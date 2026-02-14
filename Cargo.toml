@@ -1,6 +1,46 @@
 [package]
 name = "photovault"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Offline-first photo library manager"
 
 [dependencies]
+# UI Framework
+iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# File system utilities
+walkdir = "2"
+dirs = "5"                      # Platform-specific directories
+
+# Hashing
+sha2 = "0.10"
+
+# Image processing (for later phases)
+image = "0.25"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,3 +1,28 @@
-fn main() {
-    println!("Hello, world!");
+//! PhotoVault - Offline Photo Library Manager
+//! 
+//! A desktop application for organizing and browsing photos from external drives.
+
+mod app;
+mod theme;
+mod views;
+mod components;
+mod db;
+mod services;
+mod models;
+
+use iced::Size;
+
+fn main() -> iced::Result {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_env_filter("photovault=debug,iced=warn")
+        .init();
+    
+    tracing::info!("Starting PhotoVault...");
+    
+    // Run the application
+    iced::application(app::PhotoVault::title, app::PhotoVault::update, app::PhotoVault::view)
+        .window_size(Size::new(1200.0, 800.0))
+        .antialiasing(true)
+        .run_with(app::PhotoVault::new)
 }
