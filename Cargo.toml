@@ -31,6 +31,22 @@ sha2 = "0.10"
 # Image processing (for later phases)
 image = "0.25"
 
+# EXIF extraction
+kamadak-exif = "0.5"
+
+# Parallel processing
+rayon = "1.10"
+
+# Additional async utilities
+async-channel = "2.0"
+
+# Regex for filename parsing
+regex = "1"
+lazy_static = "1.4"
+
+# Native file dialogs
+rfd = "0.15"
+
 # Error handling
 thiserror = "1"
 anyhow = "1"
@@ -44,3 +60,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+tempfile = "3"

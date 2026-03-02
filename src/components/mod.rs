@@ -1,7 +1,9 @@
 //! Reusable UI components
 
-pub mod sidebar;
 pub mod drive_picker;
+pub mod scan_progress;
+pub mod sidebar;
 
-pub use sidebar::Sidebar;
 pub use drive_picker::DrivePicker;
+pub use scan_progress::ScanProgressView;
+pub use sidebar::Sidebar;
