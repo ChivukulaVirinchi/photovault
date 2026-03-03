@@ -1,13 +1,15 @@
 //! Application views
 
-pub mod welcome;
-pub mod timeline;
 pub mod people;
+pub mod photo_detail;
 pub mod search;
 pub mod settings;
+pub mod timeline;
+pub mod welcome;
 
-pub use welcome::WelcomeView;
-pub use timeline::TimelineView;
 pub use people::PeopleView;
+pub use photo_detail::PhotoDetailView;
 pub use search::SearchView;
 pub use settings::SettingsView;
+pub use timeline::TimelineView;
+pub use welcome::WelcomeView;

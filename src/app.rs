@@ -5,14 +5,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_channel::Receiver;
+use iced::keyboard;
 use iced::widget::{container, row};
-use iced::{Element, Length, Subscription, Task};
+use iced::{event, window, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
 use crate::db::{create_schema, Database, PhotoRepo};
-use crate::services::{DriveDetector, DriveInfo, ScanProgress};
+use crate::models::Photo;
+use crate::services::{DriveDetector, DriveInfo, ScanProgress, ThumbnailService, ThumbnailSize};
+use tokio::task::JoinSet;
 use crate::theme::colors::Backgrounds;
-use crate::views::{PeopleView, SearchView, SettingsView, TimelineView, WelcomeView};
+use crate::views::{
+    PeopleView, PhotoDetailView, SearchView, SettingsView, TimelineView, WelcomeView,
+};
 
 /// Current view in the application
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +28,7 @@ pub enum View {
     People,
     Search,
     Settings,
+    PhotoDetail,
 }
 
 /// Active scanning state
@@ -51,6 +57,22 @@ pub struct PhotoVault {
 
     /// Photo count after indexing
     photo_count: i64,
+
+    // --- Phase 3 additions ---
+    /// All loaded photos (from DB, ordered by date DESC)
+    photos: Vec<Photo>,
+
+    /// Currently selected photo index (for detail view)
+    selected_photo_index: Option<usize>,
+
+    /// Thumbnail service (created when a drive is selected)
+    thumbnail_service: Option<ThumbnailService>,
+
+    /// Whether we're currently generating thumbnails in the background
+    thumbnail_generation_active: bool,
+
+    /// Current window width in pixels (for responsive grid columns)
+    window_width: f32,
 }
 
 /// Application messages
@@ -91,6 +113,40 @@ pub enum Message {
 
     /// Scan complete -- user clicked "Continue"
     ScanComplete,
+
+    // --- Phase 3 additions ---
+    /// Photos loaded from database
+    PhotosLoaded(Vec<Photo>),
+
+    /// Select a photo to view in detail
+    SelectPhoto(i64),
+
+    /// Close photo detail view
+    ClosePhotoDetail,
+
+    /// Navigate to previous photo
+    PreviousPhoto,
+
+    /// Navigate to next photo
+    NextPhoto,
+
+    /// Thumbnail generation completed for a photo
+    ThumbnailReady {
+        photo_id: i64,
+        path: PathBuf,
+    },
+
+    /// Batch of thumbnails ready
+    ThumbnailBatchReady(Vec<(i64, PathBuf)>),
+
+    /// Keyboard event
+    KeyPressed(keyboard::Key),
+
+    /// No-op message (used as callback when we don't need the result)
+    NoOp,
+
+    /// Window was resized
+    WindowResized(f32, f32),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -110,6 +166,12 @@ impl PhotoVault {
             database: None,
             scan_state: None,
             photo_count: 0,
+            // Phase 3
+            photos: Vec::new(),
+            selected_photo_index: None,
+            thumbnail_service: None,
+            thumbnail_generation_active: false,
+            window_width: 1280.0, // sensible default until first resize event
         };
 
         // Detect drives on startup
@@ -129,22 +191,181 @@ impl PhotoVault {
         }
     }
 
-    /// Subscription for polling scan progress
+    /// Subscription for polling scan progress, keyboard events, and window resize
     pub fn subscription(&self) -> Subscription<Message> {
+        let mut subs = Vec::new();
+
+        // Scan progress polling
         if self.scan_state.is_some() {
-            iced::time::every(std::time::Duration::from_millis(50))
-                .map(|_| Message::PollScanChannels)
-        } else {
-            Subscription::none()
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(50))
+                    .map(|_| Message::PollScanChannels),
+            );
         }
+
+        // Keyboard events (for photo detail navigation) + Window resize events
+        subs.push(event::listen_with(|event, _status, _id| match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+                Some(Message::KeyPressed(key))
+            }
+            iced::Event::Window(window::Event::Resized(size)) => {
+                Some(Message::WindowResized(size.width, size.height))
+            }
+            _ => None,
+        }));
+
+        Subscription::batch(subs)
+    }
+
+    /// Load photos from database
+    fn load_photos(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+
+        let drive_path = drive_path.clone();
+
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let repo = PhotoRepo::new(&db.conn);
+                        // Load all photos (up to 50k for now)
+                        let mut photos = repo.get_all_by_date(50000, 0).unwrap_or_default();
+
+                        // Resolve relative thumbnail paths to absolute (DB stores relative for portability)
+                        for photo in &mut photos {
+                            if let Some(ref rel_path) = photo.thumbnail_path {
+                                let abs_path = drive_path.join(rel_path);
+                                photo.thumbnail_path =
+                                    Some(abs_path.to_string_lossy().to_string());
+                            }
+                        }
+
+                        photos
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open database for loading photos: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::PhotosLoaded,
+        )
+    }
+
+    /// Start background thumbnail generation for loaded photos
+    ///
+    /// Uses a shared Arc<ThumbnailService> and spawns all tasks concurrently
+    /// via JoinSet so thumbnails are generated in parallel (up to the
+    /// ConcurrencyLimiter's cap of 4).
+    fn start_thumbnail_generation(&mut self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+
+        // Create thumbnail service if needed
+        if self.thumbnail_service.is_none() {
+            match ThumbnailService::new(drive_path, 2.0) {
+                Ok(service) => {
+                    // Load existing thumbnails from disk
+                    if let Err(e) = service.load_existing_thumbnails() {
+                        tracing::warn!("Failed to load existing thumbnails: {}", e);
+                    }
+                    self.thumbnail_service = Some(service);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create thumbnail service: {}", e);
+                    return Task::none();
+                }
+            }
+        }
+
+        // Collect photos that need thumbnails
+        let photos_needing_thumbs: Vec<(i64, String, String)> = self
+            .photos
+            .iter()
+            .filter(|p| p.thumbnail_path.is_none())
+            .map(|p| (p.id, p.file_path.clone(), p.file_hash.clone()))
+            .collect();
+
+        if photos_needing_thumbs.is_empty() {
+            return Task::none();
+        }
+
+        self.thumbnail_generation_active = true;
+        let drive_path = drive_path.clone();
+
+        // Clone the shared service into an Arc so all spawn_blocking calls reuse it.
+        // ThumbnailService is Send+Sync (all fields are PathBuf / Arc<RwLock<..>> / Arc<Mutex<..>>).
+        let service = Arc::new(
+            self.thumbnail_service
+                .take()
+                .expect("thumbnail_service was just set above"),
+        );
+        // We'll put it back after generation completes (via Arc::try_unwrap)
+        let service_for_restore = Arc::clone(&service);
+
+        // Spawn background thumbnail generation with concurrent JoinSet
+        Task::perform(
+            async move {
+                let mut join_set = JoinSet::new();
+
+                for (photo_id, file_path, file_hash) in photos_needing_thumbs {
+                    let full_path = drive_path.join(&file_path);
+                    let svc = Arc::clone(&service);
+
+                    join_set.spawn_blocking(move || {
+                        if !full_path.exists() {
+                            return None;
+                        }
+
+                        match svc.generate_thumbnail(
+                            &full_path,
+                            &file_hash,
+                            ThumbnailSize::Medium,
+                        ) {
+                            Ok(path) => Some((photo_id, path)),
+                            Err(e) => {
+                                tracing::debug!(
+                                    "Thumbnail generation failed for {}: {}",
+                                    file_path,
+                                    e
+                                );
+                                None
+                            }
+                        }
+                    });
+                }
+
+                // Collect results as they complete
+                let mut results = Vec::new();
+                while let Some(res) = join_set.join_next().await {
+                    if let Ok(Some((id, path))) = res {
+                        results.push((id, path));
+                    }
+                }
+
+                // Return the Arc so we can restore the service
+                (results, service_for_restore)
+            },
+            |(results, _service_arc)| Message::ThumbnailBatchReady(results),
+        )
     }
 
     /// Handle messages
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::NavigateTo(view) => {
+                // If navigating to Timeline, always reload photos from DB
+                // (photos may have new thumbnails, or user may have re-scanned)
+                let task = if view == View::Timeline {
+                    self.load_photos()
+                } else {
+                    Task::none()
+                };
                 self.current_view = view;
-                Task::none()
+                task
             }
 
             Message::SelectDrive(path) => {
@@ -172,6 +393,8 @@ impl PhotoVault {
                             return self.update(Message::StartScan);
                         } else {
                             self.current_view = View::Timeline;
+                            // Load photos for timeline
+                            return self.load_photos();
                         }
                     }
                     Err(e) => {
@@ -263,11 +486,10 @@ impl PhotoVault {
                             }
                         }
                     },
-                    |(database, scan_result)| {
+                    |(_database, scan_result)| {
                         // We need to return the database AND the result.
                         // Since Message must be Clone+Debug, we return just the result
                         // and handle database restoration separately.
-                        // This is a design limitation -- we'll use a different approach.
                         Message::ScanFinished(scan_result)
                     },
                 )
@@ -330,6 +552,158 @@ impl PhotoVault {
                 // User clicked "Continue" after scan completed
                 self.scan_state = None;
                 self.current_view = View::Timeline;
+                // Load photos for the timeline
+                self.load_photos()
+            }
+
+            // --- Phase 3 handlers ---
+            Message::PhotosLoaded(photos) => {
+                tracing::info!("Loaded {} photos for timeline", photos.len());
+                self.photos = photos;
+                self.photo_count = self.photos.len() as i64;
+
+                // Start thumbnail generation in background
+                self.start_thumbnail_generation()
+            }
+
+            Message::SelectPhoto(photo_id) => {
+                // Find the photo index
+                if let Some(idx) = self.photos.iter().position(|p| p.id == photo_id) {
+                    self.selected_photo_index = Some(idx);
+                    self.current_view = View::PhotoDetail;
+                }
+                Task::none()
+            }
+
+            Message::ClosePhotoDetail => {
+                self.selected_photo_index = None;
+                self.current_view = View::Timeline;
+                Task::none()
+            }
+
+            Message::PreviousPhoto => {
+                if let Some(ref mut idx) = self.selected_photo_index {
+                    if *idx > 0 {
+                        *idx -= 1;
+                    }
+                }
+                Task::none()
+            }
+
+            Message::NextPhoto => {
+                if let Some(ref mut idx) = self.selected_photo_index {
+                    if *idx + 1 < self.photos.len() {
+                        *idx += 1;
+                    }
+                }
+                Task::none()
+            }
+
+            Message::ThumbnailReady { photo_id, path } => {
+                // Update the photo's thumbnail path in our in-memory list (absolute for UI)
+                if let Some(photo) = self.photos.iter_mut().find(|p| p.id == photo_id) {
+                    photo.thumbnail_path = Some(path.to_string_lossy().to_string());
+                }
+
+                // Update DB (fire-and-forget) — store relative path for portability
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let rel_path = path
+                        .strip_prefix(&drive_path)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    return Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let _ = db.conn.execute(
+                                    "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
+                                    rusqlite::params![rel_path, photo_id],
+                                );
+                            }
+                        },
+                        |_| Message::NoOp,
+                    );
+                }
+                Task::none()
+            }
+
+            Message::ThumbnailBatchReady(results) => {
+                tracing::info!("Thumbnail batch ready: {} thumbnails", results.len());
+                self.thumbnail_generation_active = false;
+
+                // Restore the thumbnail service from the Arc (it was taken in start_thumbnail_generation)
+                // If the Arc still has other refs, just recreate from drive_path
+                if self.thumbnail_service.is_none() {
+                    if let Some(ref drive_path) = self.selected_drive {
+                        if let Ok(service) = ThumbnailService::new(drive_path, 2.0) {
+                            self.thumbnail_service = Some(service);
+                        }
+                    }
+                }
+
+                // Update in-memory photo data and DB
+                if let Some(ref drive_path) = self.selected_drive {
+                    // Update in-memory list (keep absolute paths for UI display)
+                    for (photo_id, path) in &results {
+                        if let Some(photo) = self.photos.iter_mut().find(|p| p.id == *photo_id) {
+                            photo.thumbnail_path =
+                                Some(path.to_string_lossy().to_string());
+                        }
+                    }
+
+                    // Batch update DB (store relative paths for portability)
+                    let drive_path = drive_path.clone();
+                    let results_for_db = results;
+                    return Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let tx = db.conn.unchecked_transaction();
+                                if let Ok(tx) = tx {
+                                    for (photo_id, path) in &results_for_db {
+                                        // Store relative path: strip drive_root prefix
+                                        let rel_path = path
+                                            .strip_prefix(&drive_path)
+                                            .unwrap_or(path)
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let _ = tx.execute(
+                                            "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
+                                            rusqlite::params![rel_path, photo_id],
+                                        );
+                                    }
+                                    let _ = tx.commit();
+                                }
+                            }
+                        },
+                        |_| Message::NoOp,
+                    );
+                }
+                Task::none()
+            }
+
+            Message::KeyPressed(key) => {
+                if self.current_view == View::PhotoDetail {
+                    match key {
+                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                            return self.update(Message::PreviousPhoto);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                            return self.update(Message::NextPhoto);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            return self.update(Message::ClosePhotoDetail);
+                        }
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
+
+            Message::NoOp => Task::none(),
+
+            Message::WindowResized(width, _height) => {
+                self.window_width = width;
                 Task::none()
             }
         }
@@ -342,9 +716,23 @@ impl PhotoVault {
             if let Some(ref state) = self.scan_state {
                 return ScanProgressView::view(&state.progress);
             } else {
-                // Show initial scanning state
                 return ScanProgressView::view(&ScanProgress::default());
             }
+        }
+
+        // Photo detail view (full-screen overlay, no sidebar)
+        if self.current_view == View::PhotoDetail {
+            if let Some(idx) = self.selected_photo_index {
+                if let Some(photo) = self.photos.get(idx) {
+                    let has_prev = idx > 0;
+                    let has_next = idx + 1 < self.photos.len();
+                    if let Some(ref drive_path) = self.selected_drive {
+                        return PhotoDetailView::view(photo, has_prev, has_next, drive_path);
+                    }
+                }
+            }
+            // Fallback: shouldn't happen, but return to timeline
+            return TimelineView::view();
         }
 
         // If no drive selected, show welcome screen
@@ -358,10 +746,21 @@ impl PhotoVault {
         let content = match self.current_view {
             View::Welcome => WelcomeView::view(&self.drives),
             View::Scanning => unreachable!(), // Handled above
-            View::Timeline => TimelineView::view(),
+            View::Timeline => {
+                if self.photos.is_empty() {
+                    TimelineView::view()
+                } else {
+                    // Calculate responsive column count:
+                    // Sidebar is ~200px, padding 32px total, each thumb is 160+8px gap
+                    let available_width = (self.window_width - 200.0 - 32.0).max(168.0);
+                    let columns = (available_width / 168.0).floor().max(2.0) as usize;
+                    TimelineView::view_with_photos(&self.photos, columns)
+                }
+            }
             View::People => PeopleView::view(),
             View::Search => SearchView::view(),
             View::Settings => SettingsView::view(),
+            View::PhotoDetail => unreachable!(), // Handled above
         };
 
         let layout = row![sidebar, content,];
