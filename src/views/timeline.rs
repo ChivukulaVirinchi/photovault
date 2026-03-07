@@ -53,7 +53,7 @@ impl TimelineView {
             .spacing(0)
             .width(Length::Fill);
 
-        scrollable(content).height(Length::Fill).into()
+        scrollable(content).into()
     }
 
     /// Render empty timeline (backward compat, also used when no photos)

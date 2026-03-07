@@ -139,7 +139,7 @@ impl ThumbnailService {
             cache: Arc::new(RwLock::new(HashMap::new())),
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
-            generation_limiter: Arc::new(ConcurrencyLimiter::new(4)), // 4 concurrent generations
+            generation_limiter: Arc::new(ConcurrencyLimiter::new(8)), // Match batch size of 8
             generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }

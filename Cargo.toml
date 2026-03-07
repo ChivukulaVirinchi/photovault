@@ -28,8 +28,18 @@ dirs = "5"                      # Platform-specific directories
 # Hashing
 sha2 = "0.10"
 
-# Image processing (for later phases)
+# Image processing
 image = "0.25"
+
+# ONNX Runtime for ML inference (face detection/recognition)
+# Using load-dynamic to load libonnxruntime.so at runtime via dlopen.
+# This avoids linking against a prebuilt static lib that requires glibc 2.38+.
+# Place the ONNX Runtime 1.23.x shared library in libs/onnxruntime/ or set ORT_DYLIB_PATH.
+# default-features = false is critical: the default features include download-binaries.
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+
+# Linear algebra for face embeddings
+ndarray = "0.16"
 
 # EXIF extraction
 kamadak-exif = "0.5"

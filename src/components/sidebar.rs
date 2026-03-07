@@ -42,7 +42,8 @@ impl Sidebar {
 
     /// Create a navigation button
     fn nav_button(label: &str, target: View, current: &View) -> Element<'static, Message> {
-        let is_active = std::mem::discriminant(&target) == std::mem::discriminant(current);
+        let is_active = std::mem::discriminant(&target) == std::mem::discriminant(current)
+            || (matches!(target, View::People) && matches!(current, View::ClusterDetail));
 
         let label_color = if is_active {
             Text::PRIMARY

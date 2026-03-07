@@ -141,8 +141,8 @@ fn placeholder_card(file_name: &str, size: f32) -> Element<'static, Message> {
     )
     .width(size)
     .height(size)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
+    .align_x(iced::alignment::Horizontal::Center)
+    .align_y(iced::alignment::Vertical::Center)
     .style(|_theme: &iced::Theme| container::Style {
         background: Some(Backgrounds::ELEVATED.into()),
         border: iced::Border {

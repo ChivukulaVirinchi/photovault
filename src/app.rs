@@ -10,9 +10,12 @@ use iced::widget::{container, row};
 use iced::{event, window, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
-use crate::db::{create_schema, Database, PhotoRepo};
+use crate::db::{create_schema, Database, FaceClusterRecord, FaceRepo, PhotoRepo};
 use crate::models::Photo;
-use crate::services::{DriveDetector, DriveInfo, ScanProgress, ThumbnailService, ThumbnailSize};
+use crate::services::{
+    DriveDetector, DriveInfo, FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
+    ScanProgress, ThumbnailService, ThumbnailSize,
+};
 use tokio::task::JoinSet;
 use crate::theme::colors::Backgrounds;
 use crate::views::{
@@ -26,6 +29,7 @@ pub enum View {
     Scanning,
     Timeline,
     People,
+    ClusterDetail,
     Search,
     Settings,
     PhotoDetail,
@@ -71,8 +75,43 @@ pub struct PhotoVault {
     /// Whether we're currently generating thumbnails in the background
     thumbnail_generation_active: bool,
 
+    /// Queue of photos still needing thumbnail generation (photo_id, file_path, file_hash)
+    /// Processed in batches to avoid overwhelming the system.
+    thumbnail_queue: Vec<(i64, String, String)>,
+
     /// Current window width in pixels (for responsive grid columns)
     window_width: f32,
+
+    // --- Phase 4 additions ---
+    /// Face clusters loaded from database
+    face_clusters: Vec<FaceClusterRecord>,
+
+    /// Whether face processing is running in the background
+    face_processing_active: bool,
+
+    /// Current face processing progress
+    face_processing_progress: Option<FaceProcessingProgress>,
+
+    /// Cluster ID currently being name-edited
+    editing_cluster_id: Option<i64>,
+
+    /// Current edit text for cluster name
+    edit_cluster_name: String,
+
+    /// Currently selected cluster ID (for detail view)
+    selected_cluster_id: Option<i64>,
+
+    /// Photos belonging to the currently selected cluster
+    cluster_photos: Vec<Photo>,
+
+    /// Whether merge mode is active in People view
+    merge_mode_active: bool,
+
+    /// Selected cluster IDs for merging
+    merge_selected_clusters: Vec<i64>,
+
+    /// Previous view before opening photo detail (for proper back navigation)
+    previous_view: Option<View>,
 }
 
 /// Application messages
@@ -139,6 +178,9 @@ pub enum Message {
     /// Batch of thumbnails ready
     ThumbnailBatchReady(Vec<(i64, PathBuf)>),
 
+    /// DB write for a thumbnail batch completed; triggers the next batch
+    ThumbnailBatchSaved,
+
     /// Keyboard event
     KeyPressed(keyboard::Key),
 
@@ -147,6 +189,55 @@ pub enum Message {
 
     /// Window was resized
     WindowResized(f32, f32),
+
+    // --- Phase 4: Face processing ---
+    /// Start face processing pipeline
+    ProcessFaces,
+
+    /// Face processing progress update
+    FaceProcessingProgress(FaceProcessingProgress),
+
+    /// Face processing completed
+    FaceProcessingComplete(Result<FaceProcessingResult, String>),
+
+    /// Run clustering on existing face embeddings
+    RunClustering,
+
+    /// Clustering completed
+    ClusteringComplete(Result<usize, String>),
+
+    /// Face clusters loaded from database
+    FaceClustersLoaded(Vec<FaceClusterRecord>),
+
+    /// Select a face cluster to view
+    SelectCluster(i64),
+
+    /// Photos loaded for a selected cluster
+    ClusterPhotosLoaded(Vec<Photo>),
+
+    /// Go back from cluster detail to People view
+    BackToPeople,
+
+    /// Start editing a cluster name
+    StartEditClusterName(i64),
+
+    /// Cluster name text changed
+    EditClusterName(i64, String),
+
+    /// Save the edited cluster name
+    SaveClusterName(i64),
+
+    /// Merge two clusters (source_id, target_id)
+    MergeClusters(i64, i64),
+
+    /// Toggle merge mode on/off
+    ToggleMergeMode,
+
+    /// Toggle a cluster's selection for merging
+    ToggleMergeSelect(i64),
+
+    /// Execute merge of all selected clusters
+    MergeSelectedClusters,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -171,7 +262,19 @@ impl PhotoVault {
             selected_photo_index: None,
             thumbnail_service: None,
             thumbnail_generation_active: false,
+            thumbnail_queue: Vec::new(),
             window_width: 1280.0, // sensible default until first resize event
+            // Phase 4
+            face_clusters: Vec::new(),
+            face_processing_active: false,
+            face_processing_progress: None,
+            editing_cluster_id: None,
+            edit_cluster_name: String::new(),
+            selected_cluster_id: None,
+            cluster_photos: Vec::new(),
+            merge_mode_active: false,
+            merge_selected_clusters: Vec::new(),
+            previous_view: None,
         };
 
         // Detect drives on startup
@@ -254,11 +357,15 @@ impl PhotoVault {
         )
     }
 
-    /// Start background thumbnail generation for loaded photos
+    /// Maximum number of thumbnails to process per batch.
+    const THUMBNAIL_BATCH_SIZE: usize = 8;
+
+    /// Start background thumbnail generation for the next batch from the queue.
     ///
-    /// Uses a shared Arc<ThumbnailService> and spawns all tasks concurrently
-    /// via JoinSet so thumbnails are generated in parallel (up to the
-    /// ConcurrencyLimiter's cap of 4).
+    /// Drains up to THUMBNAIL_BATCH_SIZE items from `self.thumbnail_queue` and
+    /// spawns them concurrently via JoinSet. When the batch finishes, the
+    /// `ThumbnailBatchReady` handler will call this again if the queue is
+    /// not empty, creating a natural batch chain until all thumbnails are done.
     fn start_thumbnail_generation(&mut self) -> Task<Message> {
         let Some(ref drive_path) = self.selected_drive else {
             return Task::none();
@@ -281,37 +388,41 @@ impl PhotoVault {
             }
         }
 
-        // Collect photos that need thumbnails
-        let photos_needing_thumbs: Vec<(i64, String, String)> = self
-            .photos
-            .iter()
-            .filter(|p| p.thumbnail_path.is_none())
-            .map(|p| (p.id, p.file_path.clone(), p.file_hash.clone()))
-            .collect();
-
-        if photos_needing_thumbs.is_empty() {
+        // If the queue is empty, nothing to do
+        if self.thumbnail_queue.is_empty() {
+            self.thumbnail_generation_active = false;
             return Task::none();
         }
 
         self.thumbnail_generation_active = true;
+
+        // Drain the next batch from the front of the queue
+        let batch_end = self.thumbnail_queue.len().min(Self::THUMBNAIL_BATCH_SIZE);
+        let batch: Vec<(i64, String, String)> = self.thumbnail_queue.drain(..batch_end).collect();
+        let remaining = self.thumbnail_queue.len();
+
+        tracing::info!(
+            "Starting thumbnail batch: {} photos ({} remaining in queue)",
+            batch.len(),
+            remaining
+        );
+
         let drive_path = drive_path.clone();
 
         // Clone the shared service into an Arc so all spawn_blocking calls reuse it.
-        // ThumbnailService is Send+Sync (all fields are PathBuf / Arc<RwLock<..>> / Arc<Mutex<..>>).
         let service = Arc::new(
             self.thumbnail_service
                 .take()
                 .expect("thumbnail_service was just set above"),
         );
-        // We'll put it back after generation completes (via Arc::try_unwrap)
         let service_for_restore = Arc::clone(&service);
 
-        // Spawn background thumbnail generation with concurrent JoinSet
+        // Spawn background thumbnail generation for this batch only
         Task::perform(
             async move {
                 let mut join_set = JoinSet::new();
 
-                for (photo_id, file_path, file_hash) in photos_needing_thumbs {
+                for (photo_id, file_path, file_hash) in batch {
                     let full_path = drive_path.join(&file_path);
                     let svc = Arc::clone(&service);
 
@@ -353,14 +464,65 @@ impl PhotoVault {
         )
     }
 
+    /// Load face clusters from the database
+    fn load_face_clusters(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+
+        let drive_path = drive_path.clone();
+
+        Task::perform(
+            async move {
+                // Regenerate any missing face crop thumbnails in a blocking thread
+                // (handles faces detected before crop-saving code was added)
+                let drive_for_regen = drive_path.clone();
+                let regen_result = tokio::task::spawn_blocking(move || {
+                    FaceProcessor::regenerate_missing_crops(&drive_for_regen)
+                })
+                .await;
+                match regen_result {
+                    Ok(Ok(count)) => {
+                        if count > 0 {
+                            tracing::info!("Regenerated {} face crop thumbnails", count);
+                        }
+                    }
+                    Ok(Err(e)) => tracing::warn!("Failed to regenerate face crops: {}", e),
+                    Err(e) => tracing::warn!("Face crop regeneration task panicked: {}", e),
+                }
+
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let face_repo = FaceRepo::new(&db.conn);
+                        let mut clusters = face_repo.get_all_clusters().unwrap_or_default();
+                        tracing::info!(
+                            "load_face_clusters: got {} clusters from DB",
+                            clusters.len()
+                        );
+                        FaceRepo::populate_face_thumbnails(&mut clusters, &drive_path);
+                        clusters
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open database for face clusters: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::FaceClustersLoaded,
+        )
+    }
+
     /// Handle messages
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::NavigateTo(view) => {
+                tracing::info!("NavigateTo: {:?}", view);
                 // If navigating to Timeline, always reload photos from DB
                 // (photos may have new thumbnails, or user may have re-scanned)
                 let task = if view == View::Timeline {
                     self.load_photos()
+                } else if view == View::People {
+                    self.load_face_clusters()
                 } else {
                     Task::none()
                 };
@@ -562,13 +724,27 @@ impl PhotoVault {
                 self.photos = photos;
                 self.photo_count = self.photos.len() as i64;
 
-                // Start thumbnail generation in background
+                // Populate the thumbnail queue with photos that need thumbnails
+                self.thumbnail_queue = self
+                    .photos
+                    .iter()
+                    .filter(|p| p.thumbnail_path.is_none())
+                    .map(|p| (p.id, p.file_path.clone(), p.file_hash.clone()))
+                    .collect();
+
+                tracing::info!(
+                    "{} photos need thumbnail generation",
+                    self.thumbnail_queue.len()
+                );
+
+                // Start processing the first batch
                 self.start_thumbnail_generation()
             }
 
             Message::SelectPhoto(photo_id) => {
                 // Find the photo index
                 if let Some(idx) = self.photos.iter().position(|p| p.id == photo_id) {
+                    self.previous_view = Some(self.current_view.clone());
                     self.selected_photo_index = Some(idx);
                     self.current_view = View::PhotoDetail;
                 }
@@ -577,7 +753,8 @@ impl PhotoVault {
 
             Message::ClosePhotoDetail => {
                 self.selected_photo_index = None;
-                self.current_view = View::Timeline;
+                // Return to whatever view we came from
+                self.current_view = self.previous_view.take().unwrap_or(View::Timeline);
                 Task::none()
             }
 
@@ -629,8 +806,7 @@ impl PhotoVault {
             }
 
             Message::ThumbnailBatchReady(results) => {
-                tracing::info!("Thumbnail batch ready: {} thumbnails", results.len());
-                self.thumbnail_generation_active = false;
+                tracing::info!("Thumbnail batch ready: {} thumbnails generated", results.len());
 
                 // Restore the thumbnail service from the Arc (it was taken in start_thumbnail_generation)
                 // If the Arc still has other refs, just recreate from drive_path
@@ -653,6 +829,7 @@ impl PhotoVault {
                     }
 
                     // Batch update DB (store relative paths for portability)
+                    // When done, send ThumbnailBatchSaved to trigger the next batch
                     let drive_path = drive_path.clone();
                     let results_for_db = results;
                     return Task::perform(
@@ -676,10 +853,25 @@ impl PhotoVault {
                                 }
                             }
                         },
-                        |_| Message::NoOp,
+                        |_| Message::ThumbnailBatchSaved,
                     );
                 }
                 Task::none()
+            }
+
+            Message::ThumbnailBatchSaved => {
+                // Previous batch DB write completed; start the next batch
+                if !self.thumbnail_queue.is_empty() {
+                    tracing::info!(
+                        "Thumbnail batch saved, starting next batch ({} remaining)",
+                        self.thumbnail_queue.len()
+                    );
+                    self.start_thumbnail_generation()
+                } else {
+                    tracing::info!("All thumbnails generated successfully");
+                    self.thumbnail_generation_active = false;
+                    Task::none()
+                }
             }
 
             Message::KeyPressed(key) => {
@@ -705,6 +897,339 @@ impl PhotoVault {
             Message::WindowResized(width, _height) => {
                 self.window_width = width;
                 Task::none()
+            }
+
+            // --- Phase 4: Face processing handlers ---
+            Message::ProcessFaces => {
+                if self.face_processing_active {
+                    tracing::info!("ProcessFaces: already active, ignoring");
+                    return Task::none();
+                }
+
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                tracing::info!("ProcessFaces: starting face processing pipeline");
+                self.face_processing_active = true;
+                self.face_processing_progress = Some(FaceProcessingProgress::default());
+
+                let drive_path = drive_path.clone();
+                // Models directory: alongside the binary or in a well-known location
+                let model_dir = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("models");
+
+                let (progress_tx, progress_rx) = async_channel::bounded(64);
+
+                // Spawn blocking face processing task
+                let process_task = Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            FaceProcessor::process_photos(
+                                &drive_path,
+                                &model_dir,
+                                Some(progress_tx),
+                            )
+                        });
+
+                        match handle.await {
+                            Ok(result) => result,
+                            Err(e) => Err(format!("Face processing thread panicked: {}", e)),
+                        }
+                    },
+                    Message::FaceProcessingComplete,
+                );
+
+                // Poll progress channel via subscription-like approach:
+                // We'll drain it in the subscription tick. Store the receiver.
+                // For simplicity, use a separate task that forwards progress.
+                let poll_task = Task::perform(
+                    async move {
+                        let mut last_progress = FaceProcessingProgress::default();
+                        while let Ok(progress) = progress_rx.recv().await {
+                            last_progress = progress;
+                        }
+                        last_progress
+                    },
+                    |_progress| Message::NoOp,
+                );
+
+                Task::batch([process_task, poll_task])
+            }
+
+            Message::FaceProcessingProgress(progress) => {
+                self.face_processing_progress = Some(progress);
+                Task::none()
+            }
+
+            Message::FaceProcessingComplete(result) => {
+                self.face_processing_active = false;
+                self.face_processing_progress = None;
+
+                match result {
+                    Ok(result) => {
+                        tracing::info!(
+                            "Face processing complete: {} photos, {} faces, {} clusters",
+                            result.photos_processed,
+                            result.faces_detected,
+                            result.clusters_created
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Face processing failed: {}", e);
+                    }
+                }
+
+                // Reload clusters
+                self.load_face_clusters()
+            }
+
+            Message::RunClustering => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+
+                Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let db = Database::open_for_drive(&drive_path)
+                                .map_err(|e| format!("Failed to open database: {}", e))?;
+                            let face_repo = FaceRepo::new(&db.conn);
+
+                            // Get all faces with embeddings
+                            let all_faces = face_repo
+                                .get_all_faces_with_embeddings()
+                                .map_err(|e| format!("Failed to get faces: {}", e))?;
+
+                            if all_faces.is_empty() {
+                                return Ok(0);
+                            }
+
+                            // Clear existing clusters before re-clustering to avoid duplicates
+                            face_repo
+                                .delete_all_clusters()
+                                .map_err(|e| format!("Failed to clear existing clusters: {}", e))?;
+
+                            let clusterer = crate::ml::FaceClusterer::new();
+                            let assignments = clusterer.cluster(&all_faces);
+
+                            // Group face IDs by cluster
+                            let mut cluster_groups: std::collections::HashMap<i32, Vec<i64>> =
+                                std::collections::HashMap::new();
+                            for (face_id, cluster_id) in &assignments {
+                                if *cluster_id >= 0 {
+                                    cluster_groups
+                                        .entry(*cluster_id)
+                                        .or_default()
+                                        .push(*face_id);
+                                }
+                            }
+
+                            let mut clusters_created = 0;
+                            for (_label, face_ids) in &cluster_groups {
+                                if face_ids.len() >= 2 {
+                                    let _ = face_repo.create_cluster(face_ids);
+                                    clusters_created += 1;
+                                }
+                            }
+
+                            Ok(clusters_created)
+                        });
+
+                        match handle.await {
+                            Ok(result) => result,
+                            Err(e) => Err(format!("Clustering thread panicked: {}", e)),
+                        }
+                    },
+                    Message::ClusteringComplete,
+                )
+            }
+
+            Message::ClusteringComplete(result) => {
+                match result {
+                    Ok(count) => {
+                        tracing::info!("Clustering complete: {} clusters created", count);
+                    }
+                    Err(e) => {
+                        tracing::error!("Clustering failed: {}", e);
+                    }
+                }
+                self.load_face_clusters()
+            }
+
+            Message::FaceClustersLoaded(clusters) => {
+                tracing::info!(
+                    "FaceClustersLoaded: received {} clusters (previously had {})",
+                    clusters.len(),
+                    self.face_clusters.len()
+                );
+                self.face_clusters = clusters;
+                Task::none()
+            }
+
+            Message::SelectCluster(cluster_id) => {
+                self.selected_cluster_id = Some(cluster_id);
+                self.current_view = View::ClusterDetail;
+
+                // Load photos for this cluster from already-loaded photos
+                if let Some(ref db) = self.database {
+                    let face_repo = FaceRepo::new(&db.conn);
+                    match face_repo.get_photos_for_cluster(cluster_id) {
+                        Ok(photo_ids) => {
+                            self.cluster_photos = self
+                                .photos
+                                .iter()
+                                .filter(|p| photo_ids.contains(&p.id))
+                                .cloned()
+                                .collect();
+                            tracing::info!(
+                                "Loaded {} photos for cluster {}",
+                                self.cluster_photos.len(),
+                                cluster_id
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load cluster photos: {}", e);
+                            self.cluster_photos = Vec::new();
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Message::ClusterPhotosLoaded(photos) => {
+                self.cluster_photos = photos;
+                Task::none()
+            }
+
+            Message::BackToPeople => {
+                self.current_view = View::People;
+                self.selected_cluster_id = None;
+                self.cluster_photos.clear();
+                Task::none()
+            }
+
+            Message::StartEditClusterName(cluster_id) => {
+                // Set up editing state with current name
+                let current_name = self
+                    .face_clusters
+                    .iter()
+                    .find(|c| c.id == cluster_id)
+                    .and_then(|c| c.name.clone())
+                    .unwrap_or_default();
+
+                self.editing_cluster_id = Some(cluster_id);
+                self.edit_cluster_name = current_name;
+                Task::none()
+            }
+
+            Message::EditClusterName(_cluster_id, name) => {
+                self.edit_cluster_name = name;
+                Task::none()
+            }
+
+            Message::SaveClusterName(cluster_id) => {
+                let name = self.edit_cluster_name.clone();
+                self.editing_cluster_id = None;
+
+                // Update in-memory
+                if let Some(cluster) = self.face_clusters.iter_mut().find(|c| c.id == cluster_id) {
+                    if name.is_empty() {
+                        cluster.name = None;
+                    } else {
+                        cluster.name = Some(name.clone());
+                    }
+                }
+
+                // Persist to database
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+                Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let face_repo = FaceRepo::new(&db.conn);
+                            let _ = face_repo.name_cluster(cluster_id, &name);
+                        }
+                    },
+                    |_| Message::NoOp,
+                )
+            }
+
+            Message::MergeClusters(source_id, target_id) => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+                let merge_task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let face_repo = FaceRepo::new(&db.conn);
+                            let _ = face_repo.merge_clusters(source_id, target_id);
+                        }
+                    },
+                    |_| Message::NoOp,
+                );
+
+                // Reload clusters after merge
+                let reload_task = self.load_face_clusters();
+                Task::batch([merge_task, reload_task])
+            }
+
+            Message::ToggleMergeMode => {
+                self.merge_mode_active = !self.merge_mode_active;
+                if !self.merge_mode_active {
+                    self.merge_selected_clusters.clear();
+                }
+                Task::none()
+            }
+
+            Message::ToggleMergeSelect(cluster_id) => {
+                if let Some(pos) = self.merge_selected_clusters.iter().position(|&id| id == cluster_id) {
+                    self.merge_selected_clusters.remove(pos);
+                } else {
+                    self.merge_selected_clusters.push(cluster_id);
+                }
+                Task::none()
+            }
+
+            Message::MergeSelectedClusters => {
+                if self.merge_selected_clusters.len() < 2 {
+                    return Task::none();
+                }
+
+                // Merge all selected into the first selected (target)
+                let target_id = self.merge_selected_clusters[0];
+                let source_ids: Vec<i64> = self.merge_selected_clusters[1..].to_vec();
+
+                self.merge_mode_active = false;
+                self.merge_selected_clusters.clear();
+
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+                let merge_task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let face_repo = FaceRepo::new(&db.conn);
+                            for source_id in source_ids {
+                                let _ = face_repo.merge_clusters(source_id, target_id);
+                            }
+                        }
+                    },
+                    |_| Message::NoOp,
+                );
+
+                let reload_task = self.load_face_clusters();
+                Task::batch([merge_task, reload_task])
             }
         }
     }
@@ -757,7 +1282,46 @@ impl PhotoVault {
                     TimelineView::view_with_photos(&self.photos, columns)
                 }
             }
-            View::People => PeopleView::view(),
+            View::People => PeopleView::view_with_clusters(
+                &self.face_clusters,
+                self.editing_cluster_id,
+                &self.edit_cluster_name,
+                self.face_processing_active,
+                self.face_processing_progress.as_ref(),
+                self.merge_mode_active,
+                &self.merge_selected_clusters,
+            ),
+            View::ClusterDetail => {
+                // Find the selected cluster record for display
+                let cluster = self
+                    .selected_cluster_id
+                    .and_then(|id| self.face_clusters.iter().find(|c| c.id == id));
+
+                if let Some(cluster) = cluster {
+                    let is_editing = self.editing_cluster_id == Some(cluster.id);
+                    let available_width = (self.window_width - 200.0 - 32.0).max(168.0);
+                    let columns = (available_width / 168.0).floor().max(2.0) as usize;
+
+                    PeopleView::view_cluster_detail(
+                        cluster,
+                        &self.cluster_photos,
+                        is_editing,
+                        &self.edit_cluster_name,
+                        columns,
+                    )
+                } else {
+                    // Cluster not found — fallback to People view
+                    PeopleView::view_with_clusters(
+                        &self.face_clusters,
+                        self.editing_cluster_id,
+                        &self.edit_cluster_name,
+                        self.face_processing_active,
+                        self.face_processing_progress.as_ref(),
+                        self.merge_mode_active,
+                        &self.merge_selected_clusters,
+                    )
+                }
+            }
             View::Search => SearchView::view(),
             View::Settings => SettingsView::view(),
             View::PhotoDetail => unreachable!(), // Handled above
