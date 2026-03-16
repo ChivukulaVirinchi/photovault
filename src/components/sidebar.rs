@@ -18,6 +18,8 @@ impl Sidebar {
         let nav_items = column![
             Self::nav_button("Timeline", View::Timeline, current_view),
             Self::nav_button("People", View::People, current_view),
+            Self::nav_button("Duplicates", View::Duplicates, current_view),
+            Self::nav_button("Bursts", View::Bursts, current_view),
             Self::nav_button("Search", View::Search, current_view),
             Space::with_height(Length::Fill),
             Self::nav_button("Settings", View::Settings, current_view),
@@ -43,7 +45,9 @@ impl Sidebar {
     /// Create a navigation button
     fn nav_button(label: &str, target: View, current: &View) -> Element<'static, Message> {
         let is_active = std::mem::discriminant(&target) == std::mem::discriminant(current)
-            || (matches!(target, View::People) && matches!(current, View::ClusterDetail));
+            || (matches!(target, View::People) && matches!(current, View::ClusterDetail))
+            || (matches!(target, View::Duplicates) && matches!(current, View::DuplicateDetail))
+            || (matches!(target, View::Bursts) && matches!(current, View::BurstDetail));
 
         let label_color = if is_active {
             Text::PRIMARY

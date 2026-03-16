@@ -7,8 +7,10 @@ mod components;
 mod db;
 mod ml;
 mod models;
+mod scoring;
 mod services;
 mod theme;
+mod utils;
 mod views;
 
 use iced::Size;

@@ -1,5 +1,7 @@
 //! Application views
 
+pub mod bursts;
+pub mod duplicates;
 pub mod people;
 pub mod photo_detail;
 pub mod search;
@@ -7,6 +9,8 @@ pub mod settings;
 pub mod timeline;
 pub mod welcome;
 
+pub use bursts::BurstsView;
+pub use duplicates::DuplicatesView;
 pub use people::PeopleView;
 pub use photo_detail::PhotoDetailView;
 pub use search::SearchView;

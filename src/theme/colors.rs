@@ -40,6 +40,13 @@ impl Backgrounds {
         0x36 as f32 / 255.0,
     ); // #2E2E36
 
+    /// Selected/highlighted states (between ELEVATED and ACTIVE)
+    pub const SELECTED: Color = Color::from_rgb(
+        0x2A as f32 / 255.0,
+        0x2A as f32 / 255.0,
+        0x32 as f32 / 255.0,
+    ); // #2A2A32
+
     /// Selected/Active states
     pub const ACTIVE: Color = Color::from_rgb(
         0x38 as f32 / 255.0,

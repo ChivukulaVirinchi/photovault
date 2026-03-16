@@ -10,16 +10,22 @@ use iced::widget::{container, row};
 use iced::{event, window, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
-use crate::db::{create_schema, Database, FaceClusterRecord, FaceRepo, PhotoRepo};
+use crate::db::{
+    create_schema, BurstGroupMemberRecord, BurstGroupRecord, BurstRepo, Database,
+    DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo, FaceClusterRecord, FaceRepo,
+    PhotoRepo,
+};
 use crate::models::Photo;
 use crate::services::{
-    DriveDetector, DriveInfo, FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
-    ScanProgress, ThumbnailService, ThumbnailSize,
+    BurstConfig, BurstDetector, DriveDetector, DriveInfo, DuplicateDetector,
+    FaceProcessingProgress, FaceProcessingResult, FaceProcessor, ScanProgress, ThumbnailService,
+    ThumbnailSize,
 };
 use tokio::task::JoinSet;
 use crate::theme::colors::Backgrounds;
 use crate::views::{
-    PeopleView, PhotoDetailView, SearchView, SettingsView, TimelineView, WelcomeView,
+    BurstsView, DuplicatesView, PeopleView, PhotoDetailView, SearchView, SettingsView,
+    TimelineView, WelcomeView,
 };
 
 /// Current view in the application
@@ -30,6 +36,10 @@ pub enum View {
     Timeline,
     People,
     ClusterDetail,
+    Duplicates,
+    DuplicateDetail,
+    Bursts,
+    BurstDetail,
     Search,
     Settings,
     PhotoDetail,
@@ -112,6 +122,43 @@ pub struct PhotoVault {
 
     /// Previous view before opening photo detail (for proper back navigation)
     previous_view: Option<View>,
+
+    // --- Phase 5 additions ---
+    /// Duplicate groups loaded from database
+    duplicate_groups: Vec<DuplicateGroupRecord>,
+
+    /// Total wasted space from duplicates (bytes)
+    duplicate_wasted_space: u64,
+
+    /// Currently selected duplicate group (for detail view)
+    selected_duplicate_group: Option<DuplicateGroupRecord>,
+
+    /// Members of the currently selected duplicate group
+    selected_duplicate_members: Vec<DuplicateGroupMemberRecord>,
+
+    /// Whether duplicate detection is currently running
+    duplicate_detection_running: bool,
+
+    /// Duplicate overview summaries keyed by group id: (recoverable_bytes, preview_photo_id)
+    duplicate_overview: Vec<(i64, u64, Option<i64>)>,
+
+    /// Burst groups loaded from database
+    burst_groups: Vec<BurstGroupRecord>,
+
+    /// Number of photos that could be saved across all bursts
+    burst_saveable_count: usize,
+
+    /// Currently selected burst group (for detail view)
+    selected_burst_group: Option<BurstGroupRecord>,
+
+    /// Members of the currently selected burst group
+    selected_burst_members: Vec<BurstGroupMemberRecord>,
+
+    /// Whether burst detection is currently running
+    burst_detection_running: bool,
+
+    /// Burst overview previews keyed by group id: (group_id, preview_photo_ids)
+    burst_overview_previews: Vec<(i64, Vec<i64>)>,
 }
 
 /// Application messages
@@ -238,6 +285,55 @@ pub enum Message {
 
     /// Execute merge of all selected clusters
     MergeSelectedClusters,
+
+    // --- Phase 5: Duplicate & Burst Detection ---
+    /// Run duplicate detection
+    RunDuplicateDetection,
+
+    /// Duplicate detection completed
+    DuplicateDetectionComplete(Vec<DuplicateGroupRecord>, u64, Vec<(i64, u64, Option<i64>)>),
+
+    /// Open a specific duplicate group for review
+    OpenDuplicateGroup(i64),
+
+    /// Close duplicate detail view
+    CloseDuplicateDetail,
+
+    /// Set which photo to keep in a duplicate group
+    SetKeepDuplicate(i64, i64),
+
+    /// Keep the suggested photo and trash the rest
+    KeepSuggestedDuplicate(i64),
+
+    /// Trash non-suggested duplicates in a group
+    TrashNonSuggestedDuplicates(i64),
+
+    /// Dismiss a duplicate group without trashing
+    DismissDuplicateGroup(i64),
+
+    /// Run burst detection
+    RunBurstDetection,
+
+    /// Burst detection completed
+    BurstDetectionComplete(Vec<BurstGroupRecord>, usize, Vec<(i64, Vec<i64>)>),
+
+    /// Open a burst group for review
+    OpenBurstGroup(i64),
+
+    /// Close burst detail view
+    CloseBurstDetail,
+
+    /// Set the best photo in a burst group
+    SetBestFromBurst(i64, i64),
+
+    /// Keep only the best from a burst
+    KeepBestFromBurst(i64),
+
+    /// Trash non-best photos in a burst
+    TrashNonBestFromBurst(i64),
+
+    /// Dismiss a burst group without trashing
+    DismissBurstGroup(i64),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -275,6 +371,19 @@ impl PhotoVault {
             merge_mode_active: false,
             merge_selected_clusters: Vec::new(),
             previous_view: None,
+            // Phase 5
+            duplicate_groups: Vec::new(),
+            duplicate_wasted_space: 0,
+            selected_duplicate_group: None,
+            selected_duplicate_members: Vec::new(),
+            duplicate_detection_running: false,
+            duplicate_overview: Vec::new(),
+            burst_groups: Vec::new(),
+            burst_saveable_count: 0,
+            selected_burst_group: None,
+            selected_burst_members: Vec::new(),
+            burst_detection_running: false,
+            burst_overview_previews: Vec::new(),
         };
 
         // Detect drives on startup
@@ -523,6 +632,14 @@ impl PhotoVault {
                     self.load_photos()
                 } else if view == View::People {
                     self.load_face_clusters()
+                } else if view == View::Duplicates {
+                    // Trigger duplicate detection when navigating to Duplicates view
+                    self.current_view = view;
+                    return self.update(Message::RunDuplicateDetection);
+                } else if view == View::Bursts {
+                    // Trigger burst detection when navigating to Bursts view
+                    self.current_view = view;
+                    return self.update(Message::RunBurstDetection);
                 } else {
                     Task::none()
                 };
@@ -1231,6 +1348,467 @@ impl PhotoVault {
                 let reload_task = self.load_face_clusters();
                 Task::batch([merge_task, reload_task])
             }
+
+            // --- Phase 5: Duplicate & Burst Detection handlers ---
+            Message::RunDuplicateDetection => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                self.duplicate_detection_running = true;
+
+                let drive_path = drive_path.clone();
+
+                Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let db = Database::open_for_drive(&drive_path)
+                                .map_err(|e| format!("Failed to open database: {}", e))?;
+
+                            // Run duplicate detection
+                            let dup_groups = DuplicateDetector::find_duplicates(&db.conn)
+                                .map_err(|e| format!("Duplicate detection failed: {}", e))?;
+
+                            // Sync to database
+                            let repo = DuplicateRepo::new(&db.conn);
+                            let sync_data: Vec<(String, Vec<i64>, Option<i64>)> = dup_groups
+                                .iter()
+                                .map(|g| (g.hash.clone(), g.photo_ids.clone(), g.suggested_keep_id))
+                                .collect();
+                            repo.sync_duplicate_groups(&sync_data)
+                                .map_err(|e| format!("Failed to sync duplicate groups: {}", e))?;
+
+                            // Load groups and wasted space
+                            let groups = repo.get_all_groups()
+                                .map_err(|e| format!("Failed to load groups: {}", e))?;
+                            let wasted = DuplicateDetector::calculate_wasted_space(&db.conn)
+                                .unwrap_or(0);
+
+                            // Build overview summaries per group
+                            let mut overview = Vec::new();
+                            for g in &groups {
+                                let members = repo.get_group_members(g.id).unwrap_or_default();
+                                if members.is_empty() {
+                                    overview.push((g.id, 0, None));
+                                    continue;
+                                }
+
+                                let mut total = 0u64;
+                                let mut max_size = 0u64;
+                                let mut preview_photo_id = None;
+
+                                for m in &members {
+                                    let s = m.file_size.unwrap_or(0).max(0) as u64;
+                                    total += s;
+                                    if s > max_size {
+                                        max_size = s;
+                                    }
+                                    if m.is_suggested_keep {
+                                        preview_photo_id = Some(m.photo_id);
+                                    }
+                                }
+
+                                if preview_photo_id.is_none() {
+                                    preview_photo_id = members.first().map(|m| m.photo_id);
+                                }
+
+                                let recoverable = total.saturating_sub(max_size);
+                                overview.push((g.id, recoverable, preview_photo_id));
+                            }
+
+                            Ok::<(Vec<DuplicateGroupRecord>, u64, Vec<(i64, u64, Option<i64>)>), String>((
+                                groups, wasted, overview,
+                            ))
+                        });
+
+                        match handle.await {
+                            Ok(Ok((groups, wasted, overview))) => (groups, wasted, overview),
+                            Ok(Err(e)) => {
+                                tracing::error!("Duplicate detection failed: {}", e);
+                                (Vec::new(), 0, Vec::new())
+                            }
+                            Err(e) => {
+                                tracing::error!("Duplicate detection thread panicked: {}", e);
+                                (Vec::new(), 0, Vec::new())
+                            }
+                        }
+                    },
+                    |(groups, wasted, overview)| {
+                        Message::DuplicateDetectionComplete(groups, wasted, overview)
+                    },
+                )
+            }
+
+            Message::DuplicateDetectionComplete(groups, wasted, overview) => {
+                tracing::info!(
+                    "Duplicate detection complete: {} groups, {} bytes wasted",
+                    groups.len(),
+                    wasted
+                );
+                self.duplicate_groups = groups;
+                self.duplicate_wasted_space = wasted;
+                self.duplicate_detection_running = false;
+                self.duplicate_overview = overview;
+                Task::none()
+            }
+
+            Message::OpenDuplicateGroup(group_id) => {
+                // Find the group record
+                let group = self
+                    .duplicate_groups
+                    .iter()
+                    .find(|g| g.id == group_id)
+                    .cloned();
+
+                if let Some(group) = group {
+                    self.selected_duplicate_group = Some(group);
+
+                    // Load members from DB
+                    if let Some(ref drive_path) = self.selected_drive {
+                        if let Ok(db) = Database::open_for_drive(drive_path) {
+                            let repo = DuplicateRepo::new(&db.conn);
+                            self.selected_duplicate_members =
+                                repo.get_group_members(group_id).unwrap_or_default();
+                        }
+                    }
+
+                    self.current_view = View::DuplicateDetail;
+                }
+                Task::none()
+            }
+
+            Message::CloseDuplicateDetail => {
+                self.selected_duplicate_group = None;
+                self.selected_duplicate_members.clear();
+                self.current_view = View::Duplicates;
+                Task::none()
+            }
+
+            Message::SetKeepDuplicate(group_id, photo_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    if let Ok(db) = Database::open_for_drive(drive_path) {
+                        let repo = DuplicateRepo::new(&db.conn);
+                        let _ = repo.set_keep_photo(group_id, photo_id);
+
+                        // Reload members
+                        self.selected_duplicate_members =
+                            repo.get_group_members(group_id).unwrap_or_default();
+                    }
+                }
+                Task::none()
+            }
+
+            Message::KeepSuggestedDuplicate(group_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = DuplicateRepo::new(&db.conn);
+                                // Trash non-suggested photos
+                                if let Ok(photo_ids) = repo.get_photos_to_trash(group_id) {
+                                    for pid in &photo_ids {
+                                        let _ = db.conn.execute(
+                                            "UPDATE photos SET is_trashed = TRUE WHERE id = ?1",
+                                            rusqlite::params![pid],
+                                        );
+                                    }
+                                }
+                                // Remove the group
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunDuplicateDetection,
+                    );
+                    return task;
+                }
+                Task::none()
+            }
+
+            Message::TrashNonSuggestedDuplicates(group_id) => {
+                // Same as KeepSuggested — soft-delete non-keep photos and remove group
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = DuplicateRepo::new(&db.conn);
+                                if let Ok(photo_ids) = repo.get_photos_to_trash(group_id) {
+                                    for pid in &photo_ids {
+                                        let _ = db.conn.execute(
+                                            "UPDATE photos SET is_trashed = TRUE WHERE id = ?1",
+                                            rusqlite::params![pid],
+                                        );
+                                    }
+                                }
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunDuplicateDetection,
+                    );
+                    // After trashing, go back to duplicates list
+                    self.selected_duplicate_group = None;
+                    self.selected_duplicate_members.clear();
+                    self.current_view = View::Duplicates;
+                    return task;
+                }
+                Task::none()
+            }
+
+            Message::DismissDuplicateGroup(group_id) => {
+                // Just remove the group from DB without trashing any photos
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = DuplicateRepo::new(&db.conn);
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunDuplicateDetection,
+                    );
+                    return task;
+                }
+                Task::none()
+            }
+
+            Message::RunBurstDetection => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                self.burst_detection_running = true;
+
+                let drive_path = drive_path.clone();
+
+                Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let db = Database::open_for_drive(&drive_path)
+                                .map_err(|e| format!("Failed to open database: {}", e))?;
+
+                            // Run burst detection
+                            let detector = BurstDetector::new(BurstConfig::default());
+                            let burst_groups = detector.find_bursts(&db.conn)
+                                .map_err(|e| format!("Burst detection failed: {}", e))?;
+
+                            // Sync to database
+                            let repo = BurstRepo::new(&db.conn);
+                            let sync_data: Vec<(String, String, Vec<i64>)> = burst_groups
+                                .iter()
+                                .map(|g| {
+                                    (
+                                        g.start_time.to_rfc3339(),
+                                        g.end_time.to_rfc3339(),
+                                        g.photo_ids.clone(),
+                                    )
+                                })
+                                .collect();
+                            repo.sync_burst_groups(&sync_data)
+                                .map_err(|e| format!("Failed to sync burst groups: {}", e))?;
+
+                            // Score burst members for best-pick selection
+                            let groups_from_db = repo.get_all_groups()
+                                .map_err(|e| format!("Failed to load groups: {}", e))?;
+
+                            for group in &groups_from_db {
+                                let members = repo.get_group_members(group.id).unwrap_or_default();
+                                for member in &members {
+                                    if let Some(ref file_path) = member.file_path {
+                                        let full_path = drive_path.join(file_path);
+                                        if full_path.exists() {
+                                            if let Ok(img) = image::open(&full_path) {
+                                                let score = crate::scoring::score_image(&img);
+                                                let _ = repo.update_member_scores(
+                                                    group.id,
+                                                    member.photo_id,
+                                                    score.sharpness,
+                                                    score.blur,
+                                                    0, // face_count — not scored here
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Calculate best picks
+                            repo.calculate_all_best_picks()
+                                .map_err(|e| format!("Failed to calculate best picks: {}", e))?;
+
+                            // Reload groups
+                            let final_groups = repo.get_all_groups()
+                                .map_err(|e| format!("Failed to reload groups: {}", e))?;
+
+                            // Calculate saveable count
+                            let total_photos: usize = final_groups.iter().map(|g| g.photo_count as usize).sum();
+                            let saveable = if total_photos > final_groups.len() {
+                                total_photos - final_groups.len()
+                            } else {
+                                0
+                            };
+
+                            // Build overview preview strips (up to 5 photo ids per group)
+                            let mut previews: Vec<(i64, Vec<i64>)> = Vec::new();
+                            for g in &final_groups {
+                                let members = repo.get_group_members(g.id).unwrap_or_default();
+                                let ids: Vec<i64> = members.into_iter().take(5).map(|m| m.photo_id).collect();
+                                previews.push((g.id, ids));
+                            }
+
+                            Ok::<(Vec<BurstGroupRecord>, usize, Vec<(i64, Vec<i64>)>), String>((
+                                final_groups,
+                                saveable,
+                                previews,
+                            ))
+                        });
+
+                        match handle.await {
+                            Ok(Ok((groups, saveable, previews))) => (groups, saveable, previews),
+                            Ok(Err(e)) => {
+                                tracing::error!("Burst detection failed: {}", e);
+                                (Vec::new(), 0, Vec::new())
+                            }
+                            Err(e) => {
+                                tracing::error!("Burst detection thread panicked: {}", e);
+                                (Vec::new(), 0, Vec::new())
+                            }
+                        }
+                    },
+                    |(groups, saveable, previews)| {
+                        Message::BurstDetectionComplete(groups, saveable, previews)
+                    },
+                )
+            }
+
+            Message::BurstDetectionComplete(groups, saveable, previews) => {
+                tracing::info!(
+                    "Burst detection complete: {} groups, {} saveable photos",
+                    groups.len(),
+                    saveable
+                );
+                self.burst_groups = groups;
+                self.burst_saveable_count = saveable;
+                self.burst_detection_running = false;
+                self.burst_overview_previews = previews;
+                Task::none()
+            }
+
+            Message::OpenBurstGroup(group_id) => {
+                let group = self
+                    .burst_groups
+                    .iter()
+                    .find(|g| g.id == group_id)
+                    .cloned();
+
+                if let Some(group) = group {
+                    self.selected_burst_group = Some(group);
+
+                    // Load members from DB
+                    if let Some(ref drive_path) = self.selected_drive {
+                        if let Ok(db) = Database::open_for_drive(drive_path) {
+                            let repo = BurstRepo::new(&db.conn);
+                            self.selected_burst_members =
+                                repo.get_group_members(group_id).unwrap_or_default();
+                        }
+                    }
+
+                    self.current_view = View::BurstDetail;
+                }
+                Task::none()
+            }
+
+            Message::CloseBurstDetail => {
+                self.selected_burst_group = None;
+                self.selected_burst_members.clear();
+                self.current_view = View::Bursts;
+                Task::none()
+            }
+
+            Message::SetBestFromBurst(group_id, photo_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    if let Ok(db) = Database::open_for_drive(drive_path) {
+                        let repo = BurstRepo::new(&db.conn);
+                        let _ = repo.set_suggested_best(group_id, photo_id);
+
+                        // Reload members
+                        self.selected_burst_members =
+                            repo.get_group_members(group_id).unwrap_or_default();
+                    }
+                }
+                Task::none()
+            }
+
+            Message::KeepBestFromBurst(group_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = BurstRepo::new(&db.conn);
+                                if let Ok(photo_ids) = repo.get_photos_to_trash(group_id) {
+                                    for pid in &photo_ids {
+                                        let _ = db.conn.execute(
+                                            "UPDATE photos SET is_trashed = TRUE WHERE id = ?1",
+                                            rusqlite::params![pid],
+                                        );
+                                    }
+                                }
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunBurstDetection,
+                    );
+                    return task;
+                }
+                Task::none()
+            }
+
+            Message::TrashNonBestFromBurst(group_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = BurstRepo::new(&db.conn);
+                                if let Ok(photo_ids) = repo.get_photos_to_trash(group_id) {
+                                    for pid in &photo_ids {
+                                        let _ = db.conn.execute(
+                                            "UPDATE photos SET is_trashed = TRUE WHERE id = ?1",
+                                            rusqlite::params![pid],
+                                        );
+                                    }
+                                }
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunBurstDetection,
+                    );
+                    self.selected_burst_group = None;
+                    self.selected_burst_members.clear();
+                    self.current_view = View::Bursts;
+                    return task;
+                }
+                Task::none()
+            }
+
+            Message::DismissBurstGroup(group_id) => {
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    let task = Task::perform(
+                        async move {
+                            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                                let repo = BurstRepo::new(&db.conn);
+                                let _ = repo.delete_group(group_id);
+                            }
+                        },
+                        |_| Message::RunBurstDetection,
+                    );
+                    return task;
+                }
+                Task::none()
+            }
         }
     }
 
@@ -1324,6 +1902,69 @@ impl PhotoVault {
             }
             View::Search => SearchView::view(),
             View::Settings => SettingsView::view(),
+            View::Duplicates => {
+                DuplicatesView::view(
+                    &self.duplicate_groups,
+                    self.duplicate_wasted_space,
+                    self.duplicate_detection_running,
+                    self.selected_drive.as_deref(),
+                    &self.photos,
+                    &self.duplicate_overview,
+                )
+            }
+            View::DuplicateDetail => {
+                if let Some(ref group) = self.selected_duplicate_group {
+                    if let Some(ref drive_path) = self.selected_drive {
+                        DuplicatesView::group_detail_view(
+                            group,
+                            &self.selected_duplicate_members,
+                            drive_path,
+                        )
+                    } else {
+                        DuplicatesView::view(
+                            &self.duplicate_groups,
+                            self.duplicate_wasted_space,
+                            self.duplicate_detection_running,
+                            self.selected_drive.as_deref(),
+                            &self.photos,
+                            &self.duplicate_overview,
+                        )
+                    }
+                } else {
+                    DuplicatesView::view(
+                        &self.duplicate_groups,
+                        self.duplicate_wasted_space,
+                        self.duplicate_detection_running,
+                        self.selected_drive.as_deref(),
+                        &self.photos,
+                        &self.duplicate_overview,
+                    )
+                }
+            }
+            View::Bursts => {
+                BurstsView::view(
+                    &self.burst_groups,
+                    self.burst_saveable_count,
+                    self.burst_detection_running,
+                    self.selected_drive.as_deref(),
+                    &self.photos,
+                    &self.burst_overview_previews,
+                )
+            }
+            View::BurstDetail => {
+                if let Some(ref group) = self.selected_burst_group {
+                    BurstsView::group_detail_view(group, &self.selected_burst_members)
+                } else {
+                    BurstsView::view(
+                        &self.burst_groups,
+                        self.burst_saveable_count,
+                        self.burst_detection_running,
+                        self.selected_drive.as_deref(),
+                        &self.photos,
+                        &self.burst_overview_previews,
+                    )
+                }
+            }
             View::PhotoDetail => unreachable!(), // Handled above
         };
 

@@ -30,6 +30,7 @@ sha2 = "0.10"
 
 # Image processing
 image = "0.25"
+imageproc = "0.24"
 
 # ONNX Runtime for ML inference (face detection/recognition)
 # Using load-dynamic to load libonnxruntime.so at runtime via dlopen.
