@@ -6,7 +6,9 @@ pub mod duplicate_detector;
 pub mod exif_extractor;
 pub mod face_processor;
 pub mod scanner;
+pub mod search;
 pub mod thumbnail;
+pub mod trash;
 
 pub use burst_detector::{BurstConfig, BurstDetector, BurstGroup};
 pub use drive_detector::{DriveDetector, DriveInfo};
@@ -16,4 +18,6 @@ pub use face_processor::{
     FaceProcessingPhase, FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
 };
 pub use scanner::ScanProgress;
+pub use search::{SearchResult, SearchResultGroup, SearchService};
 pub use thumbnail::{ThumbnailResult, ThumbnailService, ThumbnailSize};
+pub use trash::{DeleteResult, TrashService, TrashStats};

@@ -13,19 +13,19 @@ use crate::components::{ScanProgressView, Sidebar};
 use crate::db::{
     create_schema, BurstGroupMemberRecord, BurstGroupRecord, BurstRepo, Database,
     DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo, FaceClusterRecord, FaceRepo,
-    PhotoRepo,
+    PhotoRepo, TrashRepo, TrashedPhotoRecord, migrations,
 };
 use crate::models::Photo;
 use crate::services::{
     BurstConfig, BurstDetector, DriveDetector, DriveInfo, DuplicateDetector,
-    FaceProcessingProgress, FaceProcessingResult, FaceProcessor, ScanProgress, ThumbnailService,
-    ThumbnailSize,
+    FaceProcessingProgress, FaceProcessingResult, FaceProcessor, ScanProgress, SearchService,
+    ThumbnailService, ThumbnailSize, TrashService, TrashStats,
 };
 use tokio::task::JoinSet;
 use crate::theme::colors::Backgrounds;
 use crate::views::{
-    BurstsView, DuplicatesView, PeopleView, PhotoDetailView, SearchView, SettingsView,
-    TimelineView, WelcomeView,
+    BurstsView, CullState, CullView, DuplicatesView, PeopleView, PhotoDetailView, SearchView,
+    SettingsView, TimelineView, TrashView, WelcomeView,
 };
 
 /// Current view in the application
@@ -41,6 +41,8 @@ pub enum View {
     Bursts,
     BurstDetail,
     Search,
+    Cull,
+    Trash,
     Settings,
     PhotoDetail,
 }
@@ -159,6 +161,46 @@ pub struct PhotoVault {
 
     /// Burst overview previews keyed by group id: (group_id, preview_photo_ids)
     burst_overview_previews: Vec<(i64, Vec<i64>)>,
+
+    // --- Phase 6 additions ---
+    /// Current search input text
+    search_query: String,
+
+    /// Search suggestion chips
+    search_suggestions: Vec<String>,
+
+    /// Grouped search results
+    search_results: Option<Vec<crate::services::SearchResultGroup>>,
+
+    /// Flat list of photo IDs from latest search results (for cull mode)
+    search_result_photo_ids: Vec<i64>,
+
+    /// Search loading state
+    search_loading: bool,
+
+    /// Quick cull session state
+    cull_state: Option<CullState>,
+
+    /// Whether cull finish confirmation is pending
+    cull_confirm_pending: bool,
+
+    /// Previous view before entering cull mode
+    cull_return_view: Option<View>,
+
+    /// Trashed items list
+    trash_items: Vec<TrashedPhotoRecord>,
+
+    /// Trash statistics
+    trash_stats: TrashStats,
+
+    /// Selected trashed photo IDs for bulk restore
+    selected_trash_ids: std::collections::HashSet<i64>,
+
+    /// Pending confirmation for empty trash action
+    confirm_empty_trash: bool,
+
+    /// Pending per-photo permanent deletion confirmation
+    confirm_delete_photo_id: Option<i64>,
 }
 
 /// Application messages
@@ -334,6 +376,35 @@ pub enum Message {
 
     /// Dismiss a burst group without trashing
     DismissBurstGroup(i64),
+
+    // --- Phase 6: Search, Cull, Trash ---
+    SearchInputChanged(String),
+    SearchSuggestionSelected(String),
+    ExecuteSearch,
+    SearchComplete(Vec<crate::services::SearchResultGroup>, Vec<i64>),
+    SearchSuggestionsLoaded(Vec<String>),
+    ClearSearch,
+
+    EnterCullMode(Vec<i64>),
+    EnterCullFromSearch,
+    ExitCullMode,
+    CullNext,
+    CullPrev,
+    CullToggleTrash,
+    CullUndo,
+    CullFinish,
+    CullConfirmTrash,
+
+    LoadTrash,
+    TrashLoaded(Vec<TrashedPhotoRecord>, TrashStats),
+    TrashPhotos(Vec<i64>),
+    RestorePhoto(i64),
+    RestoreSelected,
+    ToggleTrashSelection(i64),
+    PermanentlyDeletePhoto(i64),
+    ConfirmPermanentlyDeletePhoto(i64),
+    EmptyTrash,
+    ConfirmEmptyTrash,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -384,6 +455,20 @@ impl PhotoVault {
             selected_burst_members: Vec::new(),
             burst_detection_running: false,
             burst_overview_previews: Vec::new(),
+            // Phase 6
+            search_query: String::new(),
+            search_suggestions: Vec::new(),
+            search_results: None,
+            search_result_photo_ids: Vec::new(),
+            search_loading: false,
+            cull_state: None,
+            cull_confirm_pending: false,
+            cull_return_view: None,
+            trash_items: Vec::new(),
+            trash_stats: TrashStats::default(),
+            selected_trash_ids: std::collections::HashSet::new(),
+            confirm_empty_trash: false,
+            confirm_delete_photo_id: None,
         };
 
         // Detect drives on startup
@@ -621,6 +706,32 @@ impl PhotoVault {
         )
     }
 
+    /// Load trash items and stats from DB.
+    fn load_trash(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+
+        let drive_path = drive_path.clone();
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let repo = TrashRepo::new(&db.conn);
+                        let items = repo.get_all().unwrap_or_default();
+                        let stats = TrashService::get_stats(&db.conn).unwrap_or_default();
+                        (items, stats)
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open DB for trash load: {}", e);
+                        (Vec::new(), TrashStats::default())
+                    }
+                }
+            },
+            |(items, stats)| Message::TrashLoaded(items, stats),
+        )
+    }
+
     /// Handle messages
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -640,6 +751,9 @@ impl PhotoVault {
                     // Trigger burst detection when navigating to Bursts view
                     self.current_view = view;
                     return self.update(Message::RunBurstDetection);
+                } else if view == View::Trash {
+                    self.current_view = view;
+                    return self.update(Message::LoadTrash);
                 } else {
                     Task::none()
                 };
@@ -658,6 +772,11 @@ impl PhotoVault {
                                 tracing::error!("Failed to create schema: {}", e);
                                 return Task::none();
                             }
+                        }
+
+                        if let Err(e) = migrations::run_migrations(&db.conn) {
+                            tracing::error!("Failed to run migrations: {}", e);
+                            return Task::none();
                         }
 
                         // Get photo count
@@ -1005,8 +1124,312 @@ impl PhotoVault {
                         }
                         _ => {}
                     }
+                } else if self.current_view == View::Cull {
+                    match key {
+                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                            return self.update(Message::CullPrev);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                            return self.update(Message::CullNext);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                            return self.update(Message::CullFinish);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            return self.update(Message::ExitCullMode);
+                        }
+                        keyboard::Key::Character(ch) => {
+                            let lower = ch.to_lowercase();
+                            if lower == "x" {
+                                return self.update(Message::CullToggleTrash);
+                            }
+                            if lower == "u" {
+                                return self.update(Message::CullUndo);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 Task::none()
+            }
+
+            // --- Phase 6 handlers ---
+            Message::SearchInputChanged(input) => {
+                self.search_query = input.clone();
+
+                if let Some(ref drive_path) = self.selected_drive {
+                    let drive_path = drive_path.clone();
+                    return Task::perform(
+                        async move {
+                            if input.trim().is_empty() {
+                                return Vec::new();
+                            }
+                            match Database::open_for_drive(&drive_path) {
+                                Ok(db) => SearchService::get_suggestions(&db.conn, &input)
+                                    .unwrap_or_default(),
+                                Err(_) => Vec::new(),
+                            }
+                        },
+                        Message::SearchSuggestionsLoaded,
+                    );
+                }
+
+                Task::none()
+            }
+
+            Message::SearchSuggestionSelected(value) => {
+                self.search_query = value;
+                self.update(Message::ExecuteSearch)
+            }
+
+            Message::SearchSuggestionsLoaded(suggestions) => {
+                self.search_suggestions = suggestions;
+                Task::none()
+            }
+
+            Message::ExecuteSearch => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let query_text = self.search_query.clone();
+                let drive_path = drive_path.clone();
+                self.search_loading = true;
+
+                Task::perform(
+                    async move {
+                        match Database::open_for_drive(&drive_path) {
+                            Ok(db) => {
+                                let parsed = crate::search::QueryParser::parse(&query_text);
+                                let rows = SearchService::search(&db.conn, &parsed)
+                                    .unwrap_or_default();
+                                let ids = rows.iter().map(|r| r.photo_id).collect::<Vec<_>>();
+                                let groups = SearchService::group_by_date(rows);
+                                (groups, ids)
+                            }
+                            Err(_) => (Vec::new(), Vec::new()),
+                        }
+                    },
+                    |(groups, ids)| Message::SearchComplete(groups, ids),
+                )
+            }
+
+            Message::SearchComplete(groups, ids) => {
+                self.search_loading = false;
+                self.search_results = Some(groups);
+                self.search_result_photo_ids = ids;
+                Task::none()
+            }
+
+            Message::ClearSearch => {
+                self.search_query.clear();
+                self.search_suggestions.clear();
+                self.search_results = None;
+                self.search_result_photo_ids.clear();
+                Task::none()
+            }
+
+            Message::EnterCullFromSearch => {
+                if self.search_result_photo_ids.is_empty() {
+                    return Task::none();
+                }
+                self.update(Message::EnterCullMode(self.search_result_photo_ids.clone()))
+            }
+
+            Message::EnterCullMode(photo_ids) => {
+                if photo_ids.is_empty() {
+                    return Task::none();
+                }
+                self.cull_return_view = Some(self.current_view.clone());
+                self.cull_state = Some(CullState::new(photo_ids));
+                self.cull_confirm_pending = false;
+                self.current_view = View::Cull;
+                Task::none()
+            }
+
+            Message::ExitCullMode => {
+                self.cull_state = None;
+                self.cull_confirm_pending = false;
+                self.current_view = self.cull_return_view.take().unwrap_or(View::Timeline);
+                Task::none()
+            }
+
+            Message::CullNext => {
+                if let Some(ref mut cull) = self.cull_state {
+                    cull.next();
+                    self.cull_confirm_pending = false;
+                }
+                Task::none()
+            }
+
+            Message::CullPrev => {
+                if let Some(ref mut cull) = self.cull_state {
+                    cull.prev();
+                    self.cull_confirm_pending = false;
+                }
+                Task::none()
+            }
+
+            Message::CullToggleTrash => {
+                if let Some(ref mut cull) = self.cull_state {
+                    cull.toggle_trash();
+                    self.cull_confirm_pending = false;
+                }
+                Task::none()
+            }
+
+            Message::CullUndo => {
+                if let Some(ref mut cull) = self.cull_state {
+                    cull.undo();
+                    self.cull_confirm_pending = false;
+                }
+                Task::none()
+            }
+
+            Message::CullFinish => {
+                if let Some(ref cull) = self.cull_state {
+                    if cull.marked_for_trash.is_empty() {
+                        return self.update(Message::ExitCullMode);
+                    }
+                    self.cull_confirm_pending = true;
+                    return Task::none();
+                }
+                Task::none()
+            }
+
+            Message::CullConfirmTrash => {
+                if let Some(ref cull) = self.cull_state {
+                    let ids = cull.marked_for_trash.iter().copied().collect::<Vec<_>>();
+                    self.cull_confirm_pending = false;
+                    return self.update(Message::TrashPhotos(ids));
+                }
+                Task::none()
+            }
+
+            Message::LoadTrash => self.load_trash(),
+
+            Message::TrashLoaded(items, stats) => {
+                self.trash_items = items;
+                self.trash_stats = stats;
+                self.selected_trash_ids.clear();
+                self.confirm_empty_trash = false;
+                self.confirm_delete_photo_id = None;
+                Task::none()
+            }
+
+            Message::TrashPhotos(photo_ids) => {
+                if photo_ids.is_empty() {
+                    return self.update(Message::ExitCullMode);
+                }
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+
+                let task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let _ = TrashService::trash_photos(&db.conn, &photo_ids);
+                        }
+                    },
+                    |_| Message::LoadTrash,
+                );
+
+                // refresh local photo list and exit cull
+                self.cull_state = None;
+                self.cull_confirm_pending = false;
+                self.current_view = View::Trash;
+                let reload = self.load_photos();
+                Task::batch([task, reload])
+            }
+
+            Message::RestorePhoto(photo_id) => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+                let task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let _ = TrashService::restore_photos(&db.conn, &[photo_id]);
+                        }
+                    },
+                    |_| Message::LoadTrash,
+                );
+                let reload = self.load_photos();
+                Task::batch([task, reload])
+            }
+
+            Message::RestoreSelected => {
+                let ids = self.selected_trash_ids.iter().copied().collect::<Vec<_>>();
+                if ids.is_empty() {
+                    return Task::none();
+                }
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+                let task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let _ = TrashService::restore_photos(&db.conn, &ids);
+                        }
+                    },
+                    |_| Message::LoadTrash,
+                );
+                let reload = self.load_photos();
+                Task::batch([task, reload])
+            }
+
+            Message::ToggleTrashSelection(photo_id) => {
+                if !self.selected_trash_ids.insert(photo_id) {
+                    self.selected_trash_ids.remove(&photo_id);
+                }
+                Task::none()
+            }
+
+            Message::PermanentlyDeletePhoto(photo_id) => {
+                self.confirm_delete_photo_id = Some(photo_id);
+                Task::none()
+            }
+
+            Message::ConfirmPermanentlyDeletePhoto(photo_id) => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+                let task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let _ = TrashService::permanent_delete(&db.conn, &[photo_id], &drive_path);
+                        }
+                    },
+                    |_| Message::LoadTrash,
+                );
+                let reload = self.load_photos();
+                Task::batch([task, reload])
+            }
+
+            Message::EmptyTrash => {
+                self.confirm_empty_trash = true;
+                Task::none()
+            }
+
+            Message::ConfirmEmptyTrash => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+                let task = Task::perform(
+                    async move {
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            let _ = TrashService::empty_trash(&db.conn, &drive_path);
+                        }
+                    },
+                    |_| Message::LoadTrash,
+                );
+                let reload = self.load_photos();
+                Task::batch([task, reload])
             }
 
             Message::NoOp => Task::none(),
@@ -1900,7 +2323,42 @@ impl PhotoVault {
                     )
                 }
             }
-            View::Search => SearchView::view(),
+            View::Search => SearchView::view(
+                &self.search_query,
+                &self.search_suggestions,
+                self.search_results.as_ref(),
+                self.search_loading,
+                self.selected_drive.as_deref(),
+                &self.photos,
+            ),
+            View::Cull => {
+                if let Some(ref state) = self.cull_state {
+                    CullView::view(
+                        state,
+                        "Quick Cull",
+                        &self.photos,
+                        self.selected_drive.as_deref(),
+                        self.cull_confirm_pending,
+                    )
+                } else {
+                    SearchView::view(
+                        &self.search_query,
+                        &self.search_suggestions,
+                        self.search_results.as_ref(),
+                        self.search_loading,
+                        self.selected_drive.as_deref(),
+                        &self.photos,
+                    )
+                }
+            }
+            View::Trash => TrashView::view(
+                &self.trash_items,
+                &self.trash_stats,
+                &self.selected_trash_ids,
+                self.selected_drive.as_deref(),
+                self.confirm_empty_trash,
+                self.confirm_delete_photo_id,
+            ),
             View::Settings => SettingsView::view(),
             View::Duplicates => {
                 DuplicatesView::view(

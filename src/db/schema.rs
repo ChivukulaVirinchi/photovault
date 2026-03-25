@@ -169,6 +169,20 @@ CREATE TABLE IF NOT EXISTS burst_group_members (
 );
 
 -- ============================================================
+-- TRASH TABLE
+-- Tracks soft-deleted photos for restore/permanent delete
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS trash (
+    id INTEGER PRIMARY KEY,
+    photo_id INTEGER NOT NULL UNIQUE,
+    original_path TEXT NOT NULL,
+    trashed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+);
+
+-- ============================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 
@@ -182,12 +196,14 @@ CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
 -- Faces
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+CREATE INDEX IF NOT EXISTS idx_face_clusters_name ON face_clusters(name);
 
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_dup_members_photo ON duplicate_group_members(photo_id);
 CREATE INDEX IF NOT EXISTS idx_burst_members_group ON burst_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_burst_members_photo ON burst_group_members(photo_id);
+CREATE INDEX IF NOT EXISTS idx_trash_trashed_at ON trash(trashed_at);
 "#;
 
 #[cfg(test)]

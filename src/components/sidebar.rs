@@ -21,6 +21,7 @@ impl Sidebar {
             Self::nav_button("Duplicates", View::Duplicates, current_view),
             Self::nav_button("Bursts", View::Bursts, current_view),
             Self::nav_button("Search", View::Search, current_view),
+            Self::nav_button("Trash", View::Trash, current_view),
             Space::with_height(Length::Fill),
             Self::nav_button("Settings", View::Settings, current_view),
         ]
@@ -47,7 +48,8 @@ impl Sidebar {
         let is_active = std::mem::discriminant(&target) == std::mem::discriminant(current)
             || (matches!(target, View::People) && matches!(current, View::ClusterDetail))
             || (matches!(target, View::Duplicates) && matches!(current, View::DuplicateDetail))
-            || (matches!(target, View::Bursts) && matches!(current, View::BurstDetail));
+            || (matches!(target, View::Bursts) && matches!(current, View::BurstDetail))
+            || (matches!(target, View::Search) && matches!(current, View::Cull));
 
         let label_color = if is_active {
             Text::PRIMARY
