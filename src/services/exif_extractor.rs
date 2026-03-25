@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use exif::{In, Reader as ExifReader, Tag, Value};
 use lazy_static::lazy_static;
 use regex::Regex;

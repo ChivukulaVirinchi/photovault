@@ -12,16 +12,15 @@ pub mod search;
 pub mod thumbnail;
 pub mod trash;
 
-pub use burst_detector::{BurstConfig, BurstDetector, BurstGroup};
+pub use burst_detector::{BurstConfig, BurstDetector};
 pub use drive_detector::{DriveDetector, DriveInfo};
-pub use duplicate_detector::{DuplicateDetector, DuplicateGroup};
-pub use exif_extractor::{ExifExtractor, ImageMetadata};
+pub use duplicate_detector::DuplicateDetector;
 pub use face_processor::{
-    FaceProcessingPhase, FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
+    FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
 };
-pub use geocoding::{GeocodingResult, GeocodingService};
+pub use geocoding::GeocodingService;
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;
-pub use search::{SearchResult, SearchResultGroup, SearchService};
-pub use thumbnail::{ThumbnailResult, ThumbnailService, ThumbnailSize};
-pub use trash::{DeleteResult, TrashService, TrashStats};
+pub use search::{SearchResultGroup, SearchService};
+pub use thumbnail::{ThumbnailService, ThumbnailSize};
+pub use trash::{TrashService, TrashStats};

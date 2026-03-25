@@ -10,7 +10,7 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
 use crate::models::Photo;
-use crate::theme::colors::{Backgrounds, Border, ColorExt, Text as TextColors};
+use crate::theme::colors::{Backgrounds, Border, Text as TextColors};
 
 /// Photo detail view component
 pub struct PhotoDetailView;

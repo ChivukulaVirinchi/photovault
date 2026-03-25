@@ -2,6 +2,8 @@
 //!
 //! A desktop application for organizing and browsing photos from external drives.
 
+#![allow(dead_code)]
+
 mod app;
 mod components;
 mod config;

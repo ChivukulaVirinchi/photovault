@@ -5,6 +5,3 @@
 
 pub mod colors;
 pub mod typography;
-
-pub use colors::*;
-pub use typography::*;

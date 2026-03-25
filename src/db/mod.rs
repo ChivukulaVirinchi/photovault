@@ -16,7 +16,7 @@ pub mod trash_repo;
 pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
 pub use connection::Database;
 pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo};
-pub use face_repo::{FaceClusterRecord, FaceRecord, FaceRepo};
+pub use face_repo::{FaceClusterRecord, FaceRepo};
 pub use photo_repo::PhotoRepo;
 pub use schema::create_schema;
 pub use trash_repo::{TrashRepo, TrashedPhotoRecord};
