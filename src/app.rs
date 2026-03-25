@@ -619,11 +619,11 @@ impl PhotoVault {
     }
 
     /// Maximum number of thumbnails to process per batch.
-    const THUMBNAIL_BATCH_SIZE: usize = 8;
+    const THUMBNAIL_BATCH_SIZE: usize = 4;
     /// Number of photos inspected per scheduling pass.
     const THUMBNAIL_SCAN_CHUNK: usize = 64;
     /// Max number of queued thumbnail jobs to keep in memory.
-    const THUMBNAIL_QUEUE_TARGET: usize = 48;
+    const THUMBNAIL_QUEUE_TARGET: usize = 24;
     /// Number of currently-visible rows to prioritize.
     const THUMBNAIL_VISIBLE_ROWS: usize = 10;
     /// Number of prefetch rows just beyond visible rows.
@@ -867,6 +867,10 @@ impl PhotoVault {
                 // If navigating to Timeline, always reload photos from DB
                 // (photos may have new thumbnails, or user may have re-scanned)
                 let task = if view == View::Timeline {
+                    if self.geocoding_progress.is_none() {
+                        let geocode_task = self.update(Message::RunGeocoding);
+                        return Task::batch([geocode_task, self.load_photos()]);
+                    }
                     self.load_photos()
                 } else if view == View::People {
                     self.load_face_clusters()
@@ -1734,7 +1738,11 @@ impl PhotoVault {
                 let Some(ref drive_path) = self.selected_drive else {
                     return Task::none();
                 };
+                if self.geocoding_progress.is_some() {
+                    return Task::none();
+                }
                 let drive_path = drive_path.clone();
+                self.geocoding_progress = Some((0, 0));
 
                 Task::perform(
                     async move {
@@ -1785,6 +1793,24 @@ impl PhotoVault {
                         let total = rows.len();
                         let mut processed = 0usize;
 
+                        if total == 0 {
+                            return (0, 0);
+                        }
+
+                        if let Ok(tx) = db.conn.unchecked_transaction() {
+                            for (id, lat, lon) in rows {
+                                if let Some(result) = geocoder.reverse_geocode(lat, lon) {
+                                    let _ = tx.execute(
+                                        "UPDATE photos SET location_city = ?1, location_country = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+                                        rusqlite::params![result.city, result.country, id],
+                                    );
+                                }
+                                processed += 1;
+                            }
+                            let _ = tx.commit();
+                            return (processed, total);
+                        }
+
                         for (id, lat, lon) in rows {
                             if let Some(result) = geocoder.reverse_geocode(lat, lon) {
                                 let _ = db.conn.execute(
@@ -1803,7 +1829,11 @@ impl PhotoVault {
 
             Message::GeocodingProgress { processed, total } => {
                 self.geocoding_progress = Some((processed, total));
-                if processed >= total && total > 0 {
+                if total == 0 {
+                    self.geocoding_progress = None;
+                    return Task::none();
+                }
+                if processed >= total {
                     return self.update(Message::GeocodingComplete);
                 }
                 Task::none()
@@ -2698,7 +2728,7 @@ impl PhotoVault {
                 self.confirm_empty_trash,
                 self.confirm_delete_photo_id,
             ),
-            View::Settings => SettingsView::view(&self.config),
+            View::Settings => SettingsView::view(&self.config, self.geocoding_progress),
             View::Duplicates => {
                 DuplicatesView::view(
                     &self.duplicate_groups,

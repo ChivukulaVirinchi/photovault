@@ -127,7 +127,7 @@ impl ThumbnailService {
             cache: Arc::new(RwLock::new(HashMap::new())),
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
-            generation_limiter: Arc::new(ConcurrencyLimiter::new(8)), // Match batch size of 8
+            generation_limiter: Arc::new(ConcurrencyLimiter::new(4)), // Leave headroom for UI responsiveness
             generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
@@ -234,11 +234,11 @@ impl ThumbnailService {
             ((width as f64 * ratio) as u32, max_dim)
         };
 
-        let filter = match size {
-            ThumbnailSize::Small | ThumbnailSize::Medium => FilterType::Triangle,
-            ThumbnailSize::Large => FilterType::CatmullRom,
-        };
-        img.resize(new_width, new_height, filter)
+        match size {
+            // Fast-path for timeline responsiveness.
+            ThumbnailSize::Small | ThumbnailSize::Medium => img.thumbnail(new_width, new_height),
+            ThumbnailSize::Large => img.resize(new_width, new_height, FilterType::CatmullRom),
+        }
     }
 
     /// Get the path where a thumbnail should be stored

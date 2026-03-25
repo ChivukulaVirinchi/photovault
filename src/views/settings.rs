@@ -10,7 +10,7 @@ use crate::theme::colors::{Accent, Backgrounds, Border, Text};
 pub struct SettingsView;
 
 impl SettingsView {
-    pub fn view(config: &AppConfig) -> Element<'static, Message> {
+    pub fn view(config: &AppConfig, geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
         let content = column![
             text("Settings").size(28).color(Text::PRIMARY),
             Space::with_height(24),
@@ -34,7 +34,7 @@ impl SettingsView {
             Self::section_header("Date & Time"),
             Self::date_format_setting(config.date_format),
             Space::with_height(32),
-            Self::actions_section(),
+            Self::actions_section(geocoding_progress),
         ]
         .padding(32)
         .spacing(8);
@@ -181,7 +181,29 @@ impl SettingsView {
         )
     }
 
-    fn actions_section() -> Element<'static, Message> {
+    fn actions_section(geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+        let geocode_button: Element<'static, Message> = if let Some((done, total)) = geocoding_progress {
+            let label = if total == 0 {
+                "Geocoding...".to_string()
+            } else {
+                format!("Geocoding... {}/{}", done, total)
+            };
+            button(text(label).size(14).color(Text::SECONDARY))
+                .padding(Padding::from([10, 18]))
+                .style(|_theme, _status| button::Style {
+                    background: Some(Backgrounds::ELEVATED.into()),
+                    border: iced::Border {
+                        color: Border::SUBTLE,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into()
+        } else {
+            Self::action_button("Run Geocoding", Message::RunGeocoding)
+        };
+
         column![
             Self::section_header("Advanced"),
             Space::with_height(16),
@@ -192,7 +214,7 @@ impl SettingsView {
                 Space::with_width(16),
                 Self::action_button("Check for Changes", Message::CheckForChanges),
                 Space::with_width(16),
-                Self::action_button("Run Geocoding", Message::RunGeocoding),
+                geocode_button,
             ],
             Space::with_height(24),
             text("PhotoVault v0.1.0").size(12).color(Text::TERTIARY),
