@@ -10,6 +10,7 @@ use iced::widget::{container, row};
 use iced::{event, window, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
+use crate::config::{AppConfig, AppTheme, DateFormat};
 use crate::db::{
     create_schema, BurstGroupMemberRecord, BurstGroupRecord, BurstRepo, Database,
     DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo, FaceClusterRecord, FaceRepo,
@@ -19,7 +20,8 @@ use crate::models::Photo;
 use crate::services::{
     BurstConfig, BurstDetector, DriveDetector, DriveInfo, DuplicateDetector,
     FaceProcessingProgress, FaceProcessingResult, FaceProcessor, ScanProgress, SearchService,
-    ThumbnailService, ThumbnailSize, TrashService, TrashStats,
+    ThumbnailService, ThumbnailSize, TrashService, TrashStats, Reindexer, IndexChanges,
+    ApplyResult, GeocodingService,
 };
 use tokio::task::JoinSet;
 use crate::theme::colors::Backgrounds;
@@ -201,6 +203,16 @@ pub struct PhotoVault {
 
     /// Pending per-photo permanent deletion confirmation
     confirm_delete_photo_id: Option<i64>,
+
+    // --- Phase 7 additions ---
+    /// Application configuration
+    config: AppConfig,
+
+    /// Last detected index changes
+    pending_index_changes: Option<IndexChanges>,
+
+    /// Geocoding progress if running
+    geocoding_progress: Option<(usize, usize)>,
 }
 
 /// Application messages
@@ -405,6 +417,28 @@ pub enum Message {
     ConfirmPermanentlyDeletePhoto(i64),
     EmptyTrash,
     ConfirmEmptyTrash,
+
+    // --- Phase 7: Settings, Reindexing, Geocoding ---
+    SetTheme(AppTheme),
+    SetThumbnailSize(u32),
+    SetScanHiddenFolders(bool),
+    SetFaceConfidence(f32),
+    SetClusteringThreshold(f32),
+    SetBurstWindow(i64),
+    SetTrashAutoDelete(u32),
+    SetDateFormat(DateFormat),
+
+    RescanLibrary,
+    RebuildFaceClusters,
+
+    CheckForChanges,
+    ChangesDetected(IndexChanges),
+    ApplyChanges,
+    ChangesApplied(ApplyResult),
+
+    RunGeocoding,
+    GeocodingProgress { processed: usize, total: usize },
+    GeocodingComplete,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -415,8 +449,19 @@ pub struct ScanResult {
 }
 
 impl PhotoVault {
+    fn configured_thumbnail_size(&self) -> ThumbnailSize {
+        if self.config.thumbnail_size <= 220 {
+            ThumbnailSize::Small
+        } else if self.config.thumbnail_size >= 380 {
+            ThumbnailSize::Large
+        } else {
+            ThumbnailSize::Medium
+        }
+    }
+
     /// Create new application instance
     pub fn new() -> (Self, Task<Message>) {
+        let config = AppConfig::load();
         let app = Self {
             current_view: View::Welcome,
             drives: Vec::new(),
@@ -469,6 +514,10 @@ impl PhotoVault {
             selected_trash_ids: std::collections::HashSet::new(),
             confirm_empty_trash: false,
             confirm_delete_photo_id: None,
+            // Phase 7
+            config,
+            pending_index_changes: None,
+            geocoding_progress: None,
         };
 
         // Detect drives on startup
@@ -485,6 +534,15 @@ impl PhotoVault {
         match &self.selected_drive {
             Some(path) => format!("PhotoVault - {}", path.display()),
             None => "PhotoVault".to_string(),
+        }
+    }
+
+    /// Current app theme.
+    pub fn theme(&self) -> iced::Theme {
+        match self.config.theme {
+            AppTheme::Dark => iced::Theme::Dark,
+            AppTheme::Light => iced::Theme::Light,
+            AppTheme::System => iced::Theme::default(),
         }
     }
 
@@ -602,6 +660,7 @@ impl PhotoVault {
         );
 
         let drive_path = drive_path.clone();
+        let thumb_size = self.configured_thumbnail_size();
 
         // Clone the shared service into an Arc so all spawn_blocking calls reuse it.
         let service = Arc::new(
@@ -628,7 +687,7 @@ impl PhotoVault {
                         match svc.generate_thumbnail(
                             &full_path,
                             &file_hash,
-                            ThumbnailSize::Medium,
+                            thumb_size,
                         ) {
                             Ok(path) => Some((photo_id, path)),
                             Err(e) => {
@@ -784,6 +843,12 @@ impl PhotoVault {
                         self.photo_count = repo.count().unwrap_or(0);
 
                         self.selected_drive = Some(path);
+                        if let Some(ref p) = self.selected_drive {
+                            self.config.remember_drive(p.clone());
+                            if let Err(e) = self.config.save() {
+                                tracing::warn!("Failed to save remembered drive: {}", e);
+                            }
+                        }
                         self.database = Some(db);
 
                         // If library is empty, start scanning
@@ -853,7 +918,11 @@ impl PhotoVault {
 
                 // Start the scanner
                 let (progress_rx, cancel_flag, join_handle) =
-                    crate::services::scanner::start_scan(drive_path, database);
+                    crate::services::scanner::start_scan(
+                        drive_path,
+                        database,
+                        self.config.scan_hidden_folders,
+                    );
 
                 // Store scan state
                 self.scan_state = Some(ScanState {
@@ -1432,6 +1501,230 @@ impl PhotoVault {
                 Task::batch([task, reload])
             }
 
+            // --- Phase 7 handlers ---
+            Message::SetTheme(theme) => {
+                self.config.theme = theme;
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetThumbnailSize(size) => {
+                self.config.thumbnail_size = size;
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetScanHiddenFolders(enabled) => {
+                self.config.scan_hidden_folders = enabled;
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetFaceConfidence(v) => {
+                self.config.face_detection_confidence = v.clamp(0.0, 1.0);
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetClusteringThreshold(v) => {
+                self.config.face_clustering_threshold = v.clamp(0.0, 1.0);
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetBurstWindow(seconds) => {
+                self.config.burst_time_window_seconds = seconds.max(1);
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetTrashAutoDelete(days) => {
+                self.config.trash_auto_delete_days = days;
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::SetDateFormat(format) => {
+                self.config.date_format = format;
+                if let Err(e) = self.config.save() {
+                    tracing::warn!("Failed to save config: {}", e);
+                }
+                Task::none()
+            }
+
+            Message::RescanLibrary => self.update(Message::StartScan),
+
+            Message::RebuildFaceClusters => self.update(Message::RunClustering),
+
+            Message::CheckForChanges => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+                let scan_hidden_folders = self.config.scan_hidden_folders;
+
+                Task::perform(
+                    async move {
+                        match Database::open_for_drive(&drive_path) {
+                            Ok(db) => {
+                                let reindexer = Reindexer::new_with_options(scan_hidden_folders);
+                                reindexer.detect_changes(&db.conn, &drive_path).unwrap_or_default()
+                            }
+                            Err(e) => {
+                                tracing::error!("CheckForChanges DB open failed: {}", e);
+                                IndexChanges::default()
+                            }
+                        }
+                    },
+                    Message::ChangesDetected,
+                )
+            }
+
+            Message::ChangesDetected(changes) => {
+                self.pending_index_changes = Some(changes.clone());
+                if changes.is_empty() {
+                    tracing::info!("No index changes detected");
+                    return Task::none();
+                }
+                self.update(Message::ApplyChanges)
+            }
+
+            Message::ApplyChanges => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let Some(changes) = self.pending_index_changes.clone() else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+                let scan_hidden_folders = self.config.scan_hidden_folders;
+                Task::perform(
+                    async move {
+                        match Database::open_for_drive(&drive_path) {
+                            Ok(db) => {
+                                let reindexer = Reindexer::new_with_options(scan_hidden_folders);
+                                reindexer.apply_changes(&db.conn, &changes).unwrap_or_default()
+                            }
+                            Err(e) => {
+                                tracing::error!("ApplyChanges DB open failed: {}", e);
+                                ApplyResult::default()
+                            }
+                        }
+                    },
+                    Message::ChangesApplied,
+                )
+            }
+
+            Message::ChangesApplied(result) => {
+                tracing::info!("Applied index changes: {:?}", result);
+                self.pending_index_changes = None;
+
+                let mut tasks = vec![self.load_photos()];
+                if result.new_files > 0 {
+                    tasks.push(self.update(Message::StartScan));
+                }
+                Task::batch(tasks)
+            }
+
+            Message::RunGeocoding => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                let drive_path = drive_path.clone();
+
+                Task::perform(
+                    async move {
+                        use crate::db::geonames::{geonames_db_exists, geonames_db_path};
+
+                        if !geonames_db_exists() {
+                            tracing::warn!("GeoNames DB missing at {}", geonames_db_path().display());
+                            return (0usize, 0usize);
+                        }
+
+                        let geocoder = match GeocodingService::new(geonames_db_path()) {
+                            Ok(g) => g,
+                            Err(e) => {
+                                tracing::error!("Failed to open geonames DB: {}", e);
+                                return (0, 0);
+                            }
+                        };
+
+                        let db = match Database::open_for_drive(&drive_path) {
+                            Ok(db) => db,
+                            Err(e) => {
+                                tracing::error!("Failed to open drive DB for geocoding: {}", e);
+                                return (0, 0);
+                            }
+                        };
+
+                        let mut stmt = match db.conn.prepare(
+                            "SELECT id, gps_latitude, gps_longitude FROM photos WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL AND (location_city IS NULL OR location_country IS NULL)",
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::error!("Failed to query photos for geocoding: {}", e);
+                                return (0, 0);
+                            }
+                        };
+
+                        let rows: Vec<(i64, f64, f64)> = stmt
+                            .query_map([], |row| {
+                                Ok((
+                                    row.get::<_, i64>(0)?,
+                                    row.get::<_, f64>(1)?,
+                                    row.get::<_, f64>(2)?,
+                                ))
+                            })
+                            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                            .unwrap_or_default();
+
+                        let total = rows.len();
+                        let mut processed = 0usize;
+
+                        for (id, lat, lon) in rows {
+                            if let Some(result) = geocoder.reverse_geocode(lat, lon) {
+                                let _ = db.conn.execute(
+                                    "UPDATE photos SET location_city = ?1, location_country = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+                                    rusqlite::params![result.city, result.country, id],
+                                );
+                            }
+                            processed += 1;
+                        }
+
+                        (processed, total)
+                    },
+                    |(processed, total)| Message::GeocodingProgress { processed, total },
+                )
+            }
+
+            Message::GeocodingProgress { processed, total } => {
+                self.geocoding_progress = Some((processed, total));
+                if processed >= total && total > 0 {
+                    return self.update(Message::GeocodingComplete);
+                }
+                Task::none()
+            }
+
+            Message::GeocodingComplete => {
+                self.geocoding_progress = None;
+                self.load_photos()
+            }
+
             Message::NoOp => Task::none(),
 
             Message::WindowResized(width, _height) => {
@@ -1455,6 +1748,7 @@ impl PhotoVault {
                 self.face_processing_progress = Some(FaceProcessingProgress::default());
 
                 let drive_path = drive_path.clone();
+                let detector_confidence = self.config.face_detection_confidence;
                 // Models directory: alongside the binary or in a well-known location
                 let model_dir = std::env::current_dir()
                     .unwrap_or_default()
@@ -1469,6 +1763,7 @@ impl PhotoVault {
                             FaceProcessor::process_photos(
                                 &drive_path,
                                 &model_dir,
+                                detector_confidence,
                                 Some(progress_tx),
                             )
                         });
@@ -1531,6 +1826,7 @@ impl PhotoVault {
                 };
 
                 let drive_path = drive_path.clone();
+                let clustering_threshold = self.config.face_clustering_threshold;
 
                 Task::perform(
                     async move {
@@ -1553,7 +1849,8 @@ impl PhotoVault {
                                 .delete_all_clusters()
                                 .map_err(|e| format!("Failed to clear existing clusters: {}", e))?;
 
-                            let clusterer = crate::ml::FaceClusterer::new();
+                            let epsilon = (1.0_f32 - clustering_threshold).clamp(0.2, 0.9);
+                            let clusterer = crate::ml::FaceClusterer::new().with_epsilon(epsilon);
                             let assignments = clusterer.cluster(&all_faces);
 
                             // Group face IDs by cluster
@@ -2004,6 +2301,7 @@ impl PhotoVault {
                 self.burst_detection_running = true;
 
                 let drive_path = drive_path.clone();
+                let burst_window = self.config.burst_time_window_seconds.max(1);
 
                 Task::perform(
                     async move {
@@ -2012,7 +2310,10 @@ impl PhotoVault {
                                 .map_err(|e| format!("Failed to open database: {}", e))?;
 
                             // Run burst detection
-                            let detector = BurstDetector::new(BurstConfig::default());
+                            let detector = BurstDetector::new(BurstConfig {
+                                max_gap_seconds: burst_window,
+                                min_photos: 3,
+                            });
                             let burst_groups = detector.find_bursts(&db.conn)
                                 .map_err(|e| format!("Burst detection failed: {}", e))?;
 
@@ -2267,7 +2568,7 @@ impl PhotoVault {
         }
 
         // Main layout: sidebar + content
-        let sidebar = Sidebar::view(&self.current_view);
+        let sidebar = Sidebar::view(&self.current_view, self.config.theme);
 
         let content = match self.current_view {
             View::Welcome => WelcomeView::view(&self.drives),
@@ -2359,7 +2660,7 @@ impl PhotoVault {
                 self.confirm_empty_trash,
                 self.confirm_delete_photo_id,
             ),
-            View::Settings => SettingsView::view(),
+            View::Settings => SettingsView::view(&self.config),
             View::Duplicates => {
                 DuplicatesView::view(
                     &self.duplicate_groups,

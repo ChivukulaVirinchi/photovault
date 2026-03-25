@@ -4,7 +4,9 @@
 
 mod app;
 mod components;
+mod config;
 mod db;
+mod error;
 mod ml;
 mod models;
 mod search;
@@ -30,6 +32,7 @@ fn main() -> iced::Result {
         app::PhotoVault::update,
         app::PhotoVault::view,
     )
+    .theme(app::PhotoVault::theme)
     .subscription(app::PhotoVault::subscription)
     .window_size(Size::new(1200.0, 800.0))
     .antialiasing(true)

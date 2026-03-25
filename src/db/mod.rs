@@ -7,6 +7,7 @@ pub mod burst_repo;
 pub mod connection;
 pub mod duplicate_repo;
 pub mod face_repo;
+pub mod geonames;
 pub mod migrations;
 pub mod photo_repo;
 pub mod schema;

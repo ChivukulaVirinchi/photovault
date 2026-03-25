@@ -50,6 +50,7 @@ impl Database {
 
         // Configure SQLite for optimal performance
         Self::configure_connection(&conn)?;
+        let _ = Self::create_indexes(&conn);
 
         Ok(Self {
             conn,
@@ -78,7 +79,25 @@ impl Database {
         // Foreign key enforcement
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
+        // Collect statistics for optimizer
+        let _ = conn.execute_batch("ANALYZE;");
+
         Ok(())
+    }
+
+    /// Create recommended indexes for query performance.
+    fn create_indexes(conn: &Connection) -> SqliteResult<()> {
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_photos_date ON photos(date_taken);
+            CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
+            CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, location_city);
+            CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
+            CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
+            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+            CREATE INDEX IF NOT EXISTS idx_clusters_name ON face_clusters(name);
+            "#,
+        )
     }
 
     /// Check if this is a fresh database (needs schema creation)

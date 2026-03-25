@@ -65,6 +65,7 @@ impl FaceProcessor {
     pub fn process_photos(
         drive_path: &Path,
         model_dir: &Path,
+        detector_confidence: f32,
         progress_tx: Option<async_channel::Sender<FaceProcessingProgress>>,
     ) -> Result<FaceProcessingResult, String> {
         // Open database
@@ -117,6 +118,7 @@ impl FaceProcessor {
 
         let mut detector = FaceDetector::new(&runtime, &detector_path)
             .map_err(|e| format!("Failed to load face detector: {}", e))?;
+        detector = detector.with_confidence_threshold(detector_confidence);
 
         let mut embedder = FaceEmbedder::new(&runtime, &embedder_path)
             .map_err(|e| format!("Failed to load face embedder: {}", e))?;

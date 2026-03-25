@@ -84,6 +84,7 @@ pub struct ScanResult {
 pub fn start_scan(
     root_path: PathBuf,
     database: Database,
+    scan_hidden_folders: bool,
 ) -> (
     Receiver<ScanProgress>,
     Arc<AtomicBool>,
@@ -94,7 +95,13 @@ pub fn start_scan(
     let cancel_flag_clone = cancel_flag.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
-        run_scan(root_path, database, progress_tx, cancel_flag_clone)
+        run_scan(
+            root_path,
+            database,
+            progress_tx,
+            cancel_flag_clone,
+            scan_hidden_folders,
+        )
     });
 
     (progress_rx, cancel_flag, handle)
@@ -106,6 +113,7 @@ fn run_scan(
     database: Database,
     progress_tx: Sender<ScanProgress>,
     cancel_flag: Arc<AtomicBool>,
+    scan_hidden_folders: bool,
 ) -> ScanResult {
     let start_time = Instant::now();
     let mut errors = Vec::new();
@@ -121,7 +129,7 @@ fn run_scan(
     let walker = WalkDir::new(&root_path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !should_skip(e));
+        .filter_entry(|e| !should_skip(e, scan_hidden_folders));
 
     for entry in walker {
         // Check for cancellation
@@ -289,11 +297,11 @@ fn run_scan(
 }
 
 /// Check if a directory entry should be skipped
-fn should_skip(entry: &DirEntry) -> bool {
+fn should_skip(entry: &DirEntry, scan_hidden_folders: bool) -> bool {
     let file_name = entry.file_name().to_string_lossy();
 
     // Skip hidden files/directories (starting with .)
-    if file_name.starts_with('.') {
+    if !scan_hidden_folders && file_name.starts_with('.') {
         return true;
     }
 
@@ -357,7 +365,8 @@ mod tests {
         for entry in walker {
             let entry = entry.unwrap();
             if entry.file_name().to_string_lossy() == ".hidden" {
-                assert!(should_skip(&entry));
+                assert!(should_skip(&entry, false));
+                assert!(!should_skip(&entry, true));
             }
         }
     }

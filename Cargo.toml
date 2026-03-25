@@ -50,6 +50,7 @@ rayon = "1.10"
 
 # Additional async utilities
 async-channel = "2.0"
+lru = "0.12"
 
 # Regex for filename parsing
 regex = "1"

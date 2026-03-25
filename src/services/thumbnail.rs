@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
+use lru::LruCache;
 
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,6 +59,45 @@ pub enum ThumbnailResult {
     Pending,
     /// Generation failed
     Failed(String),
+}
+
+/// LRU cache for loaded thumbnails.
+pub struct ThumbnailCache {
+    cache: LruCache<String, iced::widget::image::Handle>,
+    max_memory_bytes: usize,
+    current_memory_bytes: usize,
+}
+
+impl ThumbnailCache {
+    pub fn new(max_memory_mb: usize) -> Self {
+        Self {
+            cache: LruCache::new(std::num::NonZeroUsize::new(1000).expect("non-zero cache size")),
+            max_memory_bytes: max_memory_mb * 1024 * 1024,
+            current_memory_bytes: 0,
+        }
+    }
+
+    pub fn get(&mut self, hash: &str) -> Option<&iced::widget::image::Handle> {
+        self.cache.get(hash)
+    }
+
+    pub fn insert(&mut self, hash: String, handle: iced::widget::image::Handle, size_bytes: usize) {
+        while self.current_memory_bytes + size_bytes > self.max_memory_bytes {
+            if self.cache.pop_lru().is_some() {
+                self.current_memory_bytes = self.current_memory_bytes.saturating_sub(size_bytes);
+            } else {
+                break;
+            }
+        }
+
+        self.cache.put(hash, handle);
+        self.current_memory_bytes += size_bytes;
+    }
+
+    pub fn clear(&mut self) {
+        self.cache.clear();
+        self.current_memory_bytes = 0;
+    }
 }
 
 /// Concurrency limiter using std::sync primitives (safe for spawn_blocking)
