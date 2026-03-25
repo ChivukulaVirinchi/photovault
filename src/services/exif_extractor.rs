@@ -247,6 +247,7 @@ impl ExifExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_filename_date_parsing() {

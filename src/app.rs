@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use iced::keyboard;
-use iced::widget::{container, row};
+use iced::widget::{column, container, row, text};
 use iced::{event, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
@@ -227,6 +227,12 @@ pub struct PhotoVault {
 
     /// Geocoding progress if running
     geocoding_progress: Option<(usize, usize)>,
+
+    /// Cancel flag for face processing
+    face_cancel_flag: Option<Arc<AtomicBool>>,
+
+    /// Whether ML models are available (checked once at startup)
+    ml_available: bool,
 }
 
 /// Application messages
@@ -430,6 +436,9 @@ pub enum Message {
     RunGeocoding,
     GeocodingProgress { processed: usize, total: usize },
     GeocodingComplete,
+
+    /// Cancel face processing
+    CancelFaceProcessing,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -529,6 +538,9 @@ impl PhotoVault {
             config,
             pending_index_changes: None,
             geocoding_progress: None,
+            // Phase 8: Production readiness
+            face_cancel_flag: None,
+            ml_available: crate::bootstrap::has_face_models(),
         };
 
         // Detect drives on startup
@@ -561,8 +573,13 @@ impl PhotoVault {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = Vec::new();
 
-        // Background progress polling
-        if self.scan_state.is_some() || self.face_processing_active {
+        // Background progress polling (scan, face processing, or any active background op)
+        let has_background_ops = self.scan_state.is_some()
+            || self.face_processing_active
+            || self.duplicate_detection_running
+            || self.burst_detection_running;
+
+        if has_background_ops {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(120))
                     .map(|_| Message::PollScanChannels),
@@ -619,11 +636,11 @@ impl PhotoVault {
     }
 
     /// Maximum number of thumbnails to process per batch.
-    const THUMBNAIL_BATCH_SIZE: usize = 4;
+    const THUMBNAIL_BATCH_SIZE: usize = 8;
     /// Number of photos inspected per scheduling pass.
     const THUMBNAIL_SCAN_CHUNK: usize = 64;
     /// Max number of queued thumbnail jobs to keep in memory.
-    const THUMBNAIL_QUEUE_TARGET: usize = 24;
+    const THUMBNAIL_QUEUE_TARGET: usize = 48;
     /// Number of currently-visible rows to prioritize.
     const THUMBNAIL_VISIBLE_ROWS: usize = 10;
     /// Number of prefetch rows just beyond visible rows.
@@ -985,9 +1002,13 @@ impl PhotoVault {
                 };
 
                 tracing::info!("Starting scan of {:?}", drive_path);
-                self.current_view = View::Scanning;
+                // Non-blocking: stay on current view (or Scanning if first scan)
+                if self.photo_count == 0 {
+                    self.current_view = View::Scanning;
+                }
 
                 let drive_path = drive_path.clone();
+                let drive_path_for_recovery = drive_path.clone();
 
                 // Start the scanner
                 let (progress_rx, cancel_flag, join_handle) =
@@ -1022,7 +1043,17 @@ impl PhotoVault {
                             }
                             Err(e) => {
                                 tracing::error!("Scanner thread panicked: {}", e);
-                                panic!("Scanner thread panicked: {}", e);
+                                // Return a zero-count result instead of panicking
+                                // Re-open DB for recovery
+                                let db = Database::open_for_drive(&drive_path_for_recovery)
+                                    .expect("Failed to re-open database after scanner panic");
+                                (
+                                    db,
+                                    ScanResult {
+                                        photo_count: 0,
+                                        final_progress: ScanProgress::default(),
+                                    },
+                                )
                             }
                         }
                     },
@@ -1084,7 +1115,18 @@ impl PhotoVault {
                     }
                 }
 
-                Task::none()
+                // If still on Scanning view (first scan), auto-advance
+                if self.current_view == View::Scanning {
+                    Task::none()
+                } else {
+                    // Scan was running in background — clear state and reload if on Timeline
+                    self.scan_state = None;
+                    if self.current_view == View::Timeline {
+                        self.load_photos()
+                    } else {
+                        Task::none()
+                    }
+                }
             }
 
             Message::ScanComplete => {
@@ -1894,6 +1936,9 @@ impl PhotoVault {
                 let (progress_tx, progress_rx) = async_channel::bounded(32);
                 self.face_progress_receiver = Some(progress_rx);
 
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                self.face_cancel_flag = Some(Arc::clone(&cancel_flag));
+
                 // Spawn blocking face processing task
                 let process_task = Task::perform(
                     async move {
@@ -1903,6 +1948,7 @@ impl PhotoVault {
                                 &model_dir,
                                 detector_confidence,
                                 Some(progress_tx),
+                                Some(cancel_flag),
                             )
                         });
 
@@ -1917,10 +1963,19 @@ impl PhotoVault {
                 process_task
             }
 
+            Message::CancelFaceProcessing => {
+                if let Some(ref flag) = self.face_cancel_flag {
+                    flag.store(true, Ordering::Relaxed);
+                    tracing::info!("Face processing cancellation requested");
+                }
+                Task::none()
+            }
+
             Message::FaceProcessingComplete(result) => {
                 self.face_processing_active = false;
                 self.face_progress_receiver = None;
                 self.face_processing_progress = None;
+                self.face_cancel_flag = None;
 
                 match result {
                     Ok(result) => {
@@ -2807,15 +2862,88 @@ impl PhotoVault {
             View::PhotoDetail => unreachable!(), // Handled above
         };
 
-        let layout = row![sidebar, content,];
+        let main_row = row![sidebar, content,];
 
-        container(layout)
+        // Build status bar if any background operations are active
+        let has_status = self.scan_state.is_some()
+            || self.face_processing_active
+            || self.duplicate_detection_running
+            || self.burst_detection_running
+            || self.geocoding_progress.is_some();
+
+        if has_status {
+            let mut status_parts: Vec<String> = Vec::new();
+
+            if let Some(ref state) = self.scan_state {
+                let p = &state.progress;
+                if p.is_complete {
+                    status_parts.push(format!("Scan complete: {} files", p.files_processed));
+                } else {
+                    status_parts.push(format!(
+                        "Scanning: {}/{} files",
+                        p.files_processed, p.files_found
+                    ));
+                }
+            }
+
+            if self.face_processing_active {
+                if let Some(ref prog) = self.face_processing_progress {
+                    status_parts.push(format!(
+                        "Faces: {}/{} photos ({} found)",
+                        prog.processed, prog.total, prog.faces_found
+                    ));
+                } else {
+                    status_parts.push("Faces: initializing...".to_string());
+                }
+            }
+
+            if self.duplicate_detection_running {
+                status_parts.push("Detecting duplicates...".to_string());
+            }
+
+            if self.burst_detection_running {
+                status_parts.push("Detecting bursts...".to_string());
+            }
+
+            if let Some((processed, total)) = self.geocoding_progress {
+                if total > 0 {
+                    status_parts.push(format!("Geocoding: {}/{}", processed, total));
+                }
+            }
+
+            let status_text = status_parts.join("  |  ");
+
+            let status_bar = container(
+                text(status_text)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+            )
             .width(Length::Fill)
-            .height(Length::Fill)
+            .padding([4, 12])
             .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+                background: Some(iced::Color::from_rgb(0.12, 0.12, 0.14).into()),
                 ..Default::default()
-            })
-            .into()
+            });
+
+            let layout = column![main_row, status_bar];
+
+            container(layout)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme: &iced::Theme| container::Style {
+                    background: Some(Backgrounds::PRIMARY.into()),
+                    ..Default::default()
+                })
+                .into()
+        } else {
+            container(main_row)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme: &iced::Theme| container::Style {
+                    background: Some(Backgrounds::PRIMARY.into()),
+                    ..Default::default()
+                })
+                .into()
+        }
     }
 }

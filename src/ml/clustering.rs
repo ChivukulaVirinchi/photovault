@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_cluster_distinct_faces() {
-        let clusterer = FaceClusterer::new().with_min_samples(2).with_epsilon(0.3);
+        let clusterer = FaceClusterer::new().with_epsilon(0.3);
 
         // Two groups of very different embeddings
         let mut group_a = vec![0.0f32; 512];

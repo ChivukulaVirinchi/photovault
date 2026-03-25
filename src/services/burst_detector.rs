@@ -59,8 +59,7 @@ impl BurstDetector {
         )?;
 
         let photos: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap_or_else(|_| panic!("Failed to query photos"))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(|r| r.ok())
             .collect();
 

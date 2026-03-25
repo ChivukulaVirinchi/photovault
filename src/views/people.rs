@@ -44,8 +44,30 @@ impl PeopleView {
                 "Starting face processing...".to_string()
             };
 
+            let cancel_btn = button(text("Cancel").size(12).color(Text::PRIMARY))
+                .padding(Padding::from([4, 12]))
+                .style(|_theme: &iced::Theme, status: button::Status| {
+                    let background = match status {
+                        button::Status::Hovered => Some(iced::Color::from_rgb(0.6, 0.2, 0.2).into()),
+                        _ => Some(iced::Color::from_rgb(0.4, 0.15, 0.15).into()),
+                    };
+                    button::Style {
+                        background,
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                })
+                .on_press(Message::CancelFaceProcessing);
+
             container(
-                row![text(progress_text).size(13).color(Accent::PRIMARY),]
+                row![
+                    text(progress_text).size(13).color(Accent::PRIMARY),
+                    Space::with_width(Length::Fill),
+                    cancel_btn,
+                ]
                     .spacing(8)
                     .align_y(Alignment::Center),
             )

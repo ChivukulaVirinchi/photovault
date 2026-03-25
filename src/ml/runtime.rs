@@ -5,30 +5,37 @@ use std::path::{Path, PathBuf};
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 
+/// Platform-specific ONNX Runtime library name
+#[cfg(target_os = "windows")]
+const ORT_LIB_NAME: &str = "onnxruntime.dll";
+#[cfg(not(target_os = "windows"))]
+const ORT_LIB_NAME: &str = "libonnxruntime.so";
+
 /// ONNX Runtime environment wrapper
 ///
 /// Manages the global ONNX Runtime environment and provides
 /// helper methods for loading models.
 ///
-/// Uses `load-dynamic` feature: libonnxruntime.so is loaded at runtime via dlopen.
+/// Uses `load-dynamic` feature: the runtime library is loaded at runtime.
 /// The library is resolved in this order:
 /// 1. `ORT_DYLIB_PATH` environment variable (if set)
-/// 2. `libs/onnxruntime/libonnxruntime.so` relative to the executable
-/// 3. `libs/onnxruntime/libonnxruntime.so` relative to the current working directory
+/// 2. `libs/onnxruntime/<LIB>` relative to the executable
+/// 3. `libs/onnxruntime/<LIB>` relative to the current working directory
 pub struct OnnxRuntime;
 
 impl OnnxRuntime {
     fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
-        let direct = dir.join("libonnxruntime.so");
+        let direct = dir.join(ORT_LIB_NAME);
         if direct.exists() {
             return Some(direct);
         }
 
+        // Also check for versioned variants (e.g. libonnxruntime.so.1.23.0)
         let entries = std::fs::read_dir(dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("libonnxruntime.so") {
+                if name.starts_with(ORT_LIB_NAME) {
                     return Some(path);
                 }
             }
@@ -98,8 +105,10 @@ impl OnnxRuntime {
             );
         } else {
             return Err(ort::Error::new(
-                "ONNX Runtime library not found. Set ORT_DYLIB_PATH or place libonnxruntime.so (1.23.x) in libs/onnxruntime/"
-                    .to_string(),
+                format!(
+                    "ONNX Runtime library not found. Set ORT_DYLIB_PATH or place {} (1.23.x) in libs/onnxruntime/",
+                    ORT_LIB_NAME
+                ),
             ));
         }
         Ok(Self)

@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::db::face_repo::FaceRepo;
@@ -57,6 +59,7 @@ impl FaceProcessor {
         model_dir: &Path,
         detector_confidence: f32,
         progress_tx: Option<async_channel::Sender<FaceProcessingProgress>>,
+        cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<FaceProcessingResult, String> {
         // Open database
         let db = Database::open_for_drive(drive_path)
@@ -86,7 +89,7 @@ impl FaceProcessor {
         // Initialize ONNX Runtime and load models
         let runtime = OnnxRuntime::init().map_err(|e| {
             format!(
-                "Failed to init ONNX Runtime: {}. Install ONNX Runtime 1.23.x and set ORT_DYLIB_PATH, or place libonnxruntime.so in libs/onnxruntime/.",
+                "Failed to init ONNX Runtime: {}. Install ONNX Runtime 1.23.x and set ORT_DYLIB_PATH, or place the runtime library in libs/onnxruntime/.",
                 e
             )
         })?;
@@ -132,6 +135,20 @@ impl FaceProcessor {
 
         // Phase 1: Detect faces and generate embeddings
         for (idx, (photo_id, file_path)) in unprocessed.iter().enumerate() {
+            // Check for cancellation
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(Ordering::Relaxed) {
+                    tracing::info!("Face processing cancelled at photo {}/{}", idx, total);
+                    // Still run clustering on whatever faces we've found so far
+                    let clusters_created = Self::run_clustering(&face_repo)?;
+                    return Ok(FaceProcessingResult {
+                        photos_processed: idx,
+                        faces_detected: total_faces,
+                        clusters_created,
+                    });
+                }
+            }
+
             // Send progress
             if let Some(ref tx) = progress_tx {
                 let now = Instant::now();
