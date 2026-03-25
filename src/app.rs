@@ -459,13 +459,8 @@ impl PhotoVault {
     }
 
     fn configured_thumbnail_size(&self) -> ThumbnailSize {
-        if self.config.thumbnail_size <= 220 {
-            ThumbnailSize::Small
-        } else if self.config.thumbnail_size >= 380 {
-            ThumbnailSize::Large
-        } else {
-            ThumbnailSize::Medium
-        }
+        // Fast-path grid rendering: generate small thumbnails first for responsiveness.
+        ThumbnailSize::Small
     }
 
     /// Create new application instance
@@ -1829,13 +1824,10 @@ impl PhotoVault {
 
                 let drive_path = drive_path.clone();
                 let detector_confidence = self.config.face_detection_confidence;
-                // Models directory: alongside the binary or in a well-known location
-                let model_dir = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("models");
+                let model_dir = crate::bootstrap::model_dir();
 
-                let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
-                let embedder_path = model_dir.join("glintr100.onnx");
+                let detector_path = crate::bootstrap::detector_model_path();
+                let embedder_path = crate::bootstrap::embedder_model_path();
                 if !detector_path.exists() || !embedder_path.exists() {
                     self.face_processing_active = false;
                     self.face_processing_progress = None;

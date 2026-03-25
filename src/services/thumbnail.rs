@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage, GenericImageView};
 
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -169,6 +169,11 @@ impl ThumbnailService {
     ) -> Result<PathBuf, String> {
         let thumb_path = self.thumbnail_path(file_hash, size);
 
+        if thumb_path.exists() {
+            self.add_to_cache(file_hash, size, &thumb_path);
+            return Ok(thumb_path);
+        }
+
         // Create the hash subdirectory if it doesn't exist
         if let Some(parent) = thumb_path.parent() {
             std::fs::create_dir_all(parent)
@@ -184,10 +189,18 @@ impl ThumbnailService {
         // Generate thumbnail
         let thumb = self.create_thumbnail(&img, size);
 
-        // Save as JPEG
-        thumb
-            .save_with_format(&thumb_path, ImageFormat::Jpeg)
-            .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+        // Save as JPEG with faster/lower-quality profile for quicker generation
+        let quality = match size {
+            ThumbnailSize::Small => 55,
+            ThumbnailSize::Medium => 65,
+            ThumbnailSize::Large => 78,
+        };
+        let mut out = std::fs::File::create(&thumb_path)
+            .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
+        let mut encoder = JpegEncoder::new_with_quality(&mut out, quality);
+        encoder
+            .encode_image(&thumb)
+            .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
 
         // Get file size
         let file_size = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
@@ -221,8 +234,11 @@ impl ThumbnailService {
             ((width as f64 * ratio) as u32, max_dim)
         };
 
-        // Use Lanczos3 for high quality downscaling
-        img.resize(new_width, new_height, FilterType::Lanczos3)
+        let filter = match size {
+            ThumbnailSize::Small | ThumbnailSize::Medium => FilterType::Triangle,
+            ThumbnailSize::Large => FilterType::CatmullRom,
+        };
+        img.resize(new_width, new_height, filter)
     }
 
     /// Get the path where a thumbnail should be stored

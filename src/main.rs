@@ -3,6 +3,7 @@
 //! A desktop application for organizing and browsing photos from external drives.
 
 mod app;
+mod bootstrap;
 mod components;
 mod config;
 mod db;
@@ -66,6 +67,16 @@ fn main() -> iced::Result {
         std::process::id(),
         std::env::args().collect::<Vec<_>>()
     );
+
+    if !crate::bootstrap::has_face_models() {
+        tracing::warn!(
+            "Face models missing. Expected {} and {}",
+            crate::bootstrap::detector_model_path().display(),
+            crate::bootstrap::embedder_model_path().display()
+        );
+    }
+
+    crate::bootstrap::ensure_geonames_db();
 
     // Run the application
     iced::application(
