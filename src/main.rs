@@ -76,6 +76,12 @@ fn main() -> iced::Result {
         );
     }
 
+    if !std::path::Path::new("libs/onnxruntime").exists() {
+        tracing::warn!(
+            "ONNX Runtime missing under libs/onnxruntime. Run ./scripts/setup_assets.sh"
+        );
+    }
+
     crate::bootstrap::ensure_geonames_db();
 
     // Run the application
