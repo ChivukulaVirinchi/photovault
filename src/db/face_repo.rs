@@ -6,20 +6,6 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
-/// Face record from database
-#[derive(Debug, Clone)]
-pub struct FaceRecord {
-    pub id: i64,
-    pub photo_id: i64,
-    pub bbox_x: f32,
-    pub bbox_y: f32,
-    pub bbox_width: f32,
-    pub bbox_height: f32,
-    pub confidence: f32,
-    pub cluster_id: Option<i64>,
-    pub embedding: FaceEmbedding,
-}
-
 /// Face cluster record from database
 #[derive(Debug, Clone)]
 pub struct FaceClusterRecord {
@@ -90,43 +76,6 @@ impl<'a> FaceRepo<'a> {
             if let Some(emb) = FaceEmbedding::from_bytes(&bytes) {
                 faces.push((id, emb));
             }
-        }
-
-        Ok(faces)
-    }
-
-    /// Get all unclustered faces
-    pub fn get_unclustered_faces(&self) -> SqliteResult<Vec<FaceRecord>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
-                   confidence, cluster_id, embedding
-            FROM faces
-            WHERE cluster_id IS NULL
-            "#,
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let embedding_bytes: Vec<u8> = row.get(8)?;
-            let embedding = FaceEmbedding::from_bytes(&embedding_bytes)
-                .unwrap_or_else(|| FaceEmbedding::new(ndarray::Array1::zeros(512)));
-
-            Ok(FaceRecord {
-                id: row.get(0)?,
-                photo_id: row.get(1)?,
-                bbox_x: row.get(2)?,
-                bbox_y: row.get(3)?,
-                bbox_width: row.get(4)?,
-                bbox_height: row.get(5)?,
-                confidence: row.get(6)?,
-                cluster_id: row.get(7)?,
-                embedding,
-            })
-        })?;
-
-        let mut faces = Vec::new();
-        for row in rows {
-            faces.push(row?);
         }
 
         Ok(faces)
@@ -286,27 +235,6 @@ impl<'a> FaceRepo<'a> {
         Ok(photo_ids)
     }
 
-    /// Check if a photo has already been processed for faces
-    pub fn is_photo_processed(&self, photo_id: i64) -> SqliteResult<bool> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",
-            params![photo_id],
-            |row| row.get(0),
-        )?;
-        // If there are faces OR the photo is marked as processed, it's done.
-        // We also check the faces_processed flag on the photos table.
-        let processed: bool = self
-            .conn
-            .query_row(
-                "SELECT faces_processed FROM photos WHERE id = ?1",
-                params![photo_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
-
-        Ok(count > 0 || processed)
-    }
-
     /// Mark a photo as face-processed (even if no faces found)
     pub fn mark_photo_processed(&self, photo_id: i64) -> SqliteResult<()> {
         self.conn.execute(
@@ -345,12 +273,6 @@ impl<'a> FaceRepo<'a> {
         }
     }
 
-    /// Get total face count
-    pub fn count_faces(&self) -> SqliteResult<i64> {
-        self.conn
-            .query_row("SELECT COUNT(*) FROM faces", [], |row| row.get(0))
-    }
-
     /// Get photos that need face processing (not yet processed)
     pub fn get_unprocessed_photo_ids(&self) -> SqliteResult<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
@@ -371,29 +293,6 @@ impl<'a> FaceRepo<'a> {
         }
 
         Ok(result)
-    }
-
-    /// Get the face bounding box info for a specific face (for thumbnail cropping)
-    pub fn get_face_bbox(&self, face_id: i64) -> SqliteResult<Option<(i64, f32, f32, f32, f32)>> {
-        let result = self.conn.query_row(
-            "SELECT photo_id, bbox_x, bbox_y, bbox_width, bbox_height FROM faces WHERE id = ?1",
-            params![face_id],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, f32>(1)?,
-                    row.get::<_, f32>(2)?,
-                    row.get::<_, f32>(3)?,
-                    row.get::<_, f32>(4)?,
-                ))
-            },
-        );
-
-        match result {
-            Ok(bbox) => Ok(Some(bbox)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
     }
 
     /// Get all face IDs with bounding boxes and their photo file paths.

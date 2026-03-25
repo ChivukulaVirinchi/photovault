@@ -9,8 +9,6 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 pub struct GeocodingResult {
     pub city: String,
     pub country: String,
-    pub country_code: String,
-    pub distance_km: f64,
 }
 
 /// Offline geocoding service using GeoNames data.
@@ -81,7 +79,7 @@ impl GeocodingService {
 
         let mut nearest: Option<(GeocodingResult, f64)> = None;
 
-        for (city_name, country_name, country_code, city_lat, city_lon) in cities {
+        for (city_name, country_name, _country_code, city_lat, city_lon) in cities {
             let distance = Self::haversine_distance(lat, lon, city_lat, city_lon);
             match &nearest {
                 None => {
@@ -89,8 +87,6 @@ impl GeocodingService {
                         GeocodingResult {
                             city: city_name,
                             country: country_name,
-                            country_code,
-                            distance_km: distance,
                         },
                         distance,
                     ));
@@ -100,8 +96,6 @@ impl GeocodingService {
                         GeocodingResult {
                             city: city_name,
                             country: country_name,
-                            country_code,
-                            distance_km: distance,
                         },
                         distance,
                     ));
@@ -134,22 +128,6 @@ impl GeocodingService {
         !((lat.abs() < 0.001) && (lon.abs() < 0.001))
     }
 
-    pub fn get_country_name(&self, code: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT name FROM countries WHERE code = ?1",
-                params![code],
-                |row| row.get(0),
-            )
-            .ok()
-    }
-
-    pub fn batch_geocode(&self, coords: &[(f64, f64)]) -> Vec<Option<GeocodingResult>> {
-        coords
-            .iter()
-            .map(|(lat, lon)| self.reverse_geocode(*lat, *lon))
-            .collect()
-    }
 }
 
 #[cfg(test)]

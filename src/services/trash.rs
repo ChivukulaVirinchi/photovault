@@ -18,7 +18,6 @@ pub struct DeleteResult {
 pub struct TrashStats {
     pub count: usize,
     pub total_size: u64,
-    pub oldest_item: Option<String>,
 }
 
 /// Trash service.
@@ -140,19 +139,9 @@ impl TrashService {
             |row| row.get(0),
         )?;
 
-        let oldest: Option<String> = conn
-            .query_row(
-                "SELECT MIN(trashed_at) FROM photos WHERE is_trashed = TRUE",
-                [],
-                |row| row.get(0),
-            )
-            .ok()
-            .flatten();
-
         Ok(TrashStats {
             count: count as usize,
             total_size: total.max(0) as u64,
-            oldest_item: oldest,
         })
     }
 }

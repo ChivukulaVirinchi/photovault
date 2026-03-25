@@ -6,16 +6,12 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 #[derive(Debug, Clone)]
 pub struct DuplicateGroupRecord {
     pub id: i64,
-    pub group_hash: String,
-    pub duplicate_type: String,
     pub member_count: i64,
 }
 
 /// Duplicate group member record
 #[derive(Debug, Clone)]
 pub struct DuplicateGroupMemberRecord {
-    pub id: i64,
-    pub group_id: i64,
     pub photo_id: i64,
     pub is_suggested_keep: bool,
 
@@ -83,8 +79,6 @@ impl<'a> DuplicateRepo<'a> {
             r#"
             SELECT 
                 dg.id,
-                dg.group_hash,
-                dg.duplicate_type,
                 COUNT(dgm.id) as member_count
             FROM duplicate_groups dg
             LEFT JOIN duplicate_group_members dgm ON dg.id = dgm.group_id
@@ -96,9 +90,7 @@ impl<'a> DuplicateRepo<'a> {
         let rows = stmt.query_map([], |row| {
             Ok(DuplicateGroupRecord {
                 id: row.get(0)?,
-                group_hash: row.get(1)?,
-                duplicate_type: row.get(2)?,
-                member_count: row.get(3)?,
+                member_count: row.get(1)?,
             })
         })?;
 
@@ -118,8 +110,6 @@ impl<'a> DuplicateRepo<'a> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT 
-                dgm.id,
-                dgm.group_id,
                 dgm.photo_id,
                 dgm.is_suggested_keep,
                 p.file_path,
@@ -135,14 +125,12 @@ impl<'a> DuplicateRepo<'a> {
 
         let rows = stmt.query_map(params![group_id], |row| {
             Ok(DuplicateGroupMemberRecord {
-                id: row.get(0)?,
-                group_id: row.get(1)?,
-                photo_id: row.get(2)?,
-                is_suggested_keep: row.get(3)?,
-                file_path: row.get(4)?,
-                thumbnail_path: row.get(5)?,
-                file_size: row.get(6)?,
-                date_taken: row.get(7)?,
+                photo_id: row.get(0)?,
+                is_suggested_keep: row.get(1)?,
+                file_path: row.get(2)?,
+                thumbnail_path: row.get(3)?,
+                file_size: row.get(4)?,
+                date_taken: row.get(5)?,
             })
         })?;
 

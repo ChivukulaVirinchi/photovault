@@ -64,7 +64,13 @@ impl PhotoDetailView {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.scale_alpha(0.95).into()),
+                background: Some(
+                    iced::Color {
+                        a: Backgrounds::PRIMARY.a * 0.95,
+                        ..Backgrounds::PRIMARY
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             })
             .into()

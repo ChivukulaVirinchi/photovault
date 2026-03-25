@@ -230,9 +230,6 @@ pub enum Message {
     /// Folder selected from browser
     FolderSelected(Option<PathBuf>),
 
-    /// Refresh drive list
-    RefreshDrives,
-
     /// Drives detected
     DrivesDetected(Vec<DriveInfo>),
 
@@ -241,9 +238,6 @@ pub enum Message {
 
     /// Poll scan channels (from subscription tick)
     PollScanChannels,
-
-    /// Scan progress update received
-    ScanProgressUpdate(ScanProgress),
 
     /// Cancel ongoing scan
     CancelScan,
@@ -270,12 +264,6 @@ pub enum Message {
     /// Navigate to next photo
     NextPhoto,
 
-    /// Thumbnail generation completed for a photo
-    ThumbnailReady {
-        photo_id: i64,
-        path: PathBuf,
-    },
-
     /// Batch of thumbnails ready
     ThumbnailBatchReady(Vec<(i64, PathBuf)>),
 
@@ -295,9 +283,6 @@ pub enum Message {
     /// Start face processing pipeline
     ProcessFaces,
 
-    /// Face processing progress update
-    FaceProcessingProgress(FaceProcessingProgress),
-
     /// Face processing completed
     FaceProcessingComplete(Result<FaceProcessingResult, String>),
 
@@ -313,9 +298,6 @@ pub enum Message {
     /// Select a face cluster to view
     SelectCluster(i64),
 
-    /// Photos loaded for a selected cluster
-    ClusterPhotosLoaded(Vec<Photo>),
-
     /// Go back from cluster detail to People view
     BackToPeople,
 
@@ -327,9 +309,6 @@ pub enum Message {
 
     /// Save the edited cluster name
     SaveClusterName(i64),
-
-    /// Merge two clusters (source_id, target_id)
-    MergeClusters(i64, i64),
 
     /// Toggle merge mode on/off
     ToggleMergeMode,
@@ -395,8 +374,6 @@ pub enum Message {
     ExecuteSearch,
     SearchComplete(Vec<crate::services::SearchResultGroup>, Vec<i64>),
     SearchSuggestionsLoaded(Vec<String>),
-    ClearSearch,
-
     EnterCullMode(Vec<i64>),
     EnterCullFromSearch,
     ExitCullMode,
@@ -889,11 +866,6 @@ impl PhotoVault {
                 Task::none()
             }
 
-            Message::RefreshDrives => Task::perform(
-                async { DriveDetector::detect() },
-                Message::DrivesDetected,
-            ),
-
             Message::DrivesDetected(drives) => {
                 tracing::info!("Detected {} drives", drives.len());
                 self.drives = drives;
@@ -968,13 +940,6 @@ impl PhotoVault {
                     while let Ok(progress) = state.progress_receiver.try_recv() {
                         state.progress = progress;
                     }
-                }
-                Task::none()
-            }
-
-            Message::ScanProgressUpdate(progress) => {
-                if let Some(ref mut state) = self.scan_state {
-                    state.progress = progress;
                 }
                 Task::none()
             }
@@ -1077,35 +1042,6 @@ impl PhotoVault {
                     if *idx + 1 < self.photos.len() {
                         *idx += 1;
                     }
-                }
-                Task::none()
-            }
-
-            Message::ThumbnailReady { photo_id, path } => {
-                // Update the photo's thumbnail path in our in-memory list (absolute for UI)
-                if let Some(photo) = self.photos.iter_mut().find(|p| p.id == photo_id) {
-                    photo.thumbnail_path = Some(path.to_string_lossy().to_string());
-                }
-
-                // Update DB (fire-and-forget) — store relative path for portability
-                if let Some(ref drive_path) = self.selected_drive {
-                    let drive_path = drive_path.clone();
-                    let rel_path = path
-                        .strip_prefix(&drive_path)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string();
-                    return Task::perform(
-                        async move {
-                            if let Ok(db) = Database::open_for_drive(&drive_path) {
-                                let _ = db.conn.execute(
-                                    "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
-                                    rusqlite::params![rel_path, photo_id],
-                                );
-                            }
-                        },
-                        |_| Message::NoOp,
-                    );
                 }
                 Task::none()
             }
@@ -1287,14 +1223,6 @@ impl PhotoVault {
                 self.search_loading = false;
                 self.search_results = Some(groups);
                 self.search_result_photo_ids = ids;
-                Task::none()
-            }
-
-            Message::ClearSearch => {
-                self.search_query.clear();
-                self.search_suggestions.clear();
-                self.search_results = None;
-                self.search_result_photo_ids.clear();
                 Task::none()
             }
 
@@ -1793,11 +1721,6 @@ impl PhotoVault {
                 Task::batch([process_task, poll_task])
             }
 
-            Message::FaceProcessingProgress(progress) => {
-                self.face_processing_progress = Some(progress);
-                Task::none()
-            }
-
             Message::FaceProcessingComplete(result) => {
                 self.face_processing_active = false;
                 self.face_processing_progress = None;
@@ -1937,11 +1860,6 @@ impl PhotoVault {
                 Task::none()
             }
 
-            Message::ClusterPhotosLoaded(photos) => {
-                self.cluster_photos = photos;
-                Task::none()
-            }
-
             Message::BackToPeople => {
                 self.current_view = View::People;
                 self.selected_cluster_id = None;
@@ -1996,27 +1914,6 @@ impl PhotoVault {
                     },
                     |_| Message::NoOp,
                 )
-            }
-
-            Message::MergeClusters(source_id, target_id) => {
-                let Some(ref drive_path) = self.selected_drive else {
-                    return Task::none();
-                };
-
-                let drive_path = drive_path.clone();
-                let merge_task = Task::perform(
-                    async move {
-                        if let Ok(db) = Database::open_for_drive(&drive_path) {
-                            let face_repo = FaceRepo::new(&db.conn);
-                            let _ = face_repo.merge_clusters(source_id, target_id);
-                        }
-                    },
-                    |_| Message::NoOp,
-                );
-
-                // Reload clusters after merge
-                let reload_task = self.load_face_clusters();
-                Task::batch([merge_task, reload_task])
             }
 
             Message::ToggleMergeMode => {

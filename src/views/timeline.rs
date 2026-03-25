@@ -15,7 +15,6 @@ use crate::theme::colors::{Backgrounds, Text};
 /// Group of photos taken on the same date
 #[derive(Debug, Clone)]
 pub struct DateGroup {
-    pub date: String,
     pub display_date: String,
     pub location: Option<String>,
     pub photos: Vec<Photo>,
@@ -105,7 +104,6 @@ impl TimelineView {
                 .unwrap_or_else(|| "Unknown Date".to_string());
 
             let group = groups.entry(date_key.clone()).or_insert_with(|| DateGroup {
-                date: date_key,
                 display_date,
                 location: photo.location_string(),
                 photos: Vec::new(),

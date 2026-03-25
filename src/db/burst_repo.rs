@@ -14,8 +14,6 @@ pub struct BurstGroupRecord {
 /// Burst group member record
 #[derive(Debug, Clone)]
 pub struct BurstGroupMemberRecord {
-    pub id: i64,
-    pub group_id: i64,
     pub photo_id: i64,
     pub sharpness_score: Option<f32>,
     pub blur_score: Option<f32>,
@@ -24,7 +22,6 @@ pub struct BurstGroupMemberRecord {
 
     // Joined from photos
     pub file_path: Option<String>,
-    pub date_taken: Option<String>,
 }
 
 /// Burst repository
@@ -187,15 +184,12 @@ impl<'a> BurstRepo<'a> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT 
-                bgm.id,
-                bgm.group_id,
                 bgm.photo_id,
                 bgm.sharpness_score,
                 bgm.blur_score,
                 bgm.face_count,
                 bgm.is_suggested_best,
-                p.file_path,
-                p.date_taken
+                p.file_path
             FROM burst_group_members bgm
             JOIN photos p ON bgm.photo_id = p.id
             WHERE bgm.group_id = ?1
@@ -205,15 +199,12 @@ impl<'a> BurstRepo<'a> {
 
         let rows = stmt.query_map(params![group_id], |row| {
             Ok(BurstGroupMemberRecord {
-                id: row.get(0)?,
-                group_id: row.get(1)?,
-                photo_id: row.get(2)?,
-                sharpness_score: row.get(3)?,
-                blur_score: row.get(4)?,
-                face_count: row.get(5)?,
-                is_suggested_best: row.get(6)?,
-                file_path: row.get(7)?,
-                date_taken: row.get(8)?,
+                photo_id: row.get(0)?,
+                sharpness_score: row.get(1)?,
+                blur_score: row.get(2)?,
+                face_count: row.get(3)?,
+                is_suggested_best: row.get(4)?,
+                file_path: row.get(5)?,
             })
         })?;
 

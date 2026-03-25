@@ -10,7 +10,6 @@ use crate::search::SearchQuery;
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub photo_id: i64,
-    pub file_path: String,
     pub date_taken: Option<String>,
     pub location_city: Option<String>,
     pub location_country: Option<String>,
@@ -61,7 +60,6 @@ impl SearchService {
                 let rows = stmt.query_map([], |row| {
                     Ok(SearchResult {
                         photo_id: row.get(0)?,
-                        file_path: row.get(1)?,
                         date_taken: row.get(2)?,
                         location_city: row.get(3)?,
                         location_country: row.get(4)?,
@@ -75,7 +73,6 @@ impl SearchService {
                 let rows = stmt.query_map(params![params_dyn[0], params_dyn[1]], |row| {
                     Ok(SearchResult {
                         photo_id: row.get(0)?,
-                        file_path: row.get(1)?,
                         date_taken: row.get(2)?,
                         location_city: row.get(3)?,
                         location_country: row.get(4)?,
@@ -91,7 +88,6 @@ impl SearchService {
                     |row| {
                         Ok(SearchResult {
                             photo_id: row.get(0)?,
-                            file_path: row.get(1)?,
                             date_taken: row.get(2)?,
                             location_city: row.get(3)?,
                             location_country: row.get(4)?,
@@ -115,7 +111,6 @@ impl SearchService {
                     |row| {
                         Ok(SearchResult {
                             photo_id: row.get(0)?,
-                            file_path: row.get(1)?,
                             date_taken: row.get(2)?,
                             location_city: row.get(3)?,
                             location_country: row.get(4)?,

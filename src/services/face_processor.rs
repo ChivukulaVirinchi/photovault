@@ -16,16 +16,6 @@ pub struct FaceProcessingProgress {
     pub processed: usize,
     pub total: usize,
     pub faces_found: usize,
-    pub phase: FaceProcessingPhase,
-}
-
-/// Current phase of face processing
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FaceProcessingPhase {
-    Detecting,
-    Embedding,
-    Clustering,
-    Complete,
 }
 
 impl Default for FaceProcessingProgress {
@@ -34,7 +24,6 @@ impl Default for FaceProcessingProgress {
             processed: 0,
             total: 0,
             faces_found: 0,
-            phase: FaceProcessingPhase::Detecting,
         }
     }
 }
@@ -141,7 +130,6 @@ impl FaceProcessor {
                     processed: idx,
                     total,
                     faces_found: total_faces,
-                    phase: FaceProcessingPhase::Detecting,
                 });
             }
 
@@ -207,7 +195,6 @@ impl FaceProcessor {
                 processed: total,
                 total,
                 faces_found: total_faces,
-                phase: FaceProcessingPhase::Clustering,
             });
         }
 
@@ -220,7 +207,6 @@ impl FaceProcessor {
                 processed: total,
                 total,
                 faces_found: total_faces,
-                phase: FaceProcessingPhase::Complete,
             });
         }
 

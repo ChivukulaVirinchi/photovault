@@ -4,4 +4,3 @@
 //! Aesthetic: Editorial/Magazine meets Modern Desktop App
 
 pub mod colors;
-pub mod typography;

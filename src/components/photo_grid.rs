@@ -11,27 +11,6 @@ use crate::app::Message;
 use crate::models::Photo;
 use crate::theme::colors::{Backgrounds, Border, Text as TextColors};
 
-/// Configuration for the photo grid
-#[derive(Debug, Clone)]
-pub struct PhotoGridConfig {
-    /// Size of each thumbnail in pixels
-    pub thumbnail_size: f32,
-    /// Gap between thumbnails
-    pub gap: f32,
-    /// Padding around the grid
-    pub padding: f32,
-}
-
-impl Default for PhotoGridConfig {
-    fn default() -> Self {
-        Self {
-            thumbnail_size: 160.0,
-            gap: 8.0,
-            padding: 16.0,
-        }
-    }
-}
-
 /// Render a photo grid using standard iced widgets
 ///
 /// Takes owned photo data to avoid lifetime issues with closures.

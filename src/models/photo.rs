@@ -41,11 +41,6 @@ pub struct Photo {
 }
 
 impl Photo {
-    /// Get the display date for this photo
-    pub fn display_date(&self) -> Option<DateTime<Utc>> {
-        self.date_taken
-    }
-
     /// Check if this photo has GPS coordinates
     pub fn has_location(&self) -> bool {
         self.gps_latitude.is_some() && self.gps_longitude.is_some()

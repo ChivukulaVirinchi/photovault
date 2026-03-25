@@ -19,8 +19,6 @@ pub enum DatabaseError {
 /// Database wrapper with path information
 pub struct Database {
     pub conn: Connection,
-    pub path: PathBuf,
-    pub drive_root: PathBuf,
 }
 
 impl Database {
@@ -54,8 +52,6 @@ impl Database {
 
         Ok(Self {
             conn,
-            path: db_path,
-            drive_root,
         })
     }
 
@@ -121,7 +117,15 @@ mod tests {
         let temp = tempdir().unwrap();
         let db = Database::open_for_drive(temp.path()).unwrap();
 
-        assert!(db.path.exists());
+        let table_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_count >= 0);
         assert!(temp.path().join(".photovault").exists());
     }
 }

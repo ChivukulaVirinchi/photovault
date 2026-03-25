@@ -44,16 +44,6 @@ impl FaceEmbedding {
         }
     }
 
-    /// Calculate Euclidean distance with another embedding
-    pub fn euclidean_distance(&self, other: &FaceEmbedding) -> f32 {
-        self.vector
-            .iter()
-            .zip(other.vector.iter())
-            .map(|(a, b)| (a - b).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-
     /// Convert to bytes for database storage (little-endian f32 values)
     pub fn to_bytes(&self) -> Vec<u8> {
         self.vector.iter().flat_map(|f| f.to_le_bytes()).collect()
@@ -195,11 +185,4 @@ mod tests {
         assert!(FaceEmbedding::from_bytes(&bytes).is_none());
     }
 
-    #[test]
-    fn test_euclidean_distance() {
-        let emb1 = FaceEmbedding::new(Array1::from_vec(vec![0.0, 0.0, 0.0]));
-        let emb2 = FaceEmbedding::new(Array1::from_vec(vec![3.0, 4.0, 0.0]));
-
-        assert!((emb1.euclidean_distance(&emb2) - 5.0).abs() < 0.001);
-    }
 }

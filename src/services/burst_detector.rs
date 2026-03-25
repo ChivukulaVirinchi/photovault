@@ -15,8 +15,6 @@ pub struct BurstGroup {
     /// End timestamp
     pub end_time: DateTime<Utc>,
 
-    /// Suggested best photo ID
-    pub suggested_best_id: Option<i64>,
 }
 
 /// Burst detection configuration
@@ -115,7 +113,6 @@ impl BurstDetector {
             photo_ids,
             start_time,
             end_time,
-            suggested_best_id: None, // Will be set by best-pick scoring
         }
     }
 
@@ -134,32 +131,6 @@ impl BurstDetector {
         None
     }
 
-    /// Get burst statistics
-    pub fn get_stats(&self, conn: &Connection) -> rusqlite::Result<BurstStats> {
-        let groups = self.find_bursts(conn)?;
-
-        let total_groups = groups.len();
-        let total_photos: usize = groups.iter().map(|g| g.photo_ids.len()).sum();
-        let saveable_photos = if total_photos > total_groups {
-            total_photos - total_groups
-        } else {
-            0
-        }; // Keep 1 per group
-
-        Ok(BurstStats {
-            total_groups,
-            total_photos,
-            saveable_photos,
-        })
-    }
-}
-
-/// Burst detection statistics
-#[derive(Debug, Clone)]
-pub struct BurstStats {
-    pub total_groups: usize,
-    pub total_photos: usize,
-    pub saveable_photos: usize,
 }
 
 #[cfg(test)]

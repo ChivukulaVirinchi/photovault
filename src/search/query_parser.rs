@@ -8,7 +8,7 @@ pub enum SearchFilter {
     Person(String),
     Location(String),
     DateRange(DateRange),
-    Text(String),
+    Text,
 }
 
 /// A complete parsed search query.
@@ -87,7 +87,7 @@ impl QueryParser {
         }
 
         if query.is_empty() {
-            query.filters.push(SearchFilter::Text(input.to_string()));
+            query.filters.push(SearchFilter::Text);
         }
 
         query

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 
 use super::FaceEmbedding;
 
@@ -30,12 +30,6 @@ impl FaceClusterer {
     /// Set epsilon (distance threshold)
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
         self.epsilon = epsilon;
-        self
-    }
-
-    /// Set minimum samples per cluster
-    pub fn with_min_samples(mut self, min_samples: usize) -> Self {
-        self.min_samples = min_samples;
         self
     }
 
@@ -149,50 +143,6 @@ impl FaceClusterer {
             .collect()
     }
 
-    /// Assign a new face to the closest existing cluster (for incremental clustering)
-    ///
-    /// Returns `Some(cluster_id)` if the face is close enough, `None` if it's noise.
-    pub fn assign_to_cluster(
-        &self,
-        new_embedding: &FaceEmbedding,
-        cluster_centroids: &[(i32, FaceEmbedding)],
-    ) -> Option<i32> {
-        let mut best_cluster = None;
-        let mut best_distance = f32::MAX;
-
-        for (cluster_id, centroid) in cluster_centroids {
-            let distance = 1.0 - new_embedding.cosine_similarity(centroid);
-            if distance < self.epsilon && distance < best_distance {
-                best_distance = distance;
-                best_cluster = Some(*cluster_id);
-            }
-        }
-
-        best_cluster
-    }
-
-    /// Calculate the centroid (average) of a set of embeddings
-    pub fn calculate_centroid(embeddings: &[FaceEmbedding]) -> Option<FaceEmbedding> {
-        if embeddings.is_empty() {
-            return None;
-        }
-
-        let n = embeddings.len() as f32;
-        let dim = embeddings[0].vector.len();
-        let mut sum = Array1::<f32>::zeros(dim);
-
-        for emb in embeddings {
-            sum = sum + &emb.vector;
-        }
-
-        let avg = sum / n;
-
-        // L2 normalize
-        let norm: f32 = avg.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let normalized = if norm > 0.0 { avg / norm } else { avg };
-
-        Some(FaceEmbedding::new(normalized))
-    }
 }
 
 impl Default for FaceClusterer {
@@ -204,10 +154,8 @@ impl Default for FaceClusterer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::Array1;
-
     fn make_embedding(values: &[f32]) -> FaceEmbedding {
-        FaceEmbedding::new(Array1::from_vec(values.to_vec()))
+        FaceEmbedding::new(ndarray::Array1::from_vec(values.to_vec()))
     }
 
     #[test]
@@ -219,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_cluster_identical_faces() {
-        let clusterer = FaceClusterer::new().with_min_samples(2);
+        let clusterer = FaceClusterer::new();
 
         let emb = vec![1.0; 512];
         let faces = vec![
@@ -265,15 +213,4 @@ mod tests {
         assert_ne!(result[&1], result[&3]);
     }
 
-    #[test]
-    fn test_centroid_calculation() {
-        let emb1 = make_embedding(&[1.0, 0.0, 0.0]);
-        let emb2 = make_embedding(&[0.0, 1.0, 0.0]);
-
-        let centroid = FaceClusterer::calculate_centroid(&[emb1, emb2]).unwrap();
-
-        // Centroid should be normalized
-        let norm: f32 = centroid.vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.001);
-    }
 }

@@ -5,12 +5,10 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// Trashed photo record.
 #[derive(Debug, Clone)]
 pub struct TrashedPhotoRecord {
-    pub id: i64,
     pub photo_id: i64,
     pub original_path: String,
     pub trashed_at: String,
     pub file_size: Option<i64>,
-    pub date_taken: Option<String>,
     pub thumbnail_path: Option<String>,
 }
 
@@ -43,12 +41,10 @@ impl<'a> TrashRepo<'a> {
 
         let rows = stmt.query_map([], |row| {
             Ok(TrashedPhotoRecord {
-                id: row.get(0)?,
                 photo_id: row.get(1)?,
                 original_path: row.get(2)?,
                 trashed_at: row.get(3)?,
                 file_size: row.get(4)?,
-                date_taken: row.get(5)?,
                 thumbnail_path: row.get(6)?,
             })
         })?;
@@ -58,12 +54,5 @@ impl<'a> TrashRepo<'a> {
             items.push(row?);
         }
         Ok(items)
-    }
-
-    pub fn count(&self) -> SqliteResult<usize> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM trash", [], |row| row.get(0))?;
-        Ok(count as usize)
     }
 }

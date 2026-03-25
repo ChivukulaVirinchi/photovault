@@ -121,25 +121,6 @@ impl DuplicateDetector {
         scored.first().map(|(id, _, _, _)| *id)
     }
 
-    /// Get count of duplicate groups
-    pub fn count_duplicate_groups(conn: &Connection) -> rusqlite::Result<usize> {
-        let count: i64 = conn.query_row(
-            r#"
-            SELECT COUNT(*) FROM (
-                SELECT file_hash
-                FROM photos
-                WHERE is_trashed = FALSE
-                GROUP BY file_hash
-                HAVING COUNT(*) > 1
-            )
-            "#,
-            [],
-            |row| row.get(0),
-        )?;
-
-        Ok(count as usize)
-    }
-
     /// Get total wasted space from duplicates (in bytes)
     pub fn calculate_wasted_space(conn: &Connection) -> rusqlite::Result<u64> {
         // For each duplicate group, sum all file sizes except the largest

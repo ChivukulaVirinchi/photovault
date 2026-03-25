@@ -13,7 +13,6 @@ use std::time::Instant;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
-use lru::LruCache;
 
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,59 +44,8 @@ impl ThumbnailSize {
 #[derive(Debug, Clone)]
 pub struct ThumbnailEntry {
     pub path: PathBuf,
-    pub size: ThumbnailSize,
     pub last_accessed: Instant,
     pub file_size: u64,
-}
-
-/// Thumbnail generation result
-#[derive(Debug, Clone)]
-pub enum ThumbnailResult {
-    /// Thumbnail exists at path
-    Ready(PathBuf),
-    /// Thumbnail is being generated
-    Pending,
-    /// Generation failed
-    Failed(String),
-}
-
-/// LRU cache for loaded thumbnails.
-pub struct ThumbnailCache {
-    cache: LruCache<String, iced::widget::image::Handle>,
-    max_memory_bytes: usize,
-    current_memory_bytes: usize,
-}
-
-impl ThumbnailCache {
-    pub fn new(max_memory_mb: usize) -> Self {
-        Self {
-            cache: LruCache::new(std::num::NonZeroUsize::new(1000).expect("non-zero cache size")),
-            max_memory_bytes: max_memory_mb * 1024 * 1024,
-            current_memory_bytes: 0,
-        }
-    }
-
-    pub fn get(&mut self, hash: &str) -> Option<&iced::widget::image::Handle> {
-        self.cache.get(hash)
-    }
-
-    pub fn insert(&mut self, hash: String, handle: iced::widget::image::Handle, size_bytes: usize) {
-        while self.current_memory_bytes + size_bytes > self.max_memory_bytes {
-            if self.cache.pop_lru().is_some() {
-                self.current_memory_bytes = self.current_memory_bytes.saturating_sub(size_bytes);
-            } else {
-                break;
-            }
-        }
-
-        self.cache.put(hash, handle);
-        self.current_memory_bytes += size_bytes;
-    }
-
-    pub fn clear(&mut self) {
-        self.cache.clear();
-        self.current_memory_bytes = 0;
-    }
 }
 
 /// Concurrency limiter using std::sync primitives (safe for spawn_blocking)
@@ -182,53 +130,6 @@ impl ThumbnailService {
             generation_limiter: Arc::new(ConcurrencyLimiter::new(8)), // Match batch size of 8
             generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
-    }
-
-    /// Get or generate a thumbnail for a photo
-    ///
-    /// Returns immediately with the thumbnail path if cached,
-    /// or marks as generating and returns Pending.
-    pub fn get_thumbnail(
-        &self,
-        _photo_path: &str,
-        file_hash: &str,
-        size: ThumbnailSize,
-    ) -> ThumbnailResult {
-        let cache_key = (file_hash.to_string(), size);
-
-        // Check in-memory cache
-        {
-            let cache = self.cache.read().unwrap();
-            if let Some(entry) = cache.get(&cache_key) {
-                if entry.path.exists() {
-                    return ThumbnailResult::Ready(entry.path.clone());
-                }
-            }
-        }
-
-        // Check if file exists on disk
-        let thumb_path = self.thumbnail_path(file_hash, size);
-        if thumb_path.exists() {
-            // Add to in-memory cache
-            self.add_to_cache(file_hash, size, &thumb_path);
-            return ThumbnailResult::Ready(thumb_path);
-        }
-
-        // Check if already generating
-        {
-            let generating = self.generating.read().unwrap();
-            if generating.contains(file_hash) {
-                return ThumbnailResult::Pending;
-            }
-        }
-
-        // Mark as generating
-        {
-            let mut generating = self.generating.write().unwrap();
-            generating.insert(file_hash.to_string());
-        }
-
-        ThumbnailResult::Pending
     }
 
     /// Generate a thumbnail synchronously
@@ -341,7 +242,6 @@ impl ThumbnailService {
 
         let entry = ThumbnailEntry {
             path: path.to_path_buf(),
-            size,
             last_accessed: Instant::now(),
             file_size,
         };
@@ -434,7 +334,6 @@ impl ThumbnailService {
 
                             let entry = ThumbnailEntry {
                                 path: path.clone(),
-                                size,
                                 last_accessed: Instant::now(),
                                 file_size,
                             };

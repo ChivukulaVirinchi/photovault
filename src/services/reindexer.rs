@@ -24,9 +24,6 @@ impl IndexChanges {
             && self.modified.is_empty()
     }
 
-    pub fn total_changes(&self) -> usize {
-        self.added.len() + self.removed.len() + self.moved.len() + self.modified.len()
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -35,12 +32,6 @@ pub struct ApplyResult {
     pub moves_applied: usize,
     pub removals_applied: usize,
     pub updates_applied: usize,
-}
-
-impl ApplyResult {
-    pub fn total(&self) -> usize {
-        self.new_files + self.moves_applied + self.removals_applied + self.updates_applied
-    }
 }
 
 pub struct Reindexer {

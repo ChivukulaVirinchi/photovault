@@ -126,12 +126,6 @@ impl Semantic {
         0x7B as f32 / 255.0,
     ); // #E5C07B
 
-    /// Error - muted red
-    pub const ERROR: Color = Color::from_rgb(
-        0xE0 as f32 / 255.0,
-        0x6C as f32 / 255.0,
-        0x75 as f32 / 255.0,
-    ); // #E06C75
 }
 
 /// Border colors
@@ -151,18 +145,4 @@ impl Border {
         0x3A as f32 / 255.0,
         0x42 as f32 / 255.0,
     ); // #3A3A42
-}
-
-/// Helper trait for color manipulation
-pub trait ColorExt {
-    fn scale_alpha(self, factor: f32) -> Color;
-}
-
-impl ColorExt for Color {
-    fn scale_alpha(self, factor: f32) -> Color {
-        Color {
-            a: self.a * factor,
-            ..self
-        }
-    }
 }

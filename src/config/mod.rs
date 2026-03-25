@@ -88,10 +88,6 @@ impl AppConfig {
         }
     }
 
-    /// Remove drive from remembered list.
-    pub fn forget_drive(&mut self, path: &PathBuf) {
-        self.remembered_drives.retain(|p| p != path);
-    }
 }
 
 /// Theme setting.
@@ -111,14 +107,4 @@ pub enum DateFormat {
     Iso,
     Us,
     Eu,
-}
-
-impl DateFormat {
-    pub fn format_date(&self, year: i32, month: u32, day: u32) -> String {
-        match self {
-            DateFormat::Locale | DateFormat::Iso => format!("{:04}-{:02}-{:02}", year, month, day),
-            DateFormat::Us => format!("{:02}/{:02}/{:04}", month, day, year),
-            DateFormat::Eu => format!("{:02}/{:02}/{:04}", day, month, year),
-        }
-    }
 }
