@@ -96,6 +96,9 @@ pub struct PhotoVault {
     /// Cursor for incremental thumbnail scheduling over full photo list.
     thumbnail_scan_cursor: usize,
 
+    /// Monotonic generation token used to invalidate stale thumbnail tasks.
+    thumbnail_generation_epoch: u64,
+
     /// Current window width in pixels (for responsive grid columns)
     window_width: f32,
 
@@ -268,13 +271,13 @@ pub enum Message {
     NextPhoto,
 
     /// Batch of thumbnails ready
-    ThumbnailBatchReady(Vec<(i64, PathBuf)>),
+    ThumbnailBatchReady(u64, Vec<(i64, PathBuf)>),
 
     /// DB write for a thumbnail batch completed; triggers the next batch
-    ThumbnailBatchSaved,
+    ThumbnailBatchSaved(u64),
 
     /// Continue background thumbnail scheduling in small chunks.
-    ContinueThumbnailScheduling,
+    ContinueThumbnailScheduling(u64),
 
     /// Keyboard event
     KeyPressed(keyboard::Key),
@@ -480,6 +483,7 @@ impl PhotoVault {
             thumbnail_generation_active: false,
             thumbnail_queue: Vec::new(),
             thumbnail_scan_cursor: 0,
+            thumbnail_generation_epoch: 0,
             window_width: 1280.0, // sensible default until first resize event
             // Phase 4
             face_clusters: Vec::new(),
@@ -558,7 +562,7 @@ impl PhotoVault {
         // Scan progress polling
         if self.scan_state.is_some() {
             subs.push(
-                iced::time::every(std::time::Duration::from_millis(50))
+                iced::time::every(std::time::Duration::from_millis(120))
                     .map(|_| Message::PollScanChannels),
             );
         }
@@ -620,6 +624,37 @@ impl PhotoVault {
     const THUMBNAIL_SCAN_CHUNK: usize = 64;
     /// Max number of queued thumbnail jobs to keep in memory.
     const THUMBNAIL_QUEUE_TARGET: usize = 48;
+    /// Number of currently-visible rows to prioritize.
+    const THUMBNAIL_VISIBLE_ROWS: usize = 10;
+    /// Number of prefetch rows just beyond visible rows.
+    const THUMBNAIL_PREFETCH_ROWS: usize = 6;
+
+    fn timeline_columns_for_width(width: f32) -> usize {
+        let available_width = (width - 200.0 - 32.0).max(168.0);
+        (available_width / 168.0).floor().max(2.0) as usize
+    }
+
+    fn begin_thumbnail_generation_epoch(&mut self) {
+        self.thumbnail_generation_epoch = self.thumbnail_generation_epoch.wrapping_add(1);
+        self.thumbnail_generation_active = false;
+        self.thumbnail_queue.clear();
+        self.thumbnail_scan_cursor = 0;
+    }
+
+    fn seed_thumbnail_queue_for_timeline(&mut self) {
+        let columns = Self::timeline_columns_for_width(self.window_width);
+        let priority_count = columns * (Self::THUMBNAIL_VISIBLE_ROWS + Self::THUMBNAIL_PREFETCH_ROWS);
+        let initial_end = priority_count.min(self.photos.len());
+
+        for photo in self.photos.iter().take(initial_end) {
+            if photo.thumbnail_path.is_none() {
+                self.thumbnail_queue
+                    .push((photo.id, photo.file_path.clone(), photo.file_hash.clone()));
+            }
+        }
+
+        self.thumbnail_scan_cursor = initial_end;
+    }
 
     fn schedule_thumbnail_chunk(&mut self) {
         if self.thumbnail_queue.len() >= Self::THUMBNAIL_QUEUE_TARGET {
@@ -690,6 +725,7 @@ impl PhotoVault {
 
         let drive_path = drive_path.clone();
         let thumb_size = self.configured_thumbnail_size();
+        let epoch = self.thumbnail_generation_epoch;
 
         // Clone the shared service into an Arc so all spawn_blocking calls reuse it.
         let service = Arc::new(
@@ -742,7 +778,7 @@ impl PhotoVault {
                 // Return the Arc so we can restore the service
                 (results, service_for_restore)
             },
-            |(results, _service_arc)| Message::ThumbnailBatchReady(results),
+            move |(results, _service_arc)| Message::ThumbnailBatchReady(epoch, results),
         )
     }
 
@@ -825,6 +861,9 @@ impl PhotoVault {
         match message {
             Message::NavigateTo(view) => {
                 tracing::info!("NavigateTo: {:?}", view);
+                if view != View::Timeline {
+                    self.begin_thumbnail_generation_epoch();
+                }
                 // If navigating to Timeline, always reload photos from DB
                 // (photos may have new thumbnails, or user may have re-scanned)
                 let task = if view == View::Timeline {
@@ -851,6 +890,7 @@ impl PhotoVault {
 
             Message::SelectDrive(path) => {
                 tracing::info!("Selected drive: {:?}", path);
+                self.begin_thumbnail_generation_epoch();
 
                 match Database::open_for_drive(&path) {
                     Ok(db) => {
@@ -1044,12 +1084,12 @@ impl PhotoVault {
             // --- Phase 3 handlers ---
             Message::PhotosLoaded(photos) => {
                 tracing::info!("Loaded {} photos for timeline", photos.len());
+                self.begin_thumbnail_generation_epoch();
                 self.photos = photos;
                 self.photo_count = self.photos.len() as i64;
 
-                // Incremental thumbnail scheduling: only queue a small window at a time.
-                self.thumbnail_queue.clear();
-                self.thumbnail_scan_cursor = 0;
+                // Prioritize visible timeline region first, then continue incrementally.
+                self.seed_thumbnail_queue_for_timeline();
                 self.schedule_thumbnail_chunk();
 
                 tracing::info!(
@@ -1062,11 +1102,12 @@ impl PhotoVault {
                     // Start processing the first batch
                     self.start_thumbnail_generation()
                 } else if self.thumbnail_scan_cursor < self.photos.len() {
+                    let epoch = self.thumbnail_generation_epoch;
                     Task::perform(
                         async {
                             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                         },
-                        |_| Message::ContinueThumbnailScheduling,
+                        move |_| Message::ContinueThumbnailScheduling(epoch),
                     )
                 } else {
                     Task::none()
@@ -1108,7 +1149,11 @@ impl PhotoVault {
                 Task::none()
             }
 
-            Message::ThumbnailBatchReady(results) => {
+            Message::ThumbnailBatchReady(epoch, results) => {
+                if epoch != self.thumbnail_generation_epoch {
+                    tracing::debug!("Ignoring stale thumbnail batch for epoch {}", epoch);
+                    return Task::none();
+                }
                 tracing::info!("Thumbnail batch ready: {} thumbnails generated", results.len());
 
                 // Restore the thumbnail service from the Arc (it was taken in start_thumbnail_generation)
@@ -1156,13 +1201,17 @@ impl PhotoVault {
                                 }
                             }
                         },
-                        |_| Message::ThumbnailBatchSaved,
+                        move |_| Message::ThumbnailBatchSaved(epoch),
                     );
                 }
                 Task::none()
             }
 
-            Message::ThumbnailBatchSaved => {
+            Message::ThumbnailBatchSaved(epoch) => {
+                if epoch != self.thumbnail_generation_epoch {
+                    tracing::debug!("Ignoring stale thumbnail saved callback for epoch {}", epoch);
+                    return Task::none();
+                }
                 self.schedule_thumbnail_chunk();
                 // Previous batch DB write completed; start the next batch
                 if !self.thumbnail_queue.is_empty() {
@@ -1176,7 +1225,7 @@ impl PhotoVault {
                         async {
                             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                         },
-                        |_| Message::ContinueThumbnailScheduling,
+                        move |_| Message::ContinueThumbnailScheduling(epoch),
                     )
                 } else {
                     tracing::info!("All thumbnails generated successfully");
@@ -1185,7 +1234,11 @@ impl PhotoVault {
                 }
             }
 
-            Message::ContinueThumbnailScheduling => {
+            Message::ContinueThumbnailScheduling(epoch) => {
+                if epoch != self.thumbnail_generation_epoch {
+                    tracing::debug!("Ignoring stale thumbnail scheduling tick for epoch {}", epoch);
+                    return Task::none();
+                }
                 self.schedule_thumbnail_chunk();
                 if !self.thumbnail_queue.is_empty() {
                     self.start_thumbnail_generation()
@@ -1194,7 +1247,7 @@ impl PhotoVault {
                         async {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         },
-                        |_| Message::ContinueThumbnailScheduling,
+                        move |_| Message::ContinueThumbnailScheduling(epoch),
                     )
                 } else {
                     self.thumbnail_generation_active = false;
@@ -1743,7 +1796,19 @@ impl PhotoVault {
             Message::NoOp => Task::none(),
 
             Message::WindowResized(width, _height) => {
+                let old_cols = Self::timeline_columns_for_width(self.window_width);
+                let new_cols = Self::timeline_columns_for_width(width);
                 self.window_width = width;
+
+                if old_cols != new_cols && self.current_view == View::Timeline && !self.photos.is_empty() {
+                    self.begin_thumbnail_generation_epoch();
+                    self.seed_thumbnail_queue_for_timeline();
+                    self.schedule_thumbnail_chunk();
+                    if !self.thumbnail_queue.is_empty() {
+                        return self.start_thumbnail_generation();
+                    }
+                }
+
                 Task::none()
             }
 
