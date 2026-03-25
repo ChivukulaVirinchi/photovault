@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use iced::keyboard;
 use iced::widget::{container, row};
-use iced::{event, window, Element, Length, Subscription, Task};
+use iced::{event, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
 use crate::config::{AppConfig, AppTheme, DateFormat};
@@ -29,6 +29,8 @@ use crate::views::{
     BurstsView, CullState, CullView, DuplicatesView, PeopleView, PhotoDetailView, SearchView,
     SettingsView, TimelineView, TrashView, WelcomeView,
 };
+
+const THUMBNAIL_DB_FLUSH_BATCH: usize = 64;
 
 /// Current view in the application
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +113,9 @@ pub struct PhotoVault {
 
     /// Current face processing progress
     face_processing_progress: Option<FaceProcessingProgress>,
+
+    /// Last face-processing error shown in People view.
+    face_processing_error: Option<String>,
 
     /// Cluster ID currently being name-edited
     editing_cluster_id: Option<i64>,
@@ -284,9 +289,6 @@ pub enum Message {
 
     /// No-op message (used as callback when we don't need the result)
     NoOp,
-
-    /// Window was resized
-    WindowResized(f32, f32),
 
     // --- Phase 4: Face processing ---
     /// Start face processing pipeline
@@ -489,6 +491,7 @@ impl PhotoVault {
             face_clusters: Vec::new(),
             face_processing_active: false,
             face_processing_progress: None,
+            face_processing_error: None,
             editing_cluster_id: None,
             edit_cluster_name: String::new(),
             selected_cluster_id: None,
@@ -567,16 +570,14 @@ impl PhotoVault {
             );
         }
 
-        // Keyboard events (for photo detail navigation) + Window resize events
-        subs.push(event::listen_with(|event, _status, _id| match event {
-            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                Some(Message::KeyPressed(key))
-            }
-            iced::Event::Window(window::Event::Resized(size)) => {
-                Some(Message::WindowResized(size.width, size.height))
-            }
-            _ => None,
-        }));
+        if self.current_view == View::PhotoDetail || self.current_view == View::Cull {
+            subs.push(event::listen_with(|event, _status, _id| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+                    Some(Message::KeyPressed(key))
+                }
+                _ => None,
+            }));
+        }
 
         Subscription::batch(subs)
     }
@@ -1183,21 +1184,31 @@ impl PhotoVault {
                     return Task::perform(
                         async move {
                             if let Ok(db) = Database::open_for_drive(&drive_path) {
-                                let tx = db.conn.unchecked_transaction();
-                                if let Ok(tx) = tx {
+                                if !results_for_db.is_empty() {
+                                    let mut pending = Vec::with_capacity(results_for_db.len());
                                     for (photo_id, path) in &results_for_db {
-                                        // Store relative path: strip drive_root prefix
                                         let rel_path = path
                                             .strip_prefix(&drive_path)
                                             .unwrap_or(path)
                                             .to_string_lossy()
                                             .to_string();
-                                        let _ = tx.execute(
-                                            "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
-                                            rusqlite::params![rel_path, photo_id],
-                                        );
+                                        pending.push((*photo_id, rel_path));
                                     }
-                                    let _ = tx.commit();
+
+                                    let mut idx = 0;
+                                    while idx < pending.len() {
+                                        let end = (idx + THUMBNAIL_DB_FLUSH_BATCH).min(pending.len());
+                                        if let Ok(tx) = db.conn.unchecked_transaction() {
+                                            for (photo_id, rel_path) in &pending[idx..end] {
+                                                let _ = tx.execute(
+                                                    "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
+                                                    rusqlite::params![rel_path, photo_id],
+                                                );
+                                            }
+                                            let _ = tx.commit();
+                                        }
+                                        idx = end;
+                                    }
                                 }
                             }
                         },
@@ -1212,6 +1223,7 @@ impl PhotoVault {
                     tracing::debug!("Ignoring stale thumbnail saved callback for epoch {}", epoch);
                     return Task::none();
                 }
+                self.thumbnail_generation_active = false;
                 self.schedule_thumbnail_chunk();
                 // Previous batch DB write completed; start the next batch
                 if !self.thumbnail_queue.is_empty() {
@@ -1237,6 +1249,10 @@ impl PhotoVault {
             Message::ContinueThumbnailScheduling(epoch) => {
                 if epoch != self.thumbnail_generation_epoch {
                     tracing::debug!("Ignoring stale thumbnail scheduling tick for epoch {}", epoch);
+                    return Task::none();
+                }
+                if self.current_view != View::Timeline {
+                    self.thumbnail_generation_active = false;
                     return Task::none();
                 }
                 self.schedule_thumbnail_chunk();
@@ -1795,23 +1811,6 @@ impl PhotoVault {
 
             Message::NoOp => Task::none(),
 
-            Message::WindowResized(width, _height) => {
-                let old_cols = Self::timeline_columns_for_width(self.window_width);
-                let new_cols = Self::timeline_columns_for_width(width);
-                self.window_width = width;
-
-                if old_cols != new_cols && self.current_view == View::Timeline && !self.photos.is_empty() {
-                    self.begin_thumbnail_generation_epoch();
-                    self.seed_thumbnail_queue_for_timeline();
-                    self.schedule_thumbnail_chunk();
-                    if !self.thumbnail_queue.is_empty() {
-                        return self.start_thumbnail_generation();
-                    }
-                }
-
-                Task::none()
-            }
-
             // --- Phase 4: Face processing handlers ---
             Message::ProcessFaces => {
                 if self.face_processing_active {
@@ -1826,6 +1825,7 @@ impl PhotoVault {
                 tracing::info!("ProcessFaces: starting face processing pipeline");
                 self.face_processing_active = true;
                 self.face_processing_progress = Some(FaceProcessingProgress::default());
+                self.face_processing_error = None;
 
                 let drive_path = drive_path.clone();
                 let detector_confidence = self.config.face_detection_confidence;
@@ -1834,7 +1834,20 @@ impl PhotoVault {
                     .unwrap_or_default()
                     .join("models");
 
-                let (progress_tx, progress_rx) = async_channel::bounded(64);
+                let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
+                let embedder_path = model_dir.join("glintr100.onnx");
+                if !detector_path.exists() || !embedder_path.exists() {
+                    self.face_processing_active = false;
+                    self.face_processing_progress = None;
+                    self.face_processing_error = Some(format!(
+                        "Face models missing. Expected {} and {}",
+                        detector_path.display(),
+                        embedder_path.display()
+                    ));
+                    return Task::none();
+                }
+
+                let (progress_tx, _progress_rx) = async_channel::bounded(32);
 
                 // Spawn blocking face processing task
                 let process_task = Task::perform(
@@ -1856,21 +1869,7 @@ impl PhotoVault {
                     Message::FaceProcessingComplete,
                 );
 
-                // Poll progress channel via subscription-like approach:
-                // We'll drain it in the subscription tick. Store the receiver.
-                // For simplicity, use a separate task that forwards progress.
-                let poll_task = Task::perform(
-                    async move {
-                        let mut last_progress = FaceProcessingProgress::default();
-                        while let Ok(progress) = progress_rx.recv().await {
-                            last_progress = progress;
-                        }
-                        last_progress
-                    },
-                    |_progress| Message::NoOp,
-                );
-
-                Task::batch([process_task, poll_task])
+                process_task
             }
 
             Message::FaceProcessingComplete(result) => {
@@ -1879,6 +1878,7 @@ impl PhotoVault {
 
                 match result {
                     Ok(result) => {
+                        self.face_processing_error = None;
                         tracing::info!(
                             "Face processing complete: {} photos, {} faces, {} clusters",
                             result.photos_processed,
@@ -1887,6 +1887,7 @@ impl PhotoVault {
                         );
                     }
                     Err(e) => {
+                        self.face_processing_error = Some(e.clone());
                         tracing::error!("Face processing failed: {}", e);
                     }
                 }
@@ -2381,34 +2382,16 @@ impl PhotoVault {
                             repo.sync_burst_groups(&sync_data)
                                 .map_err(|e| format!("Failed to sync burst groups: {}", e))?;
 
-                            // Score burst members for best-pick selection
+                            // Set a default best pick quickly (first/earliest member).
                             let groups_from_db = repo.get_all_groups()
                                 .map_err(|e| format!("Failed to load groups: {}", e))?;
 
                             for group in &groups_from_db {
                                 let members = repo.get_group_members(group.id).unwrap_or_default();
-                                for member in &members {
-                                    if let Some(ref file_path) = member.file_path {
-                                        let full_path = drive_path.join(file_path);
-                                        if full_path.exists() {
-                                            if let Ok(img) = image::open(&full_path) {
-                                                let score = crate::scoring::score_image(&img);
-                                                let _ = repo.update_member_scores(
-                                                    group.id,
-                                                    member.photo_id,
-                                                    score.sharpness,
-                                                    score.blur,
-                                                    0, // face_count — not scored here
-                                                );
-                                            }
-                                        }
-                                    }
+                                if let Some(first) = members.first() {
+                                    let _ = repo.set_suggested_best(group.id, first.photo_id);
                                 }
                             }
-
-                            // Calculate best picks
-                            repo.calculate_all_best_picks()
-                                .map_err(|e| format!("Failed to calculate best picks: {}", e))?;
 
                             // Reload groups
                             let final_groups = repo.get_all_groups()
@@ -2639,6 +2622,7 @@ impl PhotoVault {
                 &self.edit_cluster_name,
                 self.face_processing_active,
                 self.face_processing_progress.as_ref(),
+                self.face_processing_error.as_deref(),
                 self.merge_mode_active,
                 &self.merge_selected_clusters,
             ),
@@ -2668,6 +2652,7 @@ impl PhotoVault {
                         &self.edit_cluster_name,
                         self.face_processing_active,
                         self.face_processing_progress.as_ref(),
+                        self.face_processing_error.as_deref(),
                         self.merge_mode_active,
                         &self.merge_selected_clusters,
                     )

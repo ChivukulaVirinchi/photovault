@@ -27,6 +27,7 @@ impl PeopleView {
         edit_name: &str,
         processing_active: bool,
         progress: Option<&FaceProcessingProgress>,
+        processing_error: Option<&str>,
         merge_mode_active: bool,
         merge_selected: &[i64],
     ) -> Element<'static, Message> {
@@ -251,6 +252,24 @@ impl PeopleView {
         if let Some(merge_bar) = merge_action {
             content_children.push(Space::with_height(12).into());
             content_children.push(merge_bar);
+        }
+
+        if let Some(err) = processing_error {
+            content_children.push(Space::with_height(12).into());
+            content_children.push(
+                container(text(err.to_string()).size(12).color(iced::Color::from_rgb(0.9, 0.4, 0.4)))
+                    .padding(Padding::from([8, 12]))
+                    .style(|_theme| container::Style {
+                        background: Some(Backgrounds::ELEVATED.into()),
+                        border: iced::Border {
+                            color: iced::Color::from_rgb(0.8, 0.3, 0.3),
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    })
+                    .into(),
+            );
         }
 
         content_children.push(Space::with_height(24).into());

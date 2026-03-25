@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Image quality scoring for best-pick selection
 
 pub mod blur;

@@ -17,11 +17,7 @@ pub struct BurstGroupMemberRecord {
     pub photo_id: i64,
     pub sharpness_score: Option<f32>,
     pub blur_score: Option<f32>,
-    pub face_count: Option<i32>,
     pub is_suggested_best: bool,
-
-    // Joined from photos
-    pub file_path: Option<String>,
 }
 
 /// Burst repository
@@ -83,26 +79,6 @@ impl<'a> BurstRepo<'a> {
         tx.commit()
     }
 
-    /// Update quality scores for a burst member
-    pub fn update_member_scores(
-        &self,
-        group_id: i64,
-        photo_id: i64,
-        sharpness: f32,
-        blur: f32,
-        face_count: i32,
-    ) -> SqliteResult<()> {
-        self.conn.execute(
-            r#"
-            UPDATE burst_group_members
-            SET sharpness_score = ?1, blur_score = ?2, face_count = ?3
-            WHERE group_id = ?4 AND photo_id = ?5
-            "#,
-            params![sharpness, blur, face_count, group_id, photo_id],
-        )?;
-        Ok(())
-    }
-
     /// Set the suggested best photo for a group
     pub fn set_suggested_best(&self, group_id: i64, photo_id: i64) -> SqliteResult<()> {
         // Clear existing
@@ -116,38 +92,6 @@ impl<'a> BurstRepo<'a> {
             "UPDATE burst_group_members SET is_suggested_best = TRUE WHERE group_id = ?1 AND photo_id = ?2",
             params![group_id, photo_id],
         )?;
-
-        Ok(())
-    }
-
-    /// Calculate and set best picks for all groups
-    pub fn calculate_all_best_picks(&self) -> SqliteResult<()> {
-        // For each group, find the photo with the highest combined score
-        let groups = self.get_all_groups()?;
-
-        for group in &groups {
-            let members = self.get_group_members(group.id)?;
-            if members.is_empty() {
-                continue;
-            }
-
-            // Find the member with the highest combined quality score
-            let best = members.iter().max_by(|a, b| {
-                let score_a = a.sharpness_score.unwrap_or(0.0) * 0.4
-                    + a.blur_score.unwrap_or(0.0) * 0.3
-                    + a.face_count.unwrap_or(0) as f32 * 0.1;
-                let score_b = b.sharpness_score.unwrap_or(0.0) * 0.4
-                    + b.blur_score.unwrap_or(0.0) * 0.3
-                    + b.face_count.unwrap_or(0) as f32 * 0.1;
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            if let Some(best_member) = best {
-                self.set_suggested_best(group.id, best_member.photo_id)?;
-            }
-        }
 
         Ok(())
     }
@@ -202,9 +146,7 @@ impl<'a> BurstRepo<'a> {
                 photo_id: row.get(0)?,
                 sharpness_score: row.get(1)?,
                 blur_score: row.get(2)?,
-                face_count: row.get(3)?,
                 is_suggested_best: row.get(4)?,
-                file_path: row.get(5)?,
             })
         })?;
 
