@@ -84,8 +84,12 @@ impl FaceProcessor {
         }
 
         // Initialize ONNX Runtime and load models
-        let runtime =
-            OnnxRuntime::init().map_err(|e| format!("Failed to init ONNX Runtime: {}", e))?;
+        let runtime = OnnxRuntime::init().map_err(|e| {
+            format!(
+                "Failed to init ONNX Runtime: {}. Install ONNX Runtime 1.23.x and set ORT_DYLIB_PATH, or place libonnxruntime.so in libs/onnxruntime/.",
+                e
+            )
+        })?;
 
         let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
         let embedder_path = model_dir.join("glintr100.onnx");

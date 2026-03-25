@@ -861,16 +861,15 @@ impl PhotoVault {
         match message {
             Message::NavigateTo(view) => {
                 tracing::info!("NavigateTo: {:?}", view);
+                if view == self.current_view {
+                    return Task::none();
+                }
                 if view != View::Timeline {
                     self.begin_thumbnail_generation_epoch();
                 }
                 // If navigating to Timeline, always reload photos from DB
                 // (photos may have new thumbnails, or user may have re-scanned)
                 let task = if view == View::Timeline {
-                    if self.geocoding_progress.is_none() {
-                        let geocode_task = self.update(Message::RunGeocoding);
-                        return Task::batch([geocode_task, self.load_photos()]);
-                    }
                     self.load_photos()
                 } else if view == View::People {
                     self.load_face_clusters()
@@ -923,6 +922,11 @@ impl PhotoVault {
                             }
                         }
                         self.database = Some(db);
+
+                        // Kick off background geocoding once a drive is selected.
+                        if self.geocoding_progress.is_none() {
+                            let _ = self.update(Message::RunGeocoding);
+                        }
 
                         // If library is empty, start scanning
                         if self.photo_count == 0 {
@@ -1607,6 +1611,14 @@ impl PhotoVault {
                 self.config.thumbnail_size = size;
                 if let Err(e) = self.config.save() {
                     tracing::warn!("Failed to save config: {}", e);
+                }
+                if self.current_view == View::Timeline {
+                    self.begin_thumbnail_generation_epoch();
+                    self.seed_thumbnail_queue_for_timeline();
+                    self.schedule_thumbnail_chunk();
+                    if !self.thumbnail_queue.is_empty() {
+                        return self.start_thumbnail_generation();
+                    }
                 }
                 Task::none()
             }

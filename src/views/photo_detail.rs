@@ -82,11 +82,11 @@ impl PhotoDetailView {
         let width = photo.width.unwrap_or(0);
         let height = photo.height.unwrap_or(0);
 
-        // Load the original full-resolution image via drive_path + file_path
-        let original_path = drive_path.join(&photo.file_path);
-        if original_path.exists() {
+        // Prefer thumbnail for detail view to avoid huge GPU upload buffers.
+        if let Some(ref thumb_path) = photo.thumbnail_path {
+            let path = std::path::PathBuf::from(thumb_path);
             return container(
-                iced::widget::image(iced::widget::image::Handle::from_path(&original_path))
+                iced::widget::image(iced::widget::image::Handle::from_path(&path))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .content_fit(iced::ContentFit::Contain),
@@ -102,11 +102,11 @@ impl PhotoDetailView {
             .into();
         }
 
-        // Fallback: try thumbnail if original is missing
-        if let Some(ref thumb_path) = photo.thumbnail_path {
-            let path = std::path::PathBuf::from(thumb_path);
+        // Fallback: use original if thumbnail missing
+        let original_path = drive_path.join(&photo.file_path);
+        if original_path.exists() {
             return container(
-                iced::widget::image(iced::widget::image::Handle::from_path(&path))
+                iced::widget::image(iced::widget::image::Handle::from_path(&original_path))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .content_fit(iced::ContentFit::Contain),

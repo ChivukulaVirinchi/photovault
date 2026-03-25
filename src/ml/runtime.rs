@@ -18,6 +18,25 @@ use ort::session::Session;
 pub struct OnnxRuntime;
 
 impl OnnxRuntime {
+    fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
+        let direct = dir.join("libonnxruntime.so");
+        if direct.exists() {
+            return Some(direct);
+        }
+
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("libonnxruntime.so") {
+                    return Some(path);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Resolve the path to the ONNX Runtime shared library.
     ///
     /// Checks ORT_DYLIB_PATH env var first, then looks in libs/onnxruntime/
@@ -33,14 +52,13 @@ impl OnnxRuntime {
             tracing::warn!("ORT_DYLIB_PATH set but file not found: {}", path);
         }
 
-        let lib_name = "libonnxruntime.so";
         let rel_dir = Path::new("libs").join("onnxruntime");
 
         // 2. Relative to the executable
         if let Ok(exe) = std::env::current_exe() {
             if let Some(exe_dir) = exe.parent() {
-                let candidate = exe_dir.join(&rel_dir).join(lib_name);
-                if candidate.exists() {
+                let candidate_dir = exe_dir.join(&rel_dir);
+                if let Some(candidate) = Self::find_runtime_in_dir(&candidate_dir) {
                     tracing::info!(
                         "Using ONNX Runtime from exe-relative path: {}",
                         candidate.display()
@@ -52,22 +70,14 @@ impl OnnxRuntime {
 
         // 3. Relative to the current working directory
         if let Ok(cwd) = std::env::current_dir() {
-            let candidate = cwd.join(&rel_dir).join(lib_name);
-            if candidate.exists() {
+            let candidate_dir = cwd.join(&rel_dir);
+            if let Some(candidate) = Self::find_runtime_in_dir(&candidate_dir) {
                 tracing::info!(
                     "Using ONNX Runtime from cwd-relative path: {}",
                     candidate.display()
                 );
                 return Some(candidate);
             }
-        }
-
-        // 4. Well-known system install path (oneAPI on some Linux systems)
-        let oneapi = PathBuf::from("/opt/intel/oneapi/compiler/latest/lib")
-            .join("libonnxruntime.1.12.22.721.so");
-        if oneapi.exists() {
-            tracing::info!("Using ONNX Runtime from oneAPI path: {}", oneapi.display());
-            return Some(oneapi);
         }
 
         None
@@ -87,15 +97,10 @@ impl OnnxRuntime {
                 dylib_path.display()
             );
         } else {
-            // Fall back to default search (LD_LIBRARY_PATH, system paths).
-            // This will fail at runtime if libonnxruntime.so is not findable.
-            tracing::warn!(
-                "ONNX Runtime library not found in expected locations. \
-                 Falling back to system library search. Set ORT_DYLIB_PATH or place \
-                 libonnxruntime.so in libs/onnxruntime/"
-            );
-            let _ = ort::init().commit();
-            tracing::info!("ONNX Runtime initialized (system search)");
+            return Err(ort::Error::new(
+                "ONNX Runtime library not found. Set ORT_DYLIB_PATH or place libonnxruntime.so (1.23.x) in libs/onnxruntime/"
+                    .to_string(),
+            ));
         }
         Ok(Self)
     }
