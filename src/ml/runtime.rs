@@ -62,6 +62,14 @@ impl OnnxRuntime {
             }
         }
 
+        // 4. Well-known system install path (oneAPI on some Linux systems)
+        let oneapi = PathBuf::from("/opt/intel/oneapi/compiler/latest/lib")
+            .join("libonnxruntime.1.12.22.721.so");
+        if oneapi.exists() {
+            tracing::info!("Using ONNX Runtime from oneAPI path: {}", oneapi.display());
+            return Some(oneapi);
+        }
+
         None
     }
 

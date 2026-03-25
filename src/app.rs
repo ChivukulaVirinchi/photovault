@@ -114,6 +114,9 @@ pub struct PhotoVault {
     /// Current face processing progress
     face_processing_progress: Option<FaceProcessingProgress>,
 
+    /// Live progress channel receiver for face processing.
+    face_progress_receiver: Option<Receiver<FaceProcessingProgress>>,
+
     /// Last face-processing error shown in People view.
     face_processing_error: Option<String>,
 
@@ -486,6 +489,7 @@ impl PhotoVault {
             face_clusters: Vec::new(),
             face_processing_active: false,
             face_processing_progress: None,
+            face_progress_receiver: None,
             face_processing_error: None,
             editing_cluster_id: None,
             edit_cluster_name: String::new(),
@@ -557,8 +561,8 @@ impl PhotoVault {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = Vec::new();
 
-        // Scan progress polling
-        if self.scan_state.is_some() {
+        // Background progress polling
+        if self.scan_state.is_some() || self.face_processing_active {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(120))
                     .map(|_| Message::PollScanChannels),
@@ -1028,6 +1032,12 @@ impl PhotoVault {
                     // Drain all available progress updates
                     while let Ok(progress) = state.progress_receiver.try_recv() {
                         state.progress = progress;
+                    }
+                }
+
+                if let Some(ref mut rx) = self.face_progress_receiver {
+                    while let Ok(progress) = rx.try_recv() {
+                        self.face_processing_progress = Some(progress);
                     }
                 }
                 Task::none()
@@ -1839,7 +1849,8 @@ impl PhotoVault {
                     return Task::none();
                 }
 
-                let (progress_tx, _progress_rx) = async_channel::bounded(32);
+                let (progress_tx, progress_rx) = async_channel::bounded(32);
+                self.face_progress_receiver = Some(progress_rx);
 
                 // Spawn blocking face processing task
                 let process_task = Task::perform(
@@ -1866,6 +1877,7 @@ impl PhotoVault {
 
             Message::FaceProcessingComplete(result) => {
                 self.face_processing_active = false;
+                self.face_progress_receiver = None;
                 self.face_processing_progress = None;
 
                 match result {

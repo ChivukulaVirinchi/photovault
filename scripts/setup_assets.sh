@@ -7,16 +7,31 @@ DATA_DIR="$ROOT_DIR/data"
 MODELS_DIR="$ROOT_DIR/models"
 CACHE_DIR="$ROOT_DIR/.cache/downloads"
 
+if [[ -d "$HOME/.cargo/bin" ]]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "ERROR: cargo not found in PATH. Install Rust or export PATH to ~/.cargo/bin"
+  exit 1
+fi
+
 GEONAMES_CITIES_URL="https://download.geonames.org/export/dump/cities1000.zip"
 GEONAMES_COUNTRY_URL="https://download.geonames.org/export/dump/countryInfo.txt"
-MODEL_PACK_URL_DEFAULT="https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip"
-MODEL_PACK_URL="${INSIGHTFACE_MODEL_URL:-$MODEL_PACK_URL_DEFAULT}"
+SCRFD_MODEL_URL_DEFAULT="https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx"
+GLINTR_MODEL_URL_DEFAULT="https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx"
+SCRFD_MODEL_URL="${SCRFD_MODEL_URL:-$SCRFD_MODEL_URL_DEFAULT}"
+GLINTR_MODEL_URL="${GLINTR_MODEL_URL:-$GLINTR_MODEL_URL_DEFAULT}"
 
 mkdir -p "$DATA_DIR" "$MODELS_DIR" "$CACHE_DIR"
 
 download() {
   local url="$1"
   local out="$2"
+  if [[ -s "$out" ]]; then
+    echo "Using cached: $out"
+    return 0
+  fi
   echo "Downloading: $url"
   curl -fL \
     --retry 6 \
@@ -25,6 +40,22 @@ download() {
     --connect-timeout 20 \
     -o "$out" \
     "$url"
+}
+
+geonames_db_ready() {
+  local db="$DATA_DIR/geonames.db"
+  if [[ ! -s "$db" ]]; then
+    return 1
+  fi
+
+  if command -v sqlite3 >/dev/null 2>&1; then
+    local cities
+    cities="$(sqlite3 "$db" "select count(*) from cities;" 2>/dev/null || echo 0)"
+    [[ "${cities:-0}" -gt 1000 ]]
+    return $?
+  fi
+
+  return 0
 }
 
 extract_zip() {
@@ -68,45 +99,19 @@ setup_geonames() {
     exit 1
   fi
 
-  echo "Building geonames SQLite DB..."
-  (cd "$ROOT_DIR" && cargo run --bin build_geonames)
+  if geonames_db_ready; then
+    echo "GeoNames DB already ready: $DATA_DIR/geonames.db"
+  else
+    echo "Building geonames SQLite DB (this can take a while on first run)..."
+    (cd "$ROOT_DIR" && cargo run --bin build_geonames)
+  fi
 }
 
 setup_models() {
   echo "\n==> Setting up face models"
 
-  local models_zip="$CACHE_DIR/insightface_models.zip"
-  local extract_dir="$CACHE_DIR/insightface_models"
-
-  rm -rf "$extract_dir"
-  mkdir -p "$extract_dir"
-
-  download "$MODEL_PACK_URL" "$models_zip"
-  extract_zip "$models_zip" "$extract_dir"
-
-  local detector_path
-  local embedder_path
-
-  detector_path="$(find "$extract_dir" -type f -name 'scrfd_10g_bnkps.onnx' | head -n 1 || true)"
-  embedder_path="$(find "$extract_dir" -type f -name 'glintr100.onnx' | head -n 1 || true)"
-
-  if [[ -z "$detector_path" ]]; then
-    detector_path="$(find "$extract_dir" -type f -name '*scrfd*10g*bnkps*.onnx' | head -n 1 || true)"
-  fi
-
-  if [[ -z "$embedder_path" ]]; then
-    embedder_path="$(find "$extract_dir" -type f -name 'glintr100*.onnx' | head -n 1 || true)"
-  fi
-
-  if [[ -z "$detector_path" || -z "$embedder_path" ]]; then
-    echo "ERROR: Could not locate required ONNX files in downloaded model pack."
-    echo "Found ONNX files:"
-    find "$extract_dir" -type f -name '*.onnx' -print || true
-    exit 1
-  fi
-
-  cp "$detector_path" "$MODELS_DIR/scrfd_10g_bnkps.onnx"
-  cp "$embedder_path" "$MODELS_DIR/glintr100.onnx"
+  download "$SCRFD_MODEL_URL" "$MODELS_DIR/scrfd_10g_bnkps.onnx"
+  download "$GLINTR_MODEL_URL" "$MODELS_DIR/glintr100.onnx"
 
   echo "Installed models:"
   echo "- $MODELS_DIR/scrfd_10g_bnkps.onnx"
