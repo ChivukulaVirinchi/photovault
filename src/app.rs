@@ -93,6 +93,9 @@ pub struct PhotoVault {
     /// Processed in batches to avoid overwhelming the system.
     thumbnail_queue: Vec<(i64, String, String)>,
 
+    /// Cursor for incremental thumbnail scheduling over full photo list.
+    thumbnail_scan_cursor: usize,
+
     /// Current window width in pixels (for responsive grid columns)
     window_width: f32,
 
@@ -270,6 +273,9 @@ pub enum Message {
     /// DB write for a thumbnail batch completed; triggers the next batch
     ThumbnailBatchSaved,
 
+    /// Continue background thumbnail scheduling in small chunks.
+    ContinueThumbnailScheduling,
+
     /// Keyboard event
     KeyPressed(keyboard::Key),
 
@@ -426,6 +432,27 @@ pub struct ScanResult {
 }
 
 impl PhotoVault {
+    fn merge_detected_and_remembered_drives(&self, detected: Vec<DriveInfo>) -> Vec<DriveInfo> {
+        let mut merged = detected;
+        let mut seen = std::collections::HashSet::new();
+
+        for d in &merged {
+            seen.insert(d.path.clone());
+        }
+
+        for remembered in &self.config.remembered_drives {
+            if seen.contains(remembered) {
+                continue;
+            }
+            if let Some(info) = DriveDetector::inspect_path(remembered.clone()) {
+                seen.insert(info.path.clone());
+                merged.push(info);
+            }
+        }
+
+        merged
+    }
+
     fn configured_thumbnail_size(&self) -> ThumbnailSize {
         if self.config.thumbnail_size <= 220 {
             ThumbnailSize::Small
@@ -452,6 +479,7 @@ impl PhotoVault {
             thumbnail_service: None,
             thumbnail_generation_active: false,
             thumbnail_queue: Vec::new(),
+            thumbnail_scan_cursor: 0,
             window_width: 1280.0, // sensible default until first resize event
             // Phase 4
             face_clusters: Vec::new(),
@@ -588,6 +616,30 @@ impl PhotoVault {
 
     /// Maximum number of thumbnails to process per batch.
     const THUMBNAIL_BATCH_SIZE: usize = 8;
+    /// Number of photos inspected per scheduling pass.
+    const THUMBNAIL_SCAN_CHUNK: usize = 64;
+    /// Max number of queued thumbnail jobs to keep in memory.
+    const THUMBNAIL_QUEUE_TARGET: usize = 48;
+
+    fn schedule_thumbnail_chunk(&mut self) {
+        if self.thumbnail_queue.len() >= Self::THUMBNAIL_QUEUE_TARGET {
+            return;
+        }
+
+        let end = (self.thumbnail_scan_cursor + Self::THUMBNAIL_SCAN_CHUNK).min(self.photos.len());
+
+        for photo in &self.photos[self.thumbnail_scan_cursor..end] {
+            if self.thumbnail_queue.len() >= Self::THUMBNAIL_QUEUE_TARGET {
+                break;
+            }
+            if photo.thumbnail_path.is_none() {
+                self.thumbnail_queue
+                    .push((photo.id, photo.file_path.clone(), photo.file_hash.clone()));
+            }
+        }
+
+        self.thumbnail_scan_cursor = end;
+    }
 
     /// Start background thumbnail generation for the next batch from the queue.
     ///
@@ -867,8 +919,9 @@ impl PhotoVault {
             }
 
             Message::DrivesDetected(drives) => {
-                tracing::info!("Detected {} drives", drives.len());
-                self.drives = drives;
+                let merged = self.merge_detected_and_remembered_drives(drives);
+                tracing::info!("Detected {} drives (including remembered)", merged.len());
+                self.drives = merged;
                 Task::none()
             }
 
@@ -994,21 +1047,30 @@ impl PhotoVault {
                 self.photos = photos;
                 self.photo_count = self.photos.len() as i64;
 
-                // Populate the thumbnail queue with photos that need thumbnails
-                self.thumbnail_queue = self
-                    .photos
-                    .iter()
-                    .filter(|p| p.thumbnail_path.is_none())
-                    .map(|p| (p.id, p.file_path.clone(), p.file_hash.clone()))
-                    .collect();
+                // Incremental thumbnail scheduling: only queue a small window at a time.
+                self.thumbnail_queue.clear();
+                self.thumbnail_scan_cursor = 0;
+                self.schedule_thumbnail_chunk();
 
                 tracing::info!(
-                    "{} photos need thumbnail generation",
-                    self.thumbnail_queue.len()
+                    "Queued {} thumbnails ({} photos total)",
+                    self.thumbnail_queue.len(),
+                    self.photos.len()
                 );
 
-                // Start processing the first batch
-                self.start_thumbnail_generation()
+                if !self.thumbnail_queue.is_empty() {
+                    // Start processing the first batch
+                    self.start_thumbnail_generation()
+                } else if self.thumbnail_scan_cursor < self.photos.len() {
+                    Task::perform(
+                        async {
+                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        },
+                        |_| Message::ContinueThumbnailScheduling,
+                    )
+                } else {
+                    Task::none()
+                }
             }
 
             Message::SelectPhoto(photo_id) => {
@@ -1101,6 +1163,7 @@ impl PhotoVault {
             }
 
             Message::ThumbnailBatchSaved => {
+                self.schedule_thumbnail_chunk();
                 // Previous batch DB write completed; start the next batch
                 if !self.thumbnail_queue.is_empty() {
                     tracing::info!(
@@ -1108,8 +1171,32 @@ impl PhotoVault {
                         self.thumbnail_queue.len()
                     );
                     self.start_thumbnail_generation()
+                } else if self.thumbnail_scan_cursor < self.photos.len() {
+                    Task::perform(
+                        async {
+                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        },
+                        |_| Message::ContinueThumbnailScheduling,
+                    )
                 } else {
                     tracing::info!("All thumbnails generated successfully");
+                    self.thumbnail_generation_active = false;
+                    Task::none()
+                }
+            }
+
+            Message::ContinueThumbnailScheduling => {
+                self.schedule_thumbnail_chunk();
+                if !self.thumbnail_queue.is_empty() {
+                    self.start_thumbnail_generation()
+                } else if self.thumbnail_scan_cursor < self.photos.len() {
+                    Task::perform(
+                        async {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        },
+                        |_| Message::ContinueThumbnailScheduling,
+                    )
+                } else {
                     self.thumbnail_generation_active = false;
                     Task::none()
                 }

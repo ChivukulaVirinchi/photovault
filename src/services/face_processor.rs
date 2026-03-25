@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
@@ -115,6 +116,9 @@ impl FaceProcessor {
         tracing::info!("Face processing: {} photos to process", total);
 
         let mut total_faces = 0usize;
+        let mut last_progress_emit = Instant::now()
+            .checked_sub(Duration::from_millis(250))
+            .unwrap_or_else(Instant::now);
 
         // Create faces directory for storing cropped face thumbnails
         let faces_dir = drive_path.join(".photovault").join("faces");
@@ -126,11 +130,21 @@ impl FaceProcessor {
         for (idx, (photo_id, file_path)) in unprocessed.iter().enumerate() {
             // Send progress
             if let Some(ref tx) = progress_tx {
-                let _ = tx.try_send(FaceProcessingProgress {
-                    processed: idx,
-                    total,
-                    faces_found: total_faces,
-                });
+                let now = Instant::now();
+                if now.duration_since(last_progress_emit) >= Duration::from_millis(250)
+                    || idx + 1 == total
+                {
+                    if tx
+                        .try_send(FaceProcessingProgress {
+                            processed: idx,
+                            total,
+                            faces_found: total_faces,
+                        })
+                        .is_ok()
+                    {
+                        last_progress_emit = now;
+                    }
+                }
             }
 
             // Load image

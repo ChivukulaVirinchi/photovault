@@ -16,14 +16,56 @@ mod utils;
 mod views;
 
 use iced::Size;
+use std::fs::OpenOptions;
+
+fn instance_lock_file() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("photovault")
+        .join("app.lock")
+}
+
+fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
+    let lock_path = instance_lock_file();
+    if let Some(parent) = lock_path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return None;
+        }
+    }
+
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .ok()?;
+
+    if fs2::FileExt::try_lock_exclusive(&file).is_ok() {
+        Some(file)
+    } else {
+        None
+    }
+}
 
 fn main() -> iced::Result {
+    let _instance_lock = match try_acquire_single_instance_lock() {
+        Some(file) => file,
+        None => {
+            eprintln!("PhotoVault is already running; refusing to start a second instance.");
+            return Ok(());
+        }
+    };
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter("photovault=debug,iced=warn")
         .init();
 
-    tracing::info!("Starting PhotoVault...");
+    tracing::info!(
+        "Starting PhotoVault... pid={} args={:?}",
+        std::process::id(),
+        std::env::args().collect::<Vec<_>>()
+    );
 
     // Run the application
     iced::application(
