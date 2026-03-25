@@ -37,7 +37,7 @@ pub fn ensure_geonames_db() {
 
     if !cities.exists() || !countries.exists() {
         tracing::warn!(
-            "GeoNames source files missing (expected {} and {}). Geocoding disabled until provided.",
+            "GeoNames source files missing (expected {} and {}). Geocoding disabled until provided. Run ./scripts/setup_assets.sh",
             cities.display(),
             countries.display()
         );

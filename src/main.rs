@@ -70,7 +70,7 @@ fn main() -> iced::Result {
 
     if !crate::bootstrap::has_face_models() {
         tracing::warn!(
-            "Face models missing. Expected {} and {}",
+            "Face models missing. Expected {} and {}. Run ./scripts/setup_assets.sh",
             crate::bootstrap::detector_model_path().display(),
             crate::bootstrap::embedder_model_path().display()
         );
