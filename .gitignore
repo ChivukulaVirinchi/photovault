@@ -1,1 +1,7 @@
 /target
+
+# ONNX Runtime shared library (~22MB, downloaded separately)
+/libs/
+
+# ONNX model files (~260MB total, downloaded separately)
+/models/

@@ -1,6 +1,78 @@
 [package]
 name = "photovault"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Offline-first photo library manager"
 
 [dependencies]
+# UI Framework
+iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# File system utilities
+walkdir = "2"
+dirs = "5"                      # Platform-specific directories
+
+# Hashing
+sha2 = "0.10"
+
+# Image processing
+image = "0.25"
+imageproc = "0.24"
+
+# ONNX Runtime for ML inference (face detection/recognition)
+# Using load-dynamic to load libonnxruntime.so at runtime via dlopen.
+# This avoids linking against a prebuilt static lib that requires glibc 2.38+.
+# Place the ONNX Runtime 1.23.x shared library in libs/onnxruntime/ or set ORT_DYLIB_PATH.
+# default-features = false is critical: the default features include download-binaries.
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+
+# Linear algebra for face embeddings
+ndarray = "0.16"
+
+# EXIF extraction
+kamadak-exif = "0.5"
+
+# Parallel processing
+rayon = "1.10"
+
+# Additional async utilities
+async-channel = "2.0"
+lru = "0.12"
+
+# Regex for filename parsing
+regex = "1"
+lazy_static = "1.4"
+
+# Native file dialogs
+rfd = "0.15"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fs2 = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+tempfile = "3"
