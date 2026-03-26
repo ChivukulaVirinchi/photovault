@@ -233,6 +233,12 @@ pub struct PhotoVault {
 
     /// Whether ML models are available (checked once at startup)
     ml_available: bool,
+
+    /// People names detected in the currently viewed photo
+    current_photo_people: Vec<String>,
+
+    /// Current rotation offset in photo detail (0, 90, 180, 270)
+    photo_rotation: i32,
 }
 
 /// Application messages
@@ -439,6 +445,9 @@ pub enum Message {
 
     /// Cancel face processing
     CancelFaceProcessing,
+
+    /// Rotate photo in detail view
+    RotatePhoto,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -541,6 +550,8 @@ impl PhotoVault {
             // Phase 8: Production readiness
             face_cancel_flag: None,
             ml_available: crate::bootstrap::has_face_models(),
+            current_photo_people: Vec::new(),
+            photo_rotation: 0,
         };
 
         // Detect drives on startup
@@ -613,7 +624,13 @@ impl PhotoVault {
                     Ok(db) => {
                         let repo = PhotoRepo::new(&db.conn);
                         // Load all photos (up to 50k for now)
-                        let mut photos = repo.get_all_by_date(50000, 0).unwrap_or_default();
+                        let mut photos = match repo.get_all_by_date(50000, 0) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::error!("Failed to load photos: {}", e);
+                                Vec::new()
+                            }
+                        };
 
                         // Resolve relative thumbnail paths to absolute (DB stores relative for portability)
                         for photo in &mut photos {
@@ -1191,6 +1208,16 @@ impl PhotoVault {
                     self.previous_view = Some(self.current_view.clone());
                     self.selected_photo_index = Some(idx);
                     self.current_view = View::PhotoDetail;
+                    self.photo_rotation = 0;
+
+                    // Look up people in this photo
+                    self.current_photo_people.clear();
+                    if let Some(ref db) = self.database {
+                        let face_repo = FaceRepo::new(&db.conn);
+                        if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
+                            self.current_photo_people = names;
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -1361,6 +1388,11 @@ impl PhotoVault {
                                 if let Some(photo) = self.photos.get(idx) {
                                     return self.update(Message::TrashPhotos(vec![photo.id]));
                                 }
+                            }
+                        }
+                        keyboard::Key::Character(ref ch) => {
+                            if ch.to_lowercase() == "r" {
+                                return self.update(Message::RotatePhoto);
                             }
                         }
                         _ => {}
@@ -2027,6 +2059,11 @@ impl PhotoVault {
                 Task::none()
             }
 
+            Message::RotatePhoto => {
+                self.photo_rotation = (self.photo_rotation + 90) % 360;
+                Task::none()
+            }
+
             Message::FaceProcessingComplete(result) => {
                 self.face_processing_active = false;
                 self.face_progress_receiver = None;
@@ -2209,21 +2246,44 @@ impl PhotoVault {
                     }
                 }
 
-                // Persist to database
+                // Find other clusters with the same name for auto-merge
+                let same_name_ids: Vec<i64> = if !name.is_empty() {
+                    self.face_clusters
+                        .iter()
+                        .filter(|c| c.id != cluster_id && c.name.as_deref() == Some(&name))
+                        .map(|c| c.id)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
                 let Some(ref drive_path) = self.selected_drive else {
                     return Task::none();
                 };
 
                 let drive_path = drive_path.clone();
-                Task::perform(
+                let save_task = Task::perform(
                     async move {
                         if let Ok(db) = Database::open_for_drive(&drive_path) {
                             let face_repo = FaceRepo::new(&db.conn);
                             let _ = face_repo.name_cluster(cluster_id, &name);
+
+                            // Auto-merge: if other clusters share this name, merge them in
+                            for source_id in same_name_ids {
+                                tracing::info!(
+                                    "Auto-merging cluster {} into {} (same name: {})",
+                                    source_id, cluster_id, name
+                                );
+                                let _ = face_repo.merge_clusters(source_id, cluster_id);
+                            }
                         }
                     },
                     |_| Message::NoOp,
-                )
+                );
+
+                // Reload clusters after save+merge
+                let reload_task = self.load_face_clusters();
+                Task::batch([save_task, reload_task])
             }
 
             Message::ToggleMergeMode => {
@@ -2743,7 +2803,14 @@ impl PhotoVault {
                     let has_prev = idx > 0;
                     let has_next = idx + 1 < self.photos.len();
                     if let Some(ref drive_path) = self.selected_drive {
-                        return PhotoDetailView::view(photo, has_prev, has_next, drive_path);
+                        return PhotoDetailView::view(
+                            photo,
+                            has_prev,
+                            has_next,
+                            drive_path,
+                            &self.current_photo_people,
+                            self.photo_rotation,
+                        );
                     }
                 }
             }

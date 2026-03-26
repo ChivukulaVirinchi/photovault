@@ -168,10 +168,19 @@ impl FaceProcessor {
                 }
             }
 
-            // Load image
+            // Load image and pre-resize for faster inference
+            // SCRFD input is 640x640, so anything > ~1280px is wasted compute
             let full_path = drive_path.join(file_path);
             let image = match image::open(&full_path) {
-                Ok(img) => img,
+                Ok(img) => {
+                    let (w, h) = (img.width(), img.height());
+                    let max_dim = w.max(h);
+                    if max_dim > 1280 {
+                        img.resize(1280, 1280, image::imageops::FilterType::Triangle)
+                    } else {
+                        img
+                    }
+                }
                 Err(e) => {
                     tracing::debug!("Failed to open image {}: {}", file_path, e);
                     // Mark as processed so we don't retry

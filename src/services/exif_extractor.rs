@@ -25,6 +25,15 @@ pub struct ImageMetadata {
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
 
+    // Shooting parameters
+    pub iso: Option<i32>,
+    pub aperture: Option<String>,       // e.g. "f/2.8"
+    pub shutter_speed: Option<String>,  // e.g. "1/125"
+    pub focal_length: Option<String>,   // e.g. "50mm"
+    pub lens_model: Option<String>,     // e.g. "iPhone 15 Pro back camera"
+    pub flash: Option<String>,          // e.g. "Off" or "Fired"
+    pub gps_altitude: Option<f64>,      // meters
+
     // Image dimensions
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -134,6 +143,98 @@ impl ExifExtractor {
             if let Value::Short(ref vec) = field.value {
                 if let Some(&o) = vec.first() {
                     metadata.orientation = Some(o);
+                }
+            }
+        }
+
+        // ISO
+        if let Some(field) = exif.get_field(Tag::PhotographicSensitivity, In::PRIMARY) {
+            if let Value::Short(ref vec) = field.value {
+                if let Some(&iso) = vec.first() {
+                    metadata.iso = Some(iso as i32);
+                }
+            } else if let Value::Long(ref vec) = field.value {
+                if let Some(&iso) = vec.first() {
+                    metadata.iso = Some(iso as i32);
+                }
+            }
+        }
+
+        // Aperture (FNumber)
+        if let Some(field) = exif.get_field(Tag::FNumber, In::PRIMARY) {
+            if let Value::Rational(ref vec) = field.value {
+                if let Some(r) = vec.first() {
+                    let f = r.to_f64();
+                    if f > 0.0 {
+                        metadata.aperture = Some(format!("f/{:.1}", f));
+                    }
+                }
+            }
+        }
+
+        // Shutter speed (ExposureTime)
+        if let Some(field) = exif.get_field(Tag::ExposureTime, In::PRIMARY) {
+            if let Value::Rational(ref vec) = field.value {
+                if let Some(r) = vec.first() {
+                    if r.num > 0 && r.denom > 0 {
+                        if r.num >= r.denom {
+                            metadata.shutter_speed = Some(format!("{}s", r.to_f64()));
+                        } else {
+                            metadata.shutter_speed = Some(format!("{}/{}", r.num, r.denom));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Focal length
+        if let Some(field) = exif.get_field(Tag::FocalLength, In::PRIMARY) {
+            if let Value::Rational(ref vec) = field.value {
+                if let Some(r) = vec.first() {
+                    let fl = r.to_f64();
+                    if fl > 0.0 {
+                        metadata.focal_length = Some(format!("{:.0}mm", fl));
+                    }
+                }
+            }
+        }
+
+        // Lens model
+        if let Some(field) = exif.get_field(Tag::LensModel, In::PRIMARY) {
+            let val: String = field.display_value().to_string();
+            let clean = val.trim_matches('"').to_string();
+            if !clean.is_empty() {
+                metadata.lens_model = Some(clean);
+            }
+        }
+
+        // Flash
+        if let Some(field) = exif.get_field(Tag::Flash, In::PRIMARY) {
+            if let Value::Short(ref vec) = field.value {
+                if let Some(&flash_val) = vec.first() {
+                    metadata.flash = Some(if flash_val & 1 == 1 {
+                        "Fired".to_string()
+                    } else {
+                        "Off".to_string()
+                    });
+                }
+            }
+        }
+
+        // GPS Altitude
+        if let Some(field) = exif.get_field(Tag::GPSAltitude, In::PRIMARY) {
+            if let Value::Rational(ref vec) = field.value {
+                if let Some(r) = vec.first() {
+                    let mut alt = r.to_f64();
+                    // Check altitude ref (0 = above sea level, 1 = below)
+                    if let Some(ref_field) = exif.get_field(Tag::GPSAltitudeRef, In::PRIMARY) {
+                        if let Value::Byte(ref bytes) = ref_field.value {
+                            if bytes.first() == Some(&1) {
+                                alt = -alt;
+                            }
+                        }
+                    }
+                    metadata.gps_altitude = Some(alt);
                 }
             }
         }

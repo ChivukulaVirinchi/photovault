@@ -26,8 +26,8 @@ impl Default for AppConfig {
         Self {
             theme: AppTheme::Dark,
             thumbnail_size: 300,
-            face_detection_confidence: 0.5,
-            face_clustering_threshold: 0.6,
+            face_detection_confidence: 0.4,
+            face_clustering_threshold: 0.45,
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,

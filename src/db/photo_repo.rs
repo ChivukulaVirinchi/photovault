@@ -21,6 +21,13 @@ pub struct PhotoInsert {
     pub gps_longitude: Option<f64>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
+    pub iso: Option<i32>,
+    pub aperture: Option<String>,
+    pub shutter_speed: Option<String>,
+    pub focal_length: Option<String>,
+    pub lens_model: Option<String>,
+    pub flash: Option<String>,
+    pub gps_altitude: Option<f64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: i32,
@@ -49,13 +56,17 @@ impl<'a> PhotoRepo<'a> {
                     date_taken, date_taken_source,
                     gps_latitude, gps_longitude,
                     camera_make, camera_model,
+                    iso, aperture, shutter_speed, focal_length,
+                    lens_model, flash, gps_altitude,
                     width, height, orientation
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5,
                     ?6, ?7,
                     ?8, ?9,
                     ?10, ?11,
-                    ?12, ?13, ?14
+                    ?12, ?13, ?14, ?15,
+                    ?16, ?17, ?18,
+                    ?19, ?20, ?21
                 )
                 ON CONFLICT(file_path) DO UPDATE SET
                     file_hash = excluded.file_hash,
@@ -67,6 +78,13 @@ impl<'a> PhotoRepo<'a> {
                     gps_longitude = excluded.gps_longitude,
                     camera_make = excluded.camera_make,
                     camera_model = excluded.camera_model,
+                    iso = excluded.iso,
+                    aperture = excluded.aperture,
+                    shutter_speed = excluded.shutter_speed,
+                    focal_length = excluded.focal_length,
+                    lens_model = excluded.lens_model,
+                    flash = excluded.flash,
+                    gps_altitude = excluded.gps_altitude,
                     width = excluded.width,
                     height = excluded.height,
                     orientation = excluded.orientation,
@@ -84,6 +102,13 @@ impl<'a> PhotoRepo<'a> {
                     photo.gps_longitude,
                     photo.camera_make,
                     photo.camera_model,
+                    photo.iso,
+                    photo.aperture,
+                    photo.shutter_speed,
+                    photo.focal_length,
+                    photo.lens_model,
+                    photo.flash,
+                    photo.gps_altitude,
                     photo.width,
                     photo.height,
                     photo.orientation,
@@ -109,12 +134,14 @@ impl<'a> PhotoRepo<'a> {
     pub fn get_all_by_date(&self, limit: i64, offset: i64) -> SqliteResult<Vec<Photo>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT 
+            SELECT
                 id, file_path, file_name, file_hash, file_size,
                 date_taken, date_taken_source,
                 gps_latitude, gps_longitude,
                 location_city, location_country,
                 camera_make, camera_model,
+                iso, aperture, shutter_speed, focal_length,
+                lens_model, flash, gps_altitude,
                 width, height, orientation,
                 thumbnail_path, faces_processed,
                 is_trashed, trashed_at,
@@ -155,22 +182,29 @@ impl<'a> PhotoRepo<'a> {
             location_country: row.get(10)?,
             camera_make: row.get(11)?,
             camera_model: row.get(12)?,
-            width: row.get(13)?,
-            height: row.get(14)?,
-            orientation: row.get::<_, Option<i32>>(15)?.unwrap_or(1),
-            thumbnail_path: row.get(16)?,
-            faces_processed: row.get(17)?,
-            is_trashed: row.get(18)?,
+            iso: row.get(13)?,
+            aperture: row.get(14)?,
+            shutter_speed: row.get(15)?,
+            focal_length: row.get(16)?,
+            lens_model: row.get(17)?,
+            flash: row.get(18)?,
+            gps_altitude: row.get(19)?,
+            width: row.get(20)?,
+            height: row.get(21)?,
+            orientation: row.get::<_, Option<i32>>(22)?.unwrap_or(1),
+            thumbnail_path: row.get(23)?,
+            faces_processed: row.get(24)?,
+            is_trashed: row.get(25)?,
             trashed_at: row
-                .get::<_, Option<String>>(19)?
+                .get::<_, Option<String>>(26)?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|d| d.with_timezone(&Utc)),
             indexed_at: row
-                .get::<_, String>(20)?
+                .get::<_, String>(27)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
             updated_at: row
-                .get::<_, String>(21)?
+                .get::<_, String>(28)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
         })

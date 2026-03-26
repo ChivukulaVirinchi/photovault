@@ -22,9 +22,72 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 2 {
         migrate_v1_to_v2(conn)?;
     }
+    if current_version < 3 {
+        migrate_v2_to_v3(conn)?;
+    }
+    if current_version < 4 {
+        migrate_v3_to_v4(conn)?;
+    }
 
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
+    // Add lens_model, flash, gps_altitude (these were missed in v3)
+    let columns = [
+        ("lens_model", "TEXT"),
+        ("flash", "TEXT"),
+        ("gps_altitude", "REAL"),
+    ];
+
+    for (col, col_type) in &columns {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
+        match conn.execute(&sql, []) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    conn.execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
+    tracing::info!("Migrated database to schema version 4 (lens, flash, altitude)");
+    Ok(())
+}
+
+fn migrate_v2_to_v3(conn: &Connection) -> SqliteResult<()> {
+    // Add EXIF shooting parameters
+    let columns = [
+        ("iso", "INTEGER"),
+        ("aperture", "TEXT"),
+        ("shutter_speed", "TEXT"),
+        ("focal_length", "TEXT"),
+        ("lens_model", "TEXT"),
+        ("flash", "TEXT"),
+        ("gps_altitude", "REAL"),
+    ];
+
+    for (col, col_type) in &columns {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
+        match conn.execute(&sql, []) {
+            Ok(_) => {}
+            Err(e) => {
+                // Column may already exist if migration was partially applied
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+    tracing::info!("Migrated database to schema version 3 (EXIF shooting params)");
     Ok(())
 }
 

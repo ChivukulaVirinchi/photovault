@@ -1,7 +1,7 @@
-//! Photo detail view - full-size photo viewer
+//! Photo detail view — full-size photo viewer
 //!
-//! Modal overlay for viewing photos at full resolution.
-//! Supports keyboard navigation between photos.
+//! Shows the original photo with a compact metadata panel.
+//! Supports navigation, rotation, people tags, and full EXIF display.
 
 use std::path::Path;
 
@@ -10,99 +10,78 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
 use crate::models::Photo;
-use crate::theme::colors::{Backgrounds, Border, Text as TextColors};
+use crate::theme::colors::{Backgrounds, Border, Semantic, Text as TC};
 
-/// Photo detail view component
 pub struct PhotoDetailView;
 
 impl PhotoDetailView {
-    /// Render the photo detail view as a full-screen overlay
-    ///
-    /// `drive_path` is used to resolve the photo's original file for full-res display.
     pub fn view(
         photo: &Photo,
         has_prev: bool,
         has_next: bool,
         drive_path: &Path,
+        people: &[String],
+        rotation: i32,
     ) -> Element<'static, Message> {
-        // Close button (top right)
-        let close_btn = button(text("\u{00D7}").size(24).color(TextColors::PRIMARY))
-            .padding(Padding::from([8, 12]))
-            .style(|_theme: &iced::Theme, status| {
-                let background = match status {
-                    button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                    _ => None,
-                };
-                button::Style {
-                    background,
-                    text_color: TextColors::PRIMARY,
-                    border: iced::Border::default(),
-                    ..Default::default()
-                }
-            })
-            .on_press(Message::ClosePhotoDetail);
+        // Header: filename + actions
+        let header = Self::header_bar(photo);
 
-        // Navigation buttons
-        let prev_btn = Self::nav_button("<", Message::PreviousPhoto, has_prev);
-        let next_btn = Self::nav_button(">", Message::NextPhoto, has_next);
+        // Navigation
+        let prev_btn = Self::nav_btn("\u{2039}", Message::PreviousPhoto, has_prev);
+        let next_btn = Self::nav_btn("\u{203A}", Message::NextPhoto, has_next);
 
-        // Photo metadata bar
-        let metadata = Self::metadata_bar(photo);
+        // Main image
+        let image_area = Self::image_area(photo, drive_path, rotation);
+        let image_with_nav = row![prev_btn, image_area, next_btn].align_y(Alignment::Center);
 
-        // Main image area (shows original full-res photo)
-        let image_area = Self::image_area(photo, drive_path);
+        // Metadata panel
+        let metadata = Self::metadata_panel(photo, people);
 
-        // Layout: header, image with nav buttons, metadata
-        let header =
-            row![Space::with_width(Length::Fill), close_btn,].padding(Padding::from([8, 16]));
-
-        let image_with_nav = row![prev_btn, image_area, next_btn,].align_y(Alignment::Center);
-
-        let content = column![header, image_with_nav, metadata,];
+        let content = column![header, image_with_nav, metadata];
 
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme: &iced::Theme| container::Style {
-                background: Some(
-                    iced::Color {
-                        a: Backgrounds::PRIMARY.a * 0.95,
-                        ..Backgrounds::PRIMARY
-                    }
-                    .into(),
-                ),
+                background: Some(Backgrounds::PRIMARY.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    /// Image area - shows the original full-resolution photo (not the 256px thumbnail)
-    fn image_area(photo: &Photo, drive_path: &Path) -> Element<'static, Message> {
-        let file_name = photo.file_name.clone();
-        let width = photo.width.unwrap_or(0);
-        let height = photo.height.unwrap_or(0);
+    fn header_bar(photo: &Photo) -> Element<'static, Message> {
+        let photo_id = photo.id;
 
-        // Prefer thumbnail for detail view to avoid huge GPU upload buffers.
-        if let Some(ref thumb_path) = photo.thumbnail_path {
-            let path = std::path::PathBuf::from(thumb_path);
-            return container(
-                iced::widget::image(iced::widget::image::Handle::from_path(&path))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(iced::ContentFit::Contain),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Color::BLACK.into()),
+        let close_btn = Self::icon_btn("\u{00D7}", 18, Message::ClosePhotoDetail);
+        let rotate_btn = Self::icon_btn("\u{21BB}", 14, Message::RotatePhoto);
+        let trash_btn = button(text("Trash").size(11).color(Semantic::DANGER))
+            .padding(Padding::from([4, 10]))
+            .style(|_theme: &iced::Theme, status| button::Style {
+                background: match status {
+                    button::Status::Hovered => Some(iced::Color { a: 0.12, ..Semantic::DANGER }.into()),
+                    _ => None,
+                },
+                border: iced::Border { radius: 4.0.into(), ..Default::default() },
                 ..Default::default()
             })
-            .into();
-        }
+            .on_press(Message::TrashPhotos(vec![photo_id]));
 
-        // Fallback: use original if thumbnail missing
+        row![
+            Space::with_width(16),
+            rotate_btn,
+            Space::with_width(Length::Fill),
+            trash_btn,
+            Space::with_width(8),
+            close_btn,
+            Space::with_width(12),
+        ]
+        .align_y(Alignment::Center)
+        .height(40)
+        .into()
+    }
+
+    fn image_area(photo: &Photo, drive_path: &Path, _rotation: i32) -> Element<'static, Message> {
+        // Always show original file
         let original_path = drive_path.join(&photo.file_path);
         if original_path.exists() {
             return container(
@@ -122,138 +101,185 @@ impl PhotoDetailView {
             .into();
         }
 
-        // Placeholder
+        // Fallback: thumbnail
+        if let Some(ref thumb_path) = photo.thumbnail_path {
+            let path = std::path::PathBuf::from(thumb_path);
+            return container(
+                iced::widget::image(iced::widget::image::Handle::from_path(&path))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_theme: &iced::Theme| container::Style {
+                background: Some(iced::Color::BLACK.into()),
+                ..Default::default()
+            })
+            .into();
+        }
+
+        let fname = photo.file_name.clone();
+        container(text(fname).size(14).color(TC::TERTIARY))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_theme: &iced::Theme| container::Style {
+                background: Some(iced::Color::BLACK.into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn nav_btn(label: &str, message: Message, enabled: bool) -> Element<'static, Message> {
+        let color = if enabled { TC::SECONDARY } else { TC::TERTIARY };
+        let label = label.to_owned();
+        let btn = button(text(label).size(26).color(color))
+            .padding(Padding::from([14, 10]))
+            .style(move |_theme: &iced::Theme, status| button::Style {
+                background: if enabled {
+                    match status {
+                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                },
+                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                ..Default::default()
+            });
+
+        if enabled { btn.on_press(message).into() } else { btn.into() }
+    }
+
+    fn icon_btn(icon: &str, size: u16, message: Message) -> Element<'static, Message> {
+        let icon = icon.to_owned();
+        button(text(icon).size(size).color(TC::SECONDARY))
+            .padding(Padding::from([4, 8]))
+            .style(|_theme: &iced::Theme, status| button::Style {
+                background: match status {
+                    button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                    _ => None,
+                },
+                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                ..Default::default()
+            })
+            .on_press(message)
+            .into()
+    }
+
+    /// Compact metadata panel — two rows of key info
+    fn metadata_panel(photo: &Photo, people: &[String]) -> Element<'static, Message> {
+        let mut top_items: Vec<Element<'static, Message>> = Vec::new();
+        let mut bottom_items: Vec<Element<'static, Message>> = Vec::new();
+
+        // Top row: Date | Location | People
+        if let Some(date) = &photo.date_taken {
+            top_items.push(Self::chip(&date.format("%b %d, %Y  %H:%M").to_string()));
+        }
+
+        if let Some(loc) = photo.location_string() {
+            top_items.push(Self::chip(&loc));
+        } else if photo.has_location() {
+            top_items.push(Self::chip(&format!(
+                "{:.4}, {:.4}",
+                photo.gps_latitude.unwrap_or(0.0),
+                photo.gps_longitude.unwrap_or(0.0)
+            )));
+        }
+
+        if let Some(alt) = photo.gps_altitude {
+            top_items.push(Self::chip(&format!("{:.0}m alt", alt)));
+        }
+
+        if !people.is_empty() {
+            top_items.push(Self::chip(&people.join(", ")));
+        }
+
+        // Bottom row: Camera + Exposure + Dimensions + File
+        let mut camera_parts: Vec<String> = Vec::new();
+        if let Some(ref make) = photo.camera_make {
+            if let Some(ref model) = photo.camera_model {
+                camera_parts.push(format!("{} {}", make, model));
+            } else {
+                camera_parts.push(make.clone());
+            }
+        }
+        if let Some(ref lens) = photo.lens_model {
+            camera_parts.push(lens.clone());
+        }
+        if !camera_parts.is_empty() {
+            bottom_items.push(Self::meta_text(&camera_parts.join(" \u{2022} ")));
+        }
+
+        // Exposure string: 50mm  f/1.8  1/125  ISO 64  Flash: Off
+        let mut exp_parts: Vec<String> = Vec::new();
+        if let Some(ref fl) = photo.focal_length { exp_parts.push(fl.clone()); }
+        if let Some(ref ap) = photo.aperture { exp_parts.push(ap.clone()); }
+        if let Some(ref ss) = photo.shutter_speed { exp_parts.push(ss.clone()); }
+        if let Some(iso) = photo.iso { exp_parts.push(format!("ISO {}", iso)); }
+        if let Some(ref flash) = photo.flash { exp_parts.push(format!("Flash: {}", flash)); }
+        if !exp_parts.is_empty() {
+            bottom_items.push(Self::meta_text(&exp_parts.join("  ")));
+        }
+
+        // Dimensions + file size
+        if let (Some(w), Some(h)) = (photo.width, photo.height) {
+            let mp = (w as f64 * h as f64) / 1_000_000.0;
+            bottom_items.push(Self::meta_text(&format!(
+                "{}x{} ({:.1}MP)  {}",
+                w, h, mp,
+                Self::format_size(photo.file_size)
+            )));
+        } else {
+            bottom_items.push(Self::meta_text(&Self::format_size(photo.file_size)));
+        }
+
+        let top_row = Row::with_children(top_items).spacing(8).align_y(Alignment::Center);
+        let bottom_row = Row::with_children(bottom_items).spacing(16).align_y(Alignment::Center);
+
         container(
-            column![
-                text(file_name).size(16).color(TextColors::PRIMARY),
-                Space::with_height(8),
-                text(format!("{}x{}", width, height))
-                    .size(14)
-                    .color(TextColors::SECONDARY),
-            ]
-            .align_x(Alignment::Center),
+            column![top_row, bottom_row].spacing(6),
         )
         .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        .padding(Padding::from([10, 20]))
         .style(|_theme: &iced::Theme| container::Style {
-            background: Some(iced::Color::BLACK.into()),
+            background: Some(Backgrounds::SECONDARY.into()),
+            border: iced::Border {
+                color: Border::SUBTLE,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
             ..Default::default()
         })
         .into()
     }
 
-    /// Navigation button (prev/next)
-    fn nav_button(label: &str, message: Message, enabled: bool) -> Element<'static, Message> {
-        let label_color = if enabled {
-            TextColors::PRIMARY
-        } else {
-            TextColors::TERTIARY
-        };
-
-        let label_owned = label.to_owned();
-
-        let btn = button(text(label_owned).size(32).color(label_color))
-            .padding(Padding::from([20, 16]))
-            .style(move |_theme: &iced::Theme, status| {
-                let background = if !enabled {
-                    None
-                } else {
-                    match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                        _ => None,
-                    }
-                };
-                button::Style {
-                    background,
-                    border: iced::Border::default(),
-                    ..Default::default()
-                }
-            });
-
-        if enabled {
-            btn.on_press(message).into()
-        } else {
-            btn.into()
-        }
-    }
-
-    /// Metadata bar at bottom of detail view
-    fn metadata_bar(photo: &Photo) -> Element<'static, Message> {
-        let mut items: Vec<Element<'static, Message>> = Vec::new();
-
-        // Date
-        if let Some(date) = &photo.date_taken {
-            items.push(Self::metadata_item(
-                "Date",
-                &date.format("%B %d, %Y %H:%M").to_string(),
-            ));
-        }
-
-        // Location
-        if let Some(location) = photo.location_string() {
-            items.push(Self::metadata_item("Location", &location));
-        }
-
-        // Camera
-        if let Some(ref make) = photo.camera_make {
-            let camera = match &photo.camera_model {
-                Some(model) => format!("{} {}", make, model),
-                None => make.clone(),
-            };
-            items.push(Self::metadata_item("Camera", &camera));
-        }
-
-        // Dimensions
-        if let (Some(w), Some(h)) = (photo.width, photo.height) {
-            items.push(Self::metadata_item("Size", &format!("{}x{}", w, h)));
-        }
-
-        // File size
-        let size_str = Self::format_file_size(photo.file_size);
-        items.push(Self::metadata_item("File", &size_str));
-
-        if items.is_empty() {
-            items.push(
-                text("No metadata available")
-                    .size(13)
-                    .color(TextColors::TERTIARY)
-                    .into(),
-            );
-        }
-
-        let metadata_row = Row::with_children(items)
-            .spacing(32)
-            .align_y(Alignment::Center);
-
-        container(metadata_row)
-            .width(Length::Fill)
-            .padding(Padding::from([16, 32]))
+    /// Info chip — small rounded pill with text
+    fn chip(label: &str) -> Element<'static, Message> {
+        let label = label.to_string();
+        container(text(label).size(11).color(TC::PRIMARY))
+            .padding(Padding::from([3, 8]))
             .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::SECONDARY.into()),
+                background: Some(Backgrounds::ELEVATED.into()),
                 border: iced::Border {
-                    color: Border::SUBTLE,
-                    width: 1.0,
-                    radius: 0.0.into(),
+                    radius: 10.0.into(),
+                    ..Default::default()
                 },
                 ..Default::default()
             })
             .into()
     }
 
-    /// Single metadata item (label + value)
-    fn metadata_item(label: &str, value: &str) -> Element<'static, Message> {
-        column![
-            text(label.to_owned()).size(11).color(TextColors::TERTIARY),
-            text(value.to_owned()).size(13).color(TextColors::PRIMARY),
-        ]
-        .spacing(2)
-        .into()
+    /// Simple metadata text
+    fn meta_text(value: &str) -> Element<'static, Message> {
+        text(value.to_string()).size(11).color(TC::SECONDARY).into()
     }
 
-    /// Format file size for display
-    fn format_file_size(bytes: i64) -> String {
+    fn format_size(bytes: i64) -> String {
         if bytes < 1024 {
             format!("{} B", bytes)
         } else if bytes < 1024 * 1024 {

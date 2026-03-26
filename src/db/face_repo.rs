@@ -175,6 +175,26 @@ impl<'a> FaceRepo<'a> {
         }
     }
 
+    /// Get person names for a photo (faces detected in this photo with cluster names)
+    pub fn get_person_names_for_photo(&self, photo_id: i64) -> SqliteResult<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT DISTINCT fc.name
+            FROM faces f
+            JOIN face_clusters fc ON f.cluster_id = fc.id
+            WHERE f.photo_id = ?1 AND fc.name IS NOT NULL AND fc.name != ''
+            ORDER BY fc.name
+            "#,
+        )?;
+
+        let names = stmt
+            .query_map(params![photo_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(names)
+    }
+
     /// Name a cluster (set the person's name)
     pub fn name_cluster(&self, cluster_id: i64, name: &str) -> SqliteResult<()> {
         self.conn.execute(

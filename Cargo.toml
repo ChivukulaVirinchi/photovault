@@ -80,9 +80,9 @@ opt-level = 3
 [profile.dev.package.imageproc]
 opt-level = 3
 [profile.dev.package.ort]
-opt-level = 2
+opt-level = 3
 [profile.dev.package.ort-sys]
-opt-level = 2
+opt-level = 3
 [profile.dev.package.ndarray]
 opt-level = 2
 [profile.dev.package.sha2]

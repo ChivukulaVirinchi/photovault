@@ -28,17 +28,17 @@ const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThumbnailSize {
-    Small,  // 128x128
-    Medium, // 256x256
-    Large,  // 512x512
+    Small,  // 200x200 (timeline grid)
+    Medium, // 400x400 (detail preview)
+    Large,  // 800x800 (high quality)
 }
 
 impl ThumbnailSize {
     pub fn pixels(&self) -> u32 {
         match self {
-            ThumbnailSize::Small => 128,
-            ThumbnailSize::Medium => 256,
-            ThumbnailSize::Large => 512,
+            ThumbnailSize::Small => 200,
+            ThumbnailSize::Medium => 400,
+            ThumbnailSize::Large => 800,
         }
     }
 
@@ -223,9 +223,9 @@ impl ThumbnailService {
 
         // Save as JPEG
         let quality = match size {
-            ThumbnailSize::Small => 55,
-            ThumbnailSize::Medium => 65,
-            ThumbnailSize::Large => 78,
+            ThumbnailSize::Small => 72,
+            ThumbnailSize::Medium => 80,
+            ThumbnailSize::Large => 88,
         };
         let mut out = std::fs::File::create(&thumb_path)
             .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
@@ -585,9 +585,9 @@ mod tests {
 
     #[test]
     fn test_thumbnail_sizes() {
-        assert_eq!(ThumbnailSize::Small.pixels(), 128);
-        assert_eq!(ThumbnailSize::Medium.pixels(), 256);
-        assert_eq!(ThumbnailSize::Large.pixels(), 512);
+        assert_eq!(ThumbnailSize::Small.pixels(), 200);
+        assert_eq!(ThumbnailSize::Medium.pixels(), 400);
+        assert_eq!(ThumbnailSize::Large.pixels(), 800);
     }
 
     #[test]
