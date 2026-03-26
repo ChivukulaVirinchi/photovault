@@ -237,6 +237,9 @@ pub struct PhotoVault {
     /// People names detected in the currently viewed photo
     current_photo_people: Vec<String>,
 
+    /// Number of faces detected in the currently viewed photo
+    current_photo_face_count: usize,
+
     /// Current rotation offset in photo detail (0, 90, 180, 270)
     photo_rotation: i32,
 
@@ -572,6 +575,7 @@ impl PhotoVault {
             face_cancel_flag: None,
             ml_available: crate::bootstrap::has_face_models(),
             current_photo_people: Vec::new(),
+            current_photo_face_count: 0,
             photo_rotation: 0,
             current_display_image: None,
             show_metadata_panel: true,
@@ -1236,12 +1240,21 @@ impl PhotoVault {
                     self.current_display_image = None;
                     self.zoom_to_fit = true;
 
-                    // Look up people in this photo
+                    // Look up people and face count in this photo
                     self.current_photo_people.clear();
+                    self.current_photo_face_count = 0;
                     if let Some(ref db) = self.database {
                         let face_repo = FaceRepo::new(&db.conn);
                         if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
                             self.current_photo_people = names;
+                        }
+                        // Get total face count for this photo
+                        if let Ok(count) = db.conn.query_row(
+                            "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",
+                            rusqlite::params![photo_id],
+                            |row| row.get::<_, i64>(0),
+                        ) {
+                            self.current_photo_face_count = count as usize;
                         }
                     }
 
@@ -2960,9 +2973,9 @@ impl PhotoVault {
                             has_prev,
                             has_next,
                             &self.current_photo_people,
+                            self.current_photo_face_count,
                             handle.as_ref(),
                             self.show_metadata_panel,
-                            self.zoom_to_fit,
                             self.config.theme,
                         );
                     }

@@ -19,9 +19,9 @@ impl PhotoDetailView {
         has_prev: bool,
         has_next: bool,
         people: &[String],
+        face_count: usize,
         image_handle: Option<&iced::widget::image::Handle>,
         show_metadata: bool,
-        zoom_to_fit: bool,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -73,36 +73,20 @@ impl PhotoDetailView {
         let prev_btn = Self::nav_arrow("\u{2039}", Message::PreviousPhoto, has_prev, p);
         let next_btn = Self::nav_arrow("\u{203A}", Message::NextPhoto, has_next, p);
 
-        // === Image area — takes all available space ===
+        // === Image area — viewer widget with scroll-to-zoom + drag-to-pan ===
         let image_widget: Element<'static, Message> = if let Some(handle) = image_handle {
             let handle = handle.clone();
-            if zoom_to_fit {
-                // Fit-to-window mode: simple image widget
-                container(
-                    iced::widget::image(handle)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .content_fit(iced::ContentFit::Contain),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .into()
-            } else {
-                // Free zoom mode: viewer widget with scroll-to-zoom + drag-to-pan
-                container(
-                    iced::widget::image::viewer(handle)
-                        .min_scale(0.1)
-                        .max_scale(15.0)
-                        .scale_step(0.10)
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-            }
+            container(
+                iced::widget::image::viewer(handle)
+                    .min_scale(0.25)
+                    .max_scale(10.0)
+                    .scale_step(0.10)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else {
             let fname = photo.file_name.clone();
             let tc = p.text_tertiary;
@@ -114,17 +98,9 @@ impl PhotoDetailView {
                 .into()
         };
 
-        // Double-click hint (zoom toggle)
-        let zoom_hint = {
-            let hint_text = if zoom_to_fit { "Scroll to zoom" } else { "Fit (Esc zoom)" };
-            let tc = p.text_tertiary;
-            container(text(hint_text).size(9).color(tc))
-                .padding(Padding::from([2, 8]))
-        };
-
         let image_row = row![
             prev_btn,
-            column![image_widget, zoom_hint].width(Length::Fill),
+            image_widget,
             next_btn,
         ]
         .align_y(Alignment::Center)
@@ -132,7 +108,7 @@ impl PhotoDetailView {
 
         // === Metadata panel ===
         let meta_panel: Element<'static, Message> = if show_metadata {
-            Self::build_metadata(photo, people, p)
+            Self::build_metadata(photo, people, face_count, p)
         } else {
             Space::with_height(0).into()
         };
@@ -201,6 +177,7 @@ impl PhotoDetailView {
     fn build_metadata(
         photo: &Photo,
         people: &[String],
+        face_count: usize,
         p: &'static colors::Palette,
     ) -> Element<'static, Message> {
         let label_color = p.text_tertiary;
@@ -245,11 +222,16 @@ impl PhotoDetailView {
             );
         }
 
-        if !people.is_empty() {
+        if !people.is_empty() || face_count > 0 {
+            let people_text = if !people.is_empty() {
+                people.join(", ")
+            } else {
+                format!("{} face{} detected", face_count, if face_count == 1 { "" } else { "s" })
+            };
             date_loc_items.push(
                 column![
                     text("PEOPLE").size(9).color(label_color),
-                    text(people.join(", ")).size(12).color(value_color),
+                    text(people_text).size(12).color(value_color),
                 ].spacing(1).into()
             );
         }
