@@ -501,8 +501,8 @@ impl PhotoVault {
     }
 
     fn configured_thumbnail_size(&self) -> ThumbnailSize {
-        // Fast-path grid rendering: generate small thumbnails first for responsiveness.
-        ThumbnailSize::Small
+        // Use Medium for crisp grid thumbnails (500px, 85% quality, Lanczos3).
+        ThumbnailSize::Medium
     }
 
     /// Create new application instance
@@ -2979,18 +2979,19 @@ impl PhotoVault {
 
         // Main layout: sidebar (collapsible) + content
         let sidebar: Element<'_, Message> = if self.config.sidebar_collapsed {
-            // Collapsed: just a thin strip with expand button
+            // Collapsed: thin strip with expand arrow
             let p = colors::palette(self.config.theme);
             let bg = p.bg_secondary;
             let tc = p.text_secondary;
+            let hover_bg = p.bg_hover;
             container(
                 iced::widget::button(
-                    text("\u{2261}").size(18).color(tc) // hamburger icon
+                    text("\u{00BB}").size(16).color(tc) // » double right arrow
                 )
-                .padding(iced::Padding::from([8, 6]))
+                .padding(iced::Padding::from([8, 8]))
                 .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
                     background: match s {
-                        iced::widget::button::Status::Hovered => Some(p.bg_hover.into()),
+                        iced::widget::button::Status::Hovered => Some(hover_bg.into()),
                         _ => None,
                     },
                     border: iced::Border { radius: 4.0.into(), ..Default::default() },
@@ -2998,9 +2999,9 @@ impl PhotoVault {
                 })
                 .on_press(Message::ToggleSidebar)
             )
-            .width(Length::Fixed(40.0))
+            .width(Length::Fixed(36.0))
             .height(Length::Fill)
-            .padding(iced::Padding::from([16, 6]))
+            .padding(iced::Padding::from([16, 4]))
             .style(move |_t: &iced::Theme| container::Style {
                 background: Some(bg.into()),
                 ..Default::default()

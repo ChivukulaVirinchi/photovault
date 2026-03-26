@@ -18,12 +18,30 @@ impl Sidebar {
     pub fn view(current_view: &View, app_theme: AppTheme) -> Element<'static, Message> {
         let p = colors::palette(app_theme);
 
-        let brand = container(
-            text("PhotoVault")
-                .size(13)
-                .color(p.text_secondary),
+        let hover_bg = p.bg_hover;
+        let tc = p.text_tertiary;
+        let collapse_btn = button(
+            text("\u{00AB}").size(14).color(tc) // « double left arrow
         )
-        .padding(Padding::from([24, 20]));
+        .padding(Padding::from([2, 6]))
+        .style(move |_t: &iced::Theme, s| button::Style {
+            background: match s {
+                button::Status::Hovered => Some(hover_bg.into()),
+                _ => None,
+            },
+            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+            ..Default::default()
+        })
+        .on_press(Message::ToggleSidebar);
+
+        let brand = container(
+            row![
+                text("PhotoVault").size(13).color(p.text_secondary),
+                Space::with_width(Length::Fill),
+                collapse_btn,
+            ].align_y(iced::Alignment::Center),
+        )
+        .padding(Padding::from([24, 16]));
 
         let nav_items = column![
             Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
