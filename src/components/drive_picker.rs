@@ -33,9 +33,13 @@ impl DrivePicker {
             .padding(24)
             .into()
         } else {
-            let items: Vec<Element<'static, Message>> = drives
+            // Show indexed drives first, then unindexed
+            let mut sorted_drives: Vec<&DriveInfo> = drives.iter().collect();
+            sorted_drives.sort_by(|a, b| b.has_photovault_db.cmp(&a.has_photovault_db));
+
+            let items: Vec<Element<'static, Message>> = sorted_drives
                 .iter()
-                .map(|drive: &DriveInfo| Self::drive_item(drive.clone()))
+                .map(|drive: &&DriveInfo| Self::drive_item((*drive).clone()))
                 .collect();
 
             scrollable(column(items).spacing(6))

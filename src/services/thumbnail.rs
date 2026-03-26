@@ -182,27 +182,22 @@ impl ThumbnailService {
     ) -> Result<PathBuf, String> {
         let thumb_path = self.thumbnail_path(file_hash, size);
 
+        // Check if existing thumbnail is adequate quality (not a tiny EXIF extract)
         if thumb_path.exists() {
-            self.add_to_cache(file_hash, size, &thumb_path);
-            return Ok(thumb_path);
+            let file_size = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
+            // If thumbnail is >5KB, it's a proper generated one. Tiny ones are EXIF extracts.
+            if file_size > 5000 {
+                self.add_to_cache(file_hash, size, &thumb_path);
+                return Ok(thumb_path);
+            }
+            // Otherwise, regenerate it by falling through
+            let _ = std::fs::remove_file(&thumb_path);
         }
 
         // Create the hash subdirectory if it doesn't exist
         if let Some(parent) = thumb_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create thumbnail subdirectory: {}", e))?;
-        }
-
-        // Strategy 1: Try extracting embedded EXIF thumbnail first (very fast, ~2ms)
-        if size == ThumbnailSize::Small {
-            if let Some(exif_thumb) = Self::extract_exif_thumbnail(photo_path) {
-                // EXIF thumbnails are typically 160x120 — good enough for 128x128 small size
-                if let Ok(()) = Self::save_jpeg_bytes(&thumb_path, &exif_thumb, 65) {
-                    self.add_to_cache(file_hash, size, &thumb_path);
-                    self.track_cache_size(&thumb_path);
-                    return Ok(thumb_path);
-                }
-            }
         }
 
         // Check timeout before expensive decode

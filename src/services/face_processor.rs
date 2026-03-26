@@ -169,14 +169,14 @@ impl FaceProcessor {
             }
 
             // Load image and pre-resize for faster inference
-            // SCRFD input is 640x640, so anything > ~1280px is wasted compute
+            // SCRFD input is 640x640 but larger images help detect smaller faces
             let full_path = drive_path.join(file_path);
             let image = match image::open(&full_path) {
                 Ok(img) => {
                     let (w, h) = (img.width(), img.height());
                     let max_dim = w.max(h);
-                    if max_dim > 1280 {
-                        img.resize(1280, 1280, image::imageops::FilterType::Triangle)
+                    if max_dim > 2048 {
+                        img.resize(2048, 2048, image::imageops::FilterType::Triangle)
                     } else {
                         img
                     }

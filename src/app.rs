@@ -239,6 +239,9 @@ pub struct PhotoVault {
 
     /// Current rotation offset in photo detail (0, 90, 180, 270)
     photo_rotation: i32,
+
+    /// Path to the rotated image temp file (if rotation applied)
+    rotated_image_path: Option<std::path::PathBuf>,
 }
 
 /// Application messages
@@ -446,8 +449,11 @@ pub enum Message {
     /// Cancel face processing
     CancelFaceProcessing,
 
-    /// Rotate photo in detail view
+    /// Rotate photo in detail view (spawns async rotate task)
     RotatePhoto,
+
+    /// Rotated image ready
+    RotatedImageReady(Option<std::path::PathBuf>),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -552,6 +558,7 @@ impl PhotoVault {
             ml_available: crate::bootstrap::has_face_models(),
             current_photo_people: Vec::new(),
             photo_rotation: 0,
+            rotated_image_path: None,
         };
 
         // Detect drives on startup
@@ -1209,6 +1216,7 @@ impl PhotoVault {
                     self.selected_photo_index = Some(idx);
                     self.current_view = View::PhotoDetail;
                     self.photo_rotation = 0;
+                    self.rotated_image_path = None;
 
                     // Look up people in this photo
                     self.current_photo_people.clear();
@@ -1230,6 +1238,8 @@ impl PhotoVault {
             }
 
             Message::PreviousPhoto => {
+                self.rotated_image_path = None;
+                self.photo_rotation = 0;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx > 0 {
                         *idx -= 1;
@@ -1239,6 +1249,8 @@ impl PhotoVault {
             }
 
             Message::NextPhoto => {
+                self.rotated_image_path = None;
+                self.photo_rotation = 0;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx + 1 < self.photos.len() {
                         *idx += 1;
@@ -2004,6 +2016,12 @@ impl PhotoVault {
                 self.face_processing_progress = Some(FaceProcessingProgress::default());
                 self.face_processing_error = None;
 
+                // Reset all faces_processed flags so every photo gets re-analyzed
+                if let Some(ref db) = self.database {
+                    let _ = db.conn.execute("UPDATE photos SET faces_processed = FALSE", []);
+                    tracing::info!("Reset faces_processed flags for all photos");
+                }
+
                 let drive_path = drive_path.clone();
                 let detector_confidence = self.config.face_detection_confidence;
                 let model_dir = crate::bootstrap::model_dir();
@@ -2061,6 +2079,44 @@ impl PhotoVault {
 
             Message::RotatePhoto => {
                 self.photo_rotation = (self.photo_rotation + 90) % 360;
+
+                // Get the current image path and rotate it in a background thread
+                let source_path = if let Some(ref rp) = self.rotated_image_path {
+                    Some(rp.clone())
+                } else if let Some(idx) = self.selected_photo_index {
+                    if let (Some(photo), Some(ref drive)) = (self.photos.get(idx), &self.selected_drive) {
+                        let orig = drive.join(&photo.file_path);
+                        if orig.exists() { Some(orig) } else { None }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(src) = source_path {
+                    Task::perform(
+                        async move {
+                            let handle = tokio::task::spawn_blocking(move || {
+                                let img = image::open(&src).ok()?;
+                                let rotated = img.rotate90();
+                                let temp_dir = std::env::temp_dir().join("photovault");
+                                let _ = std::fs::create_dir_all(&temp_dir);
+                                let temp_path = temp_dir.join("rotated_view.jpg");
+                                rotated.save(&temp_path).ok()?;
+                                Some(temp_path)
+                            });
+                            handle.await.ok().flatten()
+                        },
+                        Message::RotatedImageReady,
+                    )
+                } else {
+                    Task::none()
+                }
+            }
+
+            Message::RotatedImageReady(path) => {
+                self.rotated_image_path = path;
                 Task::none()
             }
 
@@ -2809,7 +2865,7 @@ impl PhotoVault {
                             has_next,
                             drive_path,
                             &self.current_photo_people,
-                            self.photo_rotation,
+                            self.rotated_image_path.as_ref(),
                         );
                     }
                 }

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (1);
+INSERT INTO schema_version (version) VALUES (4);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -35,14 +35,14 @@ INSERT INTO schema_version (version) VALUES (1);
 
 CREATE TABLE IF NOT EXISTS photos (
     id INTEGER PRIMARY KEY,
-    
+
     -- File information
     file_path TEXT NOT NULL,           -- Relative path from drive root
     file_name TEXT NOT NULL,
     file_hash TEXT NOT NULL,           -- SHA256 for duplicate detection
     file_size INTEGER NOT NULL,
     file_mtime INTEGER,                -- File modification time (unix timestamp)
-    
+
     -- EXIF metadata
     date_taken DATETIME,               -- From EXIF, fallback to file mtime
     date_taken_source TEXT,            -- 'exif' | 'filename' | 'mtime'
@@ -52,22 +52,29 @@ CREATE TABLE IF NOT EXISTS photos (
     location_country TEXT,             -- Reverse geocoded
     camera_make TEXT,
     camera_model TEXT,
+    iso INTEGER,                       -- ISO sensitivity
+    aperture TEXT,                     -- e.g. "f/2.8"
+    shutter_speed TEXT,                -- e.g. "1/125"
+    focal_length TEXT,                 -- e.g. "50mm"
+    lens_model TEXT,                   -- e.g. "iPhone 15 Pro back camera"
+    flash TEXT,                        -- "Fired" or "Off"
+    gps_altitude REAL,                 -- meters above/below sea level
     width INTEGER,
     height INTEGER,
     orientation INTEGER DEFAULT 1,
-    
+
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
     faces_processed BOOLEAN DEFAULT FALSE,
-    
+
     -- Soft delete
     is_trashed BOOLEAN DEFAULT FALSE,
     trashed_at DATETIME,
-    
+
     -- Timestamps
     indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
+
     UNIQUE(file_path)
 );
 

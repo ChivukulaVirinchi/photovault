@@ -1,11 +1,11 @@
-//! Photo detail view — full-size photo viewer
+//! Photo detail view — immersive photo viewer
 //!
-//! Shows the original photo with a compact metadata panel.
-//! Supports navigation, rotation, people tags, and full EXIF display.
+//! Full-screen image display with floating metadata overlay.
+//! Image takes maximum space. Metadata shown as an elegant bottom panel.
 
 use std::path::Path;
 
-use iced::widget::{button, column, container, row, text, Row, Space};
+use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
@@ -21,128 +21,127 @@ impl PhotoDetailView {
         has_next: bool,
         drive_path: &Path,
         people: &[String],
-        rotation: i32,
+        rotated_path: Option<&std::path::PathBuf>,
     ) -> Element<'static, Message> {
-        // Header: filename + actions
-        let header = Self::header_bar(photo);
+        let photo_id = photo.id;
 
-        // Navigation
-        let prev_btn = Self::nav_btn("\u{2039}", Message::PreviousPhoto, has_prev);
-        let next_btn = Self::nav_btn("\u{203A}", Message::NextPhoto, has_next);
+        // === Top bar: minimal, transparent feel ===
+        let rotate_btn = Self::tool_btn("\u{21BB}", "Rotate (R)", Message::RotatePhoto);
+        let trash_btn = button(
+            text("Trash").size(11).color(Semantic::DANGER),
+        )
+        .padding(Padding::from([5, 12]))
+        .style(|_t: &iced::Theme, s| button::Style {
+            background: match s {
+                button::Status::Hovered => Some(iced::Color { a: 0.12, ..Semantic::DANGER }.into()),
+                _ => None,
+            },
+            border: iced::Border { radius: 6.0.into(), ..Default::default() },
+            ..Default::default()
+        })
+        .on_press(Message::TrashPhotos(vec![photo_id]));
 
-        // Main image
-        let image_area = Self::image_area(photo, drive_path, rotation);
-        let image_with_nav = row![prev_btn, image_area, next_btn].align_y(Alignment::Center);
+        let close_btn = Self::tool_btn("\u{00D7}", "Close (Esc)", Message::ClosePhotoDetail);
 
-        // Metadata panel
-        let metadata = Self::metadata_panel(photo, people);
+        let top_bar = container(
+            row![
+                rotate_btn,
+                Space::with_width(Length::Fill),
+                trash_btn,
+                Space::with_width(8),
+                close_btn,
+            ]
+            .align_y(Alignment::Center)
+            .padding(Padding::from([6, 16])),
+        )
+        .width(Length::Fill)
+        .style(|_t: &iced::Theme| container::Style {
+            background: Some(Backgrounds::PRIMARY.into()),
+            ..Default::default()
+        });
 
-        let content = column![header, image_with_nav, metadata];
+        // === Navigation arrows ===
+        let prev_btn = Self::nav_arrow("\u{2039}", Message::PreviousPhoto, has_prev);
+        let next_btn = Self::nav_arrow("\u{203A}", Message::NextPhoto, has_next);
 
-        container(content)
+        // === Image area — takes all available space ===
+        let image_widget = Self::render_image(photo, drive_path, rotated_path);
+
+        let image_row = row![
+            prev_btn,
+            image_widget,
+            next_btn,
+        ]
+        .align_y(Alignment::Center);
+
+        // === Metadata panel — compact, two lines ===
+        let meta_panel = Self::build_metadata(photo, people);
+
+        container(column![top_bar, image_row, meta_panel])
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(|_t: &iced::Theme| container::Style {
+                background: Some(iced::Color::BLACK.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    fn header_bar(photo: &Photo) -> Element<'static, Message> {
-        let photo_id = photo.id;
+    fn render_image(photo: &Photo, drive_path: &Path, rotated_path: Option<&std::path::PathBuf>) -> Element<'static, Message> {
+        // If we have a rotated version, use that
+        if let Some(rp) = rotated_path {
+            if rp.exists() {
+                return container(
+                    iced::widget::image(iced::widget::image::Handle::from_path(rp))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .content_fit(iced::ContentFit::Contain),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into();
+            }
+        }
 
-        let close_btn = Self::icon_btn("\u{00D7}", 18, Message::ClosePhotoDetail);
-        let rotate_btn = Self::icon_btn("\u{21BB}", 14, Message::RotatePhoto);
-        let trash_btn = button(text("Trash").size(11).color(Semantic::DANGER))
-            .padding(Padding::from([4, 10]))
-            .style(|_theme: &iced::Theme, status| button::Style {
-                background: match status {
-                    button::Status::Hovered => Some(iced::Color { a: 0.12, ..Semantic::DANGER }.into()),
-                    _ => None,
-                },
-                border: iced::Border { radius: 4.0.into(), ..Default::default() },
-                ..Default::default()
-            })
-            .on_press(Message::TrashPhotos(vec![photo_id]));
+        let original = drive_path.join(&photo.file_path);
+        let path = if original.exists() {
+            original
+        } else if let Some(ref tp) = photo.thumbnail_path {
+            std::path::PathBuf::from(tp)
+        } else {
+            let fname = photo.file_name.clone();
+            return container(text(fname).size(14).color(TC::TERTIARY))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into();
+        };
 
-        row![
-            Space::with_width(16),
-            rotate_btn,
-            Space::with_width(Length::Fill),
-            trash_btn,
-            Space::with_width(8),
-            close_btn,
-            Space::with_width(12),
-        ]
-        .align_y(Alignment::Center)
-        .height(40)
+        container(
+            iced::widget::image(iced::widget::image::Handle::from_path(&path))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
     }
 
-    fn image_area(photo: &Photo, drive_path: &Path, _rotation: i32) -> Element<'static, Message> {
-        // Always show original file
-        let original_path = drive_path.join(&photo.file_path);
-        if original_path.exists() {
-            return container(
-                iced::widget::image(iced::widget::image::Handle::from_path(&original_path))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(iced::ContentFit::Contain),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Color::BLACK.into()),
-                ..Default::default()
-            })
-            .into();
-        }
-
-        // Fallback: thumbnail
-        if let Some(ref thumb_path) = photo.thumbnail_path {
-            let path = std::path::PathBuf::from(thumb_path);
-            return container(
-                iced::widget::image(iced::widget::image::Handle::from_path(&path))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(iced::ContentFit::Contain),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Color::BLACK.into()),
-                ..Default::default()
-            })
-            .into();
-        }
-
-        let fname = photo.file_name.clone();
-        container(text(fname).size(14).color(TC::TERTIARY))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Color::BLACK.into()),
-                ..Default::default()
-            })
-            .into()
-    }
-
-    fn nav_btn(label: &str, message: Message, enabled: bool) -> Element<'static, Message> {
+    fn nav_arrow(symbol: &str, msg: Message, enabled: bool) -> Element<'static, Message> {
         let color = if enabled { TC::SECONDARY } else { TC::TERTIARY };
-        let label = label.to_owned();
-        let btn = button(text(label).size(26).color(color))
-            .padding(Padding::from([14, 10]))
-            .style(move |_theme: &iced::Theme, status| button::Style {
+        let symbol = symbol.to_owned();
+        let btn = button(text(symbol).size(28).color(color))
+            .padding(Padding::from([20, 8]))
+            .style(move |_t: &iced::Theme, s| button::Style {
                 background: if enabled {
-                    match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                    match s {
+                        button::Status::Hovered => Some(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.05).into()),
                         _ => None,
                     }
                 } else {
@@ -152,142 +151,121 @@ impl PhotoDetailView {
                 ..Default::default()
             });
 
-        if enabled { btn.on_press(message).into() } else { btn.into() }
+        if enabled { btn.on_press(msg).into() } else { btn.into() }
     }
 
-    fn icon_btn(icon: &str, size: u16, message: Message) -> Element<'static, Message> {
+    fn tool_btn(icon: &str, _tooltip: &str, msg: Message) -> Element<'static, Message> {
         let icon = icon.to_owned();
-        button(text(icon).size(size).color(TC::SECONDARY))
-            .padding(Padding::from([4, 8]))
-            .style(|_theme: &iced::Theme, status| button::Style {
-                background: match status {
+        button(text(icon).size(15).color(TC::SECONDARY))
+            .padding(Padding::from([5, 8]))
+            .style(|_t: &iced::Theme, s| button::Style {
+                background: match s {
                     button::Status::Hovered => Some(Backgrounds::HOVER.into()),
                     _ => None,
                 },
                 border: iced::Border { radius: 4.0.into(), ..Default::default() },
                 ..Default::default()
             })
-            .on_press(message)
+            .on_press(msg)
             .into()
     }
 
-    /// Compact metadata panel — two rows of key info
-    fn metadata_panel(photo: &Photo, people: &[String]) -> Element<'static, Message> {
-        let mut top_items: Vec<Element<'static, Message>> = Vec::new();
-        let mut bottom_items: Vec<Element<'static, Message>> = Vec::new();
+    /// Compact two-line metadata panel
+    fn build_metadata(photo: &Photo, people: &[String]) -> Element<'static, Message> {
+        // Line 1: When, Where, Who — as readable text
+        let mut line1_parts: Vec<String> = Vec::new();
 
-        // Top row: Date | Location | People
         if let Some(date) = &photo.date_taken {
-            top_items.push(Self::chip(&date.format("%b %d, %Y  %H:%M").to_string()));
+            line1_parts.push(date.format("%b %d, %Y  %H:%M").to_string());
         }
 
         if let Some(loc) = photo.location_string() {
-            top_items.push(Self::chip(&loc));
+            line1_parts.push(loc);
         } else if photo.has_location() {
-            top_items.push(Self::chip(&format!(
+            line1_parts.push(format!(
                 "{:.4}, {:.4}",
                 photo.gps_latitude.unwrap_or(0.0),
                 photo.gps_longitude.unwrap_or(0.0)
-            )));
+            ));
         }
 
         if let Some(alt) = photo.gps_altitude {
-            top_items.push(Self::chip(&format!("{:.0}m alt", alt)));
+            line1_parts.push(format!("{:.0}m", alt));
         }
 
         if !people.is_empty() {
-            top_items.push(Self::chip(&people.join(", ")));
+            line1_parts.push(people.join(", "));
         }
 
-        // Bottom row: Camera + Exposure + Dimensions + File
-        let mut camera_parts: Vec<String> = Vec::new();
-        if let Some(ref make) = photo.camera_make {
-            if let Some(ref model) = photo.camera_model {
-                camera_parts.push(format!("{} {}", make, model));
-            } else {
-                camera_parts.push(make.clone());
+        let line1 = if line1_parts.is_empty() {
+            photo.file_name.clone()
+        } else {
+            line1_parts.join("   \u{2022}   ")
+        };
+
+        // Line 2: Camera + Exposure + Dimensions + Size
+        let mut line2_parts: Vec<String> = Vec::new();
+
+        // Camera
+        if let Some(ref model) = photo.camera_model {
+            line2_parts.push(model.clone());
+        } else if let Some(ref make) = photo.camera_make {
+            line2_parts.push(make.clone());
+        }
+
+        // Lens
+        if let Some(ref lens) = photo.lens_model {
+            line2_parts.push(lens.clone());
+        }
+
+        // Exposure: 50mm  f/1.8  1/125  ISO 64
+        let mut exp: Vec<String> = Vec::new();
+        if let Some(ref fl) = photo.focal_length { exp.push(fl.clone()); }
+        if let Some(ref ap) = photo.aperture { exp.push(ap.clone()); }
+        if let Some(ref ss) = photo.shutter_speed { exp.push(ss.clone()); }
+        if let Some(iso) = photo.iso { exp.push(format!("ISO {}", iso)); }
+        if !exp.is_empty() {
+            line2_parts.push(exp.join("  "));
+        }
+
+        if let Some(ref flash) = photo.flash {
+            if flash == "Fired" {
+                line2_parts.push("Flash".to_string());
             }
         }
-        if let Some(ref lens) = photo.lens_model {
-            camera_parts.push(lens.clone());
-        }
-        if !camera_parts.is_empty() {
-            bottom_items.push(Self::meta_text(&camera_parts.join(" \u{2022} ")));
-        }
 
-        // Exposure string: 50mm  f/1.8  1/125  ISO 64  Flash: Off
-        let mut exp_parts: Vec<String> = Vec::new();
-        if let Some(ref fl) = photo.focal_length { exp_parts.push(fl.clone()); }
-        if let Some(ref ap) = photo.aperture { exp_parts.push(ap.clone()); }
-        if let Some(ref ss) = photo.shutter_speed { exp_parts.push(ss.clone()); }
-        if let Some(iso) = photo.iso { exp_parts.push(format!("ISO {}", iso)); }
-        if let Some(ref flash) = photo.flash { exp_parts.push(format!("Flash: {}", flash)); }
-        if !exp_parts.is_empty() {
-            bottom_items.push(Self::meta_text(&exp_parts.join("  ")));
-        }
-
-        // Dimensions + file size
+        // Dimensions + file
         if let (Some(w), Some(h)) = (photo.width, photo.height) {
             let mp = (w as f64 * h as f64) / 1_000_000.0;
-            bottom_items.push(Self::meta_text(&format!(
-                "{}x{} ({:.1}MP)  {}",
-                w, h, mp,
-                Self::format_size(photo.file_size)
-            )));
-        } else {
-            bottom_items.push(Self::meta_text(&Self::format_size(photo.file_size)));
+            line2_parts.push(format!("{}x{} ({:.1}MP)", w, h, mp));
         }
+        line2_parts.push(Self::fmt_size(photo.file_size));
 
-        let top_row = Row::with_children(top_items).spacing(8).align_y(Alignment::Center);
-        let bottom_row = Row::with_children(bottom_items).spacing(16).align_y(Alignment::Center);
+        let line2 = line2_parts.join("   \u{2022}   ");
 
         container(
-            column![top_row, bottom_row].spacing(6),
+            column![
+                text(line1).size(12).color(TC::PRIMARY),
+                text(line2).size(11).color(TC::SECONDARY),
+            ]
+            .spacing(3),
         )
         .width(Length::Fill)
         .padding(Padding::from([10, 20]))
-        .style(|_theme: &iced::Theme| container::Style {
+        .style(|_t: &iced::Theme| container::Style {
             background: Some(Backgrounds::SECONDARY.into()),
             border: iced::Border {
-                color: Border::SUBTLE,
-                width: 1.0,
-                radius: 0.0.into(),
+                color: Border::SUBTLE, width: 1.0, radius: 0.0.into(),
             },
             ..Default::default()
         })
         .into()
     }
 
-    /// Info chip — small rounded pill with text
-    fn chip(label: &str) -> Element<'static, Message> {
-        let label = label.to_string();
-        container(text(label).size(11).color(TC::PRIMARY))
-            .padding(Padding::from([3, 8]))
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
-    }
-
-    /// Simple metadata text
-    fn meta_text(value: &str) -> Element<'static, Message> {
-        text(value.to_string()).size(11).color(TC::SECONDARY).into()
-    }
-
-    fn format_size(bytes: i64) -> String {
-        if bytes < 1024 {
-            format!("{} B", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1} KB", bytes as f64 / 1024.0)
-        } else if bytes < 1024 * 1024 * 1024 {
-            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
+    fn fmt_size(bytes: i64) -> String {
+        if bytes < 1024 { format!("{} B", bytes) }
+        else if bytes < 1024 * 1024 { format!("{:.1} KB", bytes as f64 / 1024.0) }
+        else if bytes < 1024 * 1024 * 1024 { format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)) }
+        else { format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)) }
     }
 }
