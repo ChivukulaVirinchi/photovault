@@ -24,7 +24,7 @@ use crate::services::{
     ApplyResult, GeocodingService,
 };
 use tokio::task::JoinSet;
-use crate::theme::colors::Backgrounds;
+use crate::theme::colors::{Backgrounds, Border, Text};
 use crate::views::{
     BurstsView, CullState, CullView, DuplicatesView, PeopleView, PhotoDetailView, SearchView,
     SettingsView, TimelineView, TrashView, WelcomeView,
@@ -2973,13 +2973,18 @@ impl PhotoVault {
 
             let status_bar = container(
                 text(status_text)
-                    .size(12)
-                    .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+                    .size(11)
+                    .color(Text::SECONDARY),
             )
             .width(Length::Fill)
-            .padding([4, 12])
+            .padding([4, 16])
             .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Color::from_rgb(0.12, 0.12, 0.14).into()),
+                background: Some(Backgrounds::SECONDARY.into()),
+                border: iced::Border {
+                    color: Border::SUBTLE,
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
                 ..Default::default()
             });
 

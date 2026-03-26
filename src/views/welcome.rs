@@ -1,6 +1,6 @@
-//! Welcome view - shown when no drive is selected
+//! Welcome view — shown when no drive is selected
 //!
-//! A clean, inviting screen that guides users to select their photo library.
+//! A calm, confident landing that guides users to their photo library.
 
 use iced::widget::{column, container, text, Space};
 use iced::{Alignment, Element, Length};
@@ -16,17 +16,19 @@ pub struct WelcomeView;
 impl WelcomeView {
     /// Render the welcome view
     pub fn view(drives: &[DriveInfo]) -> Element<'static, Message> {
-        let logo = text("PhotoVault").size(48).color(Text::PRIMARY);
+        let logo = text("PhotoVault")
+            .size(38)
+            .color(Text::PRIMARY);
 
         let tagline = text("Your photos. Your drive. Your privacy.")
-            .size(16)
-            .color(Text::SECONDARY);
+            .size(14)
+            .color(Text::TERTIARY);
 
         let content = column![
             logo,
-            Space::with_height(8),
+            Space::with_height(6),
             tagline,
-            Space::with_height(48),
+            Space::with_height(56),
             DrivePicker::view(drives),
         ]
         .align_x(Alignment::Center);

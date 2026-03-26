@@ -68,6 +68,26 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fs2 = "0.4"
 
+# Optimize key deps even in debug mode — image decoding is unusable without this
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.jpeg-decoder]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.imageproc]
+opt-level = 3
+[profile.dev.package.ort]
+opt-level = 2
+[profile.dev.package.ort-sys]
+opt-level = 2
+[profile.dev.package.ndarray]
+opt-level = 2
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = true
 codegen-units = 1

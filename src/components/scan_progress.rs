@@ -1,6 +1,7 @@
 //! Scan progress indicator component
 //!
 //! Shows a progress display during directory scanning.
+//! Design: calm, centered, with clear stats — no visual noise.
 
 use iced::widget::{button, column, container, progress_bar, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
@@ -18,9 +19,9 @@ fn format_bytes(bytes: u64) -> String {
     if bytes >= GB {
         format!("{:.2} GB", bytes as f64 / GB as f64)
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
+        format!("{:.1} MB", bytes as f64 / MB as f64)
     } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
+        format!("{:.0} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
     }
@@ -37,15 +38,15 @@ impl ScanProgressView {
         } else {
             "Scanning..."
         })
-        .size(24)
+        .size(22)
         .color(Text::PRIMARY);
 
         // Progress stats
         let stats = row![
-            Self::stat_item("Files Found", &progress.files_found.to_string()),
-            Space::with_width(32),
+            Self::stat_item("Found", &progress.files_found.to_string()),
+            Space::with_width(40),
             Self::stat_item("Processed", &progress.files_processed.to_string()),
-            Space::with_width(32),
+            Space::with_width(40),
             Self::stat_item("Size", &format_bytes(progress.bytes_processed)),
         ]
         .align_y(Alignment::Center);
@@ -58,22 +59,22 @@ impl ScanProgressView {
         };
 
         let bar = progress_bar(0.0..=1.0, progress_value)
-            .width(Length::Fixed(400.0))
-            .height(Length::Fixed(8.0));
+            .width(Length::Fixed(380.0))
+            .height(Length::Fixed(4.0));
 
         // Current file/directory
         let current = if !progress.is_complete {
             let display = if !progress.current_file.is_empty() {
                 progress.current_file.clone()
             } else if !progress.current_directory.is_empty() {
-                format!("Scanning: {}", progress.current_directory)
+                progress.current_directory.clone()
             } else {
                 "Preparing...".to_string()
             };
-            text(display).size(12).color(Text::TERTIARY)
+            text(display).size(11).color(Text::TERTIARY)
         } else {
             text(format!(
-                "Completed in {:.1} seconds",
+                "Completed in {:.1}s",
                 progress.elapsed_seconds
             ))
             .size(12)
@@ -85,17 +86,17 @@ impl ScanProgressView {
             let error_count = progress.errors.len();
             Some(
                 text(format!("{} errors encountered", error_count))
-                    .size(12)
+                    .size(11)
                     .color(Semantic::WARNING),
             )
         } else {
             None
         };
 
-        // Cancel/Done button
+        // Action button
         let action_button = if progress.is_complete {
-            button(text("Continue").size(14).color(Text::PRIMARY))
-                .padding(Padding::from([10, 20]))
+            button(text("Continue").size(13).color(Backgrounds::PRIMARY))
+                .padding(Padding::from([10, 24]))
                 .style(|_theme, status| {
                     let background = match status {
                         button::Status::Hovered => Some(Accent::HOVER.into()),
@@ -105,7 +106,7 @@ impl ScanProgressView {
                         background,
                         text_color: Backgrounds::PRIMARY,
                         border: iced::Border {
-                            radius: 6.0.into(),
+                            radius: 8.0.into(),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -113,12 +114,12 @@ impl ScanProgressView {
                 })
                 .on_press(Message::ScanComplete)
         } else {
-            button(text("Cancel").size(14).color(Text::SECONDARY))
-                .padding(Padding::from([10, 20]))
+            button(text("Cancel").size(13).color(Text::SECONDARY))
+                .padding(Padding::from([10, 24]))
                 .style(|_theme, status| {
                     let background = match status {
                         button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                        _ => Some(Backgrounds::ELEVATED.into()),
+                        _ => None,
                     };
                     button::Style {
                         background,
@@ -126,7 +127,7 @@ impl ScanProgressView {
                         border: iced::Border {
                             color: Border::VISIBLE,
                             width: 1.0,
-                            radius: 6.0.into(),
+                            radius: 8.0.into(),
                         },
                         ..Default::default()
                     }
@@ -134,23 +135,22 @@ impl ScanProgressView {
                 .on_press(Message::CancelScan)
         };
 
-        // Elapsed time display
+        // Elapsed time
         let elapsed = if !progress.is_complete && progress.elapsed_seconds > 0.0 {
             Some(
-                text(format!("{:.0}s elapsed", progress.elapsed_seconds))
-                    .size(12)
+                text(format!("{:.0}s", progress.elapsed_seconds))
+                    .size(11)
                     .color(Text::TERTIARY),
             )
         } else {
             None
         };
 
-        // Assemble the layout
         let mut content = column![
             title,
-            Space::with_height(24),
+            Space::with_height(28),
             stats,
-            Space::with_height(16),
+            Space::with_height(20),
             bar,
             Space::with_height(8),
             current,
@@ -168,7 +168,7 @@ impl ScanProgressView {
             content = content.push(err_text);
         }
 
-        content = content.push(Space::with_height(24));
+        content = content.push(Space::with_height(28));
         content = content.push(action_button);
 
         container(content)
@@ -186,8 +186,8 @@ impl ScanProgressView {
     /// Render a single stat item
     fn stat_item<'a>(label: &str, value: &str) -> Element<'a, Message> {
         column![
-            text(value.to_string()).size(28).color(Text::PRIMARY),
-            text(label.to_string()).size(12).color(Text::SECONDARY),
+            text(value.to_string()).size(24).color(Text::PRIMARY),
+            text(label.to_string()).size(11).color(Text::SECONDARY),
         ]
         .align_x(Alignment::Center)
         .into()

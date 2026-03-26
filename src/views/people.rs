@@ -14,7 +14,7 @@ use crate::components::photo_grid::photo_grid_simple;
 use crate::db::FaceClusterRecord;
 use crate::models::Photo;
 use crate::services::FaceProcessingProgress;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
 
 /// People view component
 pub struct PeopleView;
@@ -49,8 +49,8 @@ impl PeopleView {
                 .padding(Padding::from([4, 12]))
                 .style(|_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(iced::Color::from_rgb(0.6, 0.2, 0.2).into()),
-                        _ => Some(iced::Color::from_rgb(0.4, 0.15, 0.15).into()),
+                        button::Status::Hovered => Some(iced::Color { a: 0.3, ..Semantic::DANGER }.into()),
+                        _ => Some(iced::Color { a: 0.15, ..Semantic::DANGER }.into()),
                     };
                     button::Style {
                         background,

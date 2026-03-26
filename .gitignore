@@ -5,3 +5,17 @@
 
 # ONNX model files (~260MB total, downloaded separately)
 /models/
+
+# Downloaded data and build cache
+/data/
+/.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

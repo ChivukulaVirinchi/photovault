@@ -9,7 +9,7 @@ use iced::{Alignment, Element, Length, Padding};
 use crate::app::Message;
 use crate::db::TrashedPhotoRecord;
 use crate::services::trash::TrashStats;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
 use crate::utils::format_bytes;
 
 /// Trash view component.
@@ -85,20 +85,20 @@ impl TrashView {
             button(
                 text("Empty Trash")
                     .size(14)
-                    .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
+                    .color(Semantic::DANGER)
             )
             .padding(Padding::from([10, 18]))
             .style(|_theme, status| {
                 let background = match status {
                     button::Status::Hovered => {
-                        Some(iced::Color::from_rgba(0.8, 0.2, 0.2, 0.2).into())
+                        Some(iced::Color { a: 0.15, ..Semantic::DANGER }.into())
                     }
                     _ => None,
                 };
                 button::Style {
                     background,
                     border: iced::Border {
-                        color: iced::Color::from_rgb(0.8, 0.2, 0.2),
+                        color: Semantic::DANGER,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -116,7 +116,7 @@ impl TrashView {
         let confirm_text: Element<'static, Message> = if confirm_empty_trash {
             text("Click Empty Trash again to confirm permanent deletion")
                 .size(12)
-                .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
+                .color(Semantic::DANGER)
                 .into()
         } else {
             Space::with_height(Length::Shrink).into()
@@ -254,7 +254,7 @@ impl TrashView {
                     "Delete"
                 })
                 .size(12)
-                .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
+                .color(Semantic::DANGER)
             )
             .padding(Padding::from([6, 12]))
             .on_press(if confirm_delete_photo_id == Some(photo_id) {

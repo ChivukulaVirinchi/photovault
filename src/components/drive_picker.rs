@@ -1,6 +1,7 @@
 //! Drive picker component
 //!
 //! Allows users to select a drive or folder to index.
+//! Design: clean list with subtle status indicators.
 
 use iced::widget::{button, column, container, scrollable, text, Space};
 use iced::{Alignment, Element, Length, Padding};
@@ -16,55 +17,63 @@ impl DrivePicker {
     /// Render the drive picker
     pub fn view(drives: &[DriveInfo]) -> Element<'static, Message> {
         let title = text("Select a folder to index")
-            .size(20)
+            .size(16)
             .color(Text::PRIMARY);
 
         let subtitle = text("Choose a drive or folder containing your photos")
-            .size(14)
+            .size(13)
             .color(Text::SECONDARY);
 
         let drive_list: Element<'static, Message> = if drives.is_empty() {
-            container(text("No drives detected").size(14).color(Text::TERTIARY))
-                .padding(20)
-                .into()
+            container(
+                text("No drives detected")
+                    .size(13)
+                    .color(Text::TERTIARY),
+            )
+            .padding(24)
+            .into()
         } else {
             let items: Vec<Element<'static, Message>> = drives
                 .iter()
                 .map(|drive: &DriveInfo| Self::drive_item(drive.clone()))
                 .collect();
 
-            scrollable(column(items).spacing(8))
-                .height(Length::Fixed(300.0))
+            scrollable(column(items).spacing(6))
+                .height(Length::Fixed(280.0))
                 .into()
         };
 
-        let browse_button = button(text("Browse for folder...").size(14).color(Text::PRIMARY))
-            .padding(Padding::from([10, 16]))
-            .style(|_theme: &iced::Theme, status| {
-                let background = match status {
-                    button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                    button::Status::Pressed => Some(Backgrounds::ACTIVE.into()),
-                    _ => Some(Backgrounds::ELEVATED.into()),
-                };
+        let browse_button = button(
+            text("Browse for folder...")
+                .size(13)
+                .color(Text::SECONDARY),
+        )
+        .padding(Padding::from([10, 18]))
+        .style(|_theme: &iced::Theme, status| {
+            let background = match status {
+                button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                button::Status::Pressed => Some(Backgrounds::ACTIVE.into()),
+                _ => None,
+            };
 
-                button::Style {
-                    background,
-                    text_color: Text::PRIMARY,
-                    border: iced::Border {
-                        color: Border::VISIBLE,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(Message::BrowseForFolder);
+            button::Style {
+                background,
+                text_color: Text::SECONDARY,
+                border: iced::Border {
+                    color: Border::VISIBLE,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(Message::BrowseForFolder);
 
         let content = column![
             title,
-            Space::with_height(8),
+            Space::with_height(6),
             subtitle,
-            Space::with_height(24),
+            Space::with_height(28),
             drive_list,
             Space::with_height(16),
             browse_button,
@@ -77,29 +86,31 @@ impl DrivePicker {
     /// Render a single drive item
     fn drive_item(drive: DriveInfo) -> Element<'static, Message> {
         let status_text = if drive.has_photovault_db {
-            text("Previously indexed").size(12).color(Accent::PRIMARY)
+            text("Previously indexed")
+                .size(11)
+                .color(Accent::PRIMARY)
         } else {
-            text("Not indexed").size(12).color(Text::TERTIARY)
+            text("Not indexed").size(11).color(Text::TERTIARY)
         };
 
         let name = drive.name.clone();
         let path_str = drive.path.to_string_lossy().to_string();
 
         let info = column![
-            text(name).size(14).color(Text::PRIMARY),
-            text(path_str).size(12).color(Text::SECONDARY),
+            text(name).size(13).color(Text::PRIMARY),
+            text(path_str).size(11).color(Text::SECONDARY),
             status_text,
         ]
-        .spacing(4);
+        .spacing(3);
 
         let path = drive.path.clone();
 
         button(
             container(info)
-                .padding(Padding::from([12, 16]))
+                .padding(Padding::from([14, 18]))
                 .width(Length::Fill),
         )
-        .width(Length::Fixed(400.0))
+        .width(Length::Fixed(380.0))
         .style(|_theme: &iced::Theme, status| {
             let background = match status {
                 button::Status::Hovered => Some(Backgrounds::HOVER.into()),
@@ -112,7 +123,7 @@ impl DrivePicker {
                 border: iced::Border {
                     color: Border::SUBTLE,
                     width: 1.0,
-                    radius: 8.0.into(),
+                    radius: 10.0.into(),
                 },
                 ..Default::default()
             }

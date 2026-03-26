@@ -25,7 +25,7 @@ impl SearchView {
         let input = text_input("Search photos...", query)
             .on_input(Message::SearchInputChanged)
             .on_submit(Message::ExecuteSearch)
-            .size(16)
+            .size(14)
             .padding(12)
             .width(Length::Fill);
 
@@ -155,7 +155,7 @@ impl SearchView {
         };
 
         let content = column![
-            text("Search").size(28).color(Text::PRIMARY),
+            text("Search").size(22).color(Text::PRIMARY),
             Space::with_height(20),
             search_bar,
             Space::with_height(10),

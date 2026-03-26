@@ -8,7 +8,7 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
 use crate::models::Photo;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
 
 /// Cull mode state.
 #[derive(Debug, Clone, Default)]
@@ -174,7 +174,7 @@ impl CullView {
                     )
                     .padding(Padding::from([4, 8]))
                     .style(|_theme| container::Style {
-                        background: Some(iced::Color::from_rgb(0.8, 0.2, 0.2).into()),
+                        background: Some(Semantic::DANGER.into()),
                         border: iced::Border {
                             radius: 4.0.into(),
                             ..Default::default()
@@ -197,7 +197,7 @@ impl CullView {
         .style(move |_theme| container::Style {
             background: Some(
                 if is_marked {
-                    iced::Color::from_rgba(0.8, 0.2, 0.2, 0.12)
+                    iced::Color { a: 0.10, ..Semantic::DANGER }
                 } else {
                     Backgrounds::ELEVATED
                 }
@@ -205,7 +205,7 @@ impl CullView {
             ),
             border: iced::Border {
                 color: if is_marked {
-                    iced::Color::from_rgb(0.8, 0.2, 0.2)
+                    Semantic::DANGER
                 } else {
                     Border::SUBTLE
                 },
@@ -223,7 +223,7 @@ impl CullView {
             text(format!("{} marked for deletion", marked))
                 .size(14)
                 .color(if marked > 0 {
-                    iced::Color::from_rgb(0.8, 0.2, 0.2)
+                    Semantic::DANGER
                 } else {
                     Text::TERTIARY
                 }),
@@ -308,7 +308,7 @@ impl CullView {
                     state.marked_count()
                 ))
                 .size(12)
-                .color(iced::Color::from_rgb(0.8, 0.2, 0.2)),
+                .color(Semantic::DANGER),
             )
             .padding(Padding::from([6, 32]))
             .into()
@@ -410,7 +410,7 @@ impl CullView {
                 .height(50)
                 .style(move |_theme| container::Style {
                     background: Some(if is_marked {
-                        iced::Color::from_rgba(0.8, 0.2, 0.2, 0.25).into()
+                        iced::Color { a: 0.20, ..Semantic::DANGER }.into()
                     } else {
                         Backgrounds::ELEVATED.into()
                     }),
@@ -418,7 +418,7 @@ impl CullView {
                         color: if is_current {
                             Accent::PRIMARY
                         } else if is_marked {
-                            iced::Color::from_rgb(0.8, 0.2, 0.2)
+                            Semantic::DANGER
                         } else {
                             Border::SUBTLE
                         },
