@@ -58,7 +58,9 @@ impl TimelineView {
             .spacing(0)
             .width(Length::Fill);
 
-        scrollable(content).into()
+        scrollable(content)
+            .id(iced::widget::scrollable::Id::new("timeline"))
+            .into()
     }
 
     /// Render empty timeline (backward compat, also used when no photos)

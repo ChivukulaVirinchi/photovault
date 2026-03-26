@@ -150,7 +150,9 @@ impl SearchView {
                             .on_press(Message::EnterCullFromSearch),
                     ],
                     Space::with_height(12),
-                    scrollable(Column::with_children(group_views).spacing(20)).height(Length::Fill),
+                    scrollable(Column::with_children(group_views).spacing(20))
+                        .id(iced::widget::scrollable::Id::new("search"))
+                        .height(Length::Fill),
                 ]
                 .into()
             }

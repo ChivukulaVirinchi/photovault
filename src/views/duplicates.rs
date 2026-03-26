@@ -58,7 +58,8 @@ impl DuplicatesView {
             Space::with_height(8),
             subtitle,
             Space::with_height(24),
-            scrollable(Column::with_children(group_list).spacing(12)),
+            scrollable(Column::with_children(group_list).spacing(12))
+                .id(iced::widget::scrollable::Id::new("duplicates")),
         ]
         .padding(32)
         .height(Length::Fill);

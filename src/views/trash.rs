@@ -139,7 +139,9 @@ impl TrashView {
             Space::with_height(16),
             warning,
             Space::with_height(20),
-            scrollable(Column::with_children(item_list).spacing(8)).height(Length::Fill),
+            scrollable(Column::with_children(item_list).spacing(8))
+                .id(iced::widget::scrollable::Id::new("trash"))
+                .height(Length::Fill),
             Space::with_height(16),
             confirm_text,
             Space::with_height(8),

@@ -321,7 +321,7 @@ impl PeopleView {
         }
 
         content_children.push(Space::with_height(24).into());
-        content_children.push(scrollable(grid).into());
+        content_children.push(scrollable(grid).id(iced::widget::scrollable::Id::new("people")).into());
 
         let content = Column::with_children(content_children).padding(32);
 
