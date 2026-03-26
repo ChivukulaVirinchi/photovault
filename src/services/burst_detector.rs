@@ -102,11 +102,13 @@ impl BurstDetector {
         Ok(groups)
     }
 
-    /// Create a BurstGroup from collected photos
+    /// Create a BurstGroup from collected photos.
+    /// Caller guarantees `photos` is non-empty (min_photos >= 2).
     fn finalize_group(&self, photos: &[(i64, DateTime<Utc>)]) -> BurstGroup {
         let photo_ids: Vec<i64> = photos.iter().map(|(id, _)| *id).collect();
-        let start_time = photos.first().unwrap().1;
-        let end_time = photos.last().unwrap().1;
+        // Safe: only called when photos.len() >= min_photos
+        let start_time = photos.first().expect("finalize_group called with empty slice").1;
+        let end_time = photos.last().expect("finalize_group called with empty slice").1;
 
         BurstGroup {
             photo_ids,

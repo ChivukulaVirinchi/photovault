@@ -586,7 +586,8 @@ impl PhotoVault {
             );
         }
 
-        if self.current_view == View::PhotoDetail || self.current_view == View::Cull {
+        // Keyboard events for all views (shortcuts)
+        if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
                     Some(Message::KeyPressed(key))
@@ -922,9 +923,21 @@ impl PhotoVault {
                             }
                         }
 
+                        // Backup database before migrations
+                        if let Err(e) = Database::backup(&path, 3) {
+                            tracing::debug!("DB backup skipped: {}", e);
+                        }
+
                         if let Err(e) = migrations::run_migrations(&db.conn) {
                             tracing::error!("Failed to run migrations: {}", e);
                             return Task::none();
+                        }
+
+                        // Quick integrity check on open
+                        match db.check_integrity() {
+                            Ok(true) => {}
+                            Ok(false) => tracing::warn!("Database integrity check failed for {:?}", path),
+                            Err(e) => tracing::debug!("Could not run integrity check: {}", e),
                         }
 
                         // Get photo count
@@ -1107,6 +1120,8 @@ impl PhotoVault {
                 if let Some(ref drive_path) = self.selected_drive {
                     match Database::open_for_drive(drive_path) {
                         Ok(db) => {
+                            // Run maintenance after bulk scan
+                            let _ = db.run_maintenance();
                             self.database = Some(db);
                         }
                         Err(e) => {
@@ -1327,6 +1342,7 @@ impl PhotoVault {
             }
 
             Message::KeyPressed(key) => {
+                // --- View-specific shortcuts ---
                 if self.current_view == View::PhotoDetail {
                     match key {
                         keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
@@ -1337,6 +1353,15 @@ impl PhotoVault {
                         }
                         keyboard::Key::Named(keyboard::key::Named::Escape) => {
                             return self.update(Message::ClosePhotoDetail);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Delete)
+                        | keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                            // Trash current photo
+                            if let Some(idx) = self.selected_photo_index {
+                                if let Some(photo) = self.photos.get(idx) {
+                                    return self.update(Message::TrashPhotos(vec![photo.id]));
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -1354,7 +1379,7 @@ impl PhotoVault {
                         keyboard::Key::Named(keyboard::key::Named::Escape) => {
                             return self.update(Message::ExitCullMode);
                         }
-                        keyboard::Key::Character(ch) => {
+                        keyboard::Key::Character(ref ch) => {
                             let lower = ch.to_lowercase();
                             if lower == "x" {
                                 return self.update(Message::CullToggleTrash);
@@ -1365,7 +1390,38 @@ impl PhotoVault {
                         }
                         _ => {}
                     }
+                } else if self.current_view == View::ClusterDetail {
+                    if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
+                        return self.update(Message::BackToPeople);
+                    }
+                } else if self.current_view == View::DuplicateDetail {
+                    if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
+                        return self.update(Message::CloseDuplicateDetail);
+                    }
+                } else if self.current_view == View::BurstDetail {
+                    if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
+                        return self.update(Message::CloseBurstDetail);
+                    }
                 }
+
+                // --- Global shortcuts (work from any non-detail view) ---
+                match key {
+                    keyboard::Key::Character(ref ch) => {
+                        let lower = ch.to_lowercase();
+                        // '/' or 'f' → focus search (unless in a text-entry context)
+                        if (lower == "/" || lower == "f")
+                            && !matches!(
+                                self.current_view,
+                                View::PhotoDetail | View::Cull | View::Search
+                            )
+                            && self.editing_cluster_id.is_none()
+                        {
+                            return self.update(Message::NavigateTo(View::Search));
+                        }
+                    }
+                    _ => {}
+                }
+
                 Task::none()
             }
 
@@ -2726,6 +2782,7 @@ impl PhotoVault {
                 self.face_processing_error.as_deref(),
                 self.merge_mode_active,
                 &self.merge_selected_clusters,
+                self.ml_available,
             ),
             View::ClusterDetail => {
                 // Find the selected cluster record for display
@@ -2756,6 +2813,7 @@ impl PhotoVault {
                         self.face_processing_error.as_deref(),
                         self.merge_mode_active,
                         &self.merge_selected_clusters,
+                        self.ml_available,
                     )
                 }
             }

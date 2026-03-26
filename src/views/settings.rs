@@ -217,7 +217,7 @@ impl SettingsView {
                 geocode_button,
             ],
             Space::with_height(24),
-            text("PhotoVault v0.1.0").size(12).color(Text::TERTIARY),
+            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION"))).size(12).color(Text::TERTIARY),
         ]
         .into()
     }

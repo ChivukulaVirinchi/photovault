@@ -30,6 +30,7 @@ impl PeopleView {
         processing_error: Option<&str>,
         merge_mode_active: bool,
         merge_selected: &[i64],
+        ml_available: bool,
     ) -> Element<'static, Message> {
         let title = text("People").size(28).color(Text::PRIMARY);
 
@@ -80,6 +81,15 @@ impl PeopleView {
                 },
                 ..Default::default()
             })
+            .into()
+        } else if !ml_available {
+            // Face models not installed — show setup hint
+            container(
+                text("Face models not installed. Run setup_assets script to enable face detection.")
+                    .size(13)
+                    .color(Text::TERTIARY),
+            )
+            .padding(Padding::from([8, 16]))
             .into()
         } else {
             // "Detect Faces" button + "Merge" toggle button

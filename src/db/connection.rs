@@ -1,7 +1,8 @@
 //! Database connection management
 
-use rusqlite::{Connection, Result as SqliteResult};
 use std::path::{Path, PathBuf};
+
+use rusqlite::{Connection, Result as SqliteResult};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -104,6 +105,72 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count == 0)
+    }
+
+    /// Run periodic database maintenance.
+    ///
+    /// Call after bulk operations (scan, trash empty, reindex).
+    pub fn run_maintenance(&self) -> SqliteResult<()> {
+        // Let SQLite optimize its query planner statistics
+        self.conn.execute_batch("PRAGMA optimize;")?;
+        // Checkpoint WAL to keep it from growing unbounded
+        self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
+        Ok(())
+    }
+
+    /// Run integrity check on the database.
+    ///
+    /// Returns Ok(true) if database is healthy, Ok(false) if corrupt.
+    pub fn check_integrity(&self) -> SqliteResult<bool> {
+        let result: String = self.conn.query_row(
+            "PRAGMA quick_check;",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(result == "ok")
+    }
+
+    /// Create a backup of the database file.
+    ///
+    /// Copies the DB to `<db_path>.backup`. Keeps up to `max_backups` copies.
+    pub fn backup(drive_root: &Path, max_backups: usize) -> std::io::Result<PathBuf> {
+        let db_path = drive_root.join(".photovault").join("photovault.db");
+        if !db_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Database file not found",
+            ));
+        }
+
+        let backup_dir = drive_root.join(".photovault").join("backups");
+        std::fs::create_dir_all(&backup_dir)?;
+
+        // Name with timestamp
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let backup_path = backup_dir.join(format!("photovault_{}.db", timestamp));
+
+        std::fs::copy(&db_path, &backup_path)?;
+
+        // Clean old backups (keep max_backups newest)
+        let mut backups: Vec<_> = std::fs::read_dir(&backup_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("photovault_") && n.ends_with(".db"))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        backups.sort_by_key(|e| std::cmp::Reverse(e.path()));
+
+        for old in backups.into_iter().skip(max_backups) {
+            let _ = std::fs::remove_file(old.path());
+        }
+
+        tracing::info!("Database backed up to {}", backup_path.display());
+        Ok(backup_path)
     }
 }
 
