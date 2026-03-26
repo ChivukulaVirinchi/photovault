@@ -13,7 +13,6 @@
 //! 4. Higher concurrency (8 workers) with streaming results
 
 use std::collections::HashMap;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -236,77 +235,6 @@ impl ThumbnailService {
         Ok(thumb_path)
     }
 
-    /// Extract the embedded EXIF thumbnail from a JPEG file.
-    ///
-    /// Most JPEGs contain a pre-rendered 160x120 thumbnail in the EXIF data.
-    /// Extracting it is ~100x faster than full decode + resize.
-    fn extract_exif_thumbnail(photo_path: &Path) -> Option<Vec<u8>> {
-        let file = std::fs::File::open(photo_path).ok()?;
-        let mut reader = BufReader::new(file);
-        let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
-
-        // Check for JPEG thumbnail in EXIF
-        for field in exif.fields() {
-            if field.tag == exif::Tag::JPEGInterchangeFormat {
-                // There's a thumbnail — try to read it via the thumbnail() method
-                break;
-            }
-        }
-
-        // kamadak-exif doesn't expose raw thumbnail bytes directly.
-        // Re-read the file and extract the thumbnail JPEG manually.
-        Self::extract_jpeg_thumbnail_raw(photo_path)
-    }
-
-    /// Manually extract JPEG thumbnail from EXIF APP1 segment.
-    ///
-    /// Reads the EXIF IFD1 to find JPEGInterchangeFormat (offset) and
-    /// JPEGInterchangeFormatLength (size), then reads those bytes.
-    fn extract_jpeg_thumbnail_raw(photo_path: &Path) -> Option<Vec<u8>> {
-        let file = std::fs::File::open(photo_path).ok()?;
-        let mut buf_reader = BufReader::new(file);
-        let exif = exif::Reader::new().read_from_container(&mut buf_reader).ok()?;
-
-        let offset_field = exif.get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)?;
-        let length_field = exif.get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)?;
-
-        let offset = match &offset_field.value {
-            exif::Value::Long(v) => *v.first()? as usize,
-            _ => return None,
-        };
-        let length = match &length_field.value {
-            exif::Value::Long(v) => *v.first()? as usize,
-            _ => return None,
-        };
-
-        if length == 0 || length > 500_000 {
-            return None; // Sanity check
-        }
-
-        // Read the entire file and extract the thumbnail bytes from the EXIF segment.
-        // The offset is relative to the TIFF header within APP1.
-        // kamadak-exif doesn't give us raw access, so we'll re-read the file
-        // and find the APP1 marker to compute the absolute offset.
-        let data = std::fs::read(photo_path).ok()?;
-
-        // Find APP1 marker (0xFF 0xE1) and TIFF header ("Exif\0\0" + TIFF)
-        let app1_pos = find_app1_tiff_offset(&data)?;
-        let abs_offset = app1_pos + offset;
-
-        if abs_offset + length > data.len() {
-            return None;
-        }
-
-        let thumb_bytes = &data[abs_offset..abs_offset + length];
-
-        // Verify it starts with JPEG SOI marker
-        if thumb_bytes.len() >= 2 && thumb_bytes[0] == 0xFF && thumb_bytes[1] == 0xD8 {
-            Some(thumb_bytes.to_vec())
-        } else {
-            None
-        }
-    }
-
     /// Decode an image with fast downscaling for large files.
     ///
     /// For JPEGs, the underlying libjpeg can decode at 1/2, 1/4, or 1/8 scale
@@ -332,23 +260,6 @@ impl ThumbnailService {
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         Ok(img)
-    }
-
-    /// Save raw JPEG bytes (from EXIF thumbnail) after validating and resizing if needed.
-    fn save_jpeg_bytes(thumb_path: &Path, jpeg_bytes: &[u8], quality: u8) -> Result<(), String> {
-        // Decode the EXIF thumbnail to validate it and optionally resize
-        let img = image::load_from_memory(jpeg_bytes)
-            .map_err(|e| format!("Invalid EXIF thumbnail: {}", e))?;
-
-        // Re-encode at target quality (EXIF thumbs can be poorly compressed)
-        let mut out = std::fs::File::create(thumb_path)
-            .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
-        let mut encoder = JpegEncoder::new_with_quality(&mut out, quality);
-        encoder
-            .encode_image(&img)
-            .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
-
-        Ok(())
     }
 
     /// Track cache size after adding a thumbnail
@@ -518,47 +429,7 @@ impl ThumbnailService {
     }
 }
 
-/// Find the offset of the TIFF header within a JPEG's APP1 segment.
-///
-/// Returns the absolute byte offset of the TIFF header (where IFD offsets are relative to).
-fn find_app1_tiff_offset(data: &[u8]) -> Option<usize> {
-    if data.len() < 12 {
-        return None;
-    }
 
-    // JPEG starts with SOI (FF D8)
-    if data[0] != 0xFF || data[1] != 0xD8 {
-        return None;
-    }
-
-    let mut pos = 2;
-    while pos + 4 < data.len() {
-        if data[pos] != 0xFF {
-            return None;
-        }
-
-        let marker = data[pos + 1];
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-
-        if marker == 0xE1 {
-            // APP1 found — check for "Exif\0\0" header
-            let seg_start = pos + 4; // after marker + length
-            if seg_start + 6 > data.len() {
-                return None;
-            }
-            if &data[seg_start..seg_start + 6] == b"Exif\0\0" {
-                // TIFF header starts right after "Exif\0\0"
-                return Some(seg_start + 6);
-            }
-            return None; // APP1 but not EXIF
-        }
-
-        // Skip to next marker
-        pos += 2 + seg_len;
-    }
-
-    None
-}
 
 #[cfg(test)]
 mod tests {

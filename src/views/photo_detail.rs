@@ -27,13 +27,13 @@ impl PhotoDetailView {
         let p = colors::palette(theme);
         let photo_id = photo.id;
 
-        // === Top bar: minimal, transparent feel ===
-        let rotate_btn = Self::tool_btn("\u{21BB}", Message::RotatePhoto, p);
-        let info_btn = Self::tool_btn("i", Message::ToggleMetadataPanel, p);
+        // === Top bar: labeled tool buttons ===
+        let rotate_btn = Self::tool_btn("Rotate", Message::RotatePhoto, p);
+        let info_btn = Self::tool_btn("Info", Message::ToggleMetadataPanel, p);
         let trash_btn = {
             let danger = p.semantic_danger;
             button(
-                text("Trash").size(11).color(danger),
+                text("Delete").size(11).color(danger),
             )
             .padding(Padding::from([5, 12]))
             .style(move |_t: &iced::Theme, s| button::Style {
@@ -47,7 +47,7 @@ impl PhotoDetailView {
             .on_press(Message::TrashPhotos(vec![photo_id]))
         };
 
-        let close_btn = Self::tool_btn("\u{00D7}", Message::ClosePhotoDetail, p);
+        let close_btn = Self::tool_btn("Close", Message::ClosePhotoDetail, p);
 
         let top_bg = p.bg_primary;
         let top_bar = container(
@@ -78,9 +78,9 @@ impl PhotoDetailView {
             let handle = handle.clone();
             container(
                 iced::widget::image::viewer(handle)
-                    .min_scale(0.25)
+                    .min_scale(1.0)
                     .max_scale(10.0)
-                    .scale_step(0.10)
+                    .scale_step(0.15)
                     .width(Length::Fill)
                     .height(Length::Fill),
             )

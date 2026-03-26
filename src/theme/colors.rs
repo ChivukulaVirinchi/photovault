@@ -20,7 +20,6 @@ pub struct Palette {
     pub bg_hover: Color,
     pub bg_selected: Color,
     pub bg_active: Color,
-    pub bg_well: Color,
 
     // Text
     pub text_primary: Color,
@@ -66,7 +65,7 @@ pub static DARK: Palette = Palette {
     bg_hover:      rgb(0x28, 0x28, 0x2E), // #28282E
     bg_selected:   rgb(0x24, 0x24, 0x2A), // #24242A
     bg_active:     rgb(0x30, 0x30, 0x38), // #303038
-    bg_well:       rgb(0x0C, 0x0C, 0x0E), // #0C0C0E
+
 
     text_primary:   rgb(0xEC, 0xEC, 0xEA), // #ECECEA
     text_secondary: rgb(0x8A, 0x8A, 0x8E), // #8A8A8E
@@ -93,7 +92,7 @@ pub static LIGHT: Palette = Palette {
     bg_hover:      rgb(0xEB, 0xEB, 0xE8), // #EBEBE8
     bg_selected:   rgb(0xE5, 0xE5, 0xE2), // #E5E5E2
     bg_active:     rgb(0xDF, 0xDF, 0xDC), // #DFDFDC
-    bg_well:       rgb(0xF5, 0xF5, 0xF3), // #F5F5F3 input fields
+
 
     text_primary:   rgb(0x1A, 0x1A, 0x1C), // #1A1A1C
     text_secondary: rgb(0x6B, 0x6B, 0x70), // #6B6B70

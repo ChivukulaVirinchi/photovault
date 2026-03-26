@@ -249,8 +249,6 @@ pub struct PhotoVault {
     /// Whether the metadata panel is shown in photo detail view
     show_metadata_panel: bool,
 
-    /// Whether zoom-to-fit mode is active (vs free zoom)
-    zoom_to_fit: bool,
 }
 
 /// Application messages
@@ -464,9 +462,6 @@ pub enum Message {
     /// Toggle metadata panel visibility in photo detail
     ToggleMetadataPanel,
 
-    /// Toggle between fit-to-window and free zoom
-    ToggleZoomFit,
-
     /// Display image loaded for photo detail (thumbnail decoded for rotation)
     DisplayImageReady(Option<Vec<u8>>, u32, u32),
 
@@ -579,7 +574,6 @@ impl PhotoVault {
             photo_rotation: 0,
             current_display_image: None,
             show_metadata_panel: true,
-            zoom_to_fit: true,
         };
 
         // Detect drives on startup
@@ -1238,7 +1232,7 @@ impl PhotoVault {
                     self.current_view = View::PhotoDetail;
                     self.photo_rotation = 0;
                     self.current_display_image = None;
-                    self.zoom_to_fit = true;
+
 
                     // Look up people and face count in this photo
                     self.current_photo_people.clear();
@@ -1305,7 +1299,6 @@ impl PhotoVault {
             Message::PreviousPhoto => {
                 self.current_display_image = None;
                 self.photo_rotation = 0;
-                self.zoom_to_fit = true;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx > 0 {
                         *idx -= 1;
@@ -1319,7 +1312,6 @@ impl PhotoVault {
             Message::NextPhoto => {
                 self.current_display_image = None;
                 self.photo_rotation = 0;
-                self.zoom_to_fit = true;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx + 1 < self.photos.len() {
                         *idx += 1;
@@ -2186,14 +2178,9 @@ impl PhotoVault {
                 Task::none()
             }
 
-            Message::ToggleZoomFit => {
-                self.zoom_to_fit = !self.zoom_to_fit;
-                Task::none()
-            }
-
             Message::ToggleSidebar => {
                 self.config.sidebar_collapsed = !self.config.sidebar_collapsed;
-                self.config.save();
+                let _ = self.config.save();
                 Task::none()
             }
 

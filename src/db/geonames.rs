@@ -8,8 +8,20 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 /// Resolve GeoNames DB path.
+/// Searches: next to executable, then CWD, then project root.
 pub fn geonames_db_path() -> PathBuf {
-    PathBuf::from("data").join("geonames.db")
+    // 1. Next to executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("data").join("geonames.db");
+            if p.exists() { return p; }
+        }
+    }
+    // 2. Relative to CWD
+    let cwd = PathBuf::from("data").join("geonames.db");
+    if cwd.exists() { return cwd; }
+    // 3. Fallback (may not exist, caller checks)
+    cwd
 }
 
 /// Check if bundled GeoNames DB exists.
