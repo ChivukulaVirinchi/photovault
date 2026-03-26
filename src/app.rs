@@ -466,6 +466,9 @@ pub enum Message {
 
     /// Display image loaded for photo detail (thumbnail decoded for rotation)
     DisplayImageReady(Option<Vec<u8>>, u32, u32),
+
+    /// Toggle sidebar collapsed/expanded
+    ToggleSidebar,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -1242,27 +1245,15 @@ impl PhotoVault {
                         }
                     }
 
-                    // Load display image from Large thumbnail (or original) for fast rotation
+                    // Load display image — always prefer original for full quality
                     let photo = &self.photos[idx];
                     let image_path = if let Some(ref drive) = self.selected_drive {
                         let orig = drive.join(&photo.file_path);
-                        // Prefer Large thumbnail for speed; fall back to original
-                        if let Some(ref tp) = photo.thumbnail_path {
-                            let thumb = PathBuf::from(tp);
-                            // Try to find the large version by replacing /small/ with /large/
-                            let large_path = thumb.to_string_lossy()
-                                .replace("/small/", "/large/")
-                                .replace("/medium/", "/large/");
-                            let large = PathBuf::from(&large_path);
-                            if large.exists() {
-                                Some(large)
-                            } else if orig.exists() {
-                                Some(orig)
-                            } else {
-                                Some(thumb)
-                            }
-                        } else if orig.exists() {
+                        if orig.exists() {
                             Some(orig)
+                        } else if let Some(ref tp) = photo.thumbnail_path {
+                            // Fallback to thumbnail only if original is missing (e.g. drive disconnected)
+                            Some(PathBuf::from(tp))
                         } else {
                             None
                         }
@@ -1532,6 +1523,10 @@ impl PhotoVault {
                             && self.editing_cluster_id.is_none()
                         {
                             return self.update(Message::NavigateTo(View::Search));
+                        }
+                        // '[' → toggle sidebar
+                        if lower == "[" {
+                            return self.update(Message::ToggleSidebar);
                         }
                     }
                     _ => {}
@@ -2104,11 +2099,9 @@ impl PhotoVault {
                 self.face_processing_progress = Some(FaceProcessingProgress::default());
                 self.face_processing_error = None;
 
-                // Reset all faces_processed flags so every photo gets re-analyzed
-                if let Some(ref db) = self.database {
-                    let _ = db.conn.execute("UPDATE photos SET faces_processed = FALSE", []);
-                    tracing::info!("Reset faces_processed flags for all photos");
-                }
+                // Only process photos that haven't been analyzed yet.
+                // (Previously this reset ALL flags, causing re-detection of every photo
+                // and new clusters each time — destroying user-assigned names.)
 
                 let drive_path = drive_path.clone();
                 let detector_confidence = self.config.face_detection_confidence;
@@ -2182,6 +2175,12 @@ impl PhotoVault {
 
             Message::ToggleZoomFit => {
                 self.zoom_to_fit = !self.zoom_to_fit;
+                Task::none()
+            }
+
+            Message::ToggleSidebar => {
+                self.config.sidebar_collapsed = !self.config.sidebar_collapsed;
+                self.config.save();
                 Task::none()
             }
 
@@ -2978,8 +2977,38 @@ impl PhotoVault {
             return WelcomeView::view(&self.drives, self.config.theme);
         }
 
-        // Main layout: sidebar + content
-        let sidebar = Sidebar::view(&self.current_view, self.config.theme);
+        // Main layout: sidebar (collapsible) + content
+        let sidebar: Element<'_, Message> = if self.config.sidebar_collapsed {
+            // Collapsed: just a thin strip with expand button
+            let p = colors::palette(self.config.theme);
+            let bg = p.bg_secondary;
+            let tc = p.text_secondary;
+            container(
+                iced::widget::button(
+                    text("\u{2261}").size(18).color(tc) // hamburger icon
+                )
+                .padding(iced::Padding::from([8, 6]))
+                .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
+                    background: match s {
+                        iced::widget::button::Status::Hovered => Some(p.bg_hover.into()),
+                        _ => None,
+                    },
+                    border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+                .on_press(Message::ToggleSidebar)
+            )
+            .width(Length::Fixed(40.0))
+            .height(Length::Fill)
+            .padding(iced::Padding::from([16, 6]))
+            .style(move |_t: &iced::Theme| container::Style {
+                background: Some(bg.into()),
+                ..Default::default()
+            })
+            .into()
+        } else {
+            Sidebar::view(&self.current_view, self.config.theme)
+        };
 
         let content = match self.current_view {
             View::Welcome => WelcomeView::view(&self.drives, self.config.theme),
