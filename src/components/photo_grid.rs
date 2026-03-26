@@ -7,20 +7,22 @@ use iced::widget::{button, column, container, text, Column, Row, Space};
 use iced::{Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::models::Photo;
-use crate::theme::colors::{Accent, Backgrounds, Text as TextColors};
+use crate::theme::colors;
 
 /// Render a photo grid using standard iced widgets
 pub fn photo_grid_simple(
     photos: &[Photo],
     thumbnail_size: f32,
     columns: usize,
+    theme: AppTheme,
 ) -> Element<'static, Message> {
     let mut rows: Vec<Element<'static, Message>> = Vec::new();
     let mut current_row: Vec<Element<'static, Message>> = Vec::new();
 
     for photo in photos {
-        let card = photo_card(photo, thumbnail_size);
+        let card = photo_card(photo, thumbnail_size, theme);
         current_row.push(card);
 
         if current_row.len() >= columns {
@@ -43,10 +45,12 @@ pub fn photo_grid_simple(
 }
 
 /// Render a single photo card as a clickable thumbnail
-fn photo_card(photo: &Photo, size: f32) -> Element<'static, Message> {
+fn photo_card(photo: &Photo, size: f32, theme: AppTheme) -> Element<'static, Message> {
+    let p = colors::palette(theme);
     let photo_id = photo.id;
     let file_name = photo.file_name.clone();
 
+    let bg_elevated = p.bg_elevated;
     let content: Element<'static, Message> = if let Some(ref thumb_path) = photo.thumbnail_path {
         let path = std::path::PathBuf::from(thumb_path);
         container(
@@ -57,8 +61,8 @@ fn photo_card(photo: &Photo, size: f32) -> Element<'static, Message> {
         )
         .width(size)
         .height(size)
-        .style(|_theme: &iced::Theme| container::Style {
-            background: Some(Backgrounds::ELEVATED.into()),
+        .style(move |_theme: &iced::Theme| container::Style {
+            background: Some(bg_elevated.into()),
             border: iced::Border {
                 radius: 6.0.into(),
                 ..Default::default()
@@ -67,14 +71,15 @@ fn photo_card(photo: &Photo, size: f32) -> Element<'static, Message> {
         })
         .into()
     } else {
-        placeholder_card(&file_name, size)
+        placeholder_card(&file_name, size, theme)
     };
 
+    let accent_primary = p.accent_primary;
     button(content)
         .padding(0)
-        .style(|_theme: &iced::Theme, status| {
+        .style(move |_theme: &iced::Theme, status| {
             let (border_color, border_width) = match status {
-                button::Status::Hovered => (Accent::PRIMARY, 2.0),
+                button::Status::Hovered => (accent_primary, 2.0),
                 _ => (iced::Color::TRANSPARENT, 0.0),
             };
             button::Style {
@@ -92,7 +97,9 @@ fn photo_card(photo: &Photo, size: f32) -> Element<'static, Message> {
 }
 
 /// Placeholder card shown while thumbnail is loading
-fn placeholder_card(file_name: &str, size: f32) -> Element<'static, Message> {
+fn placeholder_card(file_name: &str, size: f32, theme: AppTheme) -> Element<'static, Message> {
+    let p = colors::palette(theme);
+
     let display_name = if file_name.chars().count() > 14 {
         let truncated: String = file_name.chars().take(11).collect();
         format!("{}...", truncated)
@@ -100,8 +107,9 @@ fn placeholder_card(file_name: &str, size: f32) -> Element<'static, Message> {
         file_name.to_string()
     };
 
+    let bg_elevated = p.bg_elevated;
     container(
-        column![text(display_name).size(9).color(TextColors::TERTIARY),]
+        column![text(display_name).size(9).color(p.text_tertiary),]
             .align_x(iced::Alignment::Center)
             .spacing(4),
     )
@@ -109,8 +117,8 @@ fn placeholder_card(file_name: &str, size: f32) -> Element<'static, Message> {
     .height(size)
     .align_x(iced::alignment::Horizontal::Center)
     .align_y(iced::alignment::Vertical::Center)
-    .style(|_theme: &iced::Theme| container::Style {
-        background: Some(Backgrounds::ELEVATED.into()),
+    .style(move |_theme: &iced::Theme| container::Style {
+        background: Some(bg_elevated.into()),
         border: iced::Border {
             radius: 6.0.into(),
             ..Default::default()
@@ -121,10 +129,17 @@ fn placeholder_card(file_name: &str, size: f32) -> Element<'static, Message> {
 }
 
 /// Render a day header for the timeline
-pub fn day_header(date: &str, location: Option<&str>, count: usize) -> Element<'static, Message> {
+pub fn day_header(
+    date: &str,
+    location: Option<&str>,
+    count: usize,
+    theme: AppTheme,
+) -> Element<'static, Message> {
+    let p = colors::palette(theme);
+
     let date_text = text(date.to_owned())
         .size(14)
-        .color(TextColors::PRIMARY);
+        .color(p.text_primary);
 
     let mut header_items: Vec<Element<'static, Message>> =
         vec![date_text.into(), Space::with_width(Length::Fill).into()];
@@ -133,7 +148,7 @@ pub fn day_header(date: &str, location: Option<&str>, count: usize) -> Element<'
         header_items.push(
             text(loc.to_owned())
                 .size(12)
-                .color(TextColors::SECONDARY)
+                .color(p.text_secondary)
                 .into(),
         );
         header_items.push(Space::with_width(16).into());
@@ -142,7 +157,7 @@ pub fn day_header(date: &str, location: Option<&str>, count: usize) -> Element<'
     header_items.push(
         text(format!("{}", count))
             .size(11)
-            .color(TextColors::TERTIARY)
+            .color(p.text_tertiary)
             .into(),
     );
 

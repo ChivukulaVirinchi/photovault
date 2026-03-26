@@ -7,29 +7,33 @@ use iced::{Alignment, Element, Length};
 
 use crate::app::Message;
 use crate::components::DrivePicker;
+use crate::config::AppTheme;
 use crate::services::DriveInfo;
-use crate::theme::colors::{Backgrounds, Text};
+use crate::theme::colors;
 
 /// Welcome view component
 pub struct WelcomeView;
 
 impl WelcomeView {
     /// Render the welcome view
-    pub fn view(drives: &[DriveInfo]) -> Element<'static, Message> {
+    pub fn view(drives: &[DriveInfo], theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_primary = p.bg_primary;
+
         let logo = text("PhotoVault")
             .size(38)
-            .color(Text::PRIMARY);
+            .color(p.text_primary);
 
         let tagline = text("Your photos. Your drive. Your privacy.")
             .size(14)
-            .color(Text::TERTIARY);
+            .color(p.text_tertiary);
 
         let content = column![
             logo,
             Space::with_height(6),
             tagline,
             Space::with_height(56),
-            DrivePicker::view(drives),
+            DrivePicker::view(drives, theme),
         ]
         .align_x(Alignment::Center);
 
@@ -38,8 +42,8 @@ impl WelcomeView {
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()

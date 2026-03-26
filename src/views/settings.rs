@@ -5,36 +5,39 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
 use crate::config::{AppConfig, AppTheme, DateFormat};
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors;
 
 pub struct SettingsView;
 
 impl SettingsView {
     pub fn view(config: &AppConfig, geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+        let p = colors::palette(config.theme);
+        let bg_primary = p.bg_primary;
+
         let content = column![
-            text("Settings").size(28).color(Text::PRIMARY),
+            text("Settings").size(28).color(p.text_primary),
             Space::with_height(24),
-            Self::section_header("Appearance"),
+            Self::section_header(config.theme, "Appearance"),
             Self::theme_setting(config.theme),
             Space::with_height(24),
-            Self::section_header("Indexing"),
-            Self::thumbnail_size_setting(config.thumbnail_size),
-            Self::hidden_folders_setting(config.scan_hidden_folders),
+            Self::section_header(config.theme, "Indexing"),
+            Self::thumbnail_size_setting(config.theme, config.thumbnail_size),
+            Self::hidden_folders_setting(config.theme, config.scan_hidden_folders),
             Space::with_height(24),
-            Self::section_header("Face Recognition"),
-            Self::face_confidence_setting(config.face_detection_confidence),
-            Self::clustering_threshold_setting(config.face_clustering_threshold),
+            Self::section_header(config.theme, "Face Recognition"),
+            Self::face_confidence_setting(config.theme, config.face_detection_confidence),
+            Self::clustering_threshold_setting(config.theme, config.face_clustering_threshold),
             Space::with_height(24),
-            Self::section_header("Burst Detection"),
-            Self::burst_window_setting(config.burst_time_window_seconds),
+            Self::section_header(config.theme, "Burst Detection"),
+            Self::burst_window_setting(config.theme, config.burst_time_window_seconds),
             Space::with_height(24),
-            Self::section_header("Trash"),
-            Self::auto_delete_setting(config.trash_auto_delete_days),
+            Self::section_header(config.theme, "Trash"),
+            Self::auto_delete_setting(config.theme, config.trash_auto_delete_days),
             Space::with_height(24),
-            Self::section_header("Date & Time"),
-            Self::date_format_setting(config.date_format),
+            Self::section_header(config.theme, "Date & Time"),
+            Self::date_format_setting(config.theme, config.date_format),
             Space::with_height(32),
-            Self::actions_section(geocoding_progress),
+            Self::actions_section(config.theme, geocoding_progress),
         ]
         .padding(32)
         .spacing(8);
@@ -42,20 +45,24 @@ impl SettingsView {
         container(iced::widget::scrollable(content))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    fn section_header(title: &str) -> Element<'static, Message> {
+    fn section_header(theme: AppTheme, title: &str) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let border_subtle = p.border_subtle;
+
         let title = title.to_string();
         column![
-            text(title).size(16).color(Text::PRIMARY),
-            container(Space::new(Length::Fill, Length::Fixed(1.0))).style(|_theme| {
+            text(title).size(16).color(text_primary),
+            container(Space::new(Length::Fill, Length::Fixed(1.0))).style(move |_theme| {
                 container::Style {
-                    background: Some(Border::SUBTLE.into()),
+                    background: Some(border_subtle.into()),
                     ..Default::default()
                 }
             }),
@@ -64,34 +71,37 @@ impl SettingsView {
         .into()
     }
 
-    fn theme_setting(current: AppTheme) -> Element<'static, Message> {
+    fn theme_setting(theme: AppTheme) -> Element<'static, Message> {
         let options = vec![
             ("Dark", AppTheme::Dark),
             ("Light", AppTheme::Light),
             ("System", AppTheme::System),
         ];
         Self::setting_row(
+            theme,
             "Theme",
             "Choose the app color scheme",
-            Self::option_buttons(&options, current, Message::SetTheme),
+            Self::option_buttons(theme, &options, theme, Message::SetTheme),
         )
     }
 
-    fn thumbnail_size_setting(current: u32) -> Element<'static, Message> {
+    fn thumbnail_size_setting(theme: AppTheme, current: u32) -> Element<'static, Message> {
         let options = vec![
             ("Small (200px)", 200u32),
             ("Medium (300px)", 300u32),
             ("Large (400px)", 400u32),
         ];
         Self::setting_row(
+            theme,
             "Thumbnail Size",
             "Size of generated thumbnails",
-            Self::option_buttons(&options, current, Message::SetThumbnailSize),
+            Self::option_buttons(theme, &options, current, Message::SetThumbnailSize),
         )
     }
 
-    fn hidden_folders_setting(enabled: bool) -> Element<'static, Message> {
+    fn hidden_folders_setting(theme: AppTheme, enabled: bool) -> Element<'static, Message> {
         Self::setting_row(
+            theme,
             "Scan Hidden Folders",
             "Include folders starting with '.'",
             toggler(enabled)
@@ -100,9 +110,13 @@ impl SettingsView {
         )
     }
 
-    fn face_confidence_setting(current: f32) -> Element<'static, Message> {
+    fn face_confidence_setting(theme: AppTheme, current: f32) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_secondary = p.text_secondary;
+
         let percentage = (current * 100.0) as u32;
         Self::setting_row(
+            theme,
             "Face Detection Confidence",
             "Minimum confidence for face detection",
             row![
@@ -113,16 +127,20 @@ impl SettingsView {
                 Space::with_width(16),
                 text(format!("{}%", percentage))
                     .size(14)
-                    .color(Text::SECONDARY),
+                    .color(text_secondary),
             ]
             .align_y(Alignment::Center)
             .into(),
         )
     }
 
-    fn clustering_threshold_setting(current: f32) -> Element<'static, Message> {
+    fn clustering_threshold_setting(theme: AppTheme, current: f32) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_secondary = p.text_secondary;
+
         let percentage = (current * 100.0) as u32;
         Self::setting_row(
+            theme,
             "Face Grouping Similarity",
             "How similar faces must be to group together",
             row![
@@ -133,14 +151,14 @@ impl SettingsView {
                 Space::with_width(16),
                 text(format!("{}%", percentage))
                     .size(14)
-                    .color(Text::SECONDARY),
+                    .color(text_secondary),
             ]
             .align_y(Alignment::Center)
             .into(),
         )
     }
 
-    fn burst_window_setting(current: i64) -> Element<'static, Message> {
+    fn burst_window_setting(theme: AppTheme, current: i64) -> Element<'static, Message> {
         let options = vec![
             ("2 seconds", 2i64),
             ("3 seconds", 3i64),
@@ -148,13 +166,14 @@ impl SettingsView {
             ("10 seconds", 10i64),
         ];
         Self::setting_row(
+            theme,
             "Burst Time Window",
             "Maximum gap between photos in a burst",
-            Self::option_buttons(&options, current, Message::SetBurstWindow),
+            Self::option_buttons(theme, &options, current, Message::SetBurstWindow),
         )
     }
 
-    fn auto_delete_setting(current: u32) -> Element<'static, Message> {
+    fn auto_delete_setting(theme: AppTheme, current: u32) -> Element<'static, Message> {
         let options = vec![
             ("Never", 0u32),
             ("7 days", 7u32),
@@ -162,38 +181,46 @@ impl SettingsView {
             ("90 days", 90u32),
         ];
         Self::setting_row(
+            theme,
             "Auto-Delete Trash",
             "Permanently delete trashed photos after",
-            Self::option_buttons(&options, current, Message::SetTrashAutoDelete),
+            Self::option_buttons(theme, &options, current, Message::SetTrashAutoDelete),
         )
     }
 
-    fn date_format_setting(current: DateFormat) -> Element<'static, Message> {
+    fn date_format_setting(theme: AppTheme, current: DateFormat) -> Element<'static, Message> {
         let options = vec![
             ("ISO (2019-03-15)", DateFormat::Iso),
             ("US (03/15/2019)", DateFormat::Us),
             ("EU (15/03/2019)", DateFormat::Eu),
         ];
         Self::setting_row(
+            theme,
             "Date Format",
             "How dates are displayed",
-            Self::option_buttons(&options, current, Message::SetDateFormat),
+            Self::option_buttons(theme, &options, current, Message::SetDateFormat),
         )
     }
 
-    fn actions_section(geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+    fn actions_section(theme: AppTheme, geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
+
         let geocode_button: Element<'static, Message> = if let Some((done, total)) = geocoding_progress {
             let label = if total == 0 {
                 "Geocoding...".to_string()
             } else {
                 format!("Geocoding... {}/{}", done, total)
             };
-            button(text(label).size(14).color(Text::SECONDARY))
+            button(text(label).size(14).color(text_secondary))
                 .padding(Padding::from([10, 18]))
-                .style(|_theme, _status| button::Style {
-                    background: Some(Backgrounds::ELEVATED.into()),
+                .style(move |_theme, _status| button::Style {
+                    background: Some(bg_elevated.into()),
                     border: iced::Border {
-                        color: Border::SUBTLE,
+                        color: border_subtle,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -201,39 +228,45 @@ impl SettingsView {
                 })
                 .into()
         } else {
-            Self::action_button("Run Geocoding", Message::RunGeocoding)
+            Self::action_button(theme, "Run Geocoding", Message::RunGeocoding)
         };
 
         column![
-            Self::section_header("Advanced"),
+            Self::section_header(theme, "Advanced"),
             Space::with_height(16),
             row![
-                Self::action_button("Re-scan Library", Message::RescanLibrary),
+                Self::action_button(theme, "Re-scan Library", Message::RescanLibrary),
                 Space::with_width(16),
-                Self::action_button("Rebuild Face Clusters", Message::RebuildFaceClusters),
+                Self::action_button(theme, "Rebuild Face Clusters", Message::RebuildFaceClusters),
                 Space::with_width(16),
-                Self::action_button("Check for Changes", Message::CheckForChanges),
+                Self::action_button(theme, "Check for Changes", Message::CheckForChanges),
                 Space::with_width(16),
                 geocode_button,
             ],
             Space::with_height(24),
-            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION"))).size(12).color(Text::TERTIARY),
+            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION"))).size(12).color(text_tertiary),
         ]
         .into()
     }
 
-    fn action_button(label: &str, on_press: Message) -> Element<'static, Message> {
-        button(text(label.to_string()).size(14).color(Text::PRIMARY))
+    fn action_button(theme: AppTheme, label: &str, on_press: Message) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+
+        button(text(label.to_string()).size(14).color(text_primary))
             .padding(Padding::from([10, 18]))
-            .style(|_theme, status| {
+            .style(move |_theme, status| {
                 let background = match status {
-                    button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                    _ => Some(Backgrounds::ELEVATED.into()),
+                    button::Status::Hovered => Some(bg_hover.into()),
+                    _ => Some(bg_elevated.into()),
                 };
                 button::Style {
                     background,
                     border: iced::Border {
-                        color: Border::SUBTLE,
+                        color: border_subtle,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -245,17 +278,22 @@ impl SettingsView {
     }
 
     fn setting_row(
+        theme: AppTheme,
         label: &str,
         description: &str,
         control: Element<'static, Message>,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let text_tertiary = p.text_tertiary;
+
         let label = label.to_string();
         let description = description.to_string();
         container(
             row![
                 column![
-                    text(label).size(14).color(Text::PRIMARY),
-                    text(description).size(12).color(Text::TERTIARY),
+                    text(label).size(14).color(text_primary),
+                    text(description).size(12).color(text_tertiary),
                 ]
                 .width(Length::FillPortion(2)),
                 container(control)
@@ -269,10 +307,19 @@ impl SettingsView {
     }
 
     fn option_buttons<T: PartialEq + Copy + 'static>(
+        theme: AppTheme,
         options: &[(&str, T)],
         current: T,
         on_select: impl Fn(T) -> Message + 'static + Clone,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+
         let buttons: Vec<Element<'static, Message>> = options
             .iter()
             .map(|(label, value)| {
@@ -281,27 +328,27 @@ impl SettingsView {
                 let on_select = on_select.clone();
 
                 button(text((*label).to_string()).size(12).color(if is_selected {
-                    Accent::PRIMARY
+                    accent_primary
                 } else {
-                    Text::PRIMARY
+                    text_primary
                 }))
                 .padding(Padding::from([6, 12]))
                 .style(move |_theme, status| {
                     let background = if is_selected {
-                        Some(Accent::MUTED.into())
+                        Some(accent_muted.into())
                     } else {
                         match status {
-                            button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                            _ => Some(Backgrounds::ELEVATED.into()),
+                            button::Status::Hovered => Some(bg_hover.into()),
+                            _ => Some(bg_elevated.into()),
                         }
                     };
                     button::Style {
                         background,
                         border: iced::Border {
                             color: if is_selected {
-                                Accent::PRIMARY
+                                accent_primary
                             } else {
-                                Border::SUBTLE
+                                border_subtle
                             },
                             width: 1.0,
                             radius: 6.0.into(),

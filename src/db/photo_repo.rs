@@ -19,6 +19,8 @@ pub struct PhotoInsert {
     pub date_taken_source: Option<String>,
     pub gps_latitude: Option<f64>,
     pub gps_longitude: Option<f64>,
+    pub location_city: Option<String>,
+    pub location_country: Option<String>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
     pub iso: Option<i32>,
@@ -55,6 +57,7 @@ impl<'a> PhotoRepo<'a> {
                     file_path, file_name, file_hash, file_size, file_mtime,
                     date_taken, date_taken_source,
                     gps_latitude, gps_longitude,
+                    location_city, location_country,
                     camera_make, camera_model,
                     iso, aperture, shutter_speed, focal_length,
                     lens_model, flash, gps_altitude,
@@ -64,9 +67,10 @@ impl<'a> PhotoRepo<'a> {
                     ?6, ?7,
                     ?8, ?9,
                     ?10, ?11,
-                    ?12, ?13, ?14, ?15,
-                    ?16, ?17, ?18,
-                    ?19, ?20, ?21
+                    ?12, ?13,
+                    ?14, ?15, ?16, ?17,
+                    ?18, ?19, ?20,
+                    ?21, ?22, ?23
                 )
                 ON CONFLICT(file_path) DO UPDATE SET
                     file_hash = excluded.file_hash,
@@ -76,6 +80,8 @@ impl<'a> PhotoRepo<'a> {
                     date_taken_source = excluded.date_taken_source,
                     gps_latitude = excluded.gps_latitude,
                     gps_longitude = excluded.gps_longitude,
+                    location_city = COALESCE(excluded.location_city, photos.location_city),
+                    location_country = COALESCE(excluded.location_country, photos.location_country),
                     camera_make = excluded.camera_make,
                     camera_model = excluded.camera_model,
                     iso = excluded.iso,
@@ -100,6 +106,8 @@ impl<'a> PhotoRepo<'a> {
                     photo.date_taken_source,
                     photo.gps_latitude,
                     photo.gps_longitude,
+                    photo.location_city,
+                    photo.location_country,
                     photo.camera_make,
                     photo.camera_model,
                     photo.iso,

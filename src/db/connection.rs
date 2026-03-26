@@ -76,9 +76,6 @@ impl Database {
         // Foreign key enforcement
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
-        // Collect statistics for optimizer
-        let _ = conn.execute_batch("ANALYZE;");
-
         Ok(())
     }
 
@@ -90,8 +87,12 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
             CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, location_city);
             CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
+            CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
+            CREATE INDEX IF NOT EXISTS idx_photos_faces_trashed ON photos(faces_processed, is_trashed);
+            CREATE INDEX IF NOT EXISTS idx_photos_hash_trashed ON photos(file_hash, is_trashed);
             CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
             CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+            CREATE INDEX IF NOT EXISTS idx_faces_photo_cluster ON faces(photo_id, cluster_id);
             CREATE INDEX IF NOT EXISTS idx_clusters_name ON face_clusters(name);
             "#,
         )

@@ -28,17 +28,17 @@ const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThumbnailSize {
-    Small,  // 200x200 (timeline grid)
-    Medium, // 400x400 (detail preview)
-    Large,  // 800x800 (high quality)
+    Small,  // 300x300 (timeline grid)
+    Medium, // 500x500 (detail preview)
+    Large,  // 1000x1000 (high quality / viewer)
 }
 
 impl ThumbnailSize {
     pub fn pixels(&self) -> u32 {
         match self {
-            ThumbnailSize::Small => 200,
-            ThumbnailSize::Medium => 400,
-            ThumbnailSize::Large => 800,
+            ThumbnailSize::Small => 300,
+            ThumbnailSize::Medium => 500,
+            ThumbnailSize::Large => 1000,
         }
     }
 
@@ -216,11 +216,11 @@ impl ThumbnailService {
         // Generate thumbnail
         let thumb = self.create_thumbnail(&img, size);
 
-        // Save as JPEG
+        // Save as JPEG with quality appropriate to size
         let quality = match size {
-            ThumbnailSize::Small => 72,
-            ThumbnailSize::Medium => 80,
-            ThumbnailSize::Large => 88,
+            ThumbnailSize::Small => 82,
+            ThumbnailSize::Medium => 85,
+            ThumbnailSize::Large => 90,
         };
         let mut out = std::fs::File::create(&thumb_path)
             .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
@@ -359,7 +359,8 @@ impl ThumbnailService {
         }
     }
 
-    /// Create a thumbnail from an image, maintaining aspect ratio
+    /// Create a thumbnail from an image, maintaining aspect ratio.
+    /// Uses Lanczos3 for all sizes — produces sharp, high-quality downscales.
     fn create_thumbnail(&self, img: &DynamicImage, size: ThumbnailSize) -> DynamicImage {
         let max_dim = size.pixels();
         let (width, height) = img.dimensions();
@@ -373,20 +374,18 @@ impl ThumbnailService {
             ((width as f64 * ratio) as u32, max_dim)
         };
 
-        match size {
-            // Fast-path for timeline responsiveness.
-            ThumbnailSize::Small | ThumbnailSize::Medium => img.thumbnail(new_width, new_height),
-            ThumbnailSize::Large => img.resize(new_width, new_height, FilterType::CatmullRom),
-        }
+        img.resize(new_width, new_height, FilterType::Lanczos3)
     }
 
-    /// Get the path where a thumbnail should be stored
+    /// Get the path where a thumbnail should be stored.
+    /// Includes a version segment so quality upgrades trigger regeneration.
     fn thumbnail_path(&self, file_hash: &str, size: ThumbnailSize) -> PathBuf {
         // Use first 2 chars of hash as subdirectory (like git)
         let subdir = &file_hash[..2.min(file_hash.len())];
 
         self.cache_dir
             .join(size.dir_name())
+            .join("v2")
             .join(subdir)
             .join(format!("{}.jpg", file_hash))
     }
@@ -580,9 +579,9 @@ mod tests {
 
     #[test]
     fn test_thumbnail_sizes() {
-        assert_eq!(ThumbnailSize::Small.pixels(), 200);
-        assert_eq!(ThumbnailSize::Medium.pixels(), 400);
-        assert_eq!(ThumbnailSize::Large.pixels(), 800);
+        assert_eq!(ThumbnailSize::Small.pixels(), 300);
+        assert_eq!(ThumbnailSize::Medium.pixels(), 500);
+        assert_eq!(ThumbnailSize::Large.pixels(), 1000);
     }
 
     #[test]

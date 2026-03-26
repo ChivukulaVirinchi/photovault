@@ -7,9 +7,10 @@ use iced::widget::{button, column, container, row, scrollable, text, Column, Spa
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::db::TrashedPhotoRecord;
 use crate::services::trash::TrashStats;
-use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
+use crate::theme::colors;
 use crate::utils::format_bytes;
 
 /// Trash view component.
@@ -23,28 +24,32 @@ impl TrashView {
         drive_path: Option<&Path>,
         confirm_empty_trash: bool,
         confirm_delete_photo_id: Option<i64>,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
         if items.is_empty() {
-            return Self::empty_view();
+            return Self::empty_view(theme);
         }
 
-        let title = text("Trash").size(28).color(Text::PRIMARY);
+        let title = text("Trash").size(28).color(p.text_primary);
         let subtitle = text(format!(
             "{} photos - {}",
             stats.count,
             format_bytes(stats.total_size)
         ))
         .size(14)
-        .color(Text::SECONDARY);
+        .color(p.text_secondary);
 
+        let bg_elevated = p.bg_elevated;
         let warning = container(
             text("Photos in trash will be permanently deleted after 30 days")
                 .size(12)
-                .color(Text::TERTIARY),
+                .color(p.text_tertiary),
         )
         .padding(Padding::from([8, 12]))
-        .style(|_theme| container::Style {
-            background: Some(Backgrounds::ELEVATED.into()),
+        .style(move |_theme| container::Style {
+            background: Some(bg_elevated.into()),
             border: iced::Border {
                 radius: 6.0.into(),
                 ..Default::default()
@@ -60,11 +65,15 @@ impl TrashView {
                     selected.contains(&item.photo_id),
                     drive_path,
                     confirm_delete_photo_id,
+                    theme,
                 )
             })
             .collect();
 
         let has_selection = !selected.is_empty();
+        let text_primary = p.text_primary;
+        let text_tertiary = p.text_tertiary;
+        let semantic_danger = p.semantic_danger;
         let actions = row![
             button(
                 text(if has_selection {
@@ -74,9 +83,9 @@ impl TrashView {
                 })
                 .size(14)
                 .color(if has_selection {
-                    Text::PRIMARY
+                    text_primary
                 } else {
-                    Text::TERTIARY
+                    text_tertiary
                 })
             )
             .padding(Padding::from([10, 18]))
@@ -85,20 +94,20 @@ impl TrashView {
             button(
                 text("Empty Trash")
                     .size(14)
-                    .color(Semantic::DANGER)
+                    .color(semantic_danger)
             )
             .padding(Padding::from([10, 18]))
-            .style(|_theme, status| {
+            .style(move |_theme, status| {
                 let background = match status {
                     button::Status::Hovered => {
-                        Some(iced::Color { a: 0.15, ..Semantic::DANGER }.into())
+                        Some(iced::Color { a: 0.15, ..semantic_danger }.into())
                     }
                     _ => None,
                 };
                 button::Style {
                     background,
                     border: iced::Border {
-                        color: Semantic::DANGER,
+                        color: semantic_danger,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -116,12 +125,13 @@ impl TrashView {
         let confirm_text: Element<'static, Message> = if confirm_empty_trash {
             text("Click Empty Trash again to confirm permanent deletion")
                 .size(12)
-                .color(Semantic::DANGER)
+                .color(semantic_danger)
                 .into()
         } else {
             Space::with_height(Length::Shrink).into()
         };
 
+        let bg_primary = p.bg_primary;
         let content = column![
             title,
             Space::with_height(8),
@@ -141,22 +151,25 @@ impl TrashView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    fn empty_view() -> Element<'static, Message> {
+    fn empty_view(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_primary = p.bg_primary;
+
         let content = column![
-            text("Trash").size(28).color(Text::PRIMARY),
+            text("Trash").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("Trash is empty").size(16).color(Text::SECONDARY),
+            text("Trash is empty").size(16).color(p.text_secondary),
             Space::with_height(8),
             text("Deleted photos will appear here")
                 .size(14)
-                .color(Text::TERTIARY),
+                .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)
         .padding(32);
@@ -164,8 +177,8 @@ impl TrashView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -176,7 +189,9 @@ impl TrashView {
         is_selected: bool,
         drive_path: Option<&Path>,
         confirm_delete_photo_id: Option<i64>,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
         let photo_id = item.photo_id;
         let size = item
             .file_size
@@ -188,6 +203,7 @@ impl TrashView {
             if let (Some(root), Some(tp)) = (drive_path, item.thumbnail_path.as_ref()) {
                 let full = root.join(tp);
                 if full.exists() {
+                    let bg_elevated = p.bg_elevated;
                     container(
                         iced::widget::image(iced::widget::image::Handle::from_path(full))
                             .width(50)
@@ -196,8 +212,8 @@ impl TrashView {
                     )
                     .width(50)
                     .height(50)
-                    .style(|_theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 4.0.into(),
                             ..Default::default()
@@ -206,20 +222,25 @@ impl TrashView {
                     })
                     .into()
                 } else {
-                    Self::thumb_placeholder()
+                    Self::thumb_placeholder(theme)
                 }
             } else {
-                Self::thumb_placeholder()
+                Self::thumb_placeholder(theme)
             };
 
+        let accent_primary = p.accent_primary;
+        let text_tertiary = p.text_tertiary;
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let semantic_danger = p.semantic_danger;
         let content = row![
             button(
                 text(if is_selected { "+" } else { "" })
                     .size(12)
                     .color(if is_selected {
-                        Accent::PRIMARY
+                        accent_primary
                     } else {
-                        Text::TERTIARY
+                        text_tertiary
                     })
             )
             .width(24)
@@ -232,18 +253,18 @@ impl TrashView {
             column![
                 text(item.original_path.clone())
                     .size(13)
-                    .color(Text::PRIMARY),
+                    .color(text_primary),
                 Space::with_height(4),
                 row![
-                    text(size).size(12).color(Text::SECONDARY),
+                    text(size).size(12).color(text_secondary),
                     Space::with_width(16),
                     text(format!("Deleted {}", trashed))
                         .size(12)
-                        .color(Text::TERTIARY),
+                        .color(text_tertiary),
                 ],
             ]
             .width(Length::Fill),
-            button(text("Restore").size(12).color(Accent::PRIMARY))
+            button(text("Restore").size(12).color(accent_primary))
                 .padding(Padding::from([6, 12]))
                 .on_press(Message::RestorePhoto(photo_id)),
             Space::with_width(8),
@@ -254,7 +275,7 @@ impl TrashView {
                     "Delete"
                 })
                 .size(12)
-                .color(Semantic::DANGER)
+                .color(semantic_danger)
             )
             .padding(Padding::from([6, 12]))
             .on_press(if confirm_delete_photo_id == Some(photo_id) {
@@ -265,23 +286,26 @@ impl TrashView {
         ]
         .align_y(Alignment::Center);
 
+        let bg_selected = p.bg_selected;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
         container(content)
             .padding(12)
             .width(Length::Fill)
             .style(move |_theme| container::Style {
                 background: Some(
                     if is_selected {
-                        Backgrounds::SELECTED
+                        bg_selected
                     } else {
-                        Backgrounds::ELEVATED
+                        bg_elevated
                     }
                     .into(),
                 ),
                 border: iced::Border {
                     color: if is_selected {
-                        Accent::PRIMARY
+                        accent_primary
                     } else {
-                        Border::SUBTLE
+                        border_subtle
                     },
                     width: 1.0,
                     radius: 8.0.into(),
@@ -291,14 +315,16 @@ impl TrashView {
             .into()
     }
 
-    fn thumb_placeholder() -> Element<'static, Message> {
-        container(text("IMG").size(10).color(Text::TERTIARY))
+    fn thumb_placeholder(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        container(text("IMG").size(10).color(p.text_tertiary))
             .width(50)
             .height(50)
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()

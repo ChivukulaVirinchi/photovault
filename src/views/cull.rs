@@ -7,8 +7,9 @@ use iced::widget::{button, column, container, row, text, Row, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::models::Photo;
-use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
+use crate::theme::colors;
 
 /// Cull mode state.
 #[derive(Debug, Clone, Default)]
@@ -88,7 +89,21 @@ impl CullView {
         photos: &[Photo],
         drive_path: Option<&Path>,
         confirm_pending: bool,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_primary = p.bg_primary;
+        let bg_hover = p.bg_hover;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
+        let semantic_danger = p.semantic_danger;
+
         let title_owned = title.to_string();
         let total = state.photo_ids.len();
         let current = if total == 0 {
@@ -100,14 +115,14 @@ impl CullView {
         let is_marked = state.is_current_marked();
 
         let header = row![
-            text(title_owned).size(16).color(Text::PRIMARY),
+            text(title_owned).size(16).color(text_primary),
             Space::with_width(Length::Fill),
-            button(text("Exit Cull").size(12).color(Text::PRIMARY))
+            button(text("Exit Cull").size(12).color(text_primary))
                 .padding(Padding::from([6, 12]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                        _ => Some(Backgrounds::ELEVATED.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
+                        _ => Some(bg_elevated.into()),
                     };
                     button::Style {
                         background,
@@ -154,14 +169,14 @@ impl CullView {
                             .height(Length::Fill)
                             .into()
                         } else {
-                            text("Current photo").size(14).color(Text::TERTIARY).into()
+                            text("Current photo").size(14).color(text_tertiary).into()
                         }
                     }
                 } else {
-                    text("Current photo").size(14).color(Text::TERTIARY).into()
+                    text("Current photo").size(14).color(text_tertiary).into()
                 }
             } else {
-                text("Current photo").size(14).color(Text::TERTIARY).into()
+                text("Current photo").size(14).color(text_tertiary).into()
             };
 
         let image_area = container(
@@ -170,11 +185,11 @@ impl CullView {
                     container(
                         text("MARKED FOR DELETION")
                             .size(12)
-                            .color(Backgrounds::PRIMARY),
+                            .color(bg_primary),
                     )
                     .padding(Padding::from([4, 8]))
-                    .style(|_theme| container::Style {
-                        background: Some(Semantic::DANGER.into()),
+                    .style(move |_theme| container::Style {
+                        background: Some(semantic_danger.into()),
                         border: iced::Border {
                             radius: 4.0.into(),
                             ..Default::default()
@@ -197,17 +212,17 @@ impl CullView {
         .style(move |_theme| container::Style {
             background: Some(
                 if is_marked {
-                    iced::Color { a: 0.10, ..Semantic::DANGER }
+                    iced::Color { a: 0.10, ..semantic_danger }
                 } else {
-                    Backgrounds::ELEVATED
+                    bg_elevated
                 }
                 .into(),
             ),
             border: iced::Border {
                 color: if is_marked {
-                    Semantic::DANGER
+                    semantic_danger
                 } else {
-                    Border::SUBTLE
+                    border_subtle
                 },
                 width: 2.0,
                 radius: 8.0.into(),
@@ -218,38 +233,38 @@ impl CullView {
         let info = row![
             text(format!("{} of {}", current, total))
                 .size(14)
-                .color(Text::PRIMARY),
+                .color(text_primary),
             Space::with_width(Length::Fill),
             text(format!("{} marked for deletion", marked))
                 .size(14)
                 .color(if marked > 0 {
-                    Semantic::DANGER
+                    semantic_danger
                 } else {
-                    Text::TERTIARY
+                    text_tertiary
                 }),
         ]
         .padding(Padding::from([8, 32]));
 
-        let filmstrip = Self::render_filmstrip(state, photos, drive_path);
+        let filmstrip = Self::render_filmstrip(state, photos, drive_path, theme);
 
         let controls = row![
-            button(text("< Prev").size(14).color(Text::PRIMARY))
+            button(text("< Prev").size(14).color(text_primary))
                 .padding(Padding::from([12, 20]))
                 .on_press(Message::CullPrev),
             Space::with_width(10),
             button(
                 text(if is_marked { "Unmark (X)" } else { "Trash (X)" })
                     .size(14)
-                    .color(Text::PRIMARY)
+                    .color(text_primary)
             )
             .padding(Padding::from([12, 24]))
             .on_press(Message::CullToggleTrash),
             Space::with_width(10),
-            button(text("Next >").size(14).color(Text::PRIMARY))
+            button(text("Next >").size(14).color(text_primary))
                 .padding(Padding::from([12, 20]))
                 .on_press(Message::CullNext),
             Space::with_width(Length::Fill),
-            button(text("Undo (U)").size(12).color(Text::SECONDARY))
+            button(text("Undo (U)").size(12).color(text_secondary))
                 .padding(Padding::from([8, 14]))
                 .on_press(Message::CullUndo),
             Space::with_width(10),
@@ -260,13 +275,13 @@ impl CullView {
                     "Finish (Enter)"
                 })
                 .size(14)
-                .color(Backgrounds::PRIMARY)
+                .color(bg_primary)
             )
             .padding(Padding::from([12, 20]))
-            .style(|_theme, status| {
+            .style(move |_theme, status| {
                 let background = match status {
-                    button::Status::Hovered => Some(Accent::PRIMARY.into()),
-                    _ => Some(Accent::MUTED.into()),
+                    button::Status::Hovered => Some(accent_primary.into()),
+                    _ => Some(accent_muted.into()),
                 };
                 button::Style {
                     background,
@@ -287,17 +302,17 @@ impl CullView {
         .padding(Padding::from([16, 32]));
 
         let hints = row![
-            text("Keyboard:").size(11).color(Text::TERTIARY),
+            text("Keyboard:").size(11).color(text_tertiary),
             Space::with_width(8),
-            text("<- -> navigate").size(11).color(Text::TERTIARY),
+            text("<- -> navigate").size(11).color(text_tertiary),
             Space::with_width(12),
-            text("X trash").size(11).color(Text::TERTIARY),
+            text("X trash").size(11).color(text_tertiary),
             Space::with_width(12),
-            text("U undo").size(11).color(Text::TERTIARY),
+            text("U undo").size(11).color(text_tertiary),
             Space::with_width(12),
-            text("Enter finish").size(11).color(Text::TERTIARY),
+            text("Enter finish").size(11).color(text_tertiary),
             Space::with_width(12),
-            text("Esc exit").size(11).color(Text::TERTIARY),
+            text("Esc exit").size(11).color(text_tertiary),
         ]
         .padding(Padding::from([8, 32]));
 
@@ -308,7 +323,7 @@ impl CullView {
                     state.marked_count()
                 ))
                 .size(12)
-                .color(Semantic::DANGER),
+                .color(semantic_danger),
             )
             .padding(Padding::from([6, 32]))
             .into()
@@ -327,8 +342,8 @@ impl CullView {
         ])
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(|_theme| container::Style {
-            background: Some(Backgrounds::PRIMARY.into()),
+        .style(move |_theme| container::Style {
+            background: Some(bg_primary.into()),
             ..Default::default()
         })
         .into()
@@ -338,7 +353,14 @@ impl CullView {
         state: &CullState,
         photos: &[Photo],
         drive_path: Option<&Path>,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let accent_primary = p.accent_primary;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
+        let semantic_danger = p.semantic_danger;
+
         let current = state.current_index;
         let total = state.photo_ids.len();
 
@@ -410,17 +432,17 @@ impl CullView {
                 .height(50)
                 .style(move |_theme| container::Style {
                     background: Some(if is_marked {
-                        iced::Color { a: 0.20, ..Semantic::DANGER }.into()
+                        iced::Color { a: 0.20, ..semantic_danger }.into()
                     } else {
-                        Backgrounds::ELEVATED.into()
+                        bg_elevated.into()
                     }),
                     border: iced::Border {
                         color: if is_current {
-                            Accent::PRIMARY
+                            accent_primary
                         } else if is_marked {
-                            Semantic::DANGER
+                            semantic_danger
                         } else {
-                            Border::SUBTLE
+                            border_subtle
                         },
                         width: if is_current { 2.0 } else { 1.0 },
                         radius: 4.0.into(),

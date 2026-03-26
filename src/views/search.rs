@@ -6,9 +6,10 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::models::Photo;
 use crate::services::search::SearchResultGroup;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors;
 
 /// Search view component.
 pub struct SearchView;
@@ -21,7 +22,20 @@ impl SearchView {
         is_loading: bool,
         drive_path: Option<&Path>,
         photos: &[Photo],
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let bg_primary = p.bg_primary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_hover = p.bg_hover;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+
         let input = text_input("Search photos...", query)
             .on_input(Message::SearchInputChanged)
             .on_submit(Message::ExecuteSearch)
@@ -32,12 +46,12 @@ impl SearchView {
         let search_bar = row![
             input,
             Space::with_width(12),
-            button(text("Search").size(14).color(Backgrounds::PRIMARY))
+            button(text("Search").size(14).color(bg_primary))
                 .padding(Padding::from([12, 20]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Accent::PRIMARY.into()),
-                        _ => Some(Accent::MUTED.into()),
+                        button::Status::Hovered => Some(accent_primary.into()),
+                        _ => Some(accent_muted.into()),
                     };
                     button::Style {
                         background,
@@ -59,17 +73,17 @@ impl SearchView {
                     .take(5)
                     .map(|s| {
                         let value = s.clone();
-                        button(text(s.clone()).size(12).color(Text::PRIMARY))
+                        button(text(s.clone()).size(12).color(text_primary))
                             .padding(Padding::from([4, 10]))
-                            .style(|_theme, status| {
+                            .style(move |_theme, status| {
                                 let background = match status {
-                                    button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                                    _ => Some(Backgrounds::ELEVATED.into()),
+                                    button::Status::Hovered => Some(bg_hover.into()),
+                                    _ => Some(bg_elevated.into()),
                                 };
                                 button::Style {
                                     background,
                                     border: iced::Border {
-                                        color: Border::SUBTLE,
+                                        color: border_subtle,
                                         width: 1.0,
                                         radius: 12.0.into(),
                                     },
@@ -87,7 +101,7 @@ impl SearchView {
             };
 
         let body: Element<'static, Message> = if is_loading {
-            container(text("Searching...").size(14).color(Text::SECONDARY))
+            container(text("Searching...").size(14).color(text_secondary))
                 .width(Length::Fill)
                 .padding(24)
                 .into()
@@ -95,9 +109,9 @@ impl SearchView {
             if groups.is_empty() {
                 container(
                     column![
-                        text("No results found").size(16).color(Text::SECONDARY),
+                        text("No results found").size(16).color(text_secondary),
                         Space::with_height(8),
-                        text("Try another query").size(13).color(Text::TERTIARY),
+                        text("Try another query").size(13).color(text_tertiary),
                     ]
                     .align_x(Alignment::Center),
                 )
@@ -108,21 +122,21 @@ impl SearchView {
                 let total: usize = groups.iter().map(|g| g.results.len()).sum();
                 let group_views: Vec<Element<'static, Message>> = groups
                     .iter()
-                    .map(|g| Self::render_result_group(g, drive_path, photos))
+                    .map(|g| Self::render_result_group(g, drive_path, photos, theme))
                     .collect();
 
                 column![
                     row![
                         text(format!("{} photos found", total))
                             .size(14)
-                            .color(Text::SECONDARY),
+                            .color(text_secondary),
                         Space::with_width(Length::Fill),
-                        button(text("Quick Cull").size(13).color(Text::PRIMARY))
+                        button(text("Quick Cull").size(13).color(text_primary))
                             .padding(Padding::from([8, 14]))
-                            .style(|_theme, status| {
+                            .style(move |_theme, status| {
                                 let background = match status {
-                                    button::Status::Hovered => Some(Accent::PRIMARY.into()),
-                                    _ => Some(Accent::MUTED.into()),
+                                    button::Status::Hovered => Some(accent_primary.into()),
+                                    _ => Some(accent_muted.into()),
                                 };
                                 button::Style {
                                     background,
@@ -142,20 +156,20 @@ impl SearchView {
             }
         } else {
             column![
-                text("Search Examples").size(16).color(Text::PRIMARY),
+                text("Search Examples").size(16).color(text_primary),
                 Space::with_height(12),
-                Self::search_tip("Dad", "Find by person"),
-                Self::search_tip("Tokyo", "Find by location"),
-                Self::search_tip("March 2019", "Find by date"),
-                Self::search_tip("Dad in Tokyo", "Combine filters"),
-                Self::search_tip("last summer", "Natural date query"),
+                Self::search_tip("Dad", "Find by person", theme),
+                Self::search_tip("Tokyo", "Find by location", theme),
+                Self::search_tip("March 2019", "Find by date", theme),
+                Self::search_tip("Dad in Tokyo", "Combine filters", theme),
+                Self::search_tip("last summer", "Natural date query", theme),
             ]
             .spacing(8)
             .into()
         };
 
         let content = column![
-            text("Search").size(22).color(Text::PRIMARY),
+            text("Search").size(22).color(text_primary),
             Space::with_height(20),
             search_bar,
             Space::with_height(10),
@@ -169,21 +183,26 @@ impl SearchView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    fn search_tip(example: &str, description: &str) -> Element<'static, Message> {
+    fn search_tip(example: &str, description: &str, theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let text_tertiary = p.text_tertiary;
+        let bg_elevated = p.bg_elevated;
+
         let example = example.to_string();
         let description = description.to_string();
         row![
-            container(text(example).size(12).color(Text::PRIMARY))
+            container(text(example).size(12).color(text_primary))
                 .padding(Padding::from([4, 8]))
-                .style(|_theme| container::Style {
-                    background: Some(Backgrounds::ELEVATED.into()),
+                .style(move |_theme| container::Style {
+                    background: Some(bg_elevated.into()),
                     border: iced::Border {
                         radius: 4.0.into(),
                         ..Default::default()
@@ -191,7 +210,7 @@ impl SearchView {
                     ..Default::default()
                 }),
             Space::with_width(10),
-            text(description).size(12).color(Text::TERTIARY),
+            text(description).size(12).color(text_tertiary),
         ]
         .align_y(Alignment::Center)
         .into()
@@ -201,19 +220,25 @@ impl SearchView {
         group: &SearchResultGroup,
         drive_path: Option<&Path>,
         photos: &[Photo],
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+
         let header = row![
-            text(group.date.clone()).size(14).color(Text::PRIMARY),
+            text(group.date.clone()).size(14).color(text_primary),
             Space::with_width(10),
             if let Some(loc) = &group.location {
-                text(loc.clone()).size(12).color(Text::TERTIARY)
+                text(loc.clone()).size(12).color(text_tertiary)
             } else {
                 text("").size(12)
             },
             Space::with_width(Length::Fill),
             text(format!("{} photos", group.results.len()))
                 .size(12)
-                .color(Text::SECONDARY),
+                .color(text_secondary),
         ]
         .align_y(Alignment::Center);
 
@@ -225,6 +250,7 @@ impl SearchView {
                 if let Some(ref t) = photo.thumbnail_path {
                     let p = std::path::PathBuf::from(t);
                     if p.exists() {
+                        let bg_elevated = colors::palette(theme).bg_elevated;
                         container(
                             iced::widget::image(iced::widget::image::Handle::from_path(p))
                                 .width(56)
@@ -233,8 +259,8 @@ impl SearchView {
                         )
                         .width(56)
                         .height(56)
-                        .style(|_theme| container::Style {
-                            background: Some(Backgrounds::ELEVATED.into()),
+                        .style(move |_theme| container::Style {
+                            background: Some(bg_elevated.into()),
                             border: iced::Border {
                                 radius: 4.0.into(),
                                 ..Default::default()
@@ -245,6 +271,7 @@ impl SearchView {
                     } else {
                         let full = root.join(&photo.file_path);
                         if full.exists() {
+                            let bg_elevated = colors::palette(theme).bg_elevated;
                             container(
                                 iced::widget::image(iced::widget::image::Handle::from_path(full))
                                     .width(56)
@@ -253,8 +280,8 @@ impl SearchView {
                             )
                             .width(56)
                             .height(56)
-                            .style(|_theme| container::Style {
-                                background: Some(Backgrounds::ELEVATED.into()),
+                            .style(move |_theme| container::Style {
+                                background: Some(bg_elevated.into()),
                                 border: iced::Border {
                                     radius: 4.0.into(),
                                     ..Default::default()
@@ -263,14 +290,14 @@ impl SearchView {
                             })
                             .into()
                         } else {
-                            Self::thumb_placeholder()
+                            Self::thumb_placeholder(theme)
                         }
                     }
                 } else {
-                    Self::thumb_placeholder()
+                    Self::thumb_placeholder(theme)
                 }
             } else {
-                Self::thumb_placeholder()
+                Self::thumb_placeholder(theme)
             };
 
             items.push(
@@ -287,14 +314,16 @@ impl SearchView {
             .into()
     }
 
-    fn thumb_placeholder() -> Element<'static, Message> {
-        container(text("IMG").size(10).color(Text::TERTIARY))
+    fn thumb_placeholder(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        container(text("IMG").size(10).color(p.text_tertiary))
             .width(56)
             .height(56)
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()

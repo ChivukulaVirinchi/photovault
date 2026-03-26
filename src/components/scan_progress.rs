@@ -7,8 +7,9 @@ use iced::widget::{button, column, container, progress_bar, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::services::ScanProgress;
-use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
+use crate::theme::colors;
 
 /// Format bytes as human-readable size
 fn format_bytes(bytes: u64) -> String {
@@ -32,22 +33,35 @@ pub struct ScanProgressView;
 
 impl ScanProgressView {
     /// Render the scan progress view
-    pub fn view(progress: &ScanProgress) -> Element<'static, Message> {
+    pub fn view(progress: &ScanProgress, theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_hover = p.accent_hover;
+        let bg_primary = p.bg_primary;
+        let bg_hover = p.bg_hover;
+        let border_visible = p.border_visible;
+        let semantic_success = p.semantic_success;
+        let semantic_warning = p.semantic_warning;
+
         let title = text(if progress.is_complete {
             "Scan Complete"
         } else {
             "Scanning..."
         })
         .size(22)
-        .color(Text::PRIMARY);
+        .color(text_primary);
 
         // Progress stats
         let stats = row![
-            Self::stat_item("Found", &progress.files_found.to_string()),
+            Self::stat_item("Found", &progress.files_found.to_string(), theme),
             Space::with_width(40),
-            Self::stat_item("Processed", &progress.files_processed.to_string()),
+            Self::stat_item("Processed", &progress.files_processed.to_string(), theme),
             Space::with_width(40),
-            Self::stat_item("Size", &format_bytes(progress.bytes_processed)),
+            Self::stat_item("Size", &format_bytes(progress.bytes_processed), theme),
         ]
         .align_y(Alignment::Center);
 
@@ -71,14 +85,14 @@ impl ScanProgressView {
             } else {
                 "Preparing...".to_string()
             };
-            text(display).size(11).color(Text::TERTIARY)
+            text(display).size(11).color(text_tertiary)
         } else {
             text(format!(
                 "Completed in {:.1}s",
                 progress.elapsed_seconds
             ))
             .size(12)
-            .color(Semantic::SUCCESS)
+            .color(semantic_success)
         };
 
         // Errors summary
@@ -87,7 +101,7 @@ impl ScanProgressView {
             Some(
                 text(format!("{} errors encountered", error_count))
                     .size(11)
-                    .color(Semantic::WARNING),
+                    .color(semantic_warning),
             )
         } else {
             None
@@ -95,16 +109,16 @@ impl ScanProgressView {
 
         // Action button
         let action_button = if progress.is_complete {
-            button(text("Continue").size(13).color(Backgrounds::PRIMARY))
+            button(text("Continue").size(13).color(bg_primary))
                 .padding(Padding::from([10, 24]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Accent::HOVER.into()),
-                        _ => Some(Accent::PRIMARY.into()),
+                        button::Status::Hovered => Some(accent_hover.into()),
+                        _ => Some(accent_primary.into()),
                     };
                     button::Style {
                         background,
-                        text_color: Backgrounds::PRIMARY,
+                        text_color: bg_primary,
                         border: iced::Border {
                             radius: 8.0.into(),
                             ..Default::default()
@@ -114,18 +128,18 @@ impl ScanProgressView {
                 })
                 .on_press(Message::ScanComplete)
         } else {
-            button(text("Cancel").size(13).color(Text::SECONDARY))
+            button(text("Cancel").size(13).color(text_secondary))
                 .padding(Padding::from([10, 24]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
                         _ => None,
                     };
                     button::Style {
                         background,
-                        text_color: Text::SECONDARY,
+                        text_color: text_secondary,
                         border: iced::Border {
-                            color: Border::VISIBLE,
+                            color: border_visible,
                             width: 1.0,
                             radius: 8.0.into(),
                         },
@@ -140,7 +154,7 @@ impl ScanProgressView {
             Some(
                 text(format!("{:.0}s", progress.elapsed_seconds))
                     .size(11)
-                    .color(Text::TERTIARY),
+                    .color(text_tertiary),
             )
         } else {
             None
@@ -176,18 +190,19 @@ impl ScanProgressView {
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
     /// Render a single stat item
-    fn stat_item<'a>(label: &str, value: &str) -> Element<'a, Message> {
+    fn stat_item<'a>(label: &str, value: &str, theme: AppTheme) -> Element<'a, Message> {
+        let p = colors::palette(theme);
         column![
-            text(value.to_string()).size(24).color(Text::PRIMARY),
-            text(label.to_string()).size(11).color(Text::SECONDARY),
+            text(value.to_string()).size(24).color(p.text_primary),
+            text(label.to_string()).size(11).color(p.text_secondary),
         ]
         .align_x(Alignment::Center)
         .into()

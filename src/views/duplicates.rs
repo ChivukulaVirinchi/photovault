@@ -6,9 +6,10 @@ use iced::widget::{button, column, container, row, scrollable, text, Column, Spa
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::config::AppTheme;
 use crate::db::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
 use crate::models::Photo;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors;
 use crate::utils::format_bytes;
 
 /// Duplicates view state
@@ -23,16 +24,19 @@ impl DuplicatesView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         overview: &[(i64, u64, Option<i64>)],
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
         if is_loading {
-            return Self::loading_view();
+            return Self::loading_view(theme);
         }
 
         if groups.is_empty() {
-            return Self::empty_view();
+            return Self::empty_view(theme);
         }
 
-        let title = text("Duplicates").size(28).color(Text::PRIMARY);
+        let title = text("Duplicates").size(28).color(p.text_primary);
 
         let subtitle = text(format!(
             "{} duplicate groups found \u{2014} {} wasted",
@@ -40,14 +44,15 @@ impl DuplicatesView {
             format_bytes(wasted_space)
         ))
         .size(14)
-        .color(Text::SECONDARY);
+        .color(p.text_secondary);
 
         // Group list
         let group_list: Vec<Element<'static, Message>> = groups
             .iter()
-            .map(|g| Self::group_row(g, drive_path, photos, overview))
+            .map(|g| Self::group_row(g, drive_path, photos, overview, theme))
             .collect();
 
+        let bg_primary = p.bg_primary;
         let content = column![
             title,
             Space::with_height(8),
@@ -61,24 +66,27 @@ impl DuplicatesView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
-    fn loading_view() -> Element<'static, Message> {
+    fn loading_view(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_primary = p.bg_primary;
+
         let content = column![
-            text("Duplicates").size(28).color(Text::PRIMARY),
+            text("Duplicates").size(28).color(p.text_primary),
             Space::with_height(16),
             text("Detecting duplicates...")
                 .size(16)
-                .color(Text::SECONDARY),
+                .color(p.text_secondary),
             Space::with_height(8),
             text("Analyzing file hashes and building groups.")
                 .size(14)
-                .color(Text::TERTIARY),
+                .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)
         .padding(32);
@@ -86,23 +94,26 @@ impl DuplicatesView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
     }
 
     /// Empty state when no duplicates
-    fn empty_view() -> Element<'static, Message> {
+    fn empty_view(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_primary = p.bg_primary;
+
         let content = column![
-            text("Duplicates").size(28).color(Text::PRIMARY),
+            text("Duplicates").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("No duplicates found!").size(16).color(Text::SECONDARY),
+            text("No duplicates found!").size(16).color(p.text_secondary),
             Space::with_height(8),
             text("Your photo library has no exact duplicate files.")
                 .size(14)
-                .color(Text::TERTIARY),
+                .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)
         .padding(32);
@@ -110,8 +121,8 @@ impl DuplicatesView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -123,7 +134,9 @@ impl DuplicatesView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         overview: &[(i64, u64, Option<i64>)],
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
         let group_id = group.id;
 
         let (recoverable, preview_photo) = overview
@@ -132,12 +145,21 @@ impl DuplicatesView {
             .map(|(_, bytes, pid)| (*bytes, *pid))
             .unwrap_or((0, None));
 
-        let preview = Self::group_preview(preview_photo, drive_path, photos);
+        let preview = Self::group_preview(preview_photo, drive_path, photos, theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_hover = p.bg_hover;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
 
         let header = row![
             text(format!("Group #{}", group.id))
                 .size(14)
-                .color(Text::PRIMARY),
+                .color(text_primary),
             Space::with_width(Length::Fill),
             text(format!(
                 "{} identical files · {} recoverable",
@@ -145,17 +167,17 @@ impl DuplicatesView {
                 format_bytes(recoverable)
             ))
             .size(12)
-            .color(Text::SECONDARY),
+            .color(text_secondary),
         ]
         .align_y(Alignment::Center);
 
         let actions = row![
-            button(text("Keep Suggested").size(12).color(Text::PRIMARY))
+            button(text("Keep Suggested").size(12).color(text_primary))
                 .padding(Padding::from([6, 12]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Accent::PRIMARY.into()),
-                        _ => Some(Accent::MUTED.into()),
+                        button::Status::Hovered => Some(accent_primary.into()),
+                        _ => Some(accent_muted.into()),
                     };
                     button::Style {
                         background,
@@ -168,17 +190,17 @@ impl DuplicatesView {
                 })
                 .on_press(Message::KeepSuggestedDuplicate(group_id)),
             Space::with_width(8),
-            button(text("Review").size(12).color(Text::PRIMARY))
+            button(text("Review").size(12).color(text_primary))
                 .padding(Padding::from([6, 12]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                        _ => Some(Backgrounds::ELEVATED.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
+                        _ => Some(bg_elevated.into()),
                     };
                     button::Style {
                         background,
                         border: iced::Border {
-                            color: Border::SUBTLE,
+                            color: border_subtle,
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -187,11 +209,11 @@ impl DuplicatesView {
                 })
                 .on_press(Message::OpenDuplicateGroup(group_id)),
             Space::with_width(8),
-            button(text("Dismiss").size(12).color(Text::TERTIARY))
+            button(text("Dismiss").size(12).color(text_tertiary))
                 .padding(Padding::from([6, 12]))
-                .style(|_theme, status| {
+                .style(move |_theme, status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
                         _ => None,
                     };
                     button::Style {
@@ -215,10 +237,10 @@ impl DuplicatesView {
         container(content)
             .padding(16)
             .width(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
                 border: iced::Border {
-                    color: Border::SUBTLE,
+                    color: border_subtle,
                     width: 1.0,
                     radius: 8.0.into(),
                 },
@@ -231,7 +253,12 @@ impl DuplicatesView {
         preview_photo_id: Option<i64>,
         drive_path: Option<&Path>,
         photos: &[Photo],
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        let text_tertiary = p.text_tertiary;
+
         let image_box: Element<'static, Message> = if let (Some(pid), Some(root)) =
             (preview_photo_id, drive_path)
         {
@@ -247,8 +274,8 @@ impl DuplicatesView {
                         )
                         .width(80)
                         .height(80)
-                        .style(|_theme| container::Style {
-                            background: Some(Backgrounds::ELEVATED.into()),
+                        .style(move |_theme| container::Style {
+                            background: Some(bg_elevated.into()),
                             border: iced::Border {
                                 radius: 4.0.into(),
                                 ..Default::default()
@@ -267,8 +294,8 @@ impl DuplicatesView {
                             )
                             .width(80)
                             .height(80)
-                            .style(|_theme| container::Style {
-                                background: Some(Backgrounds::ELEVATED.into()),
+                            .style(move |_theme| container::Style {
+                                background: Some(bg_elevated.into()),
                                 border: iced::Border {
                                     radius: 4.0.into(),
                                     ..Default::default()
@@ -277,7 +304,7 @@ impl DuplicatesView {
                             })
                             .into()
                         } else {
-                            Self::preview_placeholder()
+                            Self::preview_placeholder(theme)
                         }
                     }
                 } else {
@@ -291,8 +318,8 @@ impl DuplicatesView {
                         )
                         .width(80)
                         .height(80)
-                        .style(|_theme| container::Style {
-                            background: Some(Backgrounds::ELEVATED.into()),
+                        .style(move |_theme| container::Style {
+                            background: Some(bg_elevated.into()),
                             border: iced::Border {
                                 radius: 4.0.into(),
                                 ..Default::default()
@@ -301,34 +328,36 @@ impl DuplicatesView {
                         })
                         .into()
                     } else {
-                        Self::preview_placeholder()
+                        Self::preview_placeholder(theme)
                     }
                 }
             } else {
-                Self::preview_placeholder()
+                Self::preview_placeholder(theme)
             }
         } else {
-            Self::preview_placeholder()
+            Self::preview_placeholder(theme)
         };
 
         container(row![
             image_box,
             Space::with_width(12),
-            text("Representative photo").size(12).color(Text::TERTIARY)
+            text("Representative photo").size(12).color(text_tertiary)
         ])
         .width(Length::Fill)
         .padding(Padding::from([4, 0]))
         .into()
     }
 
-    fn preview_placeholder() -> Element<'static, Message> {
-        container(text("IMG").size(12).color(Text::TERTIARY))
+    fn preview_placeholder(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        container(text("IMG").size(12).color(p.text_tertiary))
             .width(80)
             .height(80)
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()
@@ -343,29 +372,37 @@ impl DuplicatesView {
         group: &DuplicateGroupRecord,
         members: &[DuplicateGroupMemberRecord],
         drive_path: &Path,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
         let group_id = group.id;
 
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_primary = p.bg_primary;
+
         let header = row![
-            button(text("<").size(16).color(Text::PRIMARY))
+            button(text("<").size(16).color(text_primary))
                 .padding(8)
                 .style(|_theme, _status| button::Style::default())
                 .on_press(Message::CloseDuplicateDetail),
             Space::with_width(16),
             text(format!("Duplicate Group #{}", group.id))
                 .size(20)
-                .color(Text::PRIMARY),
+                .color(text_primary),
             Space::with_width(Length::Fill),
             text(format!("{} files", members.len()))
                 .size(14)
-                .color(Text::SECONDARY),
+                .color(text_secondary),
         ]
         .align_y(Alignment::Center);
 
         // Member list
         let member_list: Vec<Element<'static, Message>> = members
             .iter()
-            .map(|m| Self::member_row(group_id, m, drive_path))
+            .map(|m| Self::member_row(group_id, m, drive_path, theme))
             .collect();
 
         let content = column![
@@ -374,12 +411,12 @@ impl DuplicatesView {
             scrollable(Column::with_children(member_list).spacing(8)),
             Space::with_height(16),
             row![
-                button(text("Trash Non-Suggested").size(14).color(Text::PRIMARY))
+                button(text("Trash Non-Suggested").size(14).color(text_primary))
                     .padding(Padding::from([10, 20]))
-                    .style(|_theme, status| {
+                    .style(move |_theme, status| {
                         let background = match status {
-                            button::Status::Hovered => Some(Accent::PRIMARY.into()),
-                            _ => Some(Accent::MUTED.into()),
+                            button::Status::Hovered => Some(accent_primary.into()),
+                            _ => Some(accent_muted.into()),
                         };
                         button::Style {
                             background,
@@ -399,8 +436,8 @@ impl DuplicatesView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -411,9 +448,21 @@ impl DuplicatesView {
         group_id: i64,
         member: &DuplicateGroupMemberRecord,
         drive_path: &Path,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
         let photo_id = member.photo_id;
         let is_keep = member.is_suggested_keep;
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_hover = p.bg_hover;
+        let bg_elevated = p.bg_elevated;
+        let bg_selected = p.bg_selected;
+        let border_subtle = p.border_subtle;
 
         let path = member
             .file_path
@@ -431,23 +480,23 @@ impl DuplicatesView {
             .to_string();
 
         let keep_indicator = if is_keep {
-            text("KEEP").size(10).color(Accent::PRIMARY)
+            text("KEEP").size(10).color(accent_primary)
         } else {
             text("").size(10)
         };
 
-        let thumb = Self::thumbnail_button(member, drive_path);
+        let thumb = Self::thumbnail_button(member, drive_path, theme);
 
         let content = row![
             thumb,
             Space::with_width(16),
             column![
-                text(path).size(13).color(Text::PRIMARY),
+                text(path).size(13).color(text_primary),
                 Space::with_height(4),
                 row![
-                    text(size).size(12).color(Text::SECONDARY),
+                    text(size).size(12).color(text_secondary),
                     Space::with_width(16),
-                    text(date).size(12).color(Text::TERTIARY),
+                    text(date).size(12).color(text_tertiary),
                 ],
             ]
             .width(Length::Fill),
@@ -457,28 +506,28 @@ impl DuplicatesView {
                 text(if is_keep { "Keeping" } else { "Keep This" })
                     .size(12)
                     .color(if is_keep {
-                        Accent::PRIMARY
+                        accent_primary
                     } else {
-                        Text::PRIMARY
+                        text_primary
                     })
             )
             .padding(Padding::from([6, 12]))
             .style(move |_theme, status| {
                 let background = if is_keep {
-                    Some(Accent::MUTED.into())
+                    Some(accent_muted.into())
                 } else {
                     match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                        _ => Some(Backgrounds::ELEVATED.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
+                        _ => Some(bg_elevated.into()),
                     }
                 };
                 button::Style {
                     background,
                     border: iced::Border {
                         color: if is_keep {
-                            Accent::PRIMARY
+                            accent_primary
                         } else {
-                            Border::SUBTLE
+                            border_subtle
                         },
                         width: 1.0,
                         radius: 6.0.into(),
@@ -496,17 +545,17 @@ impl DuplicatesView {
             .style(move |_theme| container::Style {
                 background: Some(
                     if is_keep {
-                        Backgrounds::SELECTED
+                        bg_selected
                     } else {
-                        Backgrounds::ELEVATED
+                        bg_elevated
                     }
                     .into(),
                 ),
                 border: iced::Border {
                     color: if is_keep {
-                        Accent::PRIMARY
+                        accent_primary
                     } else {
-                        Border::SUBTLE
+                        border_subtle
                     },
                     width: if is_keep { 2.0 } else { 1.0 },
                     radius: 8.0.into(),
@@ -519,8 +568,13 @@ impl DuplicatesView {
     fn thumbnail_button(
         member: &DuplicateGroupMemberRecord,
         drive_path: &Path,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
         let photo_id = member.photo_id;
+        let bg_elevated = p.bg_elevated;
+        let border_subtle = p.border_subtle;
+        let border_visible = p.border_visible;
 
         let image_container: Element<'static, Message> =
             if let Some(ref thumb_path) = member.thumbnail_path {
@@ -534,8 +588,8 @@ impl DuplicatesView {
                     )
                     .width(60)
                     .height(60)
-                    .style(|_theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 4.0.into(),
                             ..Default::default()
@@ -544,7 +598,7 @@ impl DuplicatesView {
                     })
                     .into()
                 } else {
-                    Self::thumbnail_placeholder()
+                    Self::thumbnail_placeholder(theme)
                 }
             } else if let Some(ref file_path) = member.file_path {
                 let full_path = drive_path.join(file_path);
@@ -557,8 +611,8 @@ impl DuplicatesView {
                     )
                     .width(60)
                     .height(60)
-                    .style(|_theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 4.0.into(),
                             ..Default::default()
@@ -567,18 +621,18 @@ impl DuplicatesView {
                     })
                     .into()
                 } else {
-                    Self::thumbnail_placeholder()
+                    Self::thumbnail_placeholder(theme)
                 }
             } else {
-                Self::thumbnail_placeholder()
+                Self::thumbnail_placeholder(theme)
             };
 
         button(image_container)
             .padding(0)
-            .style(|_theme, status| {
+            .style(move |_theme, status| {
                 let border_color = match status {
-                    button::Status::Hovered => Border::VISIBLE,
-                    _ => Border::SUBTLE,
+                    button::Status::Hovered => border_visible,
+                    _ => border_subtle,
                 };
                 button::Style {
                     background: None,
@@ -594,14 +648,16 @@ impl DuplicatesView {
             .into()
     }
 
-    fn thumbnail_placeholder() -> Element<'static, Message> {
-        container(text("IMG").size(12).color(Text::TERTIARY))
+    fn thumbnail_placeholder(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        container(text("IMG").size(12).color(p.text_tertiary))
             .width(60)
             .height(60)
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
-            .style(|_theme| container::Style {
-                background: Some(Backgrounds::ELEVATED.into()),
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()

@@ -24,7 +24,7 @@ use crate::services::{
     ApplyResult, GeocodingService,
 };
 use tokio::task::JoinSet;
-use crate::theme::colors::{Backgrounds, Border, Text};
+use crate::theme::colors;
 use crate::views::{
     BurstsView, CullState, CullView, DuplicatesView, PeopleView, PhotoDetailView, SearchView,
     SettingsView, TimelineView, TrashView, WelcomeView,
@@ -240,8 +240,14 @@ pub struct PhotoVault {
     /// Current rotation offset in photo detail (0, 90, 180, 270)
     photo_rotation: i32,
 
-    /// Path to the rotated image temp file (if rotation applied)
-    rotated_image_path: Option<std::path::PathBuf>,
+    /// Pre-decoded display image for photo detail (rotated thumbnail, fast to manipulate)
+    current_display_image: Option<image::DynamicImage>,
+
+    /// Whether the metadata panel is shown in photo detail view
+    show_metadata_panel: bool,
+
+    /// Whether zoom-to-fit mode is active (vs free zoom)
+    zoom_to_fit: bool,
 }
 
 /// Application messages
@@ -449,11 +455,17 @@ pub enum Message {
     /// Cancel face processing
     CancelFaceProcessing,
 
-    /// Rotate photo in detail view (spawns async rotate task)
+    /// Rotate photo in detail view (instant, rotates in-memory thumbnail)
     RotatePhoto,
 
-    /// Rotated image ready
-    RotatedImageReady(Option<std::path::PathBuf>),
+    /// Toggle metadata panel visibility in photo detail
+    ToggleMetadataPanel,
+
+    /// Toggle between fit-to-window and free zoom
+    ToggleZoomFit,
+
+    /// Display image loaded for photo detail (thumbnail decoded for rotation)
+    DisplayImageReady(Option<Vec<u8>>, u32, u32),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message
@@ -558,7 +570,9 @@ impl PhotoVault {
             ml_available: crate::bootstrap::has_face_models(),
             current_photo_people: Vec::new(),
             photo_rotation: 0,
-            rotated_image_path: None,
+            current_display_image: None,
+            show_metadata_panel: true,
+            zoom_to_fit: true,
         };
 
         // Detect drives on startup
@@ -1216,7 +1230,8 @@ impl PhotoVault {
                     self.selected_photo_index = Some(idx);
                     self.current_view = View::PhotoDetail;
                     self.photo_rotation = 0;
-                    self.rotated_image_path = None;
+                    self.current_display_image = None;
+                    self.zoom_to_fit = true;
 
                     // Look up people in this photo
                     self.current_photo_people.clear();
@@ -1225,6 +1240,52 @@ impl PhotoVault {
                         if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
                             self.current_photo_people = names;
                         }
+                    }
+
+                    // Load display image from Large thumbnail (or original) for fast rotation
+                    let photo = &self.photos[idx];
+                    let image_path = if let Some(ref drive) = self.selected_drive {
+                        let orig = drive.join(&photo.file_path);
+                        // Prefer Large thumbnail for speed; fall back to original
+                        if let Some(ref tp) = photo.thumbnail_path {
+                            let thumb = PathBuf::from(tp);
+                            // Try to find the large version by replacing /small/ with /large/
+                            let large_path = thumb.to_string_lossy()
+                                .replace("/small/", "/large/")
+                                .replace("/medium/", "/large/");
+                            let large = PathBuf::from(&large_path);
+                            if large.exists() {
+                                Some(large)
+                            } else if orig.exists() {
+                                Some(orig)
+                            } else {
+                                Some(thumb)
+                            }
+                        } else if orig.exists() {
+                            Some(orig)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(path) = image_path {
+                        return Task::perform(
+                            async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    let img = image::open(&path).ok()?;
+                                    let rgba = img.to_rgba8();
+                                    let (w, h) = (rgba.width(), rgba.height());
+                                    Some((rgba.into_raw(), w, h))
+                                }).await.ok().flatten();
+                                match result {
+                                    Some((bytes, w, h)) => Message::DisplayImageReady(Some(bytes), w, h),
+                                    None => Message::DisplayImageReady(None, 0, 0),
+                                }
+                            },
+                            |msg| msg,
+                        );
                     }
                 }
                 Task::none()
@@ -1238,22 +1299,28 @@ impl PhotoVault {
             }
 
             Message::PreviousPhoto => {
-                self.rotated_image_path = None;
+                self.current_display_image = None;
                 self.photo_rotation = 0;
+                self.zoom_to_fit = true;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx > 0 {
                         *idx -= 1;
+                        let photo_id = self.photos[*idx].id;
+                        return self.update(Message::SelectPhoto(photo_id));
                     }
                 }
                 Task::none()
             }
 
             Message::NextPhoto => {
-                self.rotated_image_path = None;
+                self.current_display_image = None;
                 self.photo_rotation = 0;
+                self.zoom_to_fit = true;
                 if let Some(ref mut idx) = self.selected_photo_index {
                     if *idx + 1 < self.photos.len() {
                         *idx += 1;
+                        let photo_id = self.photos[*idx].id;
+                        return self.update(Message::SelectPhoto(photo_id));
                     }
                 }
                 Task::none()
@@ -1403,8 +1470,12 @@ impl PhotoVault {
                             }
                         }
                         keyboard::Key::Character(ref ch) => {
-                            if ch.to_lowercase() == "r" {
+                            let lower = ch.to_lowercase();
+                            if lower == "r" {
                                 return self.update(Message::RotatePhoto);
+                            }
+                            if lower == "i" {
+                                return self.update(Message::ToggleMetadataPanel);
                             }
                         }
                         _ => {}
@@ -1643,10 +1714,27 @@ impl PhotoVault {
                     |_| Message::LoadTrash,
                 );
 
-                // refresh local photo list and exit cull
-                self.cull_state = None;
-                self.cull_confirm_pending = false;
-                self.current_view = View::Trash;
+                // If trashing from photo detail, navigate back to previous view
+                // and advance to the next photo (or close if last)
+                if self.current_view == View::PhotoDetail {
+                    if let Some(idx) = self.selected_photo_index {
+                        // Will be shown after reload; adjust index
+                        if idx + 1 < self.photos.len() {
+                            // Stay at same index (next photo slides in)
+                        } else if idx > 0 {
+                            self.selected_photo_index = Some(idx - 1);
+                        } else {
+                            // Last photo trashed, go back to previous view
+                            self.selected_photo_index = None;
+                            self.current_view = self.previous_view.take().unwrap_or(View::Timeline);
+                        }
+                    }
+                } else {
+                    // From other views, go to Trash
+                    self.cull_state = None;
+                    self.cull_confirm_pending = false;
+                    self.current_view = View::Trash;
+                }
                 let reload = self.load_photos();
                 Task::batch([task, reload])
             }
@@ -2080,43 +2168,31 @@ impl PhotoVault {
             Message::RotatePhoto => {
                 self.photo_rotation = (self.photo_rotation + 90) % 360;
 
-                // Get the current image path and rotate it in a background thread
-                let source_path = if let Some(ref rp) = self.rotated_image_path {
-                    Some(rp.clone())
-                } else if let Some(idx) = self.selected_photo_index {
-                    if let (Some(photo), Some(ref drive)) = (self.photos.get(idx), &self.selected_drive) {
-                        let orig = drive.join(&photo.file_path);
-                        if orig.exists() { Some(orig) } else { None }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(src) = source_path {
-                    Task::perform(
-                        async move {
-                            let handle = tokio::task::spawn_blocking(move || {
-                                let img = image::open(&src).ok()?;
-                                let rotated = img.rotate90();
-                                let temp_dir = std::env::temp_dir().join("photovault");
-                                let _ = std::fs::create_dir_all(&temp_dir);
-                                let temp_path = temp_dir.join("rotated_view.jpg");
-                                rotated.save(&temp_path).ok()?;
-                                Some(temp_path)
-                            });
-                            handle.await.ok().flatten()
-                        },
-                        Message::RotatedImageReady,
-                    )
-                } else {
-                    Task::none()
+                // Rotate the in-memory display image (~1ms for 1000px thumbnail)
+                if let Some(ref img) = self.current_display_image {
+                    self.current_display_image = Some(img.rotate90());
                 }
+                Task::none()
             }
 
-            Message::RotatedImageReady(path) => {
-                self.rotated_image_path = path;
+            Message::ToggleMetadataPanel => {
+                self.show_metadata_panel = !self.show_metadata_panel;
+                Task::none()
+            }
+
+            Message::ToggleZoomFit => {
+                self.zoom_to_fit = !self.zoom_to_fit;
+                Task::none()
+            }
+
+            Message::DisplayImageReady(bytes_opt, w, h) => {
+                if let Some(bytes) = bytes_opt {
+                    if w > 0 && h > 0 {
+                        if let Some(rgba) = image::RgbaImage::from_raw(w, h, bytes) {
+                            self.current_display_image = Some(image::DynamicImage::ImageRgba8(rgba));
+                        }
+                    }
+                }
                 Task::none()
             }
 
@@ -2846,9 +2922,9 @@ impl PhotoVault {
         // Show scanning progress if scanning
         if self.current_view == View::Scanning {
             if let Some(ref state) = self.scan_state {
-                return ScanProgressView::view(&state.progress);
+                return ScanProgressView::view(&state.progress, self.config.theme);
             } else {
-                return ScanProgressView::view(&ScanProgress::default());
+                return ScanProgressView::view(&ScanProgress::default(), self.config.theme);
             }
         }
 
@@ -2859,41 +2935,64 @@ impl PhotoVault {
                     let has_prev = idx > 0;
                     let has_next = idx + 1 < self.photos.len();
                     if let Some(ref drive_path) = self.selected_drive {
+                        // Build image handle from pre-decoded display image or file path
+                        let handle = if let Some(ref img) = self.current_display_image {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = (rgba.width(), rgba.height());
+                            Some(iced::widget::image::Handle::from_rgba(w, h, rgba.into_raw()))
+                        } else {
+                            // Fallback: load from file path directly
+                            let orig = drive_path.join(&photo.file_path);
+                            let path = if orig.exists() {
+                                orig
+                            } else if let Some(ref tp) = photo.thumbnail_path {
+                                PathBuf::from(tp)
+                            } else {
+                                PathBuf::new()
+                            };
+                            if path.exists() {
+                                Some(iced::widget::image::Handle::from_path(&path))
+                            } else {
+                                None
+                            }
+                        };
                         return PhotoDetailView::view(
                             photo,
                             has_prev,
                             has_next,
-                            drive_path,
                             &self.current_photo_people,
-                            self.rotated_image_path.as_ref(),
+                            handle.as_ref(),
+                            self.show_metadata_panel,
+                            self.zoom_to_fit,
+                            self.config.theme,
                         );
                     }
                 }
             }
             // Fallback: shouldn't happen, but return to timeline
-            return TimelineView::view();
+            return TimelineView::view(self.config.theme);
         }
 
         // If no drive selected, show welcome screen
         if self.selected_drive.is_none() {
-            return WelcomeView::view(&self.drives);
+            return WelcomeView::view(&self.drives, self.config.theme);
         }
 
         // Main layout: sidebar + content
         let sidebar = Sidebar::view(&self.current_view, self.config.theme);
 
         let content = match self.current_view {
-            View::Welcome => WelcomeView::view(&self.drives),
+            View::Welcome => WelcomeView::view(&self.drives, self.config.theme),
             View::Scanning => unreachable!(), // Handled above
             View::Timeline => {
                 if self.photos.is_empty() {
-                    TimelineView::view()
+                    TimelineView::view(self.config.theme)
                 } else {
                     // Calculate responsive column count:
                     // Sidebar is ~200px, padding 32px total, each thumb is 160+8px gap
                     let available_width = (self.window_width - 200.0 - 32.0).max(168.0);
                     let columns = (available_width / 168.0).floor().max(2.0) as usize;
-                    TimelineView::view_with_photos(&self.photos, columns)
+                    TimelineView::view_with_photos(&self.photos, columns, self.config.theme)
                 }
             }
             View::People => PeopleView::view_with_clusters(
@@ -2906,6 +3005,7 @@ impl PhotoVault {
                 self.merge_mode_active,
                 &self.merge_selected_clusters,
                 self.ml_available,
+                self.config.theme,
             ),
             View::ClusterDetail => {
                 // Find the selected cluster record for display
@@ -2924,6 +3024,7 @@ impl PhotoVault {
                         is_editing,
                         &self.edit_cluster_name,
                         columns,
+                        self.config.theme,
                     )
                 } else {
                     // Cluster not found — fallback to People view
@@ -2937,6 +3038,7 @@ impl PhotoVault {
                         self.merge_mode_active,
                         &self.merge_selected_clusters,
                         self.ml_available,
+                        self.config.theme,
                     )
                 }
             }
@@ -2947,6 +3049,7 @@ impl PhotoVault {
                 self.search_loading,
                 self.selected_drive.as_deref(),
                 &self.photos,
+                self.config.theme,
             ),
             View::Cull => {
                 if let Some(ref state) = self.cull_state {
@@ -2956,6 +3059,7 @@ impl PhotoVault {
                         &self.photos,
                         self.selected_drive.as_deref(),
                         self.cull_confirm_pending,
+                        self.config.theme,
                     )
                 } else {
                     SearchView::view(
@@ -2965,6 +3069,7 @@ impl PhotoVault {
                         self.search_loading,
                         self.selected_drive.as_deref(),
                         &self.photos,
+                        self.config.theme,
                     )
                 }
             }
@@ -2975,6 +3080,7 @@ impl PhotoVault {
                 self.selected_drive.as_deref(),
                 self.confirm_empty_trash,
                 self.confirm_delete_photo_id,
+                self.config.theme,
             ),
             View::Settings => SettingsView::view(&self.config, self.geocoding_progress),
             View::Duplicates => {
@@ -2985,6 +3091,7 @@ impl PhotoVault {
                     self.selected_drive.as_deref(),
                     &self.photos,
                     &self.duplicate_overview,
+                    self.config.theme,
                 )
             }
             View::DuplicateDetail => {
@@ -2994,6 +3101,7 @@ impl PhotoVault {
                             group,
                             &self.selected_duplicate_members,
                             drive_path,
+                            self.config.theme,
                         )
                     } else {
                         DuplicatesView::view(
@@ -3003,6 +3111,7 @@ impl PhotoVault {
                             self.selected_drive.as_deref(),
                             &self.photos,
                             &self.duplicate_overview,
+                            self.config.theme,
                         )
                     }
                 } else {
@@ -3013,6 +3122,7 @@ impl PhotoVault {
                         self.selected_drive.as_deref(),
                         &self.photos,
                         &self.duplicate_overview,
+                        self.config.theme,
                     )
                 }
             }
@@ -3024,11 +3134,12 @@ impl PhotoVault {
                     self.selected_drive.as_deref(),
                     &self.photos,
                     &self.burst_overview_previews,
+                    self.config.theme,
                 )
             }
             View::BurstDetail => {
                 if let Some(ref group) = self.selected_burst_group {
-                    BurstsView::group_detail_view(group, &self.selected_burst_members)
+                    BurstsView::group_detail_view(group, &self.selected_burst_members, self.config.theme)
                 } else {
                     BurstsView::view(
                         &self.burst_groups,
@@ -3037,6 +3148,7 @@ impl PhotoVault {
                         self.selected_drive.as_deref(),
                         &self.photos,
                         &self.burst_overview_previews,
+                        self.config.theme,
                     )
                 }
             }
@@ -3094,17 +3206,22 @@ impl PhotoVault {
 
             let status_text = status_parts.join("  |  ");
 
+            let p = colors::palette(self.config.theme);
+            let status_bg = p.bg_secondary;
+            let status_border = p.border_subtle;
+            let status_text_color = p.text_secondary;
+
             let status_bar = container(
                 text(status_text)
                     .size(11)
-                    .color(Text::SECONDARY),
+                    .color(status_text_color),
             )
             .width(Length::Fill)
             .padding([4, 16])
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::SECONDARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(status_bg.into()),
                 border: iced::Border {
-                    color: Border::SUBTLE,
+                    color: status_border,
                     width: 1.0,
                     radius: 0.0.into(),
                 },
@@ -3112,21 +3229,23 @@ impl PhotoVault {
             });
 
             let layout = column![main_row, status_bar];
+            let bg = p.bg_primary;
 
             container(layout)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Backgrounds::PRIMARY.into()),
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg.into()),
                     ..Default::default()
                 })
                 .into()
         } else {
+            let bg = colors::palette(self.config.theme).bg_primary;
             container(main_row)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Backgrounds::PRIMARY.into()),
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg.into()),
                     ..Default::default()
                 })
                 .into()

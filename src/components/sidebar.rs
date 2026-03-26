@@ -8,7 +8,7 @@ use iced::{Element, Length, Padding};
 
 use crate::app::{Message, View};
 use crate::config::AppTheme;
-use crate::theme::colors::{Accent, Backgrounds, Border, Text};
+use crate::theme::colors;
 
 /// Sidebar navigation component
 pub struct Sidebar;
@@ -16,10 +16,12 @@ pub struct Sidebar;
 impl Sidebar {
     /// Render the sidebar
     pub fn view(current_view: &View, app_theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(app_theme);
+
         let brand = container(
             text("PhotoVault")
                 .size(13)
-                .color(Text::SECONDARY),
+                .color(p.text_secondary),
         )
         .padding(Padding::from([24, 20]));
 
@@ -47,28 +49,20 @@ impl Sidebar {
             Space::with_height(16),
         ];
 
+        let bg = p.bg_secondary;
+        let border_color = p.border_subtle;
+
         container(content)
             .width(Length::Fixed(180.0))
             .height(Length::Fill)
-            .style(move |_theme: &iced::Theme| {
-                let bg = if matches!(app_theme, AppTheme::Light) {
-                    iced::Color::from_rgb(0.96, 0.96, 0.96)
-                } else {
-                    Backgrounds::SECONDARY
-                };
-                container::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        color: if matches!(app_theme, AppTheme::Light) {
-                            iced::Color::from_rgb(0.88, 0.88, 0.88)
-                        } else {
-                            Border::SUBTLE
-                        },
-                        width: 0.0,
-                        radius: 0.0.into(),
-                    },
-                    ..Default::default()
-                }
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    color: border_color,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
             })
             .into()
     }
@@ -80,22 +74,18 @@ impl Sidebar {
         current: &View,
         app_theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(app_theme);
+
         let is_active = std::mem::discriminant(&target) == std::mem::discriminant(current)
             || (matches!(target, View::People) && matches!(current, View::ClusterDetail))
             || (matches!(target, View::Duplicates) && matches!(current, View::DuplicateDetail))
             || (matches!(target, View::Bursts) && matches!(current, View::BurstDetail))
             || (matches!(target, View::Search) && matches!(current, View::Cull));
 
-        let label_color = if matches!(app_theme, AppTheme::Light) {
-            if is_active {
-                iced::Color::from_rgb(0.1, 0.1, 0.1)
-            } else {
-                iced::Color::from_rgb(0.45, 0.45, 0.45)
-            }
-        } else if is_active {
-            Text::PRIMARY
+        let label_color = if is_active {
+            p.text_primary
         } else {
-            Text::SECONDARY
+            p.text_secondary
         };
 
         // Accent bar: 3px wide amber strip on the left for active items
@@ -103,7 +93,7 @@ impl Sidebar {
             .height(Length::Fill)
             .style(move |_theme: &iced::Theme| container::Style {
                 background: if is_active {
-                    Some(Accent::PRIMARY.into())
+                    Some(colors::DARK.accent_primary.into())
                 } else {
                     None
                 },
@@ -124,36 +114,19 @@ impl Sidebar {
         .align_y(iced::Alignment::Center)
         .height(36);
 
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let bg_active = p.bg_active;
+
         button(inner)
             .padding(0)
             .width(Length::Fill)
             .style(move |_theme: &iced::Theme, status| {
                 let background = match status {
-                    button::Status::Active if is_active => Some(
-                        if matches!(app_theme, AppTheme::Light) {
-                            iced::Color::from_rgb(0.92, 0.92, 0.92)
-                        } else {
-                            Backgrounds::ELEVATED
-                        }
-                        .into(),
-                    ),
+                    button::Status::Active if is_active => Some(bg_elevated.into()),
                     button::Status::Active => None,
-                    button::Status::Hovered => Some(
-                        if matches!(app_theme, AppTheme::Light) {
-                            iced::Color::from_rgb(0.94, 0.94, 0.94)
-                        } else {
-                            Backgrounds::HOVER
-                        }
-                        .into(),
-                    ),
-                    button::Status::Pressed => Some(
-                        if matches!(app_theme, AppTheme::Light) {
-                            iced::Color::from_rgb(0.90, 0.90, 0.90)
-                        } else {
-                            Backgrounds::ACTIVE
-                        }
-                        .into(),
-                    ),
+                    button::Status::Hovered => Some(bg_hover.into()),
+                    button::Status::Pressed => Some(bg_active.into()),
                     button::Status::Disabled => None,
                 };
 

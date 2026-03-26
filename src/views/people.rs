@@ -11,10 +11,11 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
 use crate::components::photo_grid::photo_grid_simple;
+use crate::config::AppTheme;
 use crate::db::FaceClusterRecord;
 use crate::models::Photo;
 use crate::services::FaceProcessingProgress;
-use crate::theme::colors::{Accent, Backgrounds, Border, Semantic, Text};
+use crate::theme::colors;
 
 /// People view component
 pub struct PeopleView;
@@ -31,8 +32,23 @@ impl PeopleView {
         merge_mode_active: bool,
         merge_selected: &[i64],
         ml_available: bool,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
-        let title = text("People").size(28).color(Text::PRIMARY);
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_hover = p.accent_hover;
+        let accent_muted = p.accent_muted;
+        let bg_primary = p.bg_primary;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+        let semantic_danger = p.semantic_danger;
+
+        let title = text("People").size(28).color(text_primary);
 
         // Processing status bar
         let status_bar: Element<'static, Message> = if processing_active {
@@ -45,12 +61,12 @@ impl PeopleView {
                 "Starting face processing...".to_string()
             };
 
-            let cancel_btn = button(text("Cancel").size(12).color(Text::PRIMARY))
+            let cancel_btn = button(text("Cancel").size(12).color(text_primary))
                 .padding(Padding::from([4, 12]))
-                .style(|_theme: &iced::Theme, status: button::Status| {
+                .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(iced::Color { a: 0.3, ..Semantic::DANGER }.into()),
-                        _ => Some(iced::Color { a: 0.15, ..Semantic::DANGER }.into()),
+                        button::Status::Hovered => Some(iced::Color { a: 0.3, ..semantic_danger }.into()),
+                        _ => Some(iced::Color { a: 0.15, ..semantic_danger }.into()),
                     };
                     button::Style {
                         background,
@@ -65,7 +81,7 @@ impl PeopleView {
 
             container(
                 row![
-                    text(progress_text).size(13).color(Accent::PRIMARY),
+                    text(progress_text).size(13).color(accent_primary),
                     Space::with_width(Length::Fill),
                     cancel_btn,
                 ]
@@ -73,8 +89,8 @@ impl PeopleView {
                     .align_y(Alignment::Center),
             )
             .padding(Padding::from([8, 16]))
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Accent::MUTED.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(accent_muted.into()),
                 border: iced::Border {
                     radius: 8.0.into(),
                     ..Default::default()
@@ -87,18 +103,18 @@ impl PeopleView {
             container(
                 text("Face models not installed. Run setup_assets script to enable face detection.")
                     .size(13)
-                    .color(Text::TERTIARY),
+                    .color(text_tertiary),
             )
             .padding(Padding::from([8, 16]))
             .into()
         } else {
             // "Detect Faces" button + "Merge" toggle button
-            let process_btn = button(text("Detect Faces").size(13).color(Text::PRIMARY))
+            let process_btn = button(text("Detect Faces").size(13).color(text_primary))
                 .padding(Padding::from([8, 16]))
-                .style(|_theme: &iced::Theme, status: button::Status| {
+                .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Accent::HOVER.into()),
-                        _ => Some(Accent::PRIMARY.into()),
+                        button::Status::Hovered => Some(accent_hover.into()),
+                        _ => Some(accent_primary.into()),
                     };
                     button::Style {
                         background,
@@ -116,23 +132,23 @@ impl PeopleView {
             } else {
                 "Merge"
             };
-            let merge_btn = button(text(merge_label).size(13).color(Text::PRIMARY))
+            let merge_btn = button(text(merge_label).size(13).color(text_primary))
                 .padding(Padding::from([8, 16]))
                 .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
                         _ => {
                             if merge_mode_active {
-                                Some(Accent::MUTED.into())
+                                Some(accent_muted.into())
                             } else {
-                                Some(Backgrounds::ELEVATED.into())
+                                Some(bg_elevated.into())
                             }
                         }
                     };
                     button::Style {
                         background,
                         border: iced::Border {
-                            color: Border::SUBTLE,
+                            color: border_subtle,
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -153,7 +169,7 @@ impl PeopleView {
         };
 
         if clusters.is_empty() && !processing_active {
-            return Self::empty_view_with_button(title, status_bar);
+            return Self::empty_view_with_button(title, status_bar, theme);
         }
 
         let subtitle = text(format!(
@@ -166,7 +182,7 @@ impl PeopleView {
             }
         ))
         .size(14)
-        .color(Text::SECONDARY);
+        .color(text_secondary);
 
         // Merge action bar (shown when merge mode is active and >=2 selected)
         let merge_action: Option<Element<'static, Message>> = if merge_mode_active {
@@ -175,13 +191,13 @@ impl PeopleView {
                 let merge_execute_btn = button(
                     text(format!("Merge Selected ({})", selected_count))
                         .size(13)
-                        .color(Text::PRIMARY),
+                        .color(text_primary),
                 )
                 .padding(Padding::from([8, 16]))
-                .style(|_theme: &iced::Theme, status: button::Status| {
+                .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Accent::HOVER.into()),
-                        _ => Some(Accent::PRIMARY.into()),
+                        button::Status::Hovered => Some(accent_hover.into()),
+                        _ => Some(accent_primary.into()),
                     };
                     button::Style {
                         background,
@@ -202,7 +218,7 @@ impl PeopleView {
                                 selected_count
                             ))
                             .size(13)
-                            .color(Accent::PRIMARY),
+                            .color(accent_primary),
                             Space::with_width(Length::Fill),
                             merge_execute_btn,
                         ]
@@ -210,8 +226,8 @@ impl PeopleView {
                     )
                     .padding(Padding::from([8, 16]))
                     .width(Length::Fill)
-                    .style(|_theme: &iced::Theme| container::Style {
-                        background: Some(Accent::MUTED.into()),
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(accent_muted.into()),
                         border: iced::Border {
                             radius: 8.0.into(),
                             ..Default::default()
@@ -225,12 +241,12 @@ impl PeopleView {
                     container(
                         text("Select 2 or more people to merge them")
                             .size(13)
-                            .color(Text::SECONDARY),
+                            .color(text_secondary),
                     )
                     .padding(Padding::from([8, 16]))
                     .width(Length::Fill)
-                    .style(|_theme: &iced::Theme| container::Style {
-                        background: Some(Accent::MUTED.into()),
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(accent_muted.into()),
                         border: iced::Border {
                             radius: 8.0.into(),
                             ..Default::default()
@@ -254,9 +270,9 @@ impl PeopleView {
             let is_editing = editing_cluster == Some(cluster.id);
             let is_selected = merge_selected_owned.contains(&cluster.id);
             let card = if merge_mode_active {
-                Self::person_card_merge(cluster, is_selected)
+                Self::person_card_merge(cluster, is_selected, theme)
             } else {
-                Self::person_card(cluster, is_editing, edit_name)
+                Self::person_card(cluster, is_editing, edit_name, theme)
             };
             current_row.push(card);
 
@@ -289,12 +305,12 @@ impl PeopleView {
         if let Some(err) = processing_error {
             content_children.push(Space::with_height(12).into());
             content_children.push(
-                container(text(err.to_string()).size(12).color(iced::Color::from_rgb(0.9, 0.4, 0.4)))
+                container(text(err.to_string()).size(12).color(semantic_danger))
                     .padding(Padding::from([8, 12]))
-                    .style(|_theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
-                            color: iced::Color::from_rgb(0.8, 0.3, 0.3),
+                            color: semantic_danger,
                             width: 1.0,
                             radius: 8.0.into(),
                         },
@@ -312,8 +328,8 @@ impl PeopleView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -323,7 +339,13 @@ impl PeopleView {
     fn empty_view_with_button(
         title: iced::widget::Text<'static>,
         status_bar: Element<'static, Message>,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let bg_primary = p.bg_primary;
+
         let content = column![
             title,
             Space::with_height(8),
@@ -331,11 +353,11 @@ impl PeopleView {
             Space::with_height(32),
             text("Faces will appear here after processing.")
                 .size(14)
-                .color(Text::SECONDARY),
+                .color(text_secondary),
             Space::with_height(8),
             text("Click \"Detect Faces\" to start scanning your photos for faces.")
                 .size(14)
-                .color(Text::TERTIARY),
+                .color(text_tertiary),
         ]
         .align_x(Alignment::Start)
         .padding(32);
@@ -343,8 +365,8 @@ impl PeopleView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -357,22 +379,32 @@ impl PeopleView {
         editing: bool,
         edit_name: &str,
         columns: usize,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let bg_primary = p.bg_primary;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+
         let cluster_id = cluster.id;
 
         // Back button
         let back_btn = button(
             row![
-                text("\u{2190}").size(16).color(Text::PRIMARY),
-                text("People").size(14).color(Text::SECONDARY)
+                text("\u{2190}").size(16).color(text_primary),
+                text("People").size(14).color(text_secondary)
             ]
             .spacing(8)
             .align_y(Alignment::Center),
         )
         .padding(Padding::from([8, 12]))
-        .style(|_theme: &iced::Theme, status: button::Status| {
+        .style(move |_theme: &iced::Theme, status: button::Status| {
             let background = match status {
-                button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                button::Status::Hovered => Some(bg_hover.into()),
                 _ => None,
             };
             button::Style {
@@ -398,8 +430,8 @@ impl PeopleView {
                 )
                 .width(64)
                 .height(64)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Backgrounds::ELEVATED.into()),
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg_elevated.into()),
                     border: iced::Border {
                         radius: 32.0.into(),
                         ..Default::default()
@@ -408,13 +440,13 @@ impl PeopleView {
                 })
                 .into()
             } else {
-                container(text("?").size(24).color(Text::SECONDARY))
+                container(text("?").size(24).color(text_secondary))
                     .width(64)
                     .height(64)
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
-                    .style(|_theme: &iced::Theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 32.0.into(),
                             ..Default::default()
@@ -439,11 +471,11 @@ impl PeopleView {
                 .width(Length::Fixed(300.0)),]
             .into()
         } else {
-            button(text(display_name.clone()).size(24).color(Text::PRIMARY))
+            button(text(display_name.clone()).size(24).color(text_primary))
                 .padding(Padding::from([4, 8]))
-                .style(|_theme: &iced::Theme, status: button::Status| {
+                .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
                         _ => None,
                     };
                     button::Style {
@@ -463,19 +495,19 @@ impl PeopleView {
             if photos.len() == 1 { "photo" } else { "photos" }
         ))
         .size(14)
-        .color(Text::SECONDARY);
+        .color(text_secondary);
 
         // Photo grid
         let grid: Element<'static, Message> = if photos.is_empty() {
             container(
                 text("No photos found for this person.")
                     .size(14)
-                    .color(Text::TERTIARY),
+                    .color(text_tertiary),
             )
             .padding(32)
             .into()
         } else {
-            photo_grid_simple(photos, 160.0, columns)
+            photo_grid_simple(photos, 160.0, columns, theme)
         };
 
         let content = column![
@@ -495,8 +527,8 @@ impl PeopleView {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg_primary.into()),
                 ..Default::default()
             })
             .into()
@@ -506,7 +538,19 @@ impl PeopleView {
     fn person_card_merge(
         cluster: &FaceClusterRecord,
         is_selected: bool,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let accent_primary = p.accent_primary;
+        let accent_muted = p.accent_muted;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+
         let cluster_id = cluster.id;
 
         // Face thumbnail — same as normal card
@@ -521,8 +565,8 @@ impl PeopleView {
                 )
                 .width(80)
                 .height(80)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Backgrounds::ELEVATED.into()),
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg_elevated.into()),
                     border: iced::Border {
                         radius: 40.0.into(),
                         ..Default::default()
@@ -538,13 +582,13 @@ impl PeopleView {
                     .map(|c| c.to_uppercase().to_string())
                     .unwrap_or_else(|| "?".to_string());
 
-                container(text(initials).size(28).color(Text::SECONDARY))
+                container(text(initials).size(28).color(text_secondary))
                     .width(80)
                     .height(80)
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
-                    .style(|_theme: &iced::Theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 40.0.into(),
                             ..Default::default()
@@ -556,9 +600,9 @@ impl PeopleView {
 
         // Selection indicator
         let check_indicator = if is_selected {
-            text("\u{2713}").size(16).color(Accent::PRIMARY) // checkmark
+            text("\u{2713}").size(16).color(accent_primary) // checkmark
         } else {
-            text("\u{25CB}").size(16).color(Text::TERTIARY) // empty circle
+            text("\u{25CB}").size(16).color(text_tertiary) // empty circle
         };
 
         let display_name = cluster
@@ -570,7 +614,7 @@ impl PeopleView {
             row![Space::with_width(Length::Fill), check_indicator,],
             face_circle,
             Space::with_height(8),
-            text(display_name).size(14).color(Text::PRIMARY),
+            text(display_name).size(14).color(text_primary),
             text(format!(
                 "{} {}",
                 cluster.face_count,
@@ -581,15 +625,15 @@ impl PeopleView {
                 }
             ))
             .size(12)
-            .color(Text::TERTIARY),
+            .color(text_tertiary),
         ]
         .spacing(4)
         .align_x(Alignment::Center);
 
         let border_color = if is_selected {
-            Accent::PRIMARY
+            accent_primary
         } else {
-            Border::SUBTLE
+            border_subtle
         };
         let border_width = if is_selected { 2.0 } else { 1.0 };
 
@@ -600,12 +644,12 @@ impl PeopleView {
         )
         .style(move |_theme: &iced::Theme, status: button::Status| {
             let background = match status {
-                button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                button::Status::Hovered => Some(bg_hover.into()),
                 _ => {
                     if is_selected {
-                        Some(Accent::MUTED.into())
+                        Some(accent_muted.into())
                     } else {
-                        Some(Backgrounds::ELEVATED.into())
+                        Some(bg_elevated.into())
                     }
                 }
             };
@@ -628,7 +672,17 @@ impl PeopleView {
         cluster: &FaceClusterRecord,
         is_editing: bool,
         edit_name: &str,
+        theme: AppTheme,
     ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+        let text_tertiary = p.text_tertiary;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+
         let cluster_id = cluster.id;
 
         // Face thumbnail — show actual face crop if available, otherwise initials
@@ -643,8 +697,8 @@ impl PeopleView {
                 )
                 .width(80)
                 .height(80)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Backgrounds::ELEVATED.into()),
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg_elevated.into()),
                     border: iced::Border {
                         radius: 40.0.into(), // Circular
                         ..Default::default()
@@ -661,13 +715,13 @@ impl PeopleView {
                     .map(|c| c.to_uppercase().to_string())
                     .unwrap_or_else(|| "?".to_string());
 
-                container(text(initials).size(28).color(Text::SECONDARY))
+                container(text(initials).size(28).color(text_secondary))
                     .width(80)
                     .height(80)
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
-                    .style(|_theme: &iced::Theme| container::Style {
-                        background: Some(Backgrounds::ELEVATED.into()),
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(bg_elevated.into()),
                         border: iced::Border {
                             radius: 40.0.into(), // Circular
                             ..Default::default()
@@ -692,11 +746,11 @@ impl PeopleView {
                 .clone()
                 .unwrap_or_else(|| format!("Unknown Person {}", cluster.id));
 
-            button(text(display_name).size(14).color(Text::PRIMARY))
+            button(text(display_name).size(14).color(text_primary))
                 .padding(Padding::from([4, 8]))
-                .style(|_theme: &iced::Theme, status: button::Status| {
+                .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(Backgrounds::HOVER.into()),
+                        button::Status::Hovered => Some(bg_hover.into()),
                         _ => None,
                     };
                     button::Style {
@@ -720,7 +774,7 @@ impl PeopleView {
             }
         ))
         .size(12)
-        .color(Text::TERTIARY);
+        .color(text_tertiary);
 
         let card_content = column![face_circle, Space::with_height(12), name_element, count,]
             .spacing(4)
@@ -731,15 +785,15 @@ impl PeopleView {
                 .padding(16)
                 .width(Length::Fixed(160.0)),
         )
-        .style(|_theme: &iced::Theme, status: button::Status| {
+        .style(move |_theme: &iced::Theme, status: button::Status| {
             let background = match status {
-                button::Status::Hovered => Some(Backgrounds::HOVER.into()),
-                _ => Some(Backgrounds::ELEVATED.into()),
+                button::Status::Hovered => Some(bg_hover.into()),
+                _ => Some(bg_elevated.into()),
             };
             button::Style {
                 background,
                 border: iced::Border {
-                    color: Border::SUBTLE,
+                    color: border_subtle,
                     width: 1.0,
                     radius: 12.0.into(),
                 },

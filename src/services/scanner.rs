@@ -16,6 +16,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::db::photo_repo::{PhotoInsert, PhotoRepo};
 use crate::db::Database;
 use crate::services::exif_extractor::ExifExtractor;
+use crate::services::GeocodingService;
 
 /// Supported image extensions
 const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "webp"];
@@ -125,6 +126,14 @@ fn run_scan(
 
     let repo = PhotoRepo::new(&database.conn);
 
+    // Initialize geocoder for inline reverse geocoding during scan
+    let geonames_path = crate::db::geonames::geonames_db_path();
+    let geocoder = if geonames_path.exists() {
+        GeocodingService::new(&geonames_path).ok()
+    } else {
+        None
+    };
+
     // Walk the directory tree
     let walker = WalkDir::new(&root_path)
         .follow_links(false)
@@ -214,6 +223,17 @@ fn run_scan(
         // Extract EXIF metadata
         let exif = ExifExtractor::extract(entry.path());
 
+        // Reverse-geocode GPS coordinates inline (~1ms per lookup)
+        let (location_city, location_country) =
+            if let (Some(lat), Some(lon), Some(geo)) = (exif.gps_latitude, exif.gps_longitude, geocoder.as_ref()) {
+                match geo.reverse_geocode(lat, lon) {
+                    Some(result) => (Some(result.city), Some(result.country)),
+                    None => (None, None),
+                }
+            } else {
+                (None, None)
+            };
+
         let photo_insert = PhotoInsert {
             relative_path,
             file_name: entry.file_name().to_string_lossy().to_string(),
@@ -224,6 +244,8 @@ fn run_scan(
             date_taken_source: exif.date_taken_source,
             gps_latitude: exif.gps_latitude,
             gps_longitude: exif.gps_longitude,
+            location_city,
+            location_country,
             camera_make: exif.camera_make,
             camera_model: exif.camera_model,
             iso: exif.iso,

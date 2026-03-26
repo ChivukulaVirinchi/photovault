@@ -1,161 +1,121 @@
 //! Color Palette for PhotoVault
 //!
-//! Design Philosophy: "Editorial Dark"
+//! Design Philosophy: "Editorial Dark" + Clean Light
 //! - Deep, warm dark backgrounds that let photos breathe
 //! - Soft text hierarchy — whispers, not shouts
 //! - Amber accent used surgically — only for active/interactive moments
 //! - Every surface is intentional: base → elevated → active
+//! - Light theme mirrors the hierarchy with warm paper tones
 
 use iced::Color;
 
-/// Background colors — warm, deep neutrals with subtle layering
-pub struct Backgrounds;
+use crate::config::AppTheme;
 
-impl Backgrounds {
-    /// Base canvas — the deepest layer
-    pub const PRIMARY: Color = Color::from_rgb(
-        0x0F as f32 / 255.0,
-        0x0F as f32 / 255.0,
-        0x11 as f32 / 255.0,
-    ); // #0F0F11
+/// Complete color palette for a theme variant
+pub struct Palette {
+    // Backgrounds
+    pub bg_primary: Color,
+    pub bg_secondary: Color,
+    pub bg_elevated: Color,
+    pub bg_hover: Color,
+    pub bg_selected: Color,
+    pub bg_active: Color,
+    pub bg_well: Color,
 
-    /// Sidebar and panels — one step up
-    pub const SECONDARY: Color = Color::from_rgb(
-        0x16 as f32 / 255.0,
-        0x16 as f32 / 255.0,
-        0x19 as f32 / 255.0,
-    ); // #161619
+    // Text
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub text_tertiary: Color,
 
-    /// Cards and elevated surfaces
-    pub const ELEVATED: Color = Color::from_rgb(
-        0x1E as f32 / 255.0,
-        0x1E as f32 / 255.0,
-        0x22 as f32 / 255.0,
-    ); // #1E1E22
+    // Accent
+    pub accent_primary: Color,
+    pub accent_hover: Color,
+    pub accent_muted: Color,
 
-    /// Hover state — subtle lift
-    pub const HOVER: Color = Color::from_rgb(
-        0x28 as f32 / 255.0,
-        0x28 as f32 / 255.0,
-        0x2E as f32 / 255.0,
-    ); // #28282E
+    // Semantic
+    pub semantic_success: Color,
+    pub semantic_warning: Color,
+    pub semantic_danger: Color,
 
-    /// Selected/highlighted state
-    pub const SELECTED: Color = Color::from_rgb(
-        0x24 as f32 / 255.0,
-        0x24 as f32 / 255.0,
-        0x2A as f32 / 255.0,
-    ); // #24242A
-
-    /// Active/pressed state
-    pub const ACTIVE: Color = Color::from_rgb(
-        0x30 as f32 / 255.0,
-        0x30 as f32 / 255.0,
-        0x38 as f32 / 255.0,
-    ); // #303038
-
-    /// Surface for input fields and wells
-    pub const WELL: Color = Color::from_rgb(
-        0x0C as f32 / 255.0,
-        0x0C as f32 / 255.0,
-        0x0E as f32 / 255.0,
-    ); // #0C0C0E
+    // Border
+    pub border_subtle: Color,
+    pub border_visible: Color,
 }
 
-/// Text colors — warm whites with careful hierarchy
-pub struct Text;
-
-impl Text {
-    /// Primary text — warm, not harsh white
-    pub const PRIMARY: Color = Color::from_rgb(
-        0xEC as f32 / 255.0,
-        0xEC as f32 / 255.0,
-        0xEA as f32 / 255.0,
-    ); // #ECECEA
-
-    /// Secondary text — soft gray
-    pub const SECONDARY: Color = Color::from_rgb(
-        0x8A as f32 / 255.0,
-        0x8A as f32 / 255.0,
-        0x8E as f32 / 255.0,
-    ); // #8A8A8E
-
-    /// Tertiary/disabled — barely there
-    pub const TERTIARY: Color = Color::from_rgb(
-        0x55 as f32 / 255.0,
-        0x55 as f32 / 255.0,
-        0x5A as f32 / 255.0,
-    ); // #55555A
+/// Helper: build an RGB color from hex bytes
+const fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
 }
 
-/// Accent colors — warm amber, used sparingly
-pub struct Accent;
-
-impl Accent {
-    /// Primary accent — warm amber gold
-    pub const PRIMARY: Color = Color::from_rgb(
-        0xD4 as f32 / 255.0,
-        0x9E as f32 / 255.0,
-        0x3C as f32 / 255.0,
-    ); // #D49E3C
-
-    /// Accent hover — lighter amber
-    pub const HOVER: Color = Color::from_rgb(
-        0xE0 as f32 / 255.0,
-        0xAE as f32 / 255.0,
-        0x50 as f32 / 255.0,
-    ); // #E0AE50
-
-    /// Accent muted — for subtle tinted backgrounds
-    pub const MUTED: Color = Color {
-        r: 0xD4 as f32 / 255.0,
-        g: 0x9E as f32 / 255.0,
-        b: 0x3C as f32 / 255.0,
-        a: 0.10,
-    }; // #D49E3C at 10%
+/// Helper: build an RGBA color from hex bytes + alpha
+const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
+    Color {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a,
+    }
 }
 
-/// Semantic colors
-pub struct Semantic;
+// ── Dark Palette ───────────────────────────────────────────────
 
-impl Semantic {
-    /// Success — muted sage green
-    pub const SUCCESS: Color = Color::from_rgb(
-        0x5C as f32 / 255.0,
-        0xB8 as f32 / 255.0,
-        0x85 as f32 / 255.0,
-    ); // #5CB885
+pub static DARK: Palette = Palette {
+    bg_primary:    rgb(0x0F, 0x0F, 0x11), // #0F0F11
+    bg_secondary:  rgb(0x16, 0x16, 0x19), // #161619
+    bg_elevated:   rgb(0x1E, 0x1E, 0x22), // #1E1E22
+    bg_hover:      rgb(0x28, 0x28, 0x2E), // #28282E
+    bg_selected:   rgb(0x24, 0x24, 0x2A), // #24242A
+    bg_active:     rgb(0x30, 0x30, 0x38), // #303038
+    bg_well:       rgb(0x0C, 0x0C, 0x0E), // #0C0C0E
 
-    /// Warning — soft gold
-    pub const WARNING: Color = Color::from_rgb(
-        0xD4 as f32 / 255.0,
-        0xB0 as f32 / 255.0,
-        0x6A as f32 / 255.0,
-    ); // #D4B06A
+    text_primary:   rgb(0xEC, 0xEC, 0xEA), // #ECECEA
+    text_secondary: rgb(0x8A, 0x8A, 0x8E), // #8A8A8E
+    text_tertiary:  rgb(0x55, 0x55, 0x5A), // #55555A
 
-    /// Danger — muted rose
-    pub const DANGER: Color = Color::from_rgb(
-        0xC4 as f32 / 255.0,
-        0x4E as f32 / 255.0,
-        0x52 as f32 / 255.0,
-    ); // #C44E52
+    accent_primary: rgb(0xD4, 0x9E, 0x3C), // #D49E3C
+    accent_hover:   rgb(0xE0, 0xAE, 0x50), // #E0AE50
+    accent_muted:   rgba(0xD4, 0x9E, 0x3C, 0.10),
+
+    semantic_success: rgb(0x5C, 0xB8, 0x85), // #5CB885
+    semantic_warning: rgb(0xD4, 0xB0, 0x6A), // #D4B06A
+    semantic_danger:  rgb(0xC4, 0x4E, 0x52), // #C44E52
+
+    border_subtle:  rgb(0x22, 0x22, 0x28), // #222228
+    border_visible: rgb(0x34, 0x34, 0x3C), // #34343C
+};
+
+// ── Light Palette ──────────────────────────────────────────────
+
+pub static LIGHT: Palette = Palette {
+    bg_primary:    rgb(0xFA, 0xFA, 0xF9), // #FAFAF9 warm white
+    bg_secondary:  rgb(0xF2, 0xF2, 0xF0), // #F2F2F0 sidebar panels
+    bg_elevated:   rgb(0xFF, 0xFF, 0xFF), // #FFFFFF cards
+    bg_hover:      rgb(0xEB, 0xEB, 0xE8), // #EBEBE8
+    bg_selected:   rgb(0xE5, 0xE5, 0xE2), // #E5E5E2
+    bg_active:     rgb(0xDF, 0xDF, 0xDC), // #DFDFDC
+    bg_well:       rgb(0xF5, 0xF5, 0xF3), // #F5F5F3 input fields
+
+    text_primary:   rgb(0x1A, 0x1A, 0x1C), // #1A1A1C
+    text_secondary: rgb(0x6B, 0x6B, 0x70), // #6B6B70
+    text_tertiary:  rgb(0x9A, 0x9A, 0x9F), // #9A9A9F
+
+    accent_primary: rgb(0xB8, 0x86, 0x2D), // #B8862D deeper amber for contrast
+    accent_hover:   rgb(0xA0, 0x74, 0x22), // #A07422
+    accent_muted:   rgba(0xB8, 0x86, 0x2D, 0.08),
+
+    semantic_success: rgb(0x2E, 0x8B, 0x57), // #2E8B57
+    semantic_warning: rgb(0xB8, 0x86, 0x2D), // #B8862D
+    semantic_danger:  rgb(0xC0, 0x39, 0x2B), // #C0392B
+
+    border_subtle:  rgb(0xE0, 0xE0, 0xDD), // #E0E0DD
+    border_visible: rgb(0xCC, 0xCC, 0xC8), // #CCCCC8
+};
+
+/// Get the correct palette for the given theme
+pub fn palette(theme: AppTheme) -> &'static Palette {
+    match theme {
+        AppTheme::Dark => &DARK,
+        AppTheme::Light | AppTheme::System => &LIGHT,
+    }
 }
 
-/// Border colors — barely visible separation
-pub struct Border;
-
-impl Border {
-    /// Subtle border — the default
-    pub const SUBTLE: Color = Color::from_rgb(
-        0x22 as f32 / 255.0,
-        0x22 as f32 / 255.0,
-        0x28 as f32 / 255.0,
-    ); // #222228
-
-    /// Visible border — for interactive elements
-    pub const VISIBLE: Color = Color::from_rgb(
-        0x34 as f32 / 255.0,
-        0x34 as f32 / 255.0,
-        0x3C as f32 / 255.0,
-    ); // #34343C
-}

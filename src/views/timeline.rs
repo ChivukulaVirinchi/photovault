@@ -9,8 +9,9 @@ use iced::{Alignment, Element, Length};
 
 use crate::app::Message;
 use crate::components::photo_grid::{day_header, photo_grid_simple};
+use crate::config::AppTheme;
 use crate::models::Photo;
-use crate::theme::colors::{Backgrounds, Text};
+use crate::theme::colors;
 
 /// Group of photos taken on the same date
 #[derive(Debug, Clone)]
@@ -25,9 +26,13 @@ pub struct TimelineView;
 
 impl TimelineView {
     /// Render the timeline view with photos
-    pub fn view_with_photos(photos: &[Photo], columns: usize) -> Element<'static, Message> {
+    pub fn view_with_photos(
+        photos: &[Photo],
+        columns: usize,
+        theme: AppTheme,
+    ) -> Element<'static, Message> {
         if photos.is_empty() {
-            return Self::empty_view();
+            return Self::empty_view(theme);
         }
 
         // Group photos by date
@@ -42,10 +47,11 @@ impl TimelineView {
                 &group.display_date,
                 group.location.as_deref(),
                 group.photos.len(),
+                theme,
             ));
 
             // Add photo grid for this day with dynamic column count
-            timeline_items.push(photo_grid_simple(&group.photos, 160.0, columns));
+            timeline_items.push(photo_grid_simple(&group.photos, 160.0, columns, theme));
         }
 
         let content = Column::with_children(timeline_items)
@@ -56,31 +62,34 @@ impl TimelineView {
     }
 
     /// Render empty timeline (backward compat, also used when no photos)
-    pub fn view() -> Element<'static, Message> {
-        Self::empty_view()
+    pub fn view(theme: AppTheme) -> Element<'static, Message> {
+        Self::empty_view(theme)
     }
 
     /// Empty state view
-    fn empty_view() -> Element<'static, Message> {
+    fn empty_view(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+
         let content = column![
-            text("Timeline").size(28).color(Text::PRIMARY),
+            text("Timeline").size(28).color(p.text_primary),
             Space::with_height(16),
             text("Your photos will appear here after indexing.")
                 .size(14)
-                .color(Text::SECONDARY),
+                .color(p.text_secondary),
             Space::with_height(32),
             text("Photos are organized by date, newest first.")
                 .size(14)
-                .color(Text::TERTIARY),
+                .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)
         .padding(32);
 
+        let bg = p.bg_primary;
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(Backgrounds::PRIMARY.into()),
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg.into()),
                 ..Default::default()
             })
             .into()
