@@ -105,6 +105,78 @@ impl FaceDetector {
         faces
     }
 
+    /// Detect faces with adaptive multi-scale fallback for high-res images.
+    ///
+    /// Pass 1: normal full-frame detection.
+    /// Pass 2 (fallback): overlapping high-res tiles if pass 1 found no faces
+    /// and image is large, to recover small/profile faces lost by global resizing.
+    pub fn detect_adaptive(&mut self, image: &DynamicImage) -> Vec<DetectedFace> {
+        let first_pass = self.detect(image);
+        if !first_pass.is_empty() {
+            return first_pass;
+        }
+
+        let (orig_w, orig_h) = image.dimensions();
+        if orig_w.max(orig_h) <= 2048 {
+            return first_pass;
+        }
+
+        let tile = 1600u32;
+        let step = 1200u32; // overlap for boundary faces
+        let mut all_faces = Vec::new();
+
+        let max_x = orig_w.saturating_sub(1);
+        let max_y = orig_h.saturating_sub(1);
+
+        let mut y = 0u32;
+        while y <= max_y {
+            let mut x = 0u32;
+            while x <= max_x {
+                let crop_w = tile.min(orig_w.saturating_sub(x)).max(1);
+                let crop_h = tile.min(orig_h.saturating_sub(y)).max(1);
+                let crop = image.crop_imm(x, y, crop_w, crop_h);
+
+                let mut local = self.detect(&crop);
+                if !local.is_empty() {
+                    for face in &mut local {
+                        let (bx, by, bw, bh) = face.bbox;
+                        let gx = bx + x as f32;
+                        let gy = by + y as f32;
+                        face.bbox = (gx, gy, bw, bh);
+                        face.bbox_normalized = (
+                            gx / orig_w as f32,
+                            gy / orig_h as f32,
+                            bw / orig_w as f32,
+                            bh / orig_h as f32,
+                        );
+
+                        for lm in &mut face.landmarks {
+                            lm.0 += x as f32;
+                            lm.1 += y as f32;
+                        }
+                    }
+                    all_faces.extend(local);
+                }
+
+                if x + step >= orig_w {
+                    break;
+                }
+                x += step;
+            }
+
+            if y + step >= orig_h {
+                break;
+            }
+            y += step;
+        }
+
+        if all_faces.is_empty() {
+            return all_faces;
+        }
+
+        self.non_max_suppression(all_faces)
+    }
+
     /// Preprocess image for SCRFD: resize to 640x640, normalize, produce NCHW vec
     fn preprocess(&self, image: &DynamicImage) -> Vec<f32> {
         let (target_w, target_h) = self.input_size;

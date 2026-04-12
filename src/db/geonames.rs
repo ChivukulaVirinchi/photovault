@@ -14,12 +14,16 @@ pub fn geonames_db_path() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let p = dir.join("data").join("geonames.db");
-            if p.exists() { return p; }
+            if p.exists() {
+                return p;
+            }
         }
     }
     // 2. Relative to CWD
     let cwd = PathBuf::from("data").join("geonames.db");
-    if cwd.exists() { return cwd; }
+    if cwd.exists() {
+        return cwd;
+    }
     // 3. Fallback (may not exist, caller checks)
     cwd
 }

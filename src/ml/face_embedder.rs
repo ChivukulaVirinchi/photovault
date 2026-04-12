@@ -184,5 +184,4 @@ mod tests {
         let bytes = vec![0u8; 100];
         assert!(FaceEmbedding::from_bytes(&bytes).is_none());
     }
-
 }

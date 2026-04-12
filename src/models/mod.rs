@@ -2,4 +2,4 @@
 
 pub mod photo;
 
-pub use photo::Photo;
+pub use photo::{ContentCategory, Photo};

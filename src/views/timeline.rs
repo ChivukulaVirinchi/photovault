@@ -6,6 +6,7 @@
 use chrono::{DateTime, Datelike, Utc};
 use iced::widget::{column, container, scrollable, text, Column, Space};
 use iced::{Alignment, Element, Length};
+use std::collections::HashSet;
 
 use crate::app::Message;
 use crate::components::photo_grid::{day_header, photo_grid_simple};
@@ -16,6 +17,7 @@ use crate::theme::colors;
 /// Group of photos taken on the same date
 #[derive(Debug, Clone)]
 pub struct DateGroup {
+    pub day_key: String,
     pub display_date: String,
     pub location: Option<String>,
     pub photos: Vec<Photo>,
@@ -29,6 +31,9 @@ impl TimelineView {
     pub fn view_with_photos(
         photos: &[Photo],
         columns: usize,
+        selected_photo_ids: &HashSet<i64>,
+        hovered_photo_id: Option<i64>,
+        hovered_day_key: Option<&str>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         if photos.is_empty() {
@@ -42,16 +47,32 @@ impl TimelineView {
         let mut timeline_items: Vec<Element<'static, Message>> = Vec::new();
 
         for group in groups {
+            let selected_count_for_day = group
+                .photos
+                .iter()
+                .filter(|p| selected_photo_ids.contains(&p.id))
+                .count();
+
             // Add day header
             timeline_items.push(day_header(
+                &group.day_key,
                 &group.display_date,
                 group.location.as_deref(),
                 group.photos.len(),
+                selected_count_for_day,
+                hovered_day_key == Some(group.day_key.as_str()),
                 theme,
             ));
 
             // Add photo grid for this day with dynamic column count
-            timeline_items.push(photo_grid_simple(&group.photos, 160.0, columns, theme));
+            timeline_items.push(photo_grid_simple(
+                &group.photos,
+                160.0,
+                columns,
+                Some(selected_photo_ids),
+                hovered_photo_id,
+                theme,
+            ));
         }
 
         let content = Column::with_children(timeline_items)
@@ -115,6 +136,7 @@ impl TimelineView {
                 .unwrap_or_else(|| "Unknown Date".to_string());
 
             let group = groups.entry(date_key.clone()).or_insert_with(|| DateGroup {
+                day_key: date_key.clone(),
                 display_date,
                 location: photo.location_string(),
                 photos: Vec::new(),

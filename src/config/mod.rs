@@ -27,7 +27,7 @@ impl Default for AppConfig {
             theme: AppTheme::Dark,
             thumbnail_size: 300,
             face_detection_confidence: 0.35,
-            face_clustering_threshold: 0.45,
+            face_clustering_threshold: 0.35,
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
@@ -87,7 +87,6 @@ impl AppConfig {
             self.remembered_drives.push(path);
         }
     }
-
 }
 
 /// Theme setting.

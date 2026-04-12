@@ -3,8 +3,8 @@
 //! Creates test images, generates thumbnails at each size,
 //! and verifies output quality and dimensions.
 
-use photovault::services::thumbnail::{ThumbnailService, ThumbnailSize};
 use image::{DynamicImage, ImageBuffer, Rgb};
+use photovault::services::thumbnail::{ThumbnailService, ThumbnailSize};
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -28,16 +28,34 @@ fn test_thumbnail_generation_all_sizes() {
 
     let service = ThumbnailService::new(drive_root, 1.0).unwrap();
 
-    for size in [ThumbnailSize::Small, ThumbnailSize::Medium, ThumbnailSize::Large] {
-        let result = service.generate_thumbnail(&image_path, "testhash123", size);
-        assert!(result.is_ok(), "Generation failed for {:?}: {:?}", size, result.err());
+    for size in [
+        ThumbnailSize::Small,
+        ThumbnailSize::Medium,
+        ThumbnailSize::Large,
+    ] {
+        let result = service.generate_thumbnail(&image_path, "testhash123", 1, size);
+        assert!(
+            result.is_ok(),
+            "Generation failed for {:?}: {:?}",
+            size,
+            result.err()
+        );
 
         let thumb_path = result.unwrap();
-        assert!(thumb_path.exists(), "Thumbnail file should exist for {:?}", size);
+        assert!(
+            thumb_path.exists(),
+            "Thumbnail file should exist for {:?}",
+            size
+        );
 
         // Check file size is reasonable (>5KB for a real thumbnail)
         let file_size = std::fs::metadata(&thumb_path).unwrap().len();
-        assert!(file_size > 5000, "Thumbnail {:?} too small: {} bytes", size, file_size);
+        assert!(
+            file_size > 5000,
+            "Thumbnail {:?} too small: {} bytes",
+            size,
+            file_size
+        );
 
         // Decode and check dimensions
         let thumb_img = image::open(&thumb_path).unwrap();
@@ -46,12 +64,18 @@ fn test_thumbnail_generation_all_sizes() {
         assert!(
             w <= max_dim && h <= max_dim,
             "Thumbnail {:?} exceeds max dim {}: {}x{}",
-            size, max_dim, w, h
+            size,
+            max_dim,
+            w,
+            h
         );
         assert!(
             w >= max_dim / 2 || h >= max_dim / 2,
             "Thumbnail {:?} too small: {}x{} (expected at least {} on one side)",
-            size, w, h, max_dim / 2
+            size,
+            w,
+            h,
+            max_dim / 2
         );
     }
 }
@@ -65,11 +89,15 @@ fn test_thumbnail_caching() {
     let service = ThumbnailService::new(temp.path(), 1.0).unwrap();
 
     // Generate first time
-    let path1 = service.generate_thumbnail(&image_path, "cachehash", ThumbnailSize::Small).unwrap();
+    let path1 = service
+        .generate_thumbnail(&image_path, "cachehash", 1, ThumbnailSize::Small)
+        .unwrap();
     let mtime1 = std::fs::metadata(&path1).unwrap().modified().unwrap();
 
     // Generate again - should return cached (same path, not regenerated)
-    let path2 = service.generate_thumbnail(&image_path, "cachehash", ThumbnailSize::Small).unwrap();
+    let path2 = service
+        .generate_thumbnail(&image_path, "cachehash", 1, ThumbnailSize::Small)
+        .unwrap();
     let mtime2 = std::fs::metadata(&path2).unwrap().modified().unwrap();
 
     assert_eq!(path1, path2);
@@ -85,12 +113,17 @@ fn test_thumbnail_path_versioning() {
     let image_path = temp.path().join("photo.jpg");
     create_test_jpeg(&image_path, 800, 600);
 
-    let result = service.generate_thumbnail(&image_path, "versionhash", ThumbnailSize::Small).unwrap();
+    let result = service
+        .generate_thumbnail(&image_path, "versionhash", 1, ThumbnailSize::Small)
+        .unwrap();
     let path_str = result.to_string_lossy().to_string();
 
     // Should contain "v2" in path
-    assert!(path_str.contains("/v2/") || path_str.contains("\\v2\\"),
-        "Thumbnail path should include v2 version: {}", path_str);
+    assert!(
+        path_str.contains("/v2/") || path_str.contains("\\v2\\"),
+        "Thumbnail path should include v2 version: {}",
+        path_str
+    );
 }
 
 #[test]
@@ -108,7 +141,7 @@ fn test_thumbnail_with_small_image() {
     create_test_jpeg(&image_path, 100, 80);
 
     let service = ThumbnailService::new(temp.path(), 1.0).unwrap();
-    let result = service.generate_thumbnail(&image_path, "smallhash", ThumbnailSize::Small);
+    let result = service.generate_thumbnail(&image_path, "smallhash", 1, ThumbnailSize::Small);
 
     // Should still succeed (upscale or keep original size)
     assert!(result.is_ok());
@@ -123,7 +156,7 @@ fn test_corrupt_file_handling() {
     std::fs::write(&bad_path, b"not a real jpeg file").unwrap();
 
     let service = ThumbnailService::new(temp.path(), 1.0).unwrap();
-    let result = service.generate_thumbnail(&bad_path, "badhash", ThumbnailSize::Small);
+    let result = service.generate_thumbnail(&bad_path, "badhash", 1, ThumbnailSize::Small);
 
     // Should return an error, not panic
     assert!(result.is_err());
@@ -135,7 +168,7 @@ fn test_nonexistent_file_handling() {
     let missing_path = temp.path().join("does_not_exist.jpg");
 
     let service = ThumbnailService::new(temp.path(), 1.0).unwrap();
-    let result = service.generate_thumbnail(&missing_path, "missinghash", ThumbnailSize::Small);
+    let result = service.generate_thumbnail(&missing_path, "missinghash", 1, ThumbnailSize::Small);
 
     // Should return an error, not panic
     assert!(result.is_err());
@@ -149,13 +182,17 @@ fn test_load_existing_thumbnails() {
     // Generate a thumbnail
     let image_path = temp.path().join("photo.jpg");
     create_test_jpeg(&image_path, 1000, 750);
-    service.generate_thumbnail(&image_path, "existhash", ThumbnailSize::Small).unwrap();
+    service
+        .generate_thumbnail(&image_path, "existhash", 1, ThumbnailSize::Small)
+        .unwrap();
 
     // Create a new service and load existing thumbnails
     let service2 = ThumbnailService::new(temp.path(), 1.0).unwrap();
     service2.load_existing_thumbnails().unwrap();
 
     // The cached thumbnail should be found without regeneration
-    let result = service2.generate_thumbnail(&image_path, "existhash", ThumbnailSize::Small).unwrap();
+    let result = service2
+        .generate_thumbnail(&image_path, "existhash", 1, ThumbnailSize::Small)
+        .unwrap();
     assert!(result.exists());
 }

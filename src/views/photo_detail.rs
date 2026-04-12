@@ -32,19 +32,20 @@ impl PhotoDetailView {
         let info_btn = Self::tool_btn("Info", Message::ToggleMetadataPanel, p);
         let trash_btn = {
             let danger = p.semantic_danger;
-            button(
-                text("Delete").size(11).color(danger),
-            )
-            .padding(Padding::from([5, 12]))
-            .style(move |_t: &iced::Theme, s| button::Style {
-                background: match s {
-                    button::Status::Hovered => Some(iced::Color { a: 0.12, ..danger }.into()),
-                    _ => None,
-                },
-                border: iced::Border { radius: 6.0.into(), ..Default::default() },
-                ..Default::default()
-            })
-            .on_press(Message::TrashPhotos(vec![photo_id]))
+            button(text("Delete").size(11).color(danger))
+                .padding(Padding::from([5, 12]))
+                .style(move |_t: &iced::Theme, s| button::Style {
+                    background: match s {
+                        button::Status::Hovered => Some(iced::Color { a: 0.12, ..danger }.into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::TrashPhotos(vec![photo_id]))
         };
 
         let close_btn = Self::tool_btn("Close", Message::ClosePhotoDetail, p);
@@ -88,9 +89,8 @@ impl PhotoDetailView {
             .height(Length::Fill)
             .into()
         } else {
-            let fname = photo.file_name.clone();
             let tc = p.text_tertiary;
-            container(text(fname).size(14).color(tc))
+            container(text("Loading photo...").size(14).color(tc))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .center_x(Length::Fill)
@@ -98,13 +98,9 @@ impl PhotoDetailView {
                 .into()
         };
 
-        let image_row = row![
-            prev_btn,
-            image_widget,
-            next_btn,
-        ]
-        .align_y(Alignment::Center)
-        .height(Length::Fill);
+        let image_row = row![prev_btn, image_widget, next_btn,]
+            .align_y(Alignment::Center)
+            .height(Length::Fill);
 
         // === Metadata panel ===
         let meta_panel: Element<'static, Message> = if show_metadata {
@@ -130,7 +126,11 @@ impl PhotoDetailView {
         enabled: bool,
         p: &'static colors::Palette,
     ) -> Element<'static, Message> {
-        let color = if enabled { p.text_secondary } else { p.text_tertiary };
+        let color = if enabled {
+            p.text_secondary
+        } else {
+            p.text_tertiary
+        };
         let hover_bg = p.bg_hover;
         let symbol = symbol.to_owned();
         let btn = button(text(symbol).size(28).color(color))
@@ -144,11 +144,18 @@ impl PhotoDetailView {
                 } else {
                     None
                 },
-                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             });
 
-        if enabled { btn.on_press(msg).into() } else { btn.into() }
+        if enabled {
+            btn.on_press(msg).into()
+        } else {
+            btn.into()
+        }
     }
 
     fn tool_btn(
@@ -166,7 +173,10 @@ impl PhotoDetailView {
                     button::Status::Hovered => Some(hover.into()),
                     _ => None,
                 },
-                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .on_press(msg)
@@ -191,34 +201,44 @@ impl PhotoDetailView {
             date_loc_items.push(
                 column![
                     text("DATE").size(9).color(label_color),
-                    text(date.format("%b %d, %Y  %H:%M").to_string()).size(12).color(value_color),
-                ].spacing(1).into()
+                    text(date.format("%b %d, %Y  %H:%M").to_string())
+                        .size(12)
+                        .color(value_color),
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
-        let location_text = photo.location_string()
-            .or_else(|| {
-                if photo.has_location() {
-                    Some(format!("{:.4}, {:.4}",
-                        photo.gps_latitude.unwrap_or(0.0),
-                        photo.gps_longitude.unwrap_or(0.0)))
-                } else {
-                    None
-                }
-            });
+        let location_text = photo.location_string().or_else(|| {
+            if photo.has_location() {
+                Some(format!(
+                    "{:.4}, {:.4}",
+                    photo.gps_latitude.unwrap_or(0.0),
+                    photo.gps_longitude.unwrap_or(0.0)
+                ))
+            } else {
+                None
+            }
+        });
 
         if let Some(loc) = location_text {
             date_loc_items.push(
                 column![
                     text("LOCATION").size(9).color(label_color),
                     text(loc).size(12).color(value_color),
-                ].spacing(1).into()
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
         if let Some(alt) = photo.gps_altitude {
             date_loc_items.push(
-                text(format!("{:.0}m", alt)).size(11).color(secondary_color).into()
+                text(format!("{:.0}m", alt))
+                    .size(11)
+                    .color(secondary_color)
+                    .into(),
             );
         }
 
@@ -226,27 +246,37 @@ impl PhotoDetailView {
             let people_text = if !people.is_empty() {
                 people.join(", ")
             } else {
-                format!("{} face{} detected", face_count, if face_count == 1 { "" } else { "s" })
+                format!(
+                    "{} face{} detected",
+                    face_count,
+                    if face_count == 1 { "" } else { "s" }
+                )
             };
             date_loc_items.push(
                 column![
                     text("PEOPLE").size(9).color(label_color),
                     text(people_text).size(12).color(value_color),
-                ].spacing(1).into()
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
         // --- Group 2: Camera ---
         let mut camera_items: Vec<Element<'static, Message>> = Vec::new();
 
-        let camera_name = photo.camera_model.clone()
+        let camera_name = photo
+            .camera_model
+            .clone()
             .or_else(|| photo.camera_make.clone());
         if let Some(cam) = camera_name {
             camera_items.push(
                 column![
                     text("CAMERA").size(9).color(label_color),
                     text(cam).size(12).color(value_color),
-                ].spacing(1).into()
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
@@ -255,31 +285,48 @@ impl PhotoDetailView {
                 column![
                     text("LENS").size(9).color(label_color),
                     text(lens.clone()).size(11).color(secondary_color),
-                ].spacing(1).into()
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
         // --- Group 3: Exposure ---
         let mut exp_parts: Vec<String> = Vec::new();
-        if let Some(ref fl) = photo.focal_length { exp_parts.push(fl.clone()); }
-        if let Some(ref ap) = photo.aperture { exp_parts.push(ap.clone()); }
-        if let Some(ref ss) = photo.shutter_speed { exp_parts.push(ss.clone()); }
-        if let Some(iso) = photo.iso { exp_parts.push(format!("ISO {}", iso)); }
+        if let Some(ref fl) = photo.focal_length {
+            exp_parts.push(fl.clone());
+        }
+        if let Some(ref ap) = photo.aperture {
+            exp_parts.push(ap.clone());
+        }
+        if let Some(ref ss) = photo.shutter_speed {
+            exp_parts.push(ss.clone());
+        }
+        if let Some(iso) = photo.iso {
+            exp_parts.push(format!("ISO {}", iso));
+        }
 
         let mut exposure_items: Vec<Element<'static, Message>> = Vec::new();
         if !exp_parts.is_empty() {
             exposure_items.push(
                 column![
                     text("EXPOSURE").size(9).color(label_color),
-                    text(exp_parts.join("  \u{B7}  ")).size(12).color(value_color),
-                ].spacing(1).into()
+                    text(exp_parts.join("  \u{B7}  "))
+                        .size(12)
+                        .color(value_color),
+                ]
+                .spacing(1)
+                .into(),
             );
         }
 
         if let Some(ref flash) = photo.flash {
             if flash == "Fired" {
                 exposure_items.push(
-                    text("\u{26A1} Flash").size(11).color(secondary_color).into()
+                    text("\u{26A1} Flash")
+                        .size(11)
+                        .color(secondary_color)
+                        .into(),
                 );
             }
         }
@@ -290,11 +337,17 @@ impl PhotoDetailView {
         if let (Some(w), Some(h)) = (photo.width, photo.height) {
             let mp = (w as f64 * h as f64) / 1_000_000.0;
             file_items.push(
-                text(format!("{}×{} ({:.1}MP)", w, h, mp)).size(11).color(secondary_color).into()
+                text(format!("{}×{} ({:.1}MP)", w, h, mp))
+                    .size(11)
+                    .color(secondary_color)
+                    .into(),
             );
         }
         file_items.push(
-            text(Self::fmt_size(photo.file_size)).size(11).color(secondary_color).into()
+            text(Self::fmt_size(photo.file_size))
+                .size(11)
+                .color(secondary_color)
+                .into(),
         );
 
         // --- Assemble groups into a row ---
@@ -330,7 +383,9 @@ impl PhotoDetailView {
             .style(move |_t: &iced::Theme| container::Style {
                 background: Some(panel_bg.into()),
                 border: iced::Border {
-                    color: border_color, width: 1.0, radius: 0.0.into(),
+                    color: border_color,
+                    width: 1.0,
+                    radius: 0.0.into(),
                 },
                 ..Default::default()
             })
@@ -338,9 +393,14 @@ impl PhotoDetailView {
     }
 
     fn fmt_size(bytes: i64) -> String {
-        if bytes < 1024 { format!("{} B", bytes) }
-        else if bytes < 1024 * 1024 { format!("{:.1} KB", bytes as f64 / 1024.0) }
-        else if bytes < 1024 * 1024 * 1024 { format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)) }
-        else { format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)) }
+        if bytes < 1024 {
+            format!("{} B", bytes)
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1} KB", bytes as f64 / 1024.0)
+        } else if bytes < 1024 * 1024 * 1024 {
+            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        } else {
+            format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        }
     }
 }

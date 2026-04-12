@@ -27,12 +27,12 @@ pub struct ImageMetadata {
 
     // Shooting parameters
     pub iso: Option<i32>,
-    pub aperture: Option<String>,       // e.g. "f/2.8"
-    pub shutter_speed: Option<String>,  // e.g. "1/125"
-    pub focal_length: Option<String>,   // e.g. "50mm"
-    pub lens_model: Option<String>,     // e.g. "iPhone 15 Pro back camera"
-    pub flash: Option<String>,          // e.g. "Off" or "Fired"
-    pub gps_altitude: Option<f64>,      // meters
+    pub aperture: Option<String>,      // e.g. "f/2.8"
+    pub shutter_speed: Option<String>, // e.g. "1/125"
+    pub focal_length: Option<String>,  // e.g. "50mm"
+    pub lens_model: Option<String>,    // e.g. "iPhone 15 Pro back camera"
+    pub flash: Option<String>,         // e.g. "Off" or "Fired"
+    pub gps_altitude: Option<f64>,     // meters
 
     // Image dimensions
     pub width: Option<u32>,

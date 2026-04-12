@@ -182,20 +182,16 @@ impl CullView {
         let image_area = container(
             column![
                 if is_marked {
-                    container(
-                        text("MARKED FOR DELETION")
-                            .size(12)
-                            .color(bg_primary),
-                    )
-                    .padding(Padding::from([4, 8]))
-                    .style(move |_theme| container::Style {
-                        background: Some(semantic_danger.into()),
-                        border: iced::Border {
-                            radius: 4.0.into(),
+                    container(text("MARKED FOR DELETION").size(12).color(bg_primary))
+                        .padding(Padding::from([4, 8]))
+                        .style(move |_theme| container::Style {
+                            background: Some(semantic_danger.into()),
+                            border: iced::Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                        })
                 } else {
                     container(Space::with_height(Length::Shrink))
                 },
@@ -212,7 +208,10 @@ impl CullView {
         .style(move |_theme| container::Style {
             background: Some(
                 if is_marked {
-                    iced::Color { a: 0.10, ..semantic_danger }
+                    iced::Color {
+                        a: 0.10,
+                        ..semantic_danger
+                    }
                 } else {
                     bg_elevated
                 }
@@ -432,7 +431,11 @@ impl CullView {
                 .height(50)
                 .style(move |_theme| container::Style {
                     background: Some(if is_marked {
-                        iced::Color { a: 0.20, ..semantic_danger }.into()
+                        iced::Color {
+                            a: 0.20,
+                            ..semantic_danger
+                        }
+                        .into()
                     } else {
                         bg_elevated.into()
                     }),

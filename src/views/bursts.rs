@@ -351,6 +351,8 @@ impl BurstsView {
     pub fn group_detail_view(
         group: &BurstGroupRecord,
         members: &[BurstGroupMemberRecord],
+        drive_path: Option<&Path>,
+        photos: &[Photo],
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -379,7 +381,7 @@ impl BurstsView {
         let mut current_row: Vec<Element<'static, Message>> = Vec::new();
 
         for m in members {
-            current_row.push(Self::member_card(group_id, m, theme));
+            current_row.push(Self::member_card(group_id, m, drive_path, photos, theme));
             if current_row.len() == 4 {
                 let row_items: Vec<Element<'static, Message>> = current_row.drain(..).collect();
                 rows.push(Row::with_children(row_items).spacing(12).into());
@@ -434,6 +436,8 @@ impl BurstsView {
     fn member_card(
         group_id: i64,
         member: &BurstGroupMemberRecord,
+        drive_path: Option<&Path>,
+        photos: &[Photo],
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -454,7 +458,7 @@ impl BurstsView {
         let blur = member.blur_score.unwrap_or(0.0);
 
         // Quality bar
-        let quality = (sharpness * 0.5 + blur * 0.5) * 100.0;
+        let quality = ((sharpness * 0.5 + blur * 0.5) * 100.0).clamp(0.0, 100.0);
 
         let quality_indicator = container(Space::new(Length::Fixed(quality), Length::Fixed(3.0)))
             .width(Length::Fixed(100.0))
@@ -478,10 +482,34 @@ impl BurstsView {
             container(Space::new(Length::Shrink, Length::Shrink))
         };
 
+        let preview = Self::member_preview(member.photo_id, drive_path, photos, theme);
+        let preview_button = button(preview)
+            .padding(0)
+            .style(move |_theme, status| {
+                let border_color = if is_best {
+                    accent_primary
+                } else {
+                    match status {
+                        button::Status::Hovered => accent_primary,
+                        _ => border_subtle,
+                    }
+                };
+
+                button::Style {
+                    background: None,
+                    border: iced::Border {
+                        color: border_color,
+                        width: if is_best { 2.0 } else { 1.0 },
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .on_press(Message::SetBestFromBurst(group_id, photo_id));
+
         let content = column![
-            // Image placeholder
             container(
-                column![best_badge, Space::with_height(Length::Shrink),]
+                column![best_badge, Space::with_height(4), preview_button]
                     .width(Length::Fill)
                     .padding(4)
             )
@@ -510,7 +538,7 @@ impl BurstsView {
             Space::with_height(8),
             // Select button
             button(
-                text(if is_best { "Selected" } else { "Select" })
+                text(if is_best { "Selected" } else { "Set as Best" })
                     .size(11)
                     .color(if is_best {
                         accent_primary
@@ -550,14 +578,7 @@ impl BurstsView {
         container(content)
             .padding(8)
             .style(move |_theme| container::Style {
-                background: Some(
-                    if is_best {
-                        bg_selected
-                    } else {
-                        bg_elevated
-                    }
-                    .into(),
-                ),
+                background: Some(if is_best { bg_selected } else { bg_elevated }.into()),
                 border: iced::Border {
                     color: if is_best {
                         accent_primary
@@ -566,6 +587,54 @@ impl BurstsView {
                     },
                     width: if is_best { 2.0 } else { 1.0 },
                     radius: 8.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn member_preview(
+        photo_id: i64,
+        drive_path: Option<&Path>,
+        photos: &[Photo],
+        theme: AppTheme,
+    ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg_elevated = p.bg_elevated;
+        let text_tertiary = p.text_tertiary;
+
+        if let (Some(root), Some(photo)) = (drive_path, photos.iter().find(|p| p.id == photo_id)) {
+            if let Some(ref thumb) = photo.thumbnail_path {
+                let thumb_path = std::path::PathBuf::from(thumb);
+                if thumb_path.exists() {
+                    return iced::widget::image(iced::widget::image::Handle::from_path(thumb_path))
+                        .width(Length::Fixed(132.0))
+                        .height(Length::Fixed(86.0))
+                        .content_fit(iced::ContentFit::Cover)
+                        .into();
+                }
+            }
+
+            let full = root.join(&photo.file_path);
+            if full.exists() {
+                return iced::widget::image(iced::widget::image::Handle::from_path(full))
+                    .width(Length::Fixed(132.0))
+                    .height(Length::Fixed(86.0))
+                    .content_fit(iced::ContentFit::Cover)
+                    .into();
+            }
+        }
+
+        container(text("No preview").size(10).color(text_tertiary))
+            .width(Length::Fixed(132.0))
+            .height(Length::Fixed(86.0))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .style(move |_theme| container::Style {
+                background: Some(bg_elevated.into()),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
                 },
                 ..Default::default()
             })

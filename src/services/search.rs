@@ -137,10 +137,19 @@ impl SearchService {
     ) -> SqliteResult<Vec<SearchResult>> {
         let mut stmt = conn.prepare(
             r#"
-            SELECT DISTINCT f.photo_id
-            FROM faces f
-            JOIN face_clusters fc ON f.cluster_id = fc.id
-            WHERE fc.name IS NOT NULL AND LOWER(fc.name) LIKE LOWER(?1)
+            SELECT DISTINCT photo_id FROM (
+                SELECT f.photo_id AS photo_id
+                FROM faces f
+                JOIN face_clusters fc ON f.cluster_id = fc.id
+                WHERE fc.name IS NOT NULL AND LOWER(fc.name) LIKE LOWER(?1)
+
+                UNION
+
+                SELECT pii.photo_id AS photo_id
+                FROM photo_inferred_identities pii
+                JOIN face_clusters fc ON pii.cluster_id = fc.id
+                WHERE fc.name IS NOT NULL AND LOWER(fc.name) LIKE LOWER(?1)
+            )
             "#,
         )?;
 

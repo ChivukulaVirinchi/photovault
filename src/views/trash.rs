@@ -91,34 +91,34 @@ impl TrashView {
             .padding(Padding::from([10, 18]))
             .on_press(Message::RestoreSelected),
             Space::with_width(Length::Fill),
-            button(
-                text("Empty Trash")
-                    .size(14)
-                    .color(semantic_danger)
-            )
-            .padding(Padding::from([10, 18]))
-            .style(move |_theme, status| {
-                let background = match status {
-                    button::Status::Hovered => {
-                        Some(iced::Color { a: 0.15, ..semantic_danger }.into())
+            button(text("Empty Trash").size(14).color(semantic_danger))
+                .padding(Padding::from([10, 18]))
+                .style(move |_theme, status| {
+                    let background = match status {
+                        button::Status::Hovered => Some(
+                            iced::Color {
+                                a: 0.15,
+                                ..semantic_danger
+                            }
+                            .into(),
+                        ),
+                        _ => None,
+                    };
+                    button::Style {
+                        background,
+                        border: iced::Border {
+                            color: semantic_danger,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
                     }
-                    _ => None,
-                };
-                button::Style {
-                    background,
-                    border: iced::Border {
-                        color: semantic_danger,
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(if confirm_empty_trash {
-                Message::ConfirmEmptyTrash
-            } else {
-                Message::EmptyTrash
-            }),
+                })
+                .on_press(if confirm_empty_trash {
+                    Message::ConfirmEmptyTrash
+                } else {
+                    Message::EmptyTrash
+                }),
         ]
         .align_y(Alignment::Center);
 

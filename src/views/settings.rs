@@ -10,7 +10,11 @@ use crate::theme::colors;
 pub struct SettingsView;
 
 impl SettingsView {
-    pub fn view(config: &AppConfig, geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+    pub fn view(
+        config: &AppConfig,
+        geocoding_progress: Option<(usize, usize)>,
+        rotated_fix_running: bool,
+    ) -> Element<'static, Message> {
         let p = colors::palette(config.theme);
         let bg_primary = p.bg_primary;
 
@@ -37,7 +41,7 @@ impl SettingsView {
             Self::section_header(config.theme, "Date & Time"),
             Self::date_format_setting(config.theme, config.date_format),
             Space::with_height(32),
-            Self::actions_section(config.theme, geocoding_progress),
+            Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
         ]
         .padding(32)
         .spacing(8);
@@ -202,20 +206,42 @@ impl SettingsView {
         )
     }
 
-    fn actions_section(theme: AppTheme, geocoding_progress: Option<(usize, usize)>) -> Element<'static, Message> {
+    fn actions_section(
+        theme: AppTheme,
+        geocoding_progress: Option<(usize, usize)>,
+        rotated_fix_running: bool,
+    ) -> Element<'static, Message> {
         let p = colors::palette(theme);
         let text_secondary = p.text_secondary;
         let text_tertiary = p.text_tertiary;
         let bg_elevated = p.bg_elevated;
         let border_subtle = p.border_subtle;
 
-        let geocode_button: Element<'static, Message> = if let Some((done, total)) = geocoding_progress {
-            let label = if total == 0 {
-                "Geocoding...".to_string()
+        let geocode_button: Element<'static, Message> =
+            if let Some((done, total)) = geocoding_progress {
+                let label = if total == 0 {
+                    "Geocoding...".to_string()
+                } else {
+                    format!("Geocoding... {}/{}", done, total)
+                };
+                button(text(label).size(14).color(text_secondary))
+                    .padding(Padding::from([10, 18]))
+                    .style(move |_theme, _status| button::Style {
+                        background: Some(bg_elevated.into()),
+                        border: iced::Border {
+                            color: border_subtle,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    })
+                    .into()
             } else {
-                format!("Geocoding... {}/{}", done, total)
+                Self::action_button(theme, "Run Geocoding", Message::RunGeocoding)
             };
-            button(text(label).size(14).color(text_secondary))
+
+        let rotated_button: Element<'static, Message> = if rotated_fix_running {
+            button(text("Fixing Rotations...").size(14).color(text_secondary))
                 .padding(Padding::from([10, 18]))
                 .style(move |_theme, _status| button::Style {
                     background: Some(bg_elevated.into()),
@@ -228,7 +254,7 @@ impl SettingsView {
                 })
                 .into()
         } else {
-            Self::action_button(theme, "Run Geocoding", Message::RunGeocoding)
+            Self::action_button(theme, "Fix Rotated Photos", Message::RegenerateRotatedData)
         };
 
         column![
@@ -237,14 +263,18 @@ impl SettingsView {
             row![
                 Self::action_button(theme, "Re-scan Library", Message::RescanLibrary),
                 Space::with_width(16),
-                Self::action_button(theme, "Rebuild Face Clusters", Message::RebuildFaceClusters),
+                Self::action_button(theme, "Rebuild Faces (Full)", Message::RebuildFaceClusters),
                 Space::with_width(16),
                 Self::action_button(theme, "Check for Changes", Message::CheckForChanges),
                 Space::with_width(16),
                 geocode_button,
+                Space::with_width(16),
+                rotated_button,
             ],
             Space::with_height(24),
-            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION"))).size(12).color(text_tertiary),
+            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION")))
+                .size(12)
+                .color(text_tertiary),
         ]
         .into()
     }

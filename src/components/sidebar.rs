@@ -21,7 +21,7 @@ impl Sidebar {
         let hover_bg = p.bg_hover;
         let tc = p.text_tertiary;
         let collapse_btn = button(
-            text("\u{00AB}").size(14).color(tc) // « double left arrow
+            text("\u{00AB}").size(14).color(tc), // « double left arrow
         )
         .padding(Padding::from([2, 6]))
         .style(move |_t: &iced::Theme, s| button::Style {
@@ -29,7 +29,10 @@ impl Sidebar {
                 button::Status::Hovered => Some(hover_bg.into()),
                 _ => None,
             },
-            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .on_press(Message::ToggleSidebar);
@@ -39,7 +42,8 @@ impl Sidebar {
                 text("PhotoVault").size(13).color(p.text_secondary),
                 Space::with_width(Length::Fill),
                 collapse_btn,
-            ].align_y(iced::Alignment::Center),
+            ]
+            .align_y(iced::Alignment::Center),
         )
         .padding(Padding::from([24, 16]));
 
@@ -49,14 +53,18 @@ impl Sidebar {
             Self::nav_button("Duplicates", View::Duplicates, current_view, app_theme),
             Self::nav_button("Bursts", View::Bursts, current_view, app_theme),
             Self::nav_button("Search", View::Search, current_view, app_theme),
+            Self::nav_button("Documents", View::Documents, current_view, app_theme),
             Self::nav_button("Trash", View::Trash, current_view, app_theme),
         ]
         .spacing(2)
         .padding(Padding::from([0, 8]));
 
-        let settings = container(
-            Self::nav_button("Settings", View::Settings, current_view, app_theme),
-        )
+        let settings = container(Self::nav_button(
+            "Settings",
+            View::Settings,
+            current_view,
+            app_theme,
+        ))
         .padding(Padding::from([0, 8]));
 
         let content = column![

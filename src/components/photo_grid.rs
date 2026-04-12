@@ -3,7 +3,9 @@
 //! Renders photos in a responsive grid layout with day headers.
 //! Design: gallery-style cards with subtle rounded corners and clean hover.
 
-use iced::widget::{button, column, container, text, Column, Row, Space};
+use std::collections::HashSet;
+
+use iced::widget::{button, column, container, mouse_area, text, Column, Row, Space};
 use iced::{Element, Length, Padding};
 
 use crate::app::Message;
@@ -16,13 +18,21 @@ pub fn photo_grid_simple(
     photos: &[Photo],
     thumbnail_size: f32,
     columns: usize,
+    selected_photo_ids: Option<&HashSet<i64>>,
+    hovered_photo_id: Option<i64>,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let mut rows: Vec<Element<'static, Message>> = Vec::new();
     let mut current_row: Vec<Element<'static, Message>> = Vec::new();
 
     for photo in photos {
-        let card = photo_card(photo, thumbnail_size, theme);
+        let card = photo_card(
+            photo,
+            thumbnail_size,
+            selected_photo_ids,
+            hovered_photo_id,
+            theme,
+        );
         current_row.push(card);
 
         if current_row.len() >= columns {
@@ -45,10 +55,23 @@ pub fn photo_grid_simple(
 }
 
 /// Render a single photo card as a clickable thumbnail
-fn photo_card(photo: &Photo, size: f32, theme: AppTheme) -> Element<'static, Message> {
+fn photo_card(
+    photo: &Photo,
+    size: f32,
+    selected_photo_ids: Option<&HashSet<i64>>,
+    hovered_photo_id: Option<i64>,
+    theme: AppTheme,
+) -> Element<'static, Message> {
     let p = colors::palette(theme);
     let photo_id = photo.id;
     let file_name = photo.file_name.clone();
+    let is_selected = selected_photo_ids
+        .map(|ids| ids.contains(&photo_id))
+        .unwrap_or(false);
+    let in_select_mode = selected_photo_ids
+        .map(|ids| !ids.is_empty())
+        .unwrap_or(false);
+    let is_hovered = hovered_photo_id == Some(photo_id);
 
     let bg_elevated = p.bg_elevated;
     let content: Element<'static, Message> = if let Some(ref thumb_path) = photo.thumbnail_path {
@@ -75,11 +98,18 @@ fn photo_card(photo: &Photo, size: f32, theme: AppTheme) -> Element<'static, Mes
     };
 
     let accent_primary = p.accent_primary;
-    button(content)
+    let primary_action = if in_select_mode {
+        Message::ToggleTimelinePhotoSelection(photo_id)
+    } else {
+        Message::SelectPhoto(photo_id)
+    };
+
+    let mut tile_button = button(content)
         .padding(0)
         .style(move |_theme: &iced::Theme, status| {
             let (border_color, border_width) = match status {
                 button::Status::Hovered => (accent_primary, 2.0),
+                _ if is_selected => (accent_primary, 2.0),
                 _ => (iced::Color::TRANSPARENT, 0.0),
             };
             button::Style {
@@ -91,8 +121,72 @@ fn photo_card(photo: &Photo, size: f32, theme: AppTheme) -> Element<'static, Mes
                 },
                 ..Default::default()
             }
+        });
+    tile_button = tile_button.on_press(primary_action);
+
+    if selected_photo_ids.is_some() {
+        let show_selector = is_hovered || is_selected;
+        let marker_label = if is_selected { "x" } else { "o" };
+        let marker_text_color = if is_selected {
+            p.text_primary
+        } else {
+            p.text_tertiary
+        };
+        let marker_border = p.border_subtle;
+        let marker_hover = p.bg_hover;
+        let selector: Element<'static, Message> = if show_selector {
+            button(text(marker_label).size(12).color(marker_text_color))
+                .padding(Padding::from([2, 7]))
+                .style(move |_theme: &iced::Theme, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered => Some(marker_hover.into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        color: marker_border,
+                        width: 1.0,
+                        radius: 999.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::ToggleTimelinePhotoSelection(photo_id))
+                .into()
+        } else {
+            Space::with_width(24).height(24).into()
+        };
+
+        let card: Element<'static, Message> = container(
+            column![
+                Row::with_children(vec![selector, Space::with_width(Length::Fill).into()])
+                    .width(Length::Fill),
+                tile_button,
+            ]
+            .spacing(4.0),
+        )
+        .width(size)
+        .style(move |_theme: &iced::Theme| container::Style {
+            border: iced::Border {
+                color: if is_selected {
+                    accent_primary
+                } else {
+                    iced::Color::TRANSPARENT
+                },
+                width: if is_selected { 2.0 } else { 0.0 },
+                radius: 6.0.into(),
+            },
+            ..Default::default()
         })
-        .on_press(Message::SelectPhoto(photo_id))
+        .into();
+
+        return mouse_area(card)
+            .on_enter(Message::TimelinePhotoHover(Some(photo_id)))
+            .on_exit(Message::TimelinePhotoHover(None))
+            .into();
+    }
+
+    mouse_area(tile_button)
+        .on_enter(Message::TimelinePhotoHover(Some(photo_id)))
+        .on_exit(Message::TimelinePhotoHover(None))
         .into()
 }
 
@@ -130,27 +224,55 @@ fn placeholder_card(file_name: &str, size: f32, theme: AppTheme) -> Element<'sta
 
 /// Render a day header for the timeline
 pub fn day_header(
+    day_key: &str,
     date: &str,
     location: Option<&str>,
     count: usize,
+    selected_count: usize,
+    is_hovered: bool,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
 
-    let date_text = text(date.to_owned())
-        .size(14)
-        .color(p.text_primary);
+    let date_text = text(date.to_owned()).size(14).color(p.text_primary);
 
-    let mut header_items: Vec<Element<'static, Message>> =
-        vec![date_text.into(), Space::with_width(Length::Fill).into()];
+    let mut header_items: Vec<Element<'static, Message>> = vec![];
+
+    let show_day_selector = is_hovered || selected_count > 0;
+    if show_day_selector {
+        let all_selected = selected_count >= count && count > 0;
+        let marker = if all_selected { "x" } else { "o" };
+        let marker_hover = p.bg_hover;
+        let marker_border = p.border_subtle;
+        let selector = button(text(marker).size(11).color(if all_selected {
+            p.text_primary
+        } else {
+            p.text_tertiary
+        }))
+        .padding(Padding::from([1, 6]))
+        .style(move |_theme: &iced::Theme, status| button::Style {
+            background: match status {
+                button::Status::Hovered => Some(marker_hover.into()),
+                _ => None,
+            },
+            border: iced::Border {
+                color: marker_border,
+                width: 1.0,
+                radius: 999.0.into(),
+            },
+            ..Default::default()
+        })
+        .on_press(Message::ToggleTimelineDaySelection(day_key.to_owned()));
+
+        header_items.push(selector.into());
+        header_items.push(Space::with_width(10).into());
+    }
+
+    header_items.push(date_text.into());
+    header_items.push(Space::with_width(Length::Fill).into());
 
     if let Some(loc) = location {
-        header_items.push(
-            text(loc.to_owned())
-                .size(12)
-                .color(p.text_secondary)
-                .into(),
-        );
+        header_items.push(text(loc.to_owned()).size(12).color(p.text_secondary).into());
         header_items.push(Space::with_width(16).into());
     }
 
@@ -161,10 +283,25 @@ pub fn day_header(
             .into(),
     );
 
+    if selected_count > 0 {
+        header_items.push(Space::with_width(12).into());
+        header_items.push(
+            text(format!("{} selected", selected_count))
+                .size(11)
+                .color(p.accent_primary)
+                .into(),
+        );
+    }
+
     let header_row = Row::with_children(header_items).align_y(iced::Alignment::Center);
 
-    container(header_row)
+    let header: Element<'static, Message> = container(header_row)
         .width(Length::Fill)
         .padding(Padding::from([16, 20]))
+        .into();
+
+    mouse_area(header)
+        .on_enter(Message::TimelineDayHover(Some(day_key.to_owned())))
+        .on_exit(Message::TimelineDayHover(None))
         .into()
 }

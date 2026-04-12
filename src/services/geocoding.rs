@@ -127,7 +127,6 @@ impl GeocodingService {
         }
         !((lat.abs() < 0.001) && (lon.abs() < 0.001))
     }
-
 }
 
 #[cfg(test)]

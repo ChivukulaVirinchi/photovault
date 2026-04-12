@@ -70,16 +70,15 @@ fn main() -> iced::Result {
 
     if !crate::bootstrap::has_face_models() {
         tracing::warn!(
-            "Face models missing. Expected {} and {}. Run ./scripts/setup_assets.sh",
+            "Face models missing. Expected {} and {}. Run {}",
             crate::bootstrap::detector_model_path().display(),
-            crate::bootstrap::embedder_model_path().display()
+            crate::bootstrap::embedder_model_path().display(),
+            crate::bootstrap::SETUP_ASSETS_HINT
         );
     }
 
     if !std::path::Path::new("libs/onnxruntime").exists() {
-        tracing::warn!(
-            "ONNX Runtime missing under libs/onnxruntime. Run ./scripts/setup_assets.sh"
-        );
+        tracing::warn!("ONNX Runtime missing under libs/onnxruntime. Run {}", crate::bootstrap::SETUP_ASSETS_HINT);
     }
 
     crate::bootstrap::ensure_geonames_db();

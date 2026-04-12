@@ -2,6 +2,7 @@
 
 pub mod bursts;
 pub mod cull;
+pub mod documents;
 pub mod duplicates;
 pub mod people;
 pub mod photo_detail;
@@ -13,6 +14,7 @@ pub mod welcome;
 
 pub use bursts::BurstsView;
 pub use cull::{CullState, CullView};
+pub use documents::DocumentsView;
 pub use duplicates::DuplicatesView;
 pub use people::PeopleView;
 pub use photo_detail::PhotoDetailView;

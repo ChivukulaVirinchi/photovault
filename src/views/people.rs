@@ -65,8 +65,20 @@ impl PeopleView {
                 .padding(Padding::from([4, 12]))
                 .style(move |_theme: &iced::Theme, status: button::Status| {
                     let background = match status {
-                        button::Status::Hovered => Some(iced::Color { a: 0.3, ..semantic_danger }.into()),
-                        _ => Some(iced::Color { a: 0.15, ..semantic_danger }.into()),
+                        button::Status::Hovered => Some(
+                            iced::Color {
+                                a: 0.3,
+                                ..semantic_danger
+                            }
+                            .into(),
+                        ),
+                        _ => Some(
+                            iced::Color {
+                                a: 0.15,
+                                ..semantic_danger
+                            }
+                            .into(),
+                        ),
                     };
                     button::Style {
                         background,
@@ -85,8 +97,8 @@ impl PeopleView {
                     Space::with_width(Length::Fill),
                     cancel_btn,
                 ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
+                .spacing(8)
+                .align_y(Alignment::Center),
             )
             .padding(Padding::from([8, 16]))
             .style(move |_theme: &iced::Theme| container::Style {
@@ -101,9 +113,12 @@ impl PeopleView {
         } else if !ml_available {
             // Face models not installed — show setup hint
             container(
-                text("Face models not installed. Run setup_assets script to enable face detection.")
-                    .size(13)
-                    .color(text_tertiary),
+                text(format!(
+                    "Face models not installed. Run {} to enable face detection.",
+                    crate::bootstrap::SETUP_ASSETS_HINT
+                ))
+                .size(13)
+                .color(text_tertiary),
             )
             .padding(Padding::from([8, 16]))
             .into()
@@ -321,7 +336,11 @@ impl PeopleView {
         }
 
         content_children.push(Space::with_height(24).into());
-        content_children.push(scrollable(grid).id(iced::widget::scrollable::Id::new("people")).into());
+        content_children.push(
+            scrollable(grid)
+                .id(iced::widget::scrollable::Id::new("people"))
+                .into(),
+        );
 
         let content = Column::with_children(content_children).padding(32);
 
@@ -507,7 +526,7 @@ impl PeopleView {
             .padding(32)
             .into()
         } else {
-            photo_grid_simple(photos, 160.0, columns, theme)
+            photo_grid_simple(photos, 160.0, columns, None, None, theme)
         };
 
         let content = column![
@@ -617,8 +636,8 @@ impl PeopleView {
             text(display_name).size(14).color(text_primary),
             text(format!(
                 "{} {}",
-                cluster.face_count,
-                if cluster.face_count == 1 {
+                cluster.photo_count,
+                if cluster.photo_count == 1 {
                     "photo"
                 } else {
                     "photos"
@@ -766,8 +785,8 @@ impl PeopleView {
         // Photo count
         let count = text(format!(
             "{} {}",
-            cluster.face_count,
-            if cluster.face_count == 1 {
+            cluster.photo_count,
+            if cluster.photo_count == 1 {
                 "photo"
             } else {
                 "photos"

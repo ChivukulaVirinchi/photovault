@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (4);
+INSERT INTO schema_version (version) VALUES (9);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS photos (
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
     faces_processed BOOLEAN DEFAULT FALSE,
+    content_category TEXT DEFAULT 'photo', -- 'photo' | 'document' | 'screenshot' | 'presentation' | 'whiteboard' | 'receipt'
+    ocr_text TEXT,
+    ocr_processed BOOLEAN DEFAULT FALSE,
+    ocr_confidence REAL,
 
     -- Soft delete
     is_trashed BOOLEAN DEFAULT FALSE,
@@ -116,11 +120,46 @@ CREATE TABLE IF NOT EXISTS face_clusters (
     name TEXT,                         -- NULL = unnamed, user sets this
     representative_face_id INTEGER,    -- Best face for this cluster (for display)
     face_count INTEGER DEFAULT 0,
+    photo_count INTEGER DEFAULT 0,
     
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
     FOREIGN KEY (representative_face_id) REFERENCES faces(id) ON DELETE SET NULL
+);
+
+-- ============================================================
+-- INFERRED IDENTITIES
+-- Contextual person links for photos without visible faces
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS photo_inferred_identities (
+    id INTEGER PRIMARY KEY,
+    photo_id INTEGER NOT NULL,
+    cluster_id INTEGER NOT NULL,
+    source_photo_id INTEGER NOT NULL,
+    confidence REAL NOT NULL,
+    is_inferred BOOLEAN DEFAULT TRUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+    FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+    UNIQUE(photo_id, cluster_id)
+);
+
+CREATE TABLE IF NOT EXISTS person_gallery_embeddings (
+    id INTEGER PRIMARY KEY,
+    cluster_id INTEGER NOT NULL,
+    face_id INTEGER NOT NULL,
+    embedding BLOB NOT NULL,
+    pose_label TEXT,
+    quality_score REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+    FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
+    UNIQUE(cluster_id, face_id)
 );
 
 -- ============================================================
@@ -190,6 +229,29 @@ CREATE TABLE IF NOT EXISTS trash (
 );
 
 -- ============================================================
+-- OCR SEARCH INDEX
+-- FTS5 index over extracted OCR text
+-- ============================================================
+
+CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
+    ocr_text,
+    content='photos',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
+    INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
+    UPDATE photos_fts SET ocr_text = COALESCE(new.ocr_text, '') WHERE rowid = new.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
+    DELETE FROM photos_fts WHERE rowid = old.id;
+END;
+
+-- ============================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 
@@ -199,11 +261,18 @@ CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
 CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, location_city);
 CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
 CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
+CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
+CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
 
 -- Faces
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_face_clusters_name ON face_clusters(name);
+CREATE INDEX IF NOT EXISTS idx_inferred_photo ON photo_inferred_identities(photo_id);
+CREATE INDEX IF NOT EXISTS idx_inferred_cluster ON photo_inferred_identities(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_inferred_is_inferred ON photo_inferred_identities(is_inferred);
+CREATE INDEX IF NOT EXISTS idx_gallery_cluster ON person_gallery_embeddings(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_face ON person_gallery_embeddings(face_id);
 
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);

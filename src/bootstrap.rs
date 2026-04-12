@@ -2,6 +2,13 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "windows")]
+pub const SETUP_ASSETS_HINT: &str =
+    "powershell -ExecutionPolicy Bypass -File scripts\\setup_assets.ps1";
+
+#[cfg(not(target_os = "windows"))]
+pub const SETUP_ASSETS_HINT: &str = "./scripts/setup_assets.sh";
+
 pub fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -37,9 +44,10 @@ pub fn ensure_geonames_db() {
 
     if !cities.exists() || !countries.exists() {
         tracing::warn!(
-            "GeoNames source files missing (expected {} and {}). Geocoding disabled until provided. Run ./scripts/setup_assets.sh",
+            "GeoNames source files missing (expected {} and {}). Geocoding disabled until provided. Run {}",
             cities.display(),
-            countries.display()
+            countries.display(),
+            SETUP_ASSETS_HINT
         );
         return;
     }

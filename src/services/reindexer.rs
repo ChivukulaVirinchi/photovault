@@ -23,7 +23,6 @@ impl IndexChanges {
             && self.moved.is_empty()
             && self.modified.is_empty()
     }
-
 }
 
 #[derive(Debug, Default, Clone)]

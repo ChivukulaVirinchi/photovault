@@ -51,9 +51,7 @@ impl Database {
         Self::configure_connection(&conn)?;
         let _ = Self::create_indexes(&conn);
 
-        Ok(Self {
-            conn,
-        })
+        Ok(Self { conn })
     }
 
     /// Configure SQLite connection for optimal performance
@@ -123,11 +121,9 @@ impl Database {
     ///
     /// Returns Ok(true) if database is healthy, Ok(false) if corrupt.
     pub fn check_integrity(&self) -> SqliteResult<bool> {
-        let result: String = self.conn.query_row(
-            "PRAGMA quick_check;",
-            [],
-            |row| row.get(0),
-        )?;
+        let result: String = self
+            .conn
+            .query_row("PRAGMA quick_check;", [], |row| row.get(0))?;
         Ok(result == "ok")
     }
 

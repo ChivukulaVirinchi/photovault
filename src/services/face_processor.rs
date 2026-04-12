@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
-use crate::ml::{FaceClusterer, FaceDetector, FaceEmbedder, OnnxRuntime};
+use crate::db::InferredIdentityRepo;
+use crate::ml::{ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, OnnxRuntime};
+use crate::services::image_utils::apply_exif_orientation;
 
 /// Progress information for face processing
 #[derive(Debug, Clone)]
@@ -45,6 +47,9 @@ pub struct FaceProcessingResult {
 pub struct FaceProcessor;
 
 impl FaceProcessor {
+    const CONTEXT_WINDOW_SECS: i64 = 60;
+    const CONTEXT_MIN_CONFIDENCE: f32 = 0.5;
+
     /// Run the full face processing pipeline on unprocessed photos.
     ///
     /// This is designed to be called from `spawn_blocking` as it does
@@ -58,6 +63,7 @@ impl FaceProcessor {
         drive_path: &Path,
         model_dir: &Path,
         detector_confidence: f32,
+        clustering_threshold: f32,
         progress_tx: Option<async_channel::Sender<FaceProcessingProgress>>,
         cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<FaceProcessingResult, String> {
@@ -72,13 +78,15 @@ impl FaceProcessor {
 
         // Get unprocessed photos
         let unprocessed = face_repo
-            .get_unprocessed_photo_ids()
+            .get_unprocessed_photos_with_context()
             .map_err(|e| format!("Failed to get unprocessed photos: {}", e))?;
+
+        let inferred_repo = InferredIdentityRepo::new(&db.conn);
 
         let total = unprocessed.len();
         if total == 0 {
             // No photos to process; still run clustering on any unclustered faces
-            let clusters_created = Self::run_clustering(&face_repo)?;
+            let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
             return Ok(FaceProcessingResult {
                 photos_processed: 0,
                 faces_detected: 0,
@@ -134,13 +142,13 @@ impl FaceProcessor {
         }
 
         // Phase 1: Detect faces and generate embeddings
-        for (idx, (photo_id, file_path)) in unprocessed.iter().enumerate() {
+        for (idx, (photo_id, file_path, orientation, taken_ts)) in unprocessed.iter().enumerate() {
             // Check for cancellation
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::Relaxed) {
                     tracing::info!("Face processing cancelled at photo {}/{}", idx, total);
                     // Still run clustering on whatever faces we've found so far
-                    let clusters_created = Self::run_clustering(&face_repo)?;
+                    let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
                     return Ok(FaceProcessingResult {
                         photos_processed: idx,
                         faces_detected: total_faces,
@@ -173,6 +181,7 @@ impl FaceProcessor {
             let full_path = drive_path.join(file_path);
             let image = match image::open(&full_path) {
                 Ok(img) => {
+                    let img = apply_exif_orientation(img, *orientation);
                     let (w, h) = (img.width(), img.height());
                     let max_dim = w.max(h);
                     if max_dim > 2048 {
@@ -190,7 +199,10 @@ impl FaceProcessor {
             };
 
             // Detect faces
-            let faces = detector.detect(&image);
+            let faces = detector.detect_adaptive(&image);
+
+            // Clear any previous inferred identities for this photo before writing fresh results.
+            let _ = inferred_repo.delete_for_photo(*photo_id);
 
             if !faces.is_empty() {
                 tracing::info!(
@@ -218,7 +230,14 @@ impl FaceProcessor {
                             Ok(face_id) => {
                                 // Save face crop to disk for display in People view
                                 let crop_path = faces_dir.join(format!("{}.jpg", face_id));
-                                Self::save_face_crop(aligned, &crop_path);
+                                if let Err(e) = Self::save_face_crop(aligned, &crop_path) {
+                                    tracing::warn!(
+                                        "Failed to save face crop for face {} ({}): {}",
+                                        face_id,
+                                        crop_path.display(),
+                                        e
+                                    );
+                                }
                                 total_faces += 1;
                             }
                             Err(e) => {
@@ -231,6 +250,20 @@ impl FaceProcessor {
 
             // Mark photo as processed
             let _ = face_repo.mark_photo_processed(*photo_id);
+
+            if faces.is_empty() {
+                if let Some(target_ts) = taken_ts {
+                    let _ = Self::propagate_identity_from_context(
+                        &face_repo,
+                        &inferred_repo,
+                        drive_path,
+                        *photo_id,
+                        file_path,
+                        *target_ts,
+                        &image,
+                    );
+                }
+            }
         }
 
         // Send clustering phase progress
@@ -243,7 +276,7 @@ impl FaceProcessor {
         }
 
         // Phase 2: Cluster faces
-        let clusters_created = Self::run_clustering(&face_repo)?;
+        let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
 
         // Send completion
         if let Some(ref tx) = progress_tx {
@@ -268,57 +301,253 @@ impl FaceProcessor {
         })
     }
 
-    /// Run DBSCAN clustering on all face embeddings and create/update clusters.
-    ///
-    /// Clears all existing clusters first to avoid duplicates when re-run.
-    fn run_clustering(face_repo: &FaceRepo) -> Result<usize, String> {
-        let all_faces = face_repo
-            .get_all_faces_with_embeddings()
-            .map_err(|e| format!("Failed to get faces for clustering: {}", e))?;
+    fn propagate_identity_from_context(
+        face_repo: &FaceRepo,
+        inferred_repo: &InferredIdentityRepo,
+        drive_path: &Path,
+        photo_id: i64,
+        file_path: &str,
+        target_ts: i64,
+        target_image: &image::DynamicImage,
+    ) -> Result<usize, String> {
+        let folder_like = std::path::Path::new(file_path).parent().map(|p| {
+            let s = p.to_string_lossy();
+            if s.is_empty() {
+                "%".to_string()
+            } else {
+                format!("{}%", s)
+            }
+        });
 
-        if all_faces.is_empty() {
+        let candidates = face_repo
+            .get_contextual_cluster_candidates(
+                photo_id,
+                folder_like.as_deref(),
+                target_ts,
+                Self::CONTEXT_WINDOW_SECS,
+            )
+            .map_err(|e| format!("Failed to query contextual candidates: {}", e))?;
+
+        if candidates.is_empty() {
             return Ok(0);
         }
 
-        // Clear existing clusters before re-clustering to avoid duplicates
-        face_repo
-            .delete_all_clusters()
-            .map_err(|e| format!("Failed to clear existing clusters: {}", e))?;
+        let target_brightness = Self::average_brightness(target_image);
+        let mut best_by_cluster: HashMap<i64, (i64, f32)> = HashMap::new();
 
-        let clusterer = FaceClusterer::new();
-        let assignments = clusterer.cluster(&all_faces);
+        for (source_photo_id, cluster_id, source_ts, source_file_path) in candidates {
+            let delta = (source_ts - target_ts).abs() as f32;
+            let temporal_score = 1.0 - (delta / Self::CONTEXT_WINDOW_SECS as f32).clamp(0.0, 1.0);
+            let mut confidence = 0.5 + (temporal_score * 0.4);
 
-        // Group face IDs by cluster
-        let mut cluster_groups: HashMap<i32, Vec<i64>> = HashMap::new();
-        for (face_id, cluster_id) in &assignments {
-            if *cluster_id >= 0 {
-                cluster_groups
-                    .entry(*cluster_id)
-                    .or_default()
-                    .push(*face_id);
+            // Lightweight visual consistency: compare average brightness from current image
+            // and source image if available. This reduces mistaken links across dissimilar scenes.
+            if let Some(source_brightness) =
+                Self::load_average_brightness_from_relative(drive_path, &source_file_path)
+            {
+                let diff = (target_brightness - source_brightness).abs();
+                if diff < 0.12 {
+                    confidence += 0.1;
+                }
+            }
+
+            confidence = confidence.clamp(0.0, 1.0);
+
+            if confidence < Self::CONTEXT_MIN_CONFIDENCE {
+                continue;
+            }
+
+            match best_by_cluster.get(&cluster_id) {
+                Some((_, existing)) if *existing >= confidence => {}
+                _ => {
+                    best_by_cluster.insert(cluster_id, (source_photo_id, confidence));
+                }
             }
         }
 
-        // Create clusters in database
-        let mut clusters_created = 0;
-        for (_cluster_label, face_ids) in &cluster_groups {
+        let mut inserted = 0usize;
+        for (cluster_id, (source_photo_id, confidence)) in best_by_cluster {
+            if inferred_repo
+                .insert_inferred_identity(photo_id, cluster_id, source_photo_id, confidence)
+                .is_ok()
+            {
+                inserted += 1;
+            }
+        }
+
+        Ok(inserted)
+    }
+
+    fn average_brightness(image: &image::DynamicImage) -> f32 {
+        let small = image
+            .resize(64, 64, image::imageops::FilterType::Triangle)
+            .to_rgb8();
+        let mut total = 0.0f32;
+        let mut count = 0.0f32;
+
+        for p in small.pixels() {
+            let [r, g, b] = p.0;
+            total += (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
+            count += 1.0;
+        }
+
+        if count == 0.0 {
+            0.0
+        } else {
+            total / count
+        }
+    }
+
+    fn load_average_brightness_from_relative(
+        drive_path: &Path,
+        relative_path: &str,
+    ) -> Option<f32> {
+        let path = drive_path.join(relative_path);
+        let image = image::open(path).ok()?;
+        Some(Self::average_brightness(&image))
+    }
+
+    /// Run incremental clustering in two stages:
+    /// 1) Assign unclustered faces to existing clusters (high-confidence match)
+    /// 2) Run DBSCAN only on still-unclustered faces to form new clusters
+    fn run_clustering(face_repo: &FaceRepo, clustering_threshold: f32) -> Result<usize, String> {
+        let mut assigned_to_existing = 0usize;
+        let strict_max_distance = clustering_threshold.min(0.35).clamp(0.15, 0.6);
+
+        // Stage A: assign unclustered faces to existing person gallery entries.
+        let galleries = face_repo
+            .get_gallery_embeddings()
+            .map_err(|e| format!("Failed to load person galleries: {}", e))?;
+        let cluster_photo_rows = face_repo
+            .get_cluster_photo_ids()
+            .map_err(|e| format!("Failed to load cluster-photo map: {}", e))?;
+
+        let mut cluster_photo_ids: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
+            std::collections::HashMap::new();
+        for (cluster_id, photo_id) in cluster_photo_rows {
+            cluster_photo_ids
+                .entry(cluster_id)
+                .or_default()
+                .insert(photo_id);
+        }
+
+        let mut gallery_by_cluster: std::collections::HashMap<i64, Vec<crate::ml::FaceEmbedding>> =
+            std::collections::HashMap::new();
+        for g in galleries {
+            gallery_by_cluster
+                .entry(g.cluster_id)
+                .or_default()
+                .push(g.embedding);
+        }
+
+        let unclustered = face_repo
+            .get_unclustered_faces_with_photo_embeddings()
+            .map_err(|e| format!("Failed to get unclustered faces: {}", e))?;
+
+        for (face_id, photo_id, embedding) in &unclustered {
+            let mut best: Option<(i64, f32)> = None;
+            for (cluster_id, gallery) in &gallery_by_cluster {
+                if cluster_photo_ids
+                    .get(cluster_id)
+                    .map(|set| set.contains(photo_id))
+                    .unwrap_or(false)
+                {
+                    // Conflict: cannot put two faces from same photo in one person cluster.
+                    continue;
+                }
+
+                for sample in gallery {
+                    let distance = 1.0 - embedding.cosine_similarity(sample);
+                    if distance > strict_max_distance {
+                        continue;
+                    }
+                    match best {
+                        Some((_, best_dist)) if distance >= best_dist => {}
+                        _ => best = Some((*cluster_id, distance)),
+                    }
+                }
+            }
+
+            if let Some((cluster_id, _)) = best {
+                face_repo
+                    .assign_face_to_cluster(*face_id, cluster_id)
+                    .map_err(|e| format!("Failed to assign face to cluster: {}", e))?;
+                cluster_photo_ids
+                    .entry(cluster_id)
+                    .or_default()
+                    .insert(*photo_id);
+                assigned_to_existing += 1;
+            }
+        }
+
+        // Stage B: complete-link agglomerative clustering on unresolved faces.
+        let unresolved = face_repo
+            .get_unclustered_faces_with_photo_embeddings()
+            .map_err(|e| format!("Failed to reload unresolved faces: {}", e))?;
+
+        if unresolved.is_empty() {
+            face_repo
+                .refresh_all_galleries()
+                .map_err(|e| format!("Failed to refresh galleries: {}", e))?;
+            tracing::info!(
+                "Agglomerative clustering: assigned {} faces to existing galleries; no unresolved faces left",
+                assigned_to_existing
+            );
+            return Ok(0);
+        }
+
+        let inputs: Vec<ClusterInput> = unresolved
+            .iter()
+            .map(|(face_id, photo_id, emb)| ClusterInput {
+                face_id: *face_id,
+                photo_id: *photo_id,
+                embedding: emb.clone(),
+            })
+            .collect();
+
+        let clusterer = FaceClusterer::new().with_max_distance(strict_max_distance);
+        let assignments = clusterer.cluster(&inputs);
+
+        let mut cluster_groups: HashMap<i32, Vec<i64>> = HashMap::new();
+        for (face_id, cluster_id) in assignments {
+            if cluster_id >= 0 {
+                cluster_groups.entry(cluster_id).or_default().push(face_id);
+            }
+        }
+
+        let mut clusters_created = 0usize;
+        for face_ids in cluster_groups.values() {
             if face_ids.len() >= 2 {
-                let _ = face_repo.create_cluster(face_ids);
+                face_repo
+                    .create_cluster(face_ids)
+                    .map_err(|e| format!("Failed to create cluster: {}", e))?;
                 clusters_created += 1;
             }
         }
+
+        face_repo
+            .refresh_all_galleries()
+            .map_err(|e| format!("Failed to refresh galleries: {}", e))?;
+
+        tracing::info!(
+            "Agglomerative clustering: assigned {} faces, created {} new clusters from {} unresolved faces",
+            assigned_to_existing,
+            clusters_created,
+            unresolved.len()
+        );
 
         Ok(clusters_created)
     }
 
     /// Save a face crop image to disk as JPEG.
-    fn save_face_crop(aligned_face: &image::RgbImage, path: &Path) {
+    fn save_face_crop(
+        aligned_face: &image::RgbImage,
+        path: &Path,
+    ) -> Result<(), image::ImageError> {
         let dynamic = image::DynamicImage::ImageRgb8(aligned_face.clone());
         // Resize to 80x80 for thumbnail display (the aligned face is 112x112)
         let resized = dynamic.resize_exact(80, 80, image::imageops::FilterType::Lanczos3);
-        if let Err(e) = resized.save(path) {
-            tracing::debug!("Failed to save face crop to {}: {}", path.display(), e);
-        }
+        resized.save(path)
     }
 
     /// Regenerate missing face crop files from stored bounding box data.
@@ -341,7 +570,7 @@ impl FaceProcessor {
             .map_err(|e| format!("Failed to get faces: {}", e))?;
 
         let mut regenerated = 0usize;
-        for (face_id, file_path, bbox_x, bbox_y, bbox_w, bbox_h) in &all_faces {
+        for (face_id, file_path, orientation, bbox_x, bbox_y, bbox_w, bbox_h) in &all_faces {
             let crop_path = faces_dir.join(format!("{}.jpg", face_id));
             if crop_path.exists() {
                 continue; // Already has crop
@@ -349,7 +578,7 @@ impl FaceProcessor {
 
             let full_path = drive_path.join(file_path);
             let img = match image::open(&full_path) {
-                Ok(img) => img,
+                Ok(img) => apply_exif_orientation(img, *orientation),
                 Err(_) => continue,
             };
 

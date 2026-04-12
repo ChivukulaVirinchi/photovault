@@ -20,9 +20,7 @@ impl WelcomeView {
         let p = colors::palette(theme);
         let bg_primary = p.bg_primary;
 
-        let logo = text("PhotoVault")
-            .size(38)
-            .color(p.text_primary);
+        let logo = text("PhotoVault").size(38).color(p.text_primary);
 
         let tagline = text("Your photos. Your drive. Your privacy.")
             .size(14)

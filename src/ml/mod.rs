@@ -7,7 +7,7 @@ pub mod face_detector;
 pub mod face_embedder;
 pub mod runtime;
 
-pub use clustering::FaceClusterer;
+pub use clustering::{ClusterInput, FaceClusterer};
 pub use face_detector::FaceDetector;
 pub use face_embedder::{FaceEmbedder, FaceEmbedding};
 pub use runtime::OnnxRuntime;

@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 
-use crate::models::Photo;
+use crate::models::{ContentCategory, Photo};
 
 /// A discovered file ready for database insertion
 #[derive(Debug, Clone)]
@@ -152,6 +152,7 @@ impl<'a> PhotoRepo<'a> {
                 lens_model, flash, gps_altitude,
                 width, height, orientation,
                 thumbnail_path, faces_processed,
+                content_category, ocr_text, ocr_processed, ocr_confidence,
                 is_trashed, trashed_at,
                 indexed_at, updated_at
             FROM photos
@@ -161,7 +162,7 @@ impl<'a> PhotoRepo<'a> {
             "#,
         )?;
 
-        let rows = stmt.query_map(params![limit, offset], Self::row_to_photo)?;
+        let rows = stmt.query_map(params![limit, offset], row_to_photo)?;
 
         let mut photos = Vec::new();
         for row in rows {
@@ -171,50 +172,107 @@ impl<'a> PhotoRepo<'a> {
         Ok(photos)
     }
 
-    /// Convert a database row to a Photo struct
-    fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
-        Ok(Photo {
-            id: row.get(0)?,
-            file_path: row.get(1)?,
-            file_name: row.get(2)?,
-            file_hash: row.get(3)?,
-            file_size: row.get(4)?,
-            date_taken: row
-                .get::<_, Option<String>>(5)?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|d| d.with_timezone(&Utc)),
-            date_taken_source: row.get(6)?,
-            gps_latitude: row.get(7)?,
-            gps_longitude: row.get(8)?,
-            location_city: row.get(9)?,
-            location_country: row.get(10)?,
-            camera_make: row.get(11)?,
-            camera_model: row.get(12)?,
-            iso: row.get(13)?,
-            aperture: row.get(14)?,
-            shutter_speed: row.get(15)?,
-            focal_length: row.get(16)?,
-            lens_model: row.get(17)?,
-            flash: row.get(18)?,
-            gps_altitude: row.get(19)?,
-            width: row.get(20)?,
-            height: row.get(21)?,
-            orientation: row.get::<_, Option<i32>>(22)?.unwrap_or(1),
-            thumbnail_path: row.get(23)?,
-            faces_processed: row.get(24)?,
-            is_trashed: row.get(25)?,
-            trashed_at: row
-                .get::<_, Option<String>>(26)?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|d| d.with_timezone(&Utc)),
-            indexed_at: row
-                .get::<_, String>(27)?
-                .parse::<DateTime<Utc>>()
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: row
-                .get::<_, String>(28)?
-                .parse::<DateTime<Utc>>()
-                .unwrap_or_else(|_| Utc::now()),
-        })
+    /// Get photos by IDs ordered by date (descending).
+    pub fn get_by_ids(&self, photo_ids: &[i64]) -> SqliteResult<Vec<Photo>> {
+        if photo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut all = Vec::new();
+
+        // Keep IN clause under SQLite variable limits.
+        for chunk in photo_ids.chunks(900) {
+            let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+
+            let sql = format!(
+                r#"
+                SELECT
+                    id, file_path, file_name, file_hash, file_size,
+                    date_taken, date_taken_source,
+                    gps_latitude, gps_longitude,
+                    location_city, location_country,
+                    camera_make, camera_model,
+                    iso, aperture, shutter_speed, focal_length,
+                    lens_model, flash, gps_altitude,
+                    width, height, orientation,
+                    thumbnail_path, faces_processed,
+                    content_category, ocr_text, ocr_processed, ocr_confidence,
+                    is_trashed, trashed_at,
+                    indexed_at, updated_at
+                FROM photos
+                WHERE is_trashed = FALSE AND id IN ({})
+                ORDER BY date_taken DESC
+                "#,
+                placeholders
+            );
+
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(chunk.iter().copied()),
+                row_to_photo,
+            )?;
+            for row in rows {
+                all.push(row?);
+            }
+        }
+
+        all.sort_by(|a, b| b.date_taken.cmp(&a.date_taken));
+        Ok(all)
     }
+}
+
+/// Convert a database row to a Photo struct.
+///
+/// The selected columns must match the ordering used by `PhotoRepo` and document queries.
+pub(crate) fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
+    Ok(Photo {
+        id: row.get(0)?,
+        file_path: row.get(1)?,
+        file_name: row.get(2)?,
+        file_hash: row.get(3)?,
+        file_size: row.get(4)?,
+        date_taken: row
+            .get::<_, Option<String>>(5)?
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.with_timezone(&Utc)),
+        date_taken_source: row.get(6)?,
+        gps_latitude: row.get(7)?,
+        gps_longitude: row.get(8)?,
+        location_city: row.get(9)?,
+        location_country: row.get(10)?,
+        camera_make: row.get(11)?,
+        camera_model: row.get(12)?,
+        iso: row.get(13)?,
+        aperture: row.get(14)?,
+        shutter_speed: row.get(15)?,
+        focal_length: row.get(16)?,
+        lens_model: row.get(17)?,
+        flash: row.get(18)?,
+        gps_altitude: row.get(19)?,
+        width: row.get(20)?,
+        height: row.get(21)?,
+        orientation: row.get::<_, Option<i32>>(22)?.unwrap_or(1),
+        thumbnail_path: row.get(23)?,
+        faces_processed: row.get(24)?,
+        content_category: row
+            .get::<_, Option<String>>(25)?
+            .map(|s| ContentCategory::from_db(&s))
+            .unwrap_or(ContentCategory::Photo),
+        ocr_text: row.get(26)?,
+        ocr_processed: row.get::<_, Option<bool>>(27)?.unwrap_or(false),
+        ocr_confidence: row.get(28)?,
+        is_trashed: row.get(29)?,
+        trashed_at: row
+            .get::<_, Option<String>>(30)?
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.with_timezone(&Utc)),
+        indexed_at: row
+            .get::<_, String>(31)?
+            .parse::<DateTime<Utc>>()
+            .unwrap_or_else(|_| Utc::now()),
+        updated_at: row
+            .get::<_, String>(32)?
+            .parse::<DateTime<Utc>>()
+            .unwrap_or_else(|_| Utc::now()),
+    })
 }

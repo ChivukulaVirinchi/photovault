@@ -1,148 +1,119 @@
-//! Face Clustering using DBSCAN
+//! Face clustering using agglomerative complete-linkage.
 //!
-//! Groups similar face embeddings into clusters (people).
-//! Uses cosine distance (1 - cosine_similarity) as the distance metric.
+//! This avoids DBSCAN chaining by only merging clusters where *all*
+//! pairwise distances remain under a strict threshold.
 
 use std::collections::HashMap;
 
-use ndarray::Array2;
-
 use super::FaceEmbedding;
 
-/// DBSCAN-based face clusterer
-pub struct FaceClusterer {
-    /// Minimum samples to form a cluster
-    min_samples: usize,
+#[derive(Debug, Clone)]
+pub struct ClusterInput {
+    pub face_id: i64,
+    pub photo_id: i64,
+    pub embedding: FaceEmbedding,
+}
 
-    /// Maximum distance (1 - cosine_similarity) for same cluster
-    epsilon: f32,
+/// Agglomerative clusterer with complete linkage.
+pub struct FaceClusterer {
+    /// Maximum cosine distance (1 - cosine similarity) allowed within cluster.
+    max_distance: f32,
 }
 
 impl FaceClusterer {
-    /// Create a new clusterer with default parameters
+    /// Strict default to reduce false merges.
     pub fn new() -> Self {
-        Self {
-            min_samples: 2, // At least 2 faces to form a cluster
-            epsilon: 0.4,   // ~0.6 cosine similarity threshold
-        }
+        Self { max_distance: 0.35 }
     }
 
-    /// Set epsilon (distance threshold)
-    pub fn with_epsilon(mut self, epsilon: f32) -> Self {
-        self.epsilon = epsilon;
+    pub fn with_max_distance(mut self, max_distance: f32) -> Self {
+        self.max_distance = max_distance.clamp(0.05, 1.0);
         self
     }
 
-    /// Cluster faces and return a map from face_id to cluster_id.
-    ///
-    /// Cluster IDs are non-negative integers. Noise points get cluster_id = -1.
-    pub fn cluster(&self, faces: &[(i64, FaceEmbedding)]) -> HashMap<i64, i32> {
+    /// Cluster faces and return map of face_id -> cluster_label (-1 = singleton/noise).
+    pub fn cluster(&self, faces: &[ClusterInput]) -> HashMap<i64, i32> {
         if faces.is_empty() {
             return HashMap::new();
         }
 
-        let n = faces.len();
+        // Start with each face in its own cluster.
+        let mut clusters: Vec<Vec<usize>> = (0..faces.len()).map(|i| vec![i]).collect();
 
-        // Build distance matrix (1 - cosine_similarity)
-        let mut distances = Array2::<f32>::zeros((n, n));
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let sim = faces[i].1.cosine_similarity(&faces[j].1);
-                let dist = 1.0 - sim;
-                distances[[i, j]] = dist;
-                distances[[j, i]] = dist;
-            }
-        }
+        loop {
+            let mut best_pair: Option<(usize, usize, f32)> = None;
 
-        // Run DBSCAN
-        let labels = self.dbscan(&distances);
+            for i in 0..clusters.len() {
+                for j in (i + 1)..clusters.len() {
+                    let d = self.complete_link_distance(&clusters[i], &clusters[j], faces);
+                    if d > self.max_distance {
+                        continue;
+                    }
 
-        // Map back to face IDs
-        faces
-            .iter()
-            .enumerate()
-            .map(|(i, (face_id, _))| (*face_id, labels[i]))
-            .collect()
-    }
+                    let mut merged = clusters[i].clone();
+                    merged.extend_from_slice(&clusters[j]);
+                    if Self::has_same_photo_conflict(&merged, faces) {
+                        continue;
+                    }
 
-    /// DBSCAN implementation
-    ///
-    /// Returns a vector of cluster labels. -1 means noise (unclustered).
-    fn dbscan(&self, distances: &Array2<f32>) -> Vec<i32> {
-        let n = distances.nrows();
-        // -2 = undefined (not yet visited), -1 = noise
-        let mut labels = vec![-2i32; n];
-        let mut cluster_id: i32 = 0;
-
-        for i in 0..n {
-            if labels[i] != -2 {
-                continue; // Already processed
-            }
-
-            // Find neighbors within epsilon
-            let neighbors = self.region_query(distances, i);
-
-            if neighbors.len() < self.min_samples {
-                labels[i] = -1; // Mark as noise
-                continue;
-            }
-
-            // Start a new cluster
-            labels[i] = cluster_id;
-
-            // Expand cluster using a seed set
-            let mut seed_set: Vec<usize> = neighbors;
-            let mut j = 0;
-
-            while j < seed_set.len() {
-                let q = seed_set[j];
-
-                if labels[q] == -1 {
-                    // Change noise to border point
-                    labels[q] = cluster_id;
-                }
-
-                if labels[q] != -2 {
-                    j += 1;
-                    continue; // Already processed
-                }
-
-                labels[q] = cluster_id;
-
-                let q_neighbors = self.region_query(distances, q);
-                if q_neighbors.len() >= self.min_samples {
-                    // Add new neighbors to seed set (avoid duplicates)
-                    for &neighbor in &q_neighbors {
-                        if !seed_set.contains(&neighbor) {
-                            seed_set.push(neighbor);
-                        }
+                    match best_pair {
+                        Some((_, _, best_d)) if d >= best_d => {}
+                        _ => best_pair = Some((i, j, d)),
                     }
                 }
-
-                j += 1;
             }
 
-            cluster_id += 1;
+            let Some((a, b, _)) = best_pair else {
+                break;
+            };
+
+            let mut merged = clusters[a].clone();
+            merged.extend_from_slice(&clusters[b]);
+
+            // Merge b into a
+            clusters[a] = merged;
+            clusters.remove(b);
         }
 
-        // Convert remaining -2 to -1 (shouldn't happen, but safety)
-        for label in &mut labels {
-            if *label == -2 {
-                *label = -1;
+        let mut out = HashMap::new();
+        let mut label = 0i32;
+        for members in clusters {
+            if members.len() < 2 {
+                out.insert(faces[members[0]].face_id, -1);
+            } else {
+                for idx in members {
+                    out.insert(faces[idx].face_id, label);
+                }
+                label += 1;
             }
         }
-
-        labels
+        out
     }
 
-    /// Find all points within epsilon distance of the given point
-    fn region_query(&self, distances: &Array2<f32>, point: usize) -> Vec<usize> {
-        let n = distances.nrows();
-        (0..n)
-            .filter(|&i| distances[[point, i]] <= self.epsilon)
-            .collect()
+    fn complete_link_distance(&self, a: &[usize], b: &[usize], faces: &[ClusterInput]) -> f32 {
+        let mut max_d = 0.0f32;
+        for &i in a {
+            for &j in b {
+                let sim = faces[i].embedding.cosine_similarity(&faces[j].embedding);
+                let d = 1.0 - sim;
+                if d > max_d {
+                    max_d = d;
+                }
+            }
+        }
+        max_d
     }
 
+    fn has_same_photo_conflict(cluster: &[usize], faces: &[ClusterInput]) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for &idx in cluster {
+            let pid = faces[idx].photo_id;
+            if !seen.insert(pid) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Default for FaceClusterer {
@@ -154,63 +125,41 @@ impl Default for FaceClusterer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn make_embedding(values: &[f32]) -> FaceEmbedding {
-        FaceEmbedding::new(ndarray::Array1::from_vec(values.to_vec()))
+
+    fn emb(v: &[f32]) -> FaceEmbedding {
+        FaceEmbedding::new(ndarray::Array1::from_vec(v.to_vec()))
     }
 
     #[test]
-    fn test_empty_clustering() {
+    fn complete_link_rejects_chain() {
+        // A-B close, B-C close, A-C far => should not all merge.
+        let mk = |id: i64, p: i64, vec: Vec<f32>| ClusterInput {
+            face_id: id,
+            photo_id: p,
+            embedding: emb(&vec),
+        };
+        let a = mk(1, 11, vec![1.0, 0.0, 0.0]);
+        let b = mk(2, 12, vec![0.8, 0.2, 0.0]);
+        let c = mk(3, 13, vec![0.0, 1.0, 0.0]);
+
+        let clusterer = FaceClusterer::new().with_max_distance(0.35);
+        let labels = clusterer.cluster(&[a, b, c]);
+        // Should not place all three in one non-negative cluster.
+        let vals: Vec<i32> = labels.values().copied().filter(|v| *v >= 0).collect();
+        assert!(vals.len() < 3);
+    }
+
+    #[test]
+    fn prevents_same_photo_merge() {
+        let mk = |id: i64, p: i64| ClusterInput {
+            face_id: id,
+            photo_id: p,
+            embedding: emb(&[1.0, 0.0, 0.0]),
+        };
+
         let clusterer = FaceClusterer::new();
-        let result = clusterer.cluster(&[]);
-        assert!(result.is_empty());
+        let labels = clusterer.cluster(&[mk(1, 42), mk(2, 42)]);
+        assert_eq!(labels[&1], -1);
+        assert_eq!(labels[&2], -1);
     }
-
-    #[test]
-    fn test_cluster_identical_faces() {
-        let clusterer = FaceClusterer::new();
-
-        let emb = vec![1.0; 512];
-        let faces = vec![
-            (1, make_embedding(&emb)),
-            (2, make_embedding(&emb)),
-            (3, make_embedding(&emb)),
-        ];
-
-        let result = clusterer.cluster(&faces);
-
-        // All identical embeddings should be in the same cluster
-        let c1 = result[&1];
-        assert_eq!(c1, result[&2]);
-        assert_eq!(c1, result[&3]);
-        assert!(c1 >= 0); // Not noise
-    }
-
-    #[test]
-    fn test_cluster_distinct_faces() {
-        let clusterer = FaceClusterer::new().with_epsilon(0.3);
-
-        // Two groups of very different embeddings
-        let mut group_a = vec![0.0f32; 512];
-        group_a[0] = 1.0;
-
-        let mut group_b = vec![0.0f32; 512];
-        group_b[1] = 1.0;
-
-        let faces = vec![
-            (1, make_embedding(&group_a)),
-            (2, make_embedding(&group_a)),
-            (3, make_embedding(&group_b)),
-            (4, make_embedding(&group_b)),
-        ];
-
-        let result = clusterer.cluster(&faces);
-
-        // Group A faces should be in one cluster
-        assert_eq!(result[&1], result[&2]);
-        // Group B faces should be in one cluster
-        assert_eq!(result[&3], result[&4]);
-        // The two groups should be in different clusters
-        assert_ne!(result[&1], result[&3]);
-    }
-
 }

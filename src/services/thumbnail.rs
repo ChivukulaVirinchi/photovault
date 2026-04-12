@@ -21,6 +21,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageReader};
 
+use crate::services::image_utils::apply_exif_orientation;
+
 /// Maximum time allowed for a single thumbnail generation before giving up.
 const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -149,6 +151,7 @@ impl ThumbnailService {
         &self,
         photo_path: &Path,
         file_hash: &str,
+        orientation: i32,
         size: ThumbnailSize,
     ) -> Result<PathBuf, String> {
         // Acquire concurrency permit (std::sync for blocking context)
@@ -157,7 +160,7 @@ impl ThumbnailService {
         }
 
         let start = Instant::now();
-        let result = self.generate_thumbnail_inner(photo_path, file_hash, size, start);
+        let result = self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start);
 
         // Always release permit
         self.generation_limiter.release();
@@ -176,6 +179,7 @@ impl ThumbnailService {
         &self,
         photo_path: &Path,
         file_hash: &str,
+        orientation: i32,
         size: ThumbnailSize,
         start: Instant,
     ) -> Result<PathBuf, String> {
@@ -206,6 +210,7 @@ impl ThumbnailService {
 
         // Strategy 2: Decode with downscale hint for large JPEGs
         let img = Self::decode_image_fast(photo_path, size)?;
+        let img = apply_exif_orientation(img, orientation);
 
         // Check timeout after decode
         if start.elapsed() > THUMBNAIL_TIMEOUT {
@@ -239,10 +244,13 @@ impl ThumbnailService {
     ///
     /// For JPEGs, the underlying libjpeg can decode at 1/2, 1/4, or 1/8 scale
     /// natively — much faster than decoding full resolution then resizing.
-    fn decode_image_fast(photo_path: &Path, _target_size: ThumbnailSize) -> Result<DynamicImage, String> {
+    fn decode_image_fast(
+        photo_path: &Path,
+        _target_size: ThumbnailSize,
+    ) -> Result<DynamicImage, String> {
         // Try to get image dimensions without full decode
-        let reader = ImageReader::open(photo_path)
-            .map_err(|e| format!("Failed to open image: {}", e))?;
+        let reader =
+            ImageReader::open(photo_path).map_err(|e| format!("Failed to open image: {}", e))?;
 
         // Use with_guessed_format for proper format detection
         let reader = reader
@@ -256,7 +264,8 @@ impl ThumbnailService {
         let mut reader = reader;
         reader.limits(limits);
 
-        let img = reader.decode()
+        let img = reader
+            .decode()
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         Ok(img)
@@ -428,8 +437,6 @@ impl ThumbnailService {
         Ok(())
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

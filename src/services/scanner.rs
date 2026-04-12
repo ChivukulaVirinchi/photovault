@@ -224,15 +224,16 @@ fn run_scan(
         let exif = ExifExtractor::extract(entry.path());
 
         // Reverse-geocode GPS coordinates inline (~1ms per lookup)
-        let (location_city, location_country) =
-            if let (Some(lat), Some(lon), Some(geo)) = (exif.gps_latitude, exif.gps_longitude, geocoder.as_ref()) {
-                match geo.reverse_geocode(lat, lon) {
-                    Some(result) => (Some(result.city), Some(result.country)),
-                    None => (None, None),
-                }
-            } else {
-                (None, None)
-            };
+        let (location_city, location_country) = if let (Some(lat), Some(lon), Some(geo)) =
+            (exif.gps_latitude, exif.gps_longitude, geocoder.as_ref())
+        {
+            match geo.reverse_geocode(lat, lon) {
+                Some(result) => (Some(result.city), Some(result.country)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
 
         let photo_insert = PhotoInsert {
             relative_path,

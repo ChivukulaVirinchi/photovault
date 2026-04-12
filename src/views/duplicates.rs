@@ -110,7 +110,9 @@ impl DuplicatesView {
         let content = column![
             text("Duplicates").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("No duplicates found!").size(16).color(p.text_secondary),
+            text("No duplicates found!")
+                .size(16)
+                .color(p.text_secondary),
             Space::with_height(8),
             text("Your photo library has no exact duplicate files.")
                 .size(14)
@@ -544,14 +546,7 @@ impl DuplicatesView {
             .padding(12)
             .width(Length::Fill)
             .style(move |_theme| container::Style {
-                background: Some(
-                    if is_keep {
-                        bg_selected
-                    } else {
-                        bg_elevated
-                    }
-                    .into(),
-                ),
+                background: Some(if is_keep { bg_selected } else { bg_elevated }.into()),
                 border: iced::Border {
                     color: if is_keep {
                         accent_primary

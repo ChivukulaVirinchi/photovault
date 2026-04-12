@@ -1,7 +1,9 @@
-//! Burst photo detection - groups photos taken within seconds of each other
+//! Burst photo detection - groups near-duplicate photos taken in short sessions
 
 use chrono::{DateTime, Duration, Utc};
+use image::{imageops::FilterType, DynamicImage};
 use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
 /// A burst group of photos
 #[derive(Debug, Clone)]
@@ -14,7 +16,6 @@ pub struct BurstGroup {
 
     /// End timestamp
     pub end_time: DateTime<Utc>,
-
 }
 
 /// Burst detection configuration
@@ -25,6 +26,15 @@ pub struct BurstConfig {
 
     /// Minimum photos to form a burst
     pub min_photos: usize,
+
+    /// Maximum total span for a burst sequence (seconds)
+    pub max_burst_span_seconds: i64,
+
+    /// Require visual similarity between consecutive shots
+    pub similarity_threshold: f32,
+
+    /// Require photos from the same folder for a burst
+    pub require_same_folder: bool,
 }
 
 impl Default for BurstConfig {
@@ -32,8 +42,19 @@ impl Default for BurstConfig {
         Self {
             max_gap_seconds: 3,
             min_photos: 3,
+            max_burst_span_seconds: 30,
+            similarity_threshold: 0.90,
+            require_same_folder: true,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct BurstPhotoCandidate {
+    id: i64,
+    date: DateTime<Utc>,
+    file_path: String,
+    signature: Option<Vec<f32>>,
 }
 
 /// Burst detection service
@@ -47,19 +68,23 @@ impl BurstDetector {
     }
 
     /// Find all burst groups in the database
-    pub fn find_bursts(&self, conn: &Connection) -> rusqlite::Result<Vec<BurstGroup>> {
+    pub fn find_bursts(
+        &self,
+        conn: &Connection,
+        drive_root: Option<&Path>,
+    ) -> rusqlite::Result<Vec<BurstGroup>> {
         // Get all photos ordered by date_taken
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, date_taken
+            SELECT id, date_taken, file_path
             FROM photos
             WHERE date_taken IS NOT NULL AND is_trashed = FALSE
             ORDER BY date_taken ASC
             "#,
         )?;
 
-        let photos: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        let photos: Vec<(i64, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -68,53 +93,149 @@ impl BurstDetector {
         }
 
         let mut groups = Vec::new();
-        let mut current_group: Vec<(i64, DateTime<Utc>)> = Vec::new();
+        let mut current_group: Vec<BurstPhotoCandidate> = Vec::new();
 
-        for (id, date_str) in photos {
+        for (id, date_str, file_path) in photos {
             let date = match Self::parse_datetime(&date_str) {
                 Some(d) => d,
                 None => continue,
             };
 
-            if current_group.is_empty() {
-                current_group.push((id, date));
-            } else {
-                let last_date = current_group.last().unwrap().1;
-                let gap = date.signed_duration_since(last_date);
+            let signature = drive_root.and_then(|root| {
+                let abs = root.join(&file_path);
+                Self::build_signature(&abs)
+            });
 
-                if gap <= Duration::seconds(self.config.max_gap_seconds) {
-                    current_group.push((id, date));
+            let candidate = BurstPhotoCandidate {
+                id,
+                date,
+                file_path,
+                signature,
+            };
+
+            if current_group.is_empty() {
+                current_group.push(candidate);
+            } else {
+                let should_join = self.should_join_group(&current_group, &candidate);
+
+                if should_join {
+                    current_group.push(candidate);
                 } else {
-                    // Gap too large, finalize current group
+                    // Finalize current group if candidate doesn't belong
                     if current_group.len() >= self.config.min_photos {
-                        groups.push(self.finalize_group(&current_group));
+                        groups.push(self.finalize_candidate_group(&current_group));
                     }
-                    current_group = vec![(id, date)];
+                    current_group = vec![candidate];
                 }
             }
         }
 
         // Don't forget the last group
         if current_group.len() >= self.config.min_photos {
-            groups.push(self.finalize_group(&current_group));
+            groups.push(self.finalize_candidate_group(&current_group));
         }
 
         Ok(groups)
     }
 
-    /// Create a BurstGroup from collected photos.
-    /// Caller guarantees `photos` is non-empty (min_photos >= 2).
-    fn finalize_group(&self, photos: &[(i64, DateTime<Utc>)]) -> BurstGroup {
-        let photo_ids: Vec<i64> = photos.iter().map(|(id, _)| *id).collect();
-        // Safe: only called when photos.len() >= min_photos
-        let start_time = photos.first().expect("finalize_group called with empty slice").1;
-        let end_time = photos.last().expect("finalize_group called with empty slice").1;
+    fn finalize_candidate_group(&self, photos: &[BurstPhotoCandidate]) -> BurstGroup {
+        let photo_ids: Vec<i64> = photos.iter().map(|p| p.id).collect();
+        let start_time = photos
+            .first()
+            .expect("finalize_candidate_group called with empty slice")
+            .date;
+        let end_time = photos
+            .last()
+            .expect("finalize_candidate_group called with empty slice")
+            .date;
 
         BurstGroup {
             photo_ids,
             start_time,
             end_time,
         }
+    }
+
+    fn should_join_group(
+        &self,
+        group: &[BurstPhotoCandidate],
+        candidate: &BurstPhotoCandidate,
+    ) -> bool {
+        let last = match group.last() {
+            Some(p) => p,
+            None => return true,
+        };
+
+        let gap = candidate.date.signed_duration_since(last.date);
+        if gap > Duration::seconds(self.config.max_gap_seconds) {
+            return false;
+        }
+
+        let start = group.first().expect("group has at least one item").date;
+        let span = candidate.date.signed_duration_since(start);
+        if span > Duration::seconds(self.config.max_burst_span_seconds) {
+            return false;
+        }
+
+        if self.config.require_same_folder
+            && Self::folder_key(&last.file_path) != Self::folder_key(&candidate.file_path)
+        {
+            return false;
+        }
+
+        if let (Some(a), Some(b)) = (&last.signature, &candidate.signature) {
+            let sim = Self::cosine_similarity(a, b);
+            if sim < self.config.similarity_threshold {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn folder_key(file_path: &str) -> String {
+        Path::new(file_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    }
+
+    fn build_signature(path: &PathBuf) -> Option<Vec<f32>> {
+        let img = image::open(path).ok()?;
+        Some(Self::signature_from_image(&img))
+    }
+
+    fn signature_from_image(img: &DynamicImage) -> Vec<f32> {
+        let gray = img
+            .grayscale()
+            .resize_exact(32, 32, FilterType::Triangle)
+            .to_luma8();
+        let mut sig = Vec::with_capacity(32 * 32);
+        for px in gray.pixels() {
+            sig.push(f32::from(px.0[0]) / 255.0);
+        }
+        sig
+    }
+
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+
+        let mut dot = 0.0f32;
+        let mut a_norm = 0.0f32;
+        let mut b_norm = 0.0f32;
+        for (x, y) in a.iter().zip(b.iter()) {
+            dot += x * y;
+            a_norm += x * x;
+            b_norm += y * y;
+        }
+
+        if a_norm <= f32::EPSILON || b_norm <= f32::EPSILON {
+            return 0.0;
+        }
+
+        dot / (a_norm.sqrt() * b_norm.sqrt())
     }
 
     /// Parse datetime string to DateTime<Utc>
@@ -131,13 +252,13 @@ impl BurstDetector {
 
         None
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Datelike;
+    use image::{DynamicImage, ImageBuffer, Luma};
 
     #[test]
     fn test_parse_datetime() {
@@ -148,5 +269,14 @@ mod tests {
         assert_eq!(dt.year(), 2019);
         assert_eq!(dt.month(), 3);
         assert_eq!(dt.day(), 15);
+    }
+
+    #[test]
+    fn test_similarity_identical_images_is_high() {
+        let img = DynamicImage::ImageLuma8(ImageBuffer::from_fn(32, 32, |_x, _y| Luma([200u8])));
+        let a = BurstDetector::signature_from_image(&img);
+        let b = BurstDetector::signature_from_image(&img);
+        let sim = BurstDetector::cosine_similarity(&a, &b);
+        assert!(sim > 0.999);
     }
 }

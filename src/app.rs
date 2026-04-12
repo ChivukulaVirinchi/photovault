@@ -3,31 +3,33 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use async_channel::Receiver;
 use iced::keyboard;
-use iced::widget::{column, container, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{event, Element, Length, Subscription, Task};
 
 use crate::components::{ScanProgressView, Sidebar};
 use crate::config::{AppConfig, AppTheme, DateFormat};
 use crate::db::{
     create_schema, BurstGroupMemberRecord, BurstGroupRecord, BurstRepo, Database,
-    DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo, FaceClusterRecord, FaceRepo,
-    PhotoRepo, TrashRepo, TrashedPhotoRecord, migrations,
+    DocumentRepo, DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo,
+    FaceClusterRecord, FaceRepo, PhotoRepo, TrashRepo, TrashedPhotoRecord, migrations,
 };
-use crate::models::Photo;
+use crate::models::{ContentCategory, Photo};
 use crate::services::{
-    BurstConfig, BurstDetector, DriveDetector, DriveInfo, DuplicateDetector,
-    FaceProcessingProgress, FaceProcessingResult, FaceProcessor, ScanProgress, SearchService,
-    ThumbnailService, ThumbnailSize, TrashService, TrashStats, Reindexer, IndexChanges,
-    ApplyResult, GeocodingService,
+    ApplyResult, BurstConfig, BurstDetector, DriveDetector, DriveInfo,
+    DuplicateDetector, FaceProcessingProgress, FaceProcessingResult, FaceProcessor,
+    GeocodingService, IndexChanges, OcrProcessor, OcrProgress, Reindexer, ScanProgress,
+    SearchService, ThumbnailService, ThumbnailSize, TrashService, TrashStats,
 };
+use crate::services::image_utils::apply_exif_orientation;
 use tokio::task::JoinSet;
 use crate::theme::colors;
 use crate::views::{
-    BurstsView, CullState, CullView, DuplicatesView, PeopleView, PhotoDetailView, SearchView,
-    SettingsView, TimelineView, TrashView, WelcomeView,
+    BurstsView, CullState, CullView, DocumentsView, DuplicatesView, PeopleView, PhotoDetailView,
+    SearchView, SettingsView, TimelineView, TrashView, WelcomeView,
 };
 
 const THUMBNAIL_DB_FLUSH_BATCH: usize = 64;
@@ -45,6 +47,7 @@ pub enum View {
     Bursts,
     BurstDetail,
     Search,
+    Documents,
     Cull,
     Trash,
     Settings,
@@ -91,9 +94,9 @@ pub struct PhotoVault {
     /// Whether we're currently generating thumbnails in the background
     thumbnail_generation_active: bool,
 
-    /// Queue of photos still needing thumbnail generation (photo_id, file_path, file_hash)
+    /// Queue of photos still needing thumbnail generation (photo_id, file_path, file_hash, orientation)
     /// Processed in batches to avoid overwhelming the system.
-    thumbnail_queue: Vec<(i64, String, String)>,
+    thumbnail_queue: Vec<(i64, String, String, i32)>,
 
     /// Cursor for incremental thumbnail scheduling over full photo list.
     thumbnail_scan_cursor: usize,
@@ -225,8 +228,14 @@ pub struct PhotoVault {
     /// Last detected index changes
     pending_index_changes: Option<IndexChanges>,
 
+    /// Whether to trigger face processing after the current background scan completes.
+    run_face_processing_after_scan: bool,
+
     /// Geocoding progress if running
     geocoding_progress: Option<(usize, usize)>,
+
+    /// Whether rotated-data regeneration is running
+    rotated_data_regen_active: bool,
 
     /// Cancel flag for face processing
     face_cancel_flag: Option<Arc<AtomicBool>>,
@@ -248,6 +257,36 @@ pub struct PhotoVault {
 
     /// Whether the metadata panel is shown in photo detail view
     show_metadata_panel: bool,
+
+    /// Selected photo IDs in timeline multi-select mode
+    selected_timeline_photo_ids: HashSet<i64>,
+
+    /// Hovered photo in timeline grid (for hover-only selection affordance)
+    hovered_timeline_photo_id: Option<i64>,
+
+    /// Hovered day key in timeline header (for day-level selection affordance)
+    hovered_timeline_day_key: Option<String>,
+
+    /// Documents view data (non-photo categorized items)
+    documents: Vec<Photo>,
+
+    /// Documents search query (FTS text)
+    documents_query: String,
+
+    /// Category filter in documents view
+    documents_filter: Option<ContentCategory>,
+
+    /// OCR/document analysis running
+    document_analysis_active: bool,
+
+    /// OCR/document analysis progress receiver
+    ocr_progress_receiver: Option<Receiver<OcrProgress>>,
+
+    /// OCR/document analysis progress
+    ocr_progress: Option<OcrProgress>,
+
+    /// OCR processing cancel flag
+    ocr_cancel_flag: Option<Arc<AtomicBool>>,
 
 }
 
@@ -290,6 +329,21 @@ pub enum Message {
 
     /// Select a photo to view in detail
     SelectPhoto(i64),
+
+    /// Toggle selection for a timeline photo
+    ToggleTimelinePhotoSelection(i64),
+
+    /// Toggle selection for all photos in a timeline day group
+    ToggleTimelineDaySelection(String),
+
+    /// Timeline photo hover changed
+    TimelinePhotoHover(Option<i64>),
+
+    /// Timeline day-header hover changed
+    TimelineDayHover(Option<String>),
+
+    /// Clear all timeline photo selections
+    ClearTimelinePhotoSelection,
 
     /// Close photo detail view
     ClosePhotoDetail,
@@ -431,6 +485,14 @@ pub enum Message {
     EmptyTrash,
     ConfirmEmptyTrash,
 
+    // --- Documents ---
+    LoadDocuments,
+    DocumentsLoaded(Vec<Photo>),
+    DocumentsSearchChanged(String),
+    DocumentsFilterCategory(Option<String>),
+    RunDocumentAnalysis,
+    DocumentAnalysisComplete(Result<usize, String>),
+
     // --- Phase 7: Settings, Reindexing, Geocoding ---
     SetTheme(AppTheme),
     SetThumbnailSize(u32),
@@ -443,6 +505,7 @@ pub enum Message {
 
     RescanLibrary,
     RebuildFaceClusters,
+    FaceDataResetComplete(Result<usize, String>),
 
     CheckForChanges,
     ChangesDetected(IndexChanges),
@@ -452,6 +515,9 @@ pub enum Message {
     RunGeocoding,
     GeocodingProgress { processed: usize, total: usize },
     GeocodingComplete,
+
+    RegenerateRotatedData,
+    RotatedDataRegenerated { cleared_thumbnails: usize, reset_faces: usize },
 
     /// Cancel face processing
     CancelFaceProcessing,
@@ -565,7 +631,9 @@ impl PhotoVault {
             // Phase 7
             config,
             pending_index_changes: None,
+            run_face_processing_after_scan: false,
             geocoding_progress: None,
+            rotated_data_regen_active: false,
             // Phase 8: Production readiness
             face_cancel_flag: None,
             ml_available: crate::bootstrap::has_face_models(),
@@ -574,6 +642,16 @@ impl PhotoVault {
             photo_rotation: 0,
             current_display_image: None,
             show_metadata_panel: true,
+            selected_timeline_photo_ids: HashSet::new(),
+            hovered_timeline_photo_id: None,
+            hovered_timeline_day_key: None,
+            documents: Vec::new(),
+            documents_query: String::new(),
+            documents_filter: None,
+            document_analysis_active: false,
+            ocr_progress_receiver: None,
+            ocr_progress: None,
+            ocr_cancel_flag: None,
         };
 
         // Detect drives on startup
@@ -610,7 +688,8 @@ impl PhotoVault {
         let has_background_ops = self.scan_state.is_some()
             || self.face_processing_active
             || self.duplicate_detection_running
-            || self.burst_detection_running;
+            || self.burst_detection_running
+            || self.document_analysis_active;
 
         if has_background_ops {
             subs.push(
@@ -705,8 +784,12 @@ impl PhotoVault {
 
         for photo in self.photos.iter().take(initial_end) {
             if photo.thumbnail_path.is_none() {
-                self.thumbnail_queue
-                    .push((photo.id, photo.file_path.clone(), photo.file_hash.clone()));
+                self.thumbnail_queue.push((
+                    photo.id,
+                    photo.file_path.clone(),
+                    photo.file_hash.clone(),
+                    photo.orientation,
+                ));
             }
         }
 
@@ -725,8 +808,12 @@ impl PhotoVault {
                 break;
             }
             if photo.thumbnail_path.is_none() {
-                self.thumbnail_queue
-                    .push((photo.id, photo.file_path.clone(), photo.file_hash.clone()));
+                self.thumbnail_queue.push((
+                    photo.id,
+                    photo.file_path.clone(),
+                    photo.file_hash.clone(),
+                    photo.orientation,
+                ));
             }
         }
 
@@ -771,7 +858,7 @@ impl PhotoVault {
 
         // Drain the next batch from the front of the queue
         let batch_end = self.thumbnail_queue.len().min(Self::THUMBNAIL_BATCH_SIZE);
-        let batch: Vec<(i64, String, String)> = self.thumbnail_queue.drain(..batch_end).collect();
+        let batch: Vec<(i64, String, String, i32)> = self.thumbnail_queue.drain(..batch_end).collect();
         let remaining = self.thumbnail_queue.len();
 
         tracing::info!(
@@ -797,7 +884,7 @@ impl PhotoVault {
             async move {
                 let mut join_set = JoinSet::new();
 
-                for (photo_id, file_path, file_hash) in batch {
+                for (photo_id, file_path, file_hash, orientation) in batch {
                     let full_path = drive_path.join(&file_path);
                     let svc = Arc::clone(&service);
 
@@ -809,6 +896,7 @@ impl PhotoVault {
                         match svc.generate_thumbnail(
                             &full_path,
                             &file_hash,
+                            orientation,
                             thumb_size,
                         ) {
                             Ok(path) => Some((photo_id, path)),
@@ -869,12 +957,18 @@ impl PhotoVault {
                 match Database::open_for_drive(&drive_path) {
                     Ok(db) => {
                         let face_repo = FaceRepo::new(&db.conn);
+                        if let Err(e) = face_repo.normalize_cluster_stats() {
+                            tracing::warn!("Failed to normalize cluster stats: {}", e);
+                        }
                         let mut clusters = face_repo.get_all_clusters().unwrap_or_default();
                         tracing::info!(
                             "load_face_clusters: got {} clusters from DB",
                             clusters.len()
                         );
-                        FaceRepo::populate_face_thumbnails(&mut clusters, &drive_path);
+                        if let Err(e) = face_repo.populate_face_thumbnails(&mut clusters, &drive_path)
+                        {
+                            tracing::warn!("Failed to populate face thumbnails: {}", e);
+                        }
                         clusters
                     }
                     Err(e) => {
@@ -913,6 +1007,131 @@ impl PhotoVault {
         )
     }
 
+    fn load_documents(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+
+        let drive_path = drive_path.clone();
+        let query = self.documents_query.clone();
+        let filter = self.documents_filter;
+
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let repo = DocumentRepo::new(&db.conn);
+                        let mut docs = if !query.trim().is_empty() {
+                            repo.search_documents_fts(&query, 50000, 0)
+                                .unwrap_or_default()
+                        } else if let Some(cat) = filter {
+                            repo.get_documents_by_category(cat.as_str(), 50000, 0)
+                                .unwrap_or_default()
+                        } else {
+                            repo.get_non_photo_documents(50000, 0).unwrap_or_default()
+                        };
+
+                        for photo in &mut docs {
+                            if let Some(ref rel_path) = photo.thumbnail_path {
+                                let abs_path = drive_path.join(rel_path);
+                                photo.thumbnail_path = Some(abs_path.to_string_lossy().to_string());
+                            }
+                        }
+
+                        docs
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open database for documents: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::DocumentsLoaded,
+        )
+    }
+
+    fn photo_detail_navigation_list(&self) -> &[Photo] {
+        if self.previous_view == Some(View::ClusterDetail) && !self.cluster_photos.is_empty() {
+            &self.cluster_photos
+        } else if self.previous_view == Some(View::Documents) && !self.documents.is_empty() {
+            &self.documents
+        } else {
+            &self.photos
+        }
+    }
+
+    fn load_photo_detail_for_index(&mut self, idx: usize) -> Task<Message> {
+        let Some(photo) = self.photos.get(idx) else {
+            return Task::none();
+        };
+
+        self.photo_rotation = 0;
+        self.current_display_image = None;
+
+        let photo_id = photo.id;
+
+        self.current_photo_people.clear();
+        self.current_photo_face_count = 0;
+        if let Some(ref db) = self.database {
+            let face_repo = FaceRepo::new(&db.conn);
+            if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
+                self.current_photo_people = names;
+            }
+            if let Ok(count) = db.conn.query_row(
+                "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",
+                rusqlite::params![photo_id],
+                |row| row.get::<_, i64>(0),
+            ) {
+                self.current_photo_face_count = count as usize;
+            }
+        }
+
+        // Always prefer original image for full-quality photo detail viewing.
+        // Fall back to thumbnail only when the original is unavailable.
+        let image_path = if let Some(ref drive) = self.selected_drive {
+            let orig = drive.join(&photo.file_path);
+            if orig.exists() {
+                Some(orig)
+            } else if let Some(ref tp) = photo.thumbnail_path {
+                let thumb = PathBuf::from(tp);
+                if thumb.exists() {
+                    Some(thumb)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(path) = image_path {
+            let orientation = photo.orientation;
+            return Task::perform(
+                async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let img = image::open(&path).ok()?;
+                        let img = apply_exif_orientation(img, orientation);
+                        let rgba = img.to_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        Some((rgba.into_raw(), w, h))
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    match result {
+                        Some((bytes, w, h)) => Message::DisplayImageReady(Some(bytes), w, h),
+                        None => Message::DisplayImageReady(None, 0, 0),
+                    }
+                },
+                |msg| msg,
+            );
+        }
+
+        Task::none()
+    }
+
     /// Handle messages
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -930,6 +1149,8 @@ impl PhotoVault {
                     self.load_photos()
                 } else if view == View::People {
                     self.load_face_clusters()
+                } else if view == View::Documents {
+                    self.load_documents()
                 } else if view == View::Duplicates {
                     // Trigger duplicate detection when navigating to Duplicates view
                     self.current_view = view;
@@ -1001,9 +1222,8 @@ impl PhotoVault {
                         if self.photo_count == 0 {
                             return self.update(Message::StartScan);
                         } else {
-                            self.current_view = View::Timeline;
-                            // Load photos for timeline
-                            return self.load_photos();
+                            // Existing library: auto-sync incremental changes first.
+                            return self.update(Message::CheckForChanges);
                         }
                     }
                     Err(e) => {
@@ -1131,6 +1351,12 @@ impl PhotoVault {
                         self.face_processing_progress = Some(progress);
                     }
                 }
+
+                if let Some(ref mut rx) = self.ocr_progress_receiver {
+                    while let Ok(progress) = rx.try_recv() {
+                        self.ocr_progress = Some(progress);
+                    }
+                }
                 Task::none()
             }
 
@@ -1175,10 +1401,21 @@ impl PhotoVault {
                 } else {
                     // Scan was running in background — clear state and reload if on Timeline
                     self.scan_state = None;
+                    let mut tasks = Vec::new();
+
                     if self.current_view == View::Timeline {
-                        self.load_photos()
-                    } else {
+                        tasks.push(self.load_photos());
+                    }
+
+                    if self.run_face_processing_after_scan {
+                        self.run_face_processing_after_scan = false;
+                        tasks.push(self.update(Message::ProcessFaces));
+                    }
+
+                    if tasks.is_empty() {
                         Task::none()
+                    } else {
+                        Task::batch(tasks)
                     }
                 }
             }
@@ -1197,6 +1434,10 @@ impl PhotoVault {
                 self.begin_thumbnail_generation_epoch();
                 self.photos = photos;
                 self.photo_count = self.photos.len() as i64;
+
+                let valid_ids: HashSet<i64> = self.photos.iter().map(|p| p.id).collect();
+                self.selected_timeline_photo_ids
+                    .retain(|photo_id| valid_ids.contains(photo_id));
 
                 // Prioritize visible timeline region first, then continue incrementally.
                 self.seed_thumbnail_queue_for_timeline();
@@ -1226,66 +1467,81 @@ impl PhotoVault {
 
             Message::SelectPhoto(photo_id) => {
                 // Find the photo index
-                if let Some(idx) = self.photos.iter().position(|p| p.id == photo_id) {
-                    self.previous_view = Some(self.current_view.clone());
+                let resolved_idx = self
+                    .photos
+                    .iter()
+                    .position(|p| p.id == photo_id)
+                    .or_else(|| {
+                        self.documents
+                            .iter()
+                            .find(|p| p.id == photo_id)
+                            .and_then(|doc| self.photos.iter().position(|p| p.id == doc.id))
+                    });
+
+                if let Some(idx) = resolved_idx {
+                    if self.current_view != View::PhotoDetail {
+                        self.previous_view = Some(self.current_view.clone());
+                    }
                     self.selected_photo_index = Some(idx);
                     self.current_view = View::PhotoDetail;
-                    self.photo_rotation = 0;
-                    self.current_display_image = None;
+                    return self.load_photo_detail_for_index(idx);
+                }
+                Task::none()
+            }
 
+            Message::ToggleTimelinePhotoSelection(photo_id) => {
+                if !self.selected_timeline_photo_ids.insert(photo_id) {
+                    self.selected_timeline_photo_ids.remove(&photo_id);
+                }
+                Task::none()
+            }
 
-                    // Look up people and face count in this photo
-                    self.current_photo_people.clear();
-                    self.current_photo_face_count = 0;
-                    if let Some(ref db) = self.database {
-                        let face_repo = FaceRepo::new(&db.conn);
-                        if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
-                            self.current_photo_people = names;
-                        }
-                        // Get total face count for this photo
-                        if let Ok(count) = db.conn.query_row(
-                            "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",
-                            rusqlite::params![photo_id],
-                            |row| row.get::<_, i64>(0),
-                        ) {
-                            self.current_photo_face_count = count as usize;
-                        }
+            Message::ToggleTimelineDaySelection(day_key) => {
+                let source_photos = if self.current_view == View::Documents {
+                    &self.documents
+                } else {
+                    &self.photos
+                };
+
+                let day_photo_ids: Vec<i64> = source_photos
+                    .iter()
+                    .filter(|p| {
+                        p.date_taken
+                            .map(|d| d.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "0000-00-00".to_string())
+                            == day_key
+                    })
+                    .map(|p| p.id)
+                    .collect();
+
+                if !day_photo_ids.is_empty()
+                    && day_photo_ids
+                        .iter()
+                        .all(|id| self.selected_timeline_photo_ids.contains(id))
+                {
+                    for photo_id in day_photo_ids {
+                        self.selected_timeline_photo_ids.remove(&photo_id);
                     }
-
-                    // Load display image — always prefer original for full quality
-                    let photo = &self.photos[idx];
-                    let image_path = if let Some(ref drive) = self.selected_drive {
-                        let orig = drive.join(&photo.file_path);
-                        if orig.exists() {
-                            Some(orig)
-                        } else if let Some(ref tp) = photo.thumbnail_path {
-                            // Fallback to thumbnail only if original is missing (e.g. drive disconnected)
-                            Some(PathBuf::from(tp))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some(path) = image_path {
-                        return Task::perform(
-                            async move {
-                                let result = tokio::task::spawn_blocking(move || {
-                                    let img = image::open(&path).ok()?;
-                                    let rgba = img.to_rgba8();
-                                    let (w, h) = (rgba.width(), rgba.height());
-                                    Some((rgba.into_raw(), w, h))
-                                }).await.ok().flatten();
-                                match result {
-                                    Some((bytes, w, h)) => Message::DisplayImageReady(Some(bytes), w, h),
-                                    None => Message::DisplayImageReady(None, 0, 0),
-                                }
-                            },
-                            |msg| msg,
-                        );
+                } else {
+                    for photo_id in day_photo_ids {
+                        self.selected_timeline_photo_ids.insert(photo_id);
                     }
                 }
+                Task::none()
+            }
+
+            Message::TimelinePhotoHover(photo_id) => {
+                self.hovered_timeline_photo_id = photo_id;
+                Task::none()
+            }
+
+            Message::TimelineDayHover(day_key) => {
+                self.hovered_timeline_day_key = day_key;
+                Task::none()
+            }
+
+            Message::ClearTimelinePhotoSelection => {
+                self.selected_timeline_photo_ids.clear();
                 Task::none()
             }
 
@@ -1297,26 +1553,60 @@ impl PhotoVault {
             }
 
             Message::PreviousPhoto => {
-                self.current_display_image = None;
-                self.photo_rotation = 0;
-                if let Some(ref mut idx) = self.selected_photo_index {
-                    if *idx > 0 {
-                        *idx -= 1;
-                        let photo_id = self.photos[*idx].id;
-                        return self.update(Message::SelectPhoto(photo_id));
+                let target_photo_id = if let Some(current_idx) = self.selected_photo_index {
+                    if let Some(current_photo) = self.photos.get(current_idx) {
+                        let current_id = current_photo.id;
+                        let nav_list = self.photo_detail_navigation_list();
+                        if let Some(nav_idx) = nav_list.iter().position(|p| p.id == current_id) {
+                            if nav_idx > 0 {
+                                Some(nav_list[nav_idx - 1].id)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(photo_id) = target_photo_id {
+                    if let Some(global_idx) = self.photos.iter().position(|p| p.id == photo_id) {
+                        self.selected_photo_index = Some(global_idx);
+                        return self.load_photo_detail_for_index(global_idx);
                     }
                 }
                 Task::none()
             }
 
             Message::NextPhoto => {
-                self.current_display_image = None;
-                self.photo_rotation = 0;
-                if let Some(ref mut idx) = self.selected_photo_index {
-                    if *idx + 1 < self.photos.len() {
-                        *idx += 1;
-                        let photo_id = self.photos[*idx].id;
-                        return self.update(Message::SelectPhoto(photo_id));
+                let target_photo_id = if let Some(current_idx) = self.selected_photo_index {
+                    if let Some(current_photo) = self.photos.get(current_idx) {
+                        let current_id = current_photo.id;
+                        let nav_list = self.photo_detail_navigation_list();
+                        if let Some(nav_idx) = nav_list.iter().position(|p| p.id == current_id) {
+                            if nav_idx + 1 < nav_list.len() {
+                                Some(nav_list[nav_idx + 1].id)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(photo_id) = target_photo_id {
+                    if let Some(global_idx) = self.photos.iter().position(|p| p.id == photo_id) {
+                        self.selected_photo_index = Some(global_idx);
+                        return self.load_photo_detail_for_index(global_idx);
                     }
                 }
                 Task::none()
@@ -1513,6 +1803,41 @@ impl PhotoVault {
                     if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
                         return self.update(Message::CloseBurstDetail);
                     }
+                } else if self.current_view == View::Documents {
+                    match key {
+                        keyboard::Key::Named(keyboard::key::Named::Delete)
+                        | keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                            if !self.selected_timeline_photo_ids.is_empty() {
+                                let ids = self
+                                    .selected_timeline_photo_ids
+                                    .iter()
+                                    .copied()
+                                    .collect::<Vec<_>>();
+                                return self.update(Message::TrashPhotos(ids));
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if self.current_view == View::Timeline {
+                    match key {
+                        keyboard::Key::Named(keyboard::key::Named::Delete)
+                        | keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                            if !self.selected_timeline_photo_ids.is_empty() {
+                                let ids = self
+                                    .selected_timeline_photo_ids
+                                    .iter()
+                                    .copied()
+                                    .collect::<Vec<_>>();
+                                return self.update(Message::TrashPhotos(ids));
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            if !self.selected_timeline_photo_ids.is_empty() {
+                                return self.update(Message::ClearTimelinePhotoSelection);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 // --- Global shortcuts (work from any non-detail view) ---
@@ -1687,6 +2012,88 @@ impl PhotoVault {
 
             Message::LoadTrash => self.load_trash(),
 
+            Message::LoadDocuments => self.load_documents(),
+
+            Message::DocumentsLoaded(items) => {
+                self.documents = items;
+                let valid_ids: HashSet<i64> = self.documents.iter().map(|p| p.id).collect();
+                self.selected_timeline_photo_ids
+                    .retain(|photo_id| valid_ids.contains(photo_id));
+                Task::none()
+            }
+
+            Message::DocumentsSearchChanged(input) => {
+                self.documents_query = input;
+                self.load_documents()
+            }
+
+            Message::DocumentsFilterCategory(category) => {
+                self.documents_filter = category
+                    .as_deref()
+                    .map(ContentCategory::from_db);
+                self.load_documents()
+            }
+
+            Message::RunDocumentAnalysis => {
+                if self.document_analysis_active {
+                    return Task::none();
+                }
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                self.document_analysis_active = true;
+                self.ocr_progress = Some(OcrProgress {
+                    processed: 0,
+                    total: 0,
+                    documents_found: 0,
+                });
+
+                let drive_path = drive_path.clone();
+                let (progress_tx, progress_rx) = async_channel::bounded(32);
+                self.ocr_progress_receiver = Some(progress_rx);
+
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                self.ocr_cancel_flag = Some(cancel_flag.clone());
+
+                Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            OcrProcessor::process_stage1_heuristics(
+                                &drive_path,
+                                Some(progress_tx),
+                                Some(cancel_flag),
+                            )
+                        });
+
+                        match handle.await {
+                            Ok(result) => result,
+                            Err(e) => Err(format!("Document analysis task panicked: {}", e)),
+                        }
+                    },
+                    Message::DocumentAnalysisComplete,
+                )
+            }
+
+            Message::DocumentAnalysisComplete(result) => {
+                self.document_analysis_active = false;
+                self.ocr_progress_receiver = None;
+                self.ocr_cancel_flag = None;
+
+                match result {
+                    Ok(found) => {
+                        tracing::info!("Document analysis complete: {} docs found", found);
+                    }
+                    Err(e) => {
+                        tracing::error!("Document analysis failed: {}", e);
+                    }
+                }
+
+                let reload_docs = self.load_documents();
+                let reload_photos = self.load_photos();
+                Task::batch([reload_docs, reload_photos])
+            }
+
             Message::TrashLoaded(items, stats) => {
                 self.trash_items = items;
                 self.trash_stats = stats;
@@ -1730,10 +2137,18 @@ impl PhotoVault {
                         }
                     }
                 } else {
-                    // From other views, go to Trash
-                    self.cull_state = None;
-                    self.cull_confirm_pending = false;
-                    self.current_view = View::Trash;
+                    if self.current_view == View::Timeline {
+                        // Timeline multi-delete stays in timeline (Google Photos style)
+                        self.selected_timeline_photo_ids.clear();
+                    } else if self.current_view == View::Documents {
+                        // Documents multi-delete stays in documents view
+                        self.selected_timeline_photo_ids.clear();
+                    } else {
+                        // From other views, go to Trash
+                        self.cull_state = None;
+                        self.cull_confirm_pending = false;
+                        self.current_view = View::Trash;
+                    }
                 }
                 let reload = self.load_photos();
                 Task::batch([task, reload])
@@ -1903,7 +2318,92 @@ impl PhotoVault {
 
             Message::RescanLibrary => self.update(Message::StartScan),
 
-            Message::RebuildFaceClusters => self.update(Message::RunClustering),
+            Message::RebuildFaceClusters => {
+                if self.face_processing_active {
+                    tracing::info!("RebuildFaceClusters ignored: face processing already active");
+                    return Task::none();
+                }
+
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+
+                let drive_path = drive_path.clone();
+                self.face_processing_active = true;
+                self.face_processing_progress = Some(FaceProcessingProgress::default());
+                self.face_processing_error = None;
+
+                Task::perform(
+                    async move {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let db = Database::open_for_drive(&drive_path)
+                                .map_err(|e| format!("Failed to open database: {}", e))?;
+
+                            let tx = db
+                                .conn
+                                .unchecked_transaction()
+                                .map_err(|e| format!("Failed to start reset transaction: {}", e))?;
+
+                            tx.execute("DELETE FROM photo_inferred_identities", [])
+                                .map_err(|e| format!("Failed to clear inferred identities: {}", e))?;
+                            tx.execute("DELETE FROM faces", [])
+                                .map_err(|e| format!("Failed to clear faces: {}", e))?;
+                            tx.execute("DELETE FROM face_clusters", [])
+                                .map_err(|e| format!("Failed to clear face clusters: {}", e))?;
+
+                            let reset = tx
+                                .execute(
+                                    "UPDATE photos SET faces_processed = FALSE WHERE is_trashed = FALSE",
+                                    [],
+                                )
+                                .map_err(|e| format!("Failed to reset faces_processed flags: {}", e))?;
+
+                            tx.commit()
+                                .map_err(|e| format!("Failed to commit face reset: {}", e))?;
+
+                            let faces_dir = FaceProcessor::faces_dir(&drive_path);
+                            if let Ok(entries) = std::fs::read_dir(&faces_dir) {
+                                for entry in entries.flatten() {
+                                    let _ = std::fs::remove_file(entry.path());
+                                }
+                            }
+
+                            Ok(reset)
+                        });
+
+                        match handle.await {
+                            Ok(result) => result,
+                            Err(e) => Err(format!("Face reset thread panicked: {}", e)),
+                        }
+                    },
+                    Message::FaceDataResetComplete,
+                )
+            }
+
+            Message::FaceDataResetComplete(result) => {
+                match result {
+                    Ok(reset) => {
+                        tracing::info!(
+                            "Face data reset complete: {} photos marked for full re-processing",
+                            reset
+                        );
+                        self.face_processing_active = false;
+                        self.face_processing_progress = None;
+                        self.face_progress_receiver = None;
+                        self.face_cancel_flag = None;
+                        self.update(Message::ProcessFaces)
+                    }
+                    Err(e) => {
+                        self.face_processing_active = false;
+                        self.face_processing_progress = None;
+                        self.face_progress_receiver = None;
+                        self.face_cancel_flag = None;
+                        self.face_processing_error = Some(e.clone());
+                        tracing::error!("Face data reset failed: {}", e);
+                        Task::none()
+                    }
+                }
+            }
 
             Message::CheckForChanges => {
                 let Some(ref drive_path) = self.selected_drive else {
@@ -1933,7 +2433,8 @@ impl PhotoVault {
                 self.pending_index_changes = Some(changes.clone());
                 if changes.is_empty() {
                     tracing::info!("No index changes detected");
-                    return Task::none();
+                    self.current_view = View::Timeline;
+                    return self.load_photos();
                 }
                 self.update(Message::ApplyChanges)
             }
@@ -1968,10 +2469,14 @@ impl PhotoVault {
             Message::ChangesApplied(result) => {
                 tracing::info!("Applied index changes: {:?}", result);
                 self.pending_index_changes = None;
+                self.current_view = View::Timeline;
 
                 let mut tasks = vec![self.load_photos()];
                 if result.new_files > 0 {
+                    self.run_face_processing_after_scan = true;
                     tasks.push(self.update(Message::StartScan));
+                } else if result.updates_applied > 0 {
+                    tasks.push(self.update(Message::ProcessFaces));
                 }
                 Task::batch(tasks)
             }
@@ -2069,6 +2574,122 @@ impl PhotoVault {
                 )
             }
 
+            Message::RegenerateRotatedData => {
+                let Some(ref drive_path) = self.selected_drive else {
+                    return Task::none();
+                };
+                if self.rotated_data_regen_active {
+                    return Task::none();
+                }
+
+                let drive_path = drive_path.clone();
+                self.begin_thumbnail_generation_epoch();
+                self.rotated_data_regen_active = true;
+
+                Task::perform(
+                    async move {
+                        let mut cleared_thumbnails = 0usize;
+                        let mut reset_faces = 0usize;
+
+                        if let Ok(db) = Database::open_for_drive(&drive_path) {
+                            if let Ok(mut stmt) = db.conn.prepare(
+                                "SELECT id, thumbnail_path FROM photos WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1",
+                            ) {
+                                let rows = stmt
+                                    .query_map([], |row| {
+                                        Ok((
+                                            row.get::<_, i64>(0)?,
+                                            row.get::<_, Option<String>>(1)?,
+                                        ))
+                                    })
+                                    .map(|iter| iter.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                                    .unwrap_or_default();
+
+                                for (_photo_id, rel_thumb) in &rows {
+                                    if let Some(rel_thumb) = rel_thumb {
+                                        let abs_thumb = drive_path.join(rel_thumb);
+                                        if std::fs::remove_file(&abs_thumb).is_ok() {
+                                            cleared_thumbnails += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            let _ = db.conn.execute(
+                                "UPDATE photos SET thumbnail_path = NULL WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1",
+                                [],
+                            );
+
+                            let _ = db.conn.execute(
+                                "UPDATE photos SET ocr_processed = FALSE WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1",
+                                [],
+                            );
+
+                            let affected_face_ids = db
+                                .conn
+                                .prepare(
+                                    "SELECT f.id FROM faces f JOIN photos p ON p.id = f.photo_id WHERE p.is_trashed = FALSE AND COALESCE(p.orientation, 1) != 1",
+                                )
+                                .and_then(|mut stmt| {
+                                    stmt.query_map([], |row| row.get::<_, i64>(0))
+                                        .map(|iter| iter.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                                })
+                                .unwrap_or_default();
+
+                            if let Ok(tx) = db.conn.unchecked_transaction() {
+                                let _ = tx.execute(
+                                    "DELETE FROM photo_inferred_identities WHERE photo_id IN (SELECT id FROM photos WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1)",
+                                    [],
+                                );
+                                let _ = tx.execute(
+                                    "DELETE FROM faces WHERE photo_id IN (SELECT id FROM photos WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1)",
+                                    [],
+                                );
+                                if let Ok(changed) = tx.execute(
+                                    "UPDATE photos SET faces_processed = FALSE WHERE is_trashed = FALSE AND COALESCE(orientation, 1) != 1",
+                                    [],
+                                ) {
+                                    reset_faces = changed;
+                                }
+                                let _ = tx.commit();
+                            }
+
+                            let faces_dir = drive_path.join(".photovault").join("faces");
+                            for face_id in affected_face_ids {
+                                let crop_path = faces_dir.join(format!("{}.jpg", face_id));
+                                if crop_path.exists() {
+                                    let _ = std::fs::remove_file(crop_path);
+                                }
+                            }
+                        }
+
+                        (cleared_thumbnails, reset_faces)
+                    },
+                    |(cleared_thumbnails, reset_faces)| Message::RotatedDataRegenerated {
+                        cleared_thumbnails,
+                        reset_faces,
+                    },
+                )
+            }
+
+            Message::RotatedDataRegenerated {
+                cleared_thumbnails,
+                reset_faces,
+            } => {
+                self.rotated_data_regen_active = false;
+                tracing::info!(
+                    "Regenerated rotated-data state: removed {} thumbnail files, reset {} photos for face processing",
+                    cleared_thumbnails,
+                    reset_faces
+                );
+
+                let mut tasks = vec![self.load_photos(), self.update(Message::ProcessFaces)];
+                if self.current_view == View::Documents {
+                    tasks.push(self.update(Message::RunDocumentAnalysis));
+                }
+                Task::batch(tasks)
+            }
+
             Message::GeocodingProgress { processed, total } => {
                 self.geocoding_progress = Some((processed, total));
                 if total == 0 {
@@ -2110,6 +2731,7 @@ impl PhotoVault {
 
                 let drive_path = drive_path.clone();
                 let detector_confidence = self.config.face_detection_confidence;
+                let clustering_threshold = self.config.face_clustering_threshold;
                 let model_dir = crate::bootstrap::model_dir();
 
                 let detector_path = crate::bootstrap::detector_model_path();
@@ -2139,6 +2761,7 @@ impl PhotoVault {
                                 &drive_path,
                                 &model_dir,
                                 detector_confidence,
+                                clustering_threshold,
                                 Some(progress_tx),
                                 Some(cancel_flag),
                             )
@@ -2250,9 +2873,39 @@ impl PhotoVault {
                                 .delete_all_clusters()
                                 .map_err(|e| format!("Failed to clear existing clusters: {}", e))?;
 
-                            let epsilon = (1.0_f32 - clustering_threshold).clamp(0.2, 0.9);
-                            let clusterer = crate::ml::FaceClusterer::new().with_epsilon(epsilon);
-                            let assignments = clusterer.cluster(&all_faces);
+                            let strict_max_distance = clustering_threshold.min(0.35).clamp(0.15, 0.6);
+                            let mut face_to_photo = std::collections::HashMap::new();
+                            {
+                                let mut stmt = db
+                                    .conn
+                                    .prepare("SELECT id, photo_id FROM faces")
+                                    .map_err(|e| format!("Failed to load face photo mapping: {}", e))?;
+                                let rows = stmt
+                                    .query_map([], |row| {
+                                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                                    })
+                                    .map_err(|e| format!("Failed to query face photo mapping: {}", e))?;
+                                for row in rows {
+                                    let (face_id, photo_id) =
+                                        row.map_err(|e| format!("Failed to read mapping row: {}", e))?;
+                                    face_to_photo.insert(face_id, photo_id);
+                                }
+                            }
+
+                            let inputs: Vec<crate::ml::ClusterInput> = all_faces
+                                .iter()
+                                .filter_map(|(face_id, emb)| {
+                                    face_to_photo.get(face_id).map(|photo_id| crate::ml::ClusterInput {
+                                        face_id: *face_id,
+                                        photo_id: *photo_id,
+                                        embedding: emb.clone(),
+                                    })
+                                })
+                                .collect();
+
+                            let clusterer = crate::ml::FaceClusterer::new()
+                                .with_max_distance(strict_max_distance);
+                            let assignments = clusterer.cluster(&inputs);
 
                             // Group face IDs by cluster
                             let mut cluster_groups: std::collections::HashMap<i32, Vec<i64>> =
@@ -2304,6 +2957,19 @@ impl PhotoVault {
                     clusters.len(),
                     self.face_clusters.len()
                 );
+                for cluster in &clusters {
+                    if cluster.photo_count > 0
+                        && !self.cluster_photos.is_empty()
+                        && self.selected_cluster_id == Some(cluster.id)
+                    {
+                        tracing::debug!(
+                            "Cluster {} has {} photos, currently loaded detail {}",
+                            cluster.id,
+                            cluster.photo_count,
+                            self.cluster_photos.len()
+                        );
+                    }
+                }
                 self.face_clusters = clusters;
                 Task::none()
             }
@@ -2312,17 +2978,31 @@ impl PhotoVault {
                 self.selected_cluster_id = Some(cluster_id);
                 self.current_view = View::ClusterDetail;
 
-                // Load photos for this cluster from already-loaded photos
+                // Load photos for this cluster directly from DB to avoid in-memory
+                // list truncation issues (timeline cache can be limited).
                 if let Some(ref db) = self.database {
                     let face_repo = FaceRepo::new(&db.conn);
                     match face_repo.get_photos_for_cluster(cluster_id) {
                         Ok(photo_ids) => {
-                            self.cluster_photos = self
-                                .photos
-                                .iter()
-                                .filter(|p| photo_ids.contains(&p.id))
-                                .cloned()
-                                .collect();
+                            let photo_repo = PhotoRepo::new(&db.conn);
+                            match photo_repo.get_by_ids(&photo_ids) {
+                                Ok(mut photos) => {
+                                    if let Some(ref drive_path) = self.selected_drive {
+                                        for photo in &mut photos {
+                                            if let Some(ref rel_path) = photo.thumbnail_path {
+                                                let abs_path = drive_path.join(rel_path);
+                                                photo.thumbnail_path =
+                                                    Some(abs_path.to_string_lossy().to_string());
+                                            }
+                                        }
+                                    }
+                                    self.cluster_photos = photos;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load cluster photo records: {}", e);
+                                    self.cluster_photos = Vec::new();
+                                }
+                            }
                             tracing::info!(
                                 "Loaded {} photos for cluster {}",
                                 self.cluster_photos.len(),
@@ -2711,8 +3391,11 @@ impl PhotoVault {
                             let detector = BurstDetector::new(BurstConfig {
                                 max_gap_seconds: burst_window,
                                 min_photos: 3,
+                                max_burst_span_seconds: (burst_window * 5).max(15),
+                                similarity_threshold: 0.90,
+                                require_same_folder: true,
                             });
-                            let burst_groups = detector.find_bursts(&db.conn)
+                            let burst_groups = detector.find_bursts(&db.conn, Some(&drive_path))
                                 .map_err(|e| format!("Burst detection failed: {}", e))?;
 
                             // Sync to database
@@ -2933,27 +3616,14 @@ impl PhotoVault {
                 if let Some(photo) = self.photos.get(idx) {
                     let has_prev = idx > 0;
                     let has_next = idx + 1 < self.photos.len();
-                    if let Some(ref drive_path) = self.selected_drive {
-                        // Build image handle from pre-decoded display image or file path
+                    if self.selected_drive.is_some() {
+                        // Only render pre-decoded oriented image to avoid orientation flicker.
                         let handle = if let Some(ref img) = self.current_display_image {
                             let rgba = img.to_rgba8();
                             let (w, h) = (rgba.width(), rgba.height());
                             Some(iced::widget::image::Handle::from_rgba(w, h, rgba.into_raw()))
                         } else {
-                            // Fallback: load from file path directly
-                            let orig = drive_path.join(&photo.file_path);
-                            let path = if orig.exists() {
-                                orig
-                            } else if let Some(ref tp) = photo.thumbnail_path {
-                                PathBuf::from(tp)
-                            } else {
-                                PathBuf::new()
-                            };
-                            if path.exists() {
-                                Some(iced::widget::image::Handle::from_path(&path))
-                            } else {
-                                None
-                            }
+                            None
                         };
                         return PhotoDetailView::view(
                             photo,
@@ -3022,7 +3692,95 @@ impl PhotoVault {
                     // Sidebar is ~200px, padding 32px total, each thumb is 160+8px gap
                     let available_width = (self.window_width - 200.0 - 32.0).max(168.0);
                     let columns = (available_width / 168.0).floor().max(2.0) as usize;
-                    TimelineView::view_with_photos(&self.photos, columns, self.config.theme)
+                    let timeline = TimelineView::view_with_photos(
+                        &self.photos,
+                        columns,
+                        &self.selected_timeline_photo_ids,
+                        self.hovered_timeline_photo_id,
+                        self.hovered_timeline_day_key.as_deref(),
+                        self.config.theme,
+                    );
+
+                    if self.selected_timeline_photo_ids.is_empty() {
+                        timeline
+                    } else {
+                        let p = colors::palette(self.config.theme);
+                        let selected_count = self.selected_timeline_photo_ids.len();
+
+                        let clear_hover = p.bg_hover;
+                        let clear_border = p.border_subtle;
+                        let clear_text = p.text_secondary;
+                        let clear_btn = button(text("x").size(14).color(clear_text))
+                            .padding([2, 8])
+                            .style(move |_theme: &iced::Theme, status| button::Style {
+                                background: match status {
+                                    button::Status::Hovered => Some(clear_hover.into()),
+                                    _ => None,
+                                },
+                                border: iced::Border {
+                                    color: clear_border,
+                                    width: 1.0,
+                                    radius: 999.0.into(),
+                                },
+                                ..Default::default()
+                            })
+                            .on_press(Message::ClearTimelinePhotoSelection);
+
+                        let delete_bg = p.semantic_danger;
+                        let delete_btn = button(text("Delete").size(12).color(iced::Color::WHITE))
+                            .padding([6, 12])
+                            .style(move |_theme: &iced::Theme, status| button::Style {
+                                background: Some(match status {
+                                    button::Status::Hovered => iced::Color {
+                                        r: (delete_bg.r * 0.9).clamp(0.0, 1.0),
+                                        g: (delete_bg.g * 0.9).clamp(0.0, 1.0),
+                                        b: (delete_bg.b * 0.9).clamp(0.0, 1.0),
+                                        a: 1.0,
+                                    }
+                                    .into(),
+                                    _ => delete_bg.into(),
+                                }),
+                                border: iced::Border {
+                                    color: iced::Color::TRANSPARENT,
+                                    width: 0.0,
+                                    radius: 6.0.into(),
+                                },
+                                ..Default::default()
+                            })
+                            .on_press(Message::TrashPhotos(
+                                self.selected_timeline_photo_ids
+                                    .iter()
+                                    .copied()
+                                    .collect::<Vec<_>>(),
+                            ));
+
+                        let bar_bg = p.bg_secondary;
+                        let bar_border = p.border_subtle;
+                        let top_bar = container(
+                            row![
+                                clear_btn,
+                                text(format!("{} selected", selected_count))
+                                    .size(12)
+                                    .color(p.text_secondary),
+                                iced::widget::Space::with_width(Length::Fill),
+                                delete_btn,
+                            ]
+                            .align_y(iced::Alignment::Center)
+                            .spacing(10),
+                        )
+                        .padding([8, 20])
+                        .style(move |_theme: &iced::Theme| container::Style {
+                            background: Some(bar_bg.into()),
+                            border: iced::Border {
+                                color: bar_border,
+                                width: 1.0,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        });
+
+                        column![top_bar, timeline].into()
+                    }
                 }
             }
             View::People => PeopleView::view_with_clusters(
@@ -3081,6 +3839,101 @@ impl PhotoVault {
                 &self.photos,
                 self.config.theme,
             ),
+            View::Documents => {
+                let available_width = (self.window_width - 200.0 - 32.0).max(168.0);
+                let columns = (available_width / 168.0).floor().max(2.0) as usize;
+                let docs = DocumentsView::view(
+                    &self.documents,
+                    &self.documents_query,
+                    self.documents_filter,
+                    &self.selected_timeline_photo_ids,
+                    columns,
+                    self.hovered_timeline_photo_id,
+                    self.hovered_timeline_day_key.as_deref(),
+                    self.config.theme,
+                );
+
+                if self.selected_timeline_photo_ids.is_empty() {
+                    docs
+                } else {
+                    let p = colors::palette(self.config.theme);
+                    let selected_count = self.selected_timeline_photo_ids.len();
+
+                    let clear_hover = p.bg_hover;
+                    let clear_border = p.border_subtle;
+                    let clear_text = p.text_secondary;
+                    let clear_btn = button(text("x").size(14).color(clear_text))
+                        .padding([2, 8])
+                        .style(move |_theme: &iced::Theme, status| button::Style {
+                            background: match status {
+                                button::Status::Hovered => Some(clear_hover.into()),
+                                _ => None,
+                            },
+                            border: iced::Border {
+                                color: clear_border,
+                                width: 1.0,
+                                radius: 999.0.into(),
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::ClearTimelinePhotoSelection);
+
+                    let delete_bg = p.semantic_danger;
+                    let delete_btn = button(text("Delete").size(12).color(iced::Color::WHITE))
+                        .padding([6, 12])
+                        .style(move |_theme: &iced::Theme, status| button::Style {
+                            background: Some(match status {
+                                button::Status::Hovered => iced::Color {
+                                    r: (delete_bg.r * 0.9).clamp(0.0, 1.0),
+                                    g: (delete_bg.g * 0.9).clamp(0.0, 1.0),
+                                    b: (delete_bg.b * 0.9).clamp(0.0, 1.0),
+                                    a: 1.0,
+                                }
+                                .into(),
+                                _ => delete_bg.into(),
+                            }),
+                            border: iced::Border {
+                                color: iced::Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: 6.0.into(),
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::TrashPhotos(
+                            self.selected_timeline_photo_ids
+                                .iter()
+                                .copied()
+                                .collect::<Vec<_>>(),
+                        ));
+
+                    let bar_bg = p.bg_secondary;
+                    let bar_border = p.border_subtle;
+                    let top_bar = container(
+                        row![
+                            clear_btn,
+                            text(format!("{} selected", selected_count))
+                                .size(12)
+                                .color(p.text_secondary),
+                            iced::widget::Space::with_width(Length::Fill),
+                            delete_btn,
+                        ]
+                        .align_y(iced::Alignment::Center)
+                        .spacing(10),
+                    )
+                    .padding([8, 20])
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: Some(bar_bg.into()),
+                        border: iced::Border {
+                            color: bar_border,
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        },
+                        ..Default::default()
+                    });
+
+                    column![top_bar, docs].into()
+                }
+            }
             View::Cull => {
                 if let Some(ref state) = self.cull_state {
                     CullView::view(
@@ -3112,7 +3965,11 @@ impl PhotoVault {
                 self.confirm_delete_photo_id,
                 self.config.theme,
             ),
-            View::Settings => SettingsView::view(&self.config, self.geocoding_progress),
+            View::Settings => SettingsView::view(
+                &self.config,
+                self.geocoding_progress,
+                self.rotated_data_regen_active,
+            ),
             View::Duplicates => {
                 DuplicatesView::view(
                     &self.duplicate_groups,
@@ -3169,7 +4026,13 @@ impl PhotoVault {
             }
             View::BurstDetail => {
                 if let Some(ref group) = self.selected_burst_group {
-                    BurstsView::group_detail_view(group, &self.selected_burst_members, self.config.theme)
+                    BurstsView::group_detail_view(
+                        group,
+                        &self.selected_burst_members,
+                        self.selected_drive.as_deref(),
+                        &self.photos,
+                        self.config.theme,
+                    )
                 } else {
                     BurstsView::view(
                         &self.burst_groups,
@@ -3192,7 +4055,8 @@ impl PhotoVault {
             || self.face_processing_active
             || self.duplicate_detection_running
             || self.burst_detection_running
-            || self.geocoding_progress.is_some();
+            || self.geocoding_progress.is_some()
+            || self.document_analysis_active;
 
         if has_status {
             let mut status_parts: Vec<String> = Vec::new();
@@ -3231,6 +4095,17 @@ impl PhotoVault {
             if let Some((processed, total)) = self.geocoding_progress {
                 if total > 0 {
                     status_parts.push(format!("Geocoding: {}/{}", processed, total));
+                }
+            }
+
+            if self.document_analysis_active {
+                if let Some(ref prog) = self.ocr_progress {
+                    status_parts.push(format!(
+                        "Documents: {}/{} analyzed ({} docs)",
+                        prog.processed, prog.total, prog.documents_found
+                    ));
+                } else {
+                    status_parts.push("Documents: analyzing...".to_string());
                 }
             }
 

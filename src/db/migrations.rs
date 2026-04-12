@@ -28,6 +28,21 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 4 {
         migrate_v3_to_v4(conn)?;
     }
+    if current_version < 5 {
+        migrate_v4_to_v5(conn)?;
+    }
+    if current_version < 6 {
+        migrate_v5_to_v6(conn)?;
+    }
+    if current_version < 7 {
+        migrate_v6_to_v7(conn)?;
+    }
+    if current_version < 8 {
+        migrate_v7_to_v8(conn)?;
+    }
+    if current_version < 9 {
+        migrate_v8_to_v9(conn)?;
+    }
 
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
@@ -57,6 +72,188 @@ fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
 
     conn.execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
     tracing::info!("Migrated database to schema version 4 (lens, flash, altitude)");
+    Ok(())
+}
+
+fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
+    let columns = [
+        ("content_category", "TEXT DEFAULT 'photo'"),
+        ("ocr_text", "TEXT"),
+        ("ocr_processed", "BOOLEAN DEFAULT FALSE"),
+        ("ocr_confidence", "REAL"),
+    ];
+
+    for (col, col_type) in &columns {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
+        match conn.execute(&sql, []) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    conn.execute_batch(
+        r#"
+        CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
+            ocr_text,
+            content='photos',
+            content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
+            INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
+            UPDATE photos_fts SET ocr_text = COALESCE(new.ocr_text, '') WHERE rowid = new.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
+            DELETE FROM photos_fts WHERE rowid = old.id;
+        END;
+
+        CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
+        CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
+
+        INSERT INTO schema_version (version) VALUES (6);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 6 (documents + OCR fields)");
+    Ok(())
+}
+
+fn migrate_v6_to_v7(conn: &Connection) -> SqliteResult<()> {
+    match conn.execute(
+        "ALTER TABLE face_clusters ADD COLUMN photo_count INTEGER DEFAULT 0",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+
+    conn.execute_batch(
+        r#"
+        UPDATE face_clusters
+        SET
+            face_count = (SELECT COUNT(*) FROM faces WHERE cluster_id = face_clusters.id),
+            photo_count = (
+                SELECT COUNT(DISTINCT photo_id)
+                FROM (
+                    SELECT photo_id FROM faces WHERE cluster_id = face_clusters.id
+                    UNION
+                    SELECT photo_id FROM photo_inferred_identities WHERE cluster_id = face_clusters.id
+                )
+            ),
+            representative_face_id = (
+                SELECT id
+                FROM faces
+                WHERE cluster_id = face_clusters.id
+                ORDER BY confidence DESC
+                LIMIT 1
+            ),
+            updated_at = CURRENT_TIMESTAMP;
+
+        INSERT INTO schema_version (version) VALUES (7);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 7 (face cluster photo counts)");
+    Ok(())
+}
+
+fn migrate_v7_to_v8(conn: &Connection) -> SqliteResult<()> {
+    match conn.execute(
+        "ALTER TABLE photo_inferred_identities ADD COLUMN is_inferred BOOLEAN DEFAULT TRUE",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+
+    conn.execute_batch(
+        r#"
+        UPDATE photo_inferred_identities
+        SET is_inferred = TRUE
+        WHERE is_inferred IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_inferred_is_inferred ON photo_inferred_identities(is_inferred);
+
+        INSERT INTO schema_version (version) VALUES (8);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 8 (inferred identity flag)");
+    Ok(())
+}
+
+fn migrate_v8_to_v9(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS person_gallery_embeddings (
+            id INTEGER PRIMARY KEY,
+            cluster_id INTEGER NOT NULL,
+            face_id INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            pose_label TEXT,
+            quality_score REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+            FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
+            UNIQUE(cluster_id, face_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_gallery_cluster ON person_gallery_embeddings(cluster_id);
+        CREATE INDEX IF NOT EXISTS idx_gallery_face ON person_gallery_embeddings(face_id);
+
+        INSERT INTO schema_version (version) VALUES (9);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 9 (person gallery embeddings)");
+    Ok(())
+}
+
+fn migrate_v4_to_v5(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS photo_inferred_identities (
+            id INTEGER PRIMARY KEY,
+            photo_id INTEGER NOT NULL,
+            cluster_id INTEGER NOT NULL,
+            source_photo_id INTEGER NOT NULL,
+            confidence REAL NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+            FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+            FOREIGN KEY (source_photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+            UNIQUE(photo_id, cluster_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_inferred_photo ON photo_inferred_identities(photo_id);
+        CREATE INDEX IF NOT EXISTS idx_inferred_cluster ON photo_inferred_identities(cluster_id);
+
+        INSERT INTO schema_version (version) VALUES (5);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 5 (inferred identities)");
     Ok(())
 }
 
