@@ -10,6 +10,7 @@ mod documents;
 mod duplicates;
 mod face_review;
 mod faces;
+mod memories;
 mod scanning;
 mod search_cull;
 mod settings;
@@ -206,5 +207,13 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::FaceReviewSkip => face_review::skip(app),
         Message::FaceReviewUndo => face_review::undo(app),
         Message::FaceReviewFinish => face_review::finish(app),
+
+        // --- Memories ---
+        Message::MemoriesTick => memories::tick(app),
+        Message::MemoriesRegenerated(cards) => memories::regenerated(app, cards),
+        Message::OpenMemory(id) => memories::open_memory(app, id),
+        Message::CloseMemoryDetail => memories::close_memory_detail(app),
+        Message::BlockMemoriesForPerson(cid) => memories::block_memories_for_person(app, cid),
+        Message::SetMemoriesEnabled(v) => memories::set_memories_enabled(app, v),
     }
 }

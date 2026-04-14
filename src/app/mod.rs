@@ -53,6 +53,14 @@ impl PhotoVault {
             );
         }
 
+        // Memory day-rollover tick: cheap NaiveDate compare every 60s.
+        if self.selected_drive.is_some() && self.memories_enabled {
+            subs.push(
+                iced::time::every(std::time::Duration::from_secs(60))
+                    .map(|_| Message::MemoriesTick),
+            );
+        }
+
         // Keyboard events for all views (shortcuts)
         if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {

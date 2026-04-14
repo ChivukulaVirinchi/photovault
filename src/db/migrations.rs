@@ -46,9 +46,33 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 10 {
         migrate_v9_to_v10(conn)?;
     }
+    if current_version < 11 {
+        migrate_v10_to_v11(conn)?;
+    }
 
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v10_to_v11(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS memory_blocks (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            target_key TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(kind, target_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_blocks_kind ON memory_blocks(kind);
+
+        INSERT INTO schema_version (version) VALUES (11);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 11 (memory blocks)");
     Ok(())
 }
 

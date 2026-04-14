@@ -250,6 +250,33 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             let state = app.face_review_state.as_ref().unwrap_or(&empty_state);
             FaceReviewView::view(state, app.selected_drive.as_deref(), app.config.theme)
         }
+        View::Memories => {
+            crate::views::memories::memories_view(&app.memories, app.config.theme)
+        }
+        View::MemoryDetail => {
+            let card = app
+                .selected_memory_id
+                .as_ref()
+                .and_then(|id| app.memories.iter().find(|c| &c.id == id))
+                .cloned();
+            match card {
+                Some(card) => {
+                    let photos: Vec<crate::models::Photo> = card
+                        .photo_ids
+                        .iter()
+                        .filter_map(|id| app.photos.iter().find(|p| p.id == *id).cloned())
+                        .collect();
+                    let columns = PhotoVault::timeline_columns_for_width(app.window_width);
+                    crate::views::memories::memory_detail_view(
+                        &card,
+                        &photos,
+                        columns,
+                        app.config.theme,
+                    )
+                }
+                None => crate::views::memories::memories_view(&app.memories, app.config.theme),
+            }
+        }
         View::Search => SearchView::view(
             &app.search_query,
             &app.search_suggestions,

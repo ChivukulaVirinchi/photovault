@@ -28,6 +28,10 @@ pub struct AppConfig {
     /// Weight applied to temporal-neighbor prior (±60 s, same cluster).
     #[serde(default = "default_weight_temporal")]
     pub weight_temporal: f32,
+
+    /// Whether the Memories feature (N years ago today, seasonal recaps) is on.
+    #[serde(default = "default_memories_enabled")]
+    pub memories_enabled: bool,
 }
 
 fn default_weight_cooccurrence() -> f32 {
@@ -36,6 +40,10 @@ fn default_weight_cooccurrence() -> f32 {
 
 fn default_weight_temporal() -> f32 {
     0.50
+}
+
+fn default_memories_enabled() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -55,6 +63,7 @@ impl Default for AppConfig {
             sidebar_collapsed: false,
             weight_cooccurrence: default_weight_cooccurrence(),
             weight_temporal: default_weight_temporal(),
+            memories_enabled: default_memories_enabled(),
         }
     }
 }

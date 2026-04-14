@@ -44,6 +44,10 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
         return super::handle(app, Message::LoadTrash);
     } else if view == View::FaceReview {
         return super::handle(app, Message::EnterFaceReview);
+    } else if view == View::Memories {
+        // Cards already in app.memories from startup/tick; just switch view.
+        app.current_view = view;
+        return Task::none();
     } else {
         Task::none()
     };
@@ -100,13 +104,22 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 let _ = super::handle(app, Message::RunGeocoding);
             }
 
+            // Kick off the initial Memories generation for today's date.
+            let memories_task = if app.memories_enabled {
+                let today = chrono::Local::now().date_naive();
+                super::memories::regenerate(app, today)
+            } else {
+                Task::none()
+            };
+
             // If library is empty, start scanning
-            if app.photo_count == 0 {
-                return super::handle(app, Message::StartScan);
+            let next = if app.photo_count == 0 {
+                super::handle(app, Message::StartScan)
             } else {
                 // Existing library: auto-sync incremental changes first.
-                return super::handle(app, Message::CheckForChanges);
-            }
+                super::handle(app, Message::CheckForChanges)
+            };
+            return Task::batch(vec![memories_task, next]);
         }
         Err(e) => {
             tracing::error!("Failed to open database: {}", e);

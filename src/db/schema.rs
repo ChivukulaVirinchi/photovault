@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (10);
+INSERT INTO schema_version (version) VALUES (11);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -202,6 +202,20 @@ CREATE TABLE IF NOT EXISTS face_review_queue (
 );
 
 -- ============================================================
+-- MEMORY BLOCKS
+-- User preferences for the Memories feature: hide memories involving
+-- specific people, or (future) specific date ranges.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS memory_blocks (
+    id              INTEGER PRIMARY KEY,
+    kind            TEXT NOT NULL,      -- 'person' (v1); 'date_range' future
+    target_key      TEXT NOT NULL,      -- cluster_id as string, or "MM-DD..MM-DD"
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(kind, target_key)
+);
+
+-- ============================================================
 -- DUPLICATE GROUPS
 -- Groups of identical or near-identical photos
 -- ============================================================
@@ -319,6 +333,7 @@ CREATE INDEX IF NOT EXISTS idx_review_queue_face ON face_review_queue(face_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_cluster ON face_review_queue(candidate_cluster_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_unresolved ON face_review_queue(resolved_at)
     WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_blocks_kind ON memory_blocks(kind);
 
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);

@@ -274,6 +274,20 @@ pub enum Message {
     FaceReviewUndo,
     /// Leave the review view, return to People
     FaceReviewFinish,
+
+    // --- Memories ---
+    /// Low-frequency tick for day-rollover detection.
+    MemoriesTick,
+    /// Async generator result.
+    MemoriesRegenerated(Vec<crate::services::MemoryCard>),
+    /// Open a specific memory's detail (filmstrip) view.
+    OpenMemory(String),
+    /// Leave memory detail, return to prior view.
+    CloseMemoryDetail,
+    /// Hide all memories involving a cluster; persisted.
+    BlockMemoriesForPerson(i64),
+    /// Global on/off for Memories.
+    SetMemoriesEnabled(bool),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

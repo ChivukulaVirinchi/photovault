@@ -38,6 +38,8 @@ pub enum View {
     People,
     ClusterDetail,
     FaceReview,
+    Memories,
+    MemoryDetail,
     Duplicates,
     DuplicateDetail,
     Bursts,
@@ -248,6 +250,19 @@ pub struct PhotoVault {
     /// Outstanding review queue size (for sidebar badge)
     pub(crate) face_review_pending: i64,
 
+    /// Memory cards currently surfaced in the Timeline banner + Memories view.
+    pub(crate) memories: Vec<crate::services::MemoryCard>,
+
+    /// The calendar date the in-memory `memories` list was generated for.
+    /// A day-rollover subscription regens when this drifts from today.
+    pub(crate) memories_for_date: Option<chrono::NaiveDate>,
+
+    /// Which memory the user has drilled into (maps to MemoryCard::id).
+    pub(crate) selected_memory_id: Option<String>,
+
+    /// Global toggle mirrored from AppConfig.memories_enabled.
+    pub(crate) memories_enabled: bool,
+
     /// Last-known Timeline scroll offset. Restored when the user navigates
     /// back to Timeline after opening a photo / switching views.
     pub(crate) timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset,
@@ -429,6 +444,10 @@ impl PhotoVault {
             cull_state: None,
             face_review_state: None,
             face_review_pending: 0,
+            memories: Vec::new(),
+            memories_for_date: None,
+            selected_memory_id: None,
+            memories_enabled: config.memories_enabled,
             timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset::default(),
             cull_confirm_pending: false,
             cull_return_view: None,
