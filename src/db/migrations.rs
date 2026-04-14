@@ -43,6 +43,9 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 9 {
         migrate_v8_to_v9(conn)?;
     }
+    if current_version < 10 {
+        migrate_v9_to_v10(conn)?;
+    }
 
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
@@ -198,6 +201,69 @@ fn migrate_v7_to_v8(conn: &Connection) -> SqliteResult<()> {
     )?;
 
     tracing::info!("Migrated database to schema version 8 (inferred identity flag)");
+    Ok(())
+}
+
+fn migrate_v9_to_v10(conn: &Connection) -> SqliteResult<()> {
+    let add_col = |sql: &str| -> SqliteResult<()> {
+        match conn.execute(sql, []) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("duplicate column") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    };
+
+    add_col("ALTER TABLE faces ADD COLUMN user_confirmed INTEGER DEFAULT 0")?;
+    add_col("ALTER TABLE face_clusters ADD COLUMN is_user_named INTEGER DEFAULT 0")?;
+    add_col("ALTER TABLE person_gallery_embeddings ADD COLUMN source TEXT DEFAULT 'auto'")?;
+
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS cluster_cannot_merge (
+            id INTEGER PRIMARY KEY,
+            cluster_a_id INTEGER NOT NULL,
+            cluster_b_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cluster_a_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+            FOREIGN KEY (cluster_b_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+            UNIQUE(cluster_a_id, cluster_b_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cannot_merge_a ON cluster_cannot_merge(cluster_a_id);
+        CREATE INDEX IF NOT EXISTS idx_cannot_merge_b ON cluster_cannot_merge(cluster_b_id);
+
+        CREATE TABLE IF NOT EXISTS face_review_queue (
+            id INTEGER PRIMARY KEY,
+            face_id INTEGER NOT NULL,
+            candidate_cluster_id INTEGER NOT NULL,
+            score REAL NOT NULL,
+            ambiguity REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME,
+            resolved_as TEXT,
+            FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
+            FOREIGN KEY (candidate_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+            UNIQUE(face_id, candidate_cluster_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_review_queue_face ON face_review_queue(face_id);
+        CREATE INDEX IF NOT EXISTS idx_review_queue_cluster ON face_review_queue(candidate_cluster_id);
+        CREATE INDEX IF NOT EXISTS idx_review_queue_unresolved
+            ON face_review_queue(resolved_at) WHERE resolved_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_gallery_source ON person_gallery_embeddings(source);
+
+        INSERT INTO schema_version (version) VALUES (10);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 10 (face feedback tables)");
     Ok(())
 }
 

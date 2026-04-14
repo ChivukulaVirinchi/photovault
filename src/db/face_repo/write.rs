@@ -1,4 +1,8 @@
 //! Write/mutation methods for FaceRepo.
+//!
+//! Several methods are kept as part of the repo's public surface even when
+//! nothing in the binary calls them today.
+#![allow(dead_code)]
 
 use rusqlite::{params, Result as SqliteResult};
 
@@ -197,26 +201,6 @@ impl<'a> FaceRepo<'a> {
         )?;
 
         tx.commit()
-    }
-
-    /// Record a "these two clusters are different people" user decision.
-    ///
-    /// Stored symmetrically as (min, max) to make the unique constraint
-    /// order-insensitive.
-    pub fn record_cannot_merge(&self, cluster_a: i64, cluster_b: i64) -> SqliteResult<()> {
-        if cluster_a == cluster_b {
-            return Ok(());
-        }
-        let (a, b) = if cluster_a < cluster_b {
-            (cluster_a, cluster_b)
-        } else {
-            (cluster_b, cluster_a)
-        };
-        self.conn.execute(
-            "INSERT OR IGNORE INTO cluster_cannot_merge (cluster_a_id, cluster_b_id) VALUES (?1, ?2)",
-            params![a, b],
-        )?;
-        Ok(())
     }
 
     /// Load all cannot-merge pairs (returns them in both directions for easy lookup).

@@ -141,13 +141,4 @@ impl OcrProcessor {
 
         Ok(documents_found)
     }
-
-    pub fn process_stage2_ocr(_drive_path: &std::path::Path) -> Result<usize, String> {
-        // Placeholder for deep analysis:
-        // 1. Load OCR ONNX models
-        // 2. Read candidate document photos
-        // 3. Extract text + confidence
-        // 4. Store text in photos.ocr_text and index with FTS5 triggers
-        Ok(0)
-    }
 }

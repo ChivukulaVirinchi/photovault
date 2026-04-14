@@ -1,6 +1,7 @@
 //! Inferred identity repository
 //!
 //! Stores contextual person links for photos where no direct face match exists.
+#![allow(dead_code)]
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 

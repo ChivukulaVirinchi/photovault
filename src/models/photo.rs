@@ -41,17 +41,6 @@ impl ContentCategory {
         }
     }
 
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Photo => "Photos",
-            Self::BusinessCard => "Business Cards",
-            Self::Document => "Documents",
-            Self::Screenshot => "Screenshots",
-            Self::Presentation => "Presentations",
-            Self::Whiteboard => "Whiteboards",
-            Self::Receipt => "Receipts",
-        }
-    }
 }
 
 /// Represents a photo in the library

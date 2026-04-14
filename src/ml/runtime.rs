@@ -114,11 +114,6 @@ impl OnnxRuntime {
         Ok(Self)
     }
 
-    /// Load an ONNX model from a file path into a Session.
-    pub fn load_model<P: AsRef<Path>>(&self, path: P) -> ort::Result<Session> {
-        self.load_model_with_threads(path, Self::default_intra_threads())
-    }
-
     /// Load an ONNX model with a specific number of intra-op threads.
     ///
     /// Use this when running multiple sessions in parallel to avoid
@@ -134,13 +129,6 @@ impl OnnxRuntime {
             .commit_from_file(path)?;
 
         Ok(session)
-    }
-
-    /// Default intra-op thread count, capped at 8 to avoid diminishing returns.
-    pub fn default_intra_threads() -> usize {
-        std::thread::available_parallelism()
-            .map(|n| n.get().min(8))
-            .unwrap_or(4)
     }
 }
 

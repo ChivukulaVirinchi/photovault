@@ -101,12 +101,6 @@ pub enum Message {
     /// Face processing completed
     FaceProcessingComplete(Result<FaceProcessingResult, String>),
 
-    /// Run clustering on existing face embeddings
-    RunClustering,
-
-    /// Clustering completed
-    ClusteringComplete(Result<usize, String>),
-
     /// Face clusters loaded from database
     FaceClustersLoaded(Vec<FaceClusterRecord>),
 

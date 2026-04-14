@@ -65,8 +65,6 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         // --- Faces ---
         Message::ProcessFaces => faces::process_faces(app),
         Message::FaceProcessingComplete(result) => faces::face_processing_complete(app, result),
-        Message::RunClustering => faces::run_clustering(app),
-        Message::ClusteringComplete(result) => faces::clustering_complete(app, result),
         Message::FaceClustersLoaded(clusters) => faces::face_clusters_loaded(app, clusters),
         Message::SelectCluster(cluster_id) => faces::select_cluster(app, cluster_id),
         Message::BackToPeople => faces::back_to_people(app),

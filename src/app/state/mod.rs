@@ -361,8 +361,13 @@ impl PhotoVault {
     }
 
     pub(crate) fn configured_thumbnail_size(&self) -> ThumbnailSize {
-        // Use Medium for crisp grid thumbnails (500px, 85% quality, Lanczos3).
-        ThumbnailSize::Medium
+        // Map user-chosen pixel size (from Settings) onto the three quality
+        // tiers the thumbnail service generates.
+        match self.config.thumbnail_size {
+            0..=350 => ThumbnailSize::Small,
+            351..=700 => ThumbnailSize::Medium,
+            _ => ThumbnailSize::Large,
+        }
     }
 
     /// Create new application instance

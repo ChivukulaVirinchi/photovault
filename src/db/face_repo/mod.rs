@@ -2,13 +2,11 @@
 //!
 //! Handles all database operations for faces and face clusters.
 
+#![allow(dead_code)]
+
 mod gallery;
 mod read;
 mod write;
-
-pub use self::gallery::*;
-pub use self::read::*;
-pub use self::write::*;
 
 use rusqlite::Connection;
 

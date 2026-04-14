@@ -70,13 +70,6 @@ pub struct FaceEmbedder {
 }
 
 impl FaceEmbedder {
-    /// Load the ArcFace model
-    pub fn new<P: AsRef<Path>>(runtime: &OnnxRuntime, model_path: P) -> ort::Result<Self> {
-        let session = runtime.load_model(model_path)?;
-
-        Ok(Self { session })
-    }
-
     /// Load the ArcFace model with a specific thread count per session.
     pub fn new_with_threads<P: AsRef<Path>>(
         runtime: &OnnxRuntime,

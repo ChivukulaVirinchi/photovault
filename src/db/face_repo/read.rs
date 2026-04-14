@@ -1,4 +1,9 @@
 //! Read/query methods for FaceRepo.
+//!
+//! Several methods here are kept as part of the repo's public surface even
+//! when nothing in the binary calls them today: they're cheap to maintain
+//! and likely to be used by future features.
+#![allow(dead_code)]
 
 use rusqlite::{params, Result as SqliteResult};
 
@@ -534,35 +539,6 @@ impl<'a> FaceRepo<'a> {
         }
 
         Ok(items)
-    }
-
-    /// Look up the embedding of a single face (used to add to a gallery after
-    /// a user "same person" confirmation).
-    pub fn get_face_embedding(&self, face_id: i64) -> SqliteResult<Option<FaceEmbedding>> {
-        let row: Option<Vec<u8>> = self
-            .conn
-            .query_row(
-                "SELECT embedding FROM faces WHERE id = ?1",
-                params![face_id],
-                |row| row.get(0),
-            )
-            .ok();
-        Ok(row.and_then(|bytes| FaceEmbedding::from_bytes(&bytes)))
-    }
-
-    /// Look up the prior cluster_id for a face (if the face already had an
-    /// assignment when queued). Used by the review UI to know which cluster
-    /// the "different" decision should forbid merging with.
-    pub fn get_face_cluster_id(&self, face_id: i64) -> SqliteResult<Option<i64>> {
-        let row: Option<Option<i64>> = self
-            .conn
-            .query_row(
-                "SELECT cluster_id FROM faces WHERE id = ?1",
-                params![face_id],
-                |row| row.get(0),
-            )
-            .ok();
-        Ok(row.flatten())
     }
 
     /// Cluster IDs of the already-assigned faces in the given photo (other

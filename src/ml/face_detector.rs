@@ -59,18 +59,6 @@ struct StrideOutput {
 }
 
 impl FaceDetector {
-    /// Load the SCRFD model
-    pub fn new<P: AsRef<Path>>(runtime: &OnnxRuntime, model_path: P) -> ort::Result<Self> {
-        let session = runtime.load_model(model_path)?;
-
-        Ok(Self {
-            session,
-            input_size: (640, 640),
-            confidence_threshold: 0.5,
-            nms_threshold: 0.4,
-        })
-    }
-
     /// Load the SCRFD model with a specific thread count per session.
     pub fn new_with_threads<P: AsRef<Path>>(
         runtime: &OnnxRuntime,
