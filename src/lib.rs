@@ -7,4 +7,3 @@ pub mod models;
 pub mod services;
 pub mod theme;
 pub mod search;
-pub mod scoring;

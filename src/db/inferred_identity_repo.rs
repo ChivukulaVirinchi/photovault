@@ -1,7 +1,6 @@
 //! Inferred identity repository
 //!
 //! Stores contextual person links for photos where no direct face match exists.
-#![allow(dead_code)]
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 
@@ -36,40 +35,6 @@ impl<'a> InferredIdentityRepo<'a> {
         )?;
         self.refresh_cluster_stats(cluster_id)?;
         Ok(())
-    }
-
-    pub fn delete_for_photo(&self, photo_id: i64) -> SqliteResult<usize> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT cluster_id FROM photo_inferred_identities WHERE photo_id = ?1",
-        )?;
-        let cluster_ids = stmt
-            .query_map(params![photo_id], |row| row.get::<_, i64>(0))?
-            .filter_map(|row| row.ok())
-            .collect::<Vec<_>>();
-
-        let deleted = self.conn.execute(
-            "DELETE FROM photo_inferred_identities WHERE photo_id = ?1",
-            params![photo_id],
-        )?;
-
-        for cluster_id in cluster_ids {
-            self.refresh_cluster_stats(cluster_id)?;
-        }
-
-        Ok(deleted)
-    }
-
-    pub fn get_photo_ids_for_cluster(&self, cluster_id: i64) -> SqliteResult<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT photo_id FROM photo_inferred_identities WHERE cluster_id = ?1",
-        )?;
-
-        let rows = stmt.query_map(params![cluster_id], |row| row.get::<_, i64>(0))?;
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row?);
-        }
-        Ok(ids)
     }
 
     fn refresh_cluster_stats(&self, cluster_id: i64) -> SqliteResult<()> {

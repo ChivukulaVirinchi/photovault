@@ -10,7 +10,6 @@ mod db;
 mod ml;
 mod models;
 mod search;
-mod scoring;
 mod services;
 mod theme;
 mod utils;

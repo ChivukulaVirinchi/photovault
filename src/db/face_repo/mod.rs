@@ -2,8 +2,6 @@
 //!
 //! Handles all database operations for faces and face clusters.
 
-#![allow(dead_code)]
-
 mod gallery;
 mod read;
 mod write;
@@ -25,7 +23,6 @@ pub struct FaceClusterRecord {
     pub id: i64,
     pub name: Option<String>,
     pub representative_face_id: Option<i64>,
-    pub face_count: i64,
     pub photo_count: i64,
     /// Path to the representative face thumbnail (computed, not stored in DB)
     pub face_thumbnail_path: Option<String>,
@@ -39,13 +36,11 @@ pub struct FaceClusterRecord {
 pub struct ReviewItem {
     pub queue_id: i64,
     pub face_id: i64,
-    pub face_photo_id: i64,
     pub candidate_cluster_id: i64,
     pub candidate_cluster_name: Option<String>,
     pub candidate_cluster_size: i64,
     pub candidate_sample_face_ids: Vec<i64>,
     pub score: f32,
-    pub ambiguity: Option<f32>,
 }
 
 /// Face database repository

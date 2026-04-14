@@ -1,9 +1,4 @@
 //! Read/query methods for FaceRepo.
-//!
-//! Several methods here are kept as part of the repo's public surface even
-//! when nothing in the binary calls them today: they're cheap to maintain
-//! and likely to be used by future features.
-#![allow(dead_code)]
 
 use rusqlite::{params, Result as SqliteResult};
 
@@ -12,79 +7,6 @@ use crate::ml::FaceEmbedding;
 use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding, ReviewItem};
 
 impl<'a> FaceRepo<'a> {
-    /// Get all faces with embeddings (for clustering)
-    pub fn get_all_faces_with_embeddings(&self) -> SqliteResult<Vec<(i64, FaceEmbedding)>> {
-        let mut stmt = self.conn.prepare("SELECT id, embedding FROM faces")?;
-
-        let rows = stmt.query_map([], |row| {
-            let id: i64 = row.get(0)?;
-            let bytes: Vec<u8> = row.get(1)?;
-            Ok((id, bytes))
-        })?;
-
-        let mut faces = Vec::new();
-        for row in rows {
-            let (id, bytes) = row?;
-            match FaceEmbedding::from_bytes(&bytes) {
-                Some(emb) => faces.push((id, emb)),
-                None => tracing::warn!("Corrupted face embedding for face_id={}: {} bytes", id, bytes.len()),
-            }
-        }
-
-        Ok(faces)
-    }
-
-    /// Get all faces with photo_id and embeddings.
-    pub fn get_all_faces_with_photo_embeddings(
-        &self,
-    ) -> SqliteResult<Vec<(i64, i64, FaceEmbedding)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, photo_id, embedding FROM faces")?;
-
-        let rows = stmt.query_map([], |row| {
-            let id: i64 = row.get(0)?;
-            let photo_id: i64 = row.get(1)?;
-            let bytes: Vec<u8> = row.get(2)?;
-            Ok((id, photo_id, bytes))
-        })?;
-
-        let mut faces = Vec::new();
-        for row in rows {
-            let (id, photo_id, bytes) = row?;
-            match FaceEmbedding::from_bytes(&bytes) {
-                Some(emb) => faces.push((id, photo_id, emb)),
-                None => tracing::warn!("Corrupted face embedding for face_id={}: {} bytes", id, bytes.len()),
-            }
-        }
-
-        Ok(faces)
-    }
-
-    /// Get unclustered faces with embeddings.
-    pub fn get_unclustered_faces_with_embeddings(&self) -> SqliteResult<Vec<(i64, FaceEmbedding)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, embedding FROM faces WHERE cluster_id IS NULL")?;
-
-        let rows = stmt.query_map([], |row| {
-            let id: i64 = row.get(0)?;
-            let bytes: Vec<u8> = row.get(1)?;
-            Ok((id, bytes))
-        })?;
-
-        let mut faces = Vec::new();
-        for row in rows {
-            let (id, bytes) = row?;
-            match FaceEmbedding::from_bytes(&bytes) {
-                Some(emb) => faces.push((id, emb)),
-                None => tracing::warn!("Corrupted face embedding for face_id={}: {} bytes", id, bytes.len()),
-            }
-        }
-
-        Ok(faces)
-    }
-
     /// Get unclustered faces with photo_id and embeddings.
     pub fn get_unclustered_faces_with_photo_embeddings(
         &self,
@@ -112,70 +34,11 @@ impl<'a> FaceRepo<'a> {
         Ok(faces)
     }
 
-    /// Get centroid embedding for each existing cluster.
-    pub fn get_cluster_centroids(&self) -> SqliteResult<Vec<(i64, FaceEmbedding)>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT cluster_id, embedding
-            FROM faces
-            WHERE cluster_id IS NOT NULL
-            ORDER BY cluster_id
-            "#,
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let cluster_id: i64 = row.get(0)?;
-            let bytes: Vec<u8> = row.get(1)?;
-            Ok((cluster_id, bytes))
-        })?;
-
-        let mut grouped: std::collections::HashMap<i64, Vec<FaceEmbedding>> =
-            std::collections::HashMap::new();
-        for row in rows {
-            let (cluster_id, bytes) = row?;
-            match FaceEmbedding::from_bytes(&bytes) {
-                Some(emb) => { grouped.entry(cluster_id).or_default().push(emb); }
-                None => tracing::warn!("Corrupted face embedding in cluster_id={}: {} bytes", cluster_id, bytes.len()),
-            }
-        }
-
-        let mut centroids = Vec::new();
-        for (cluster_id, embeddings) in grouped {
-            if embeddings.is_empty() {
-                continue;
-            }
-
-            let mut sum = vec![0.0f32; 512];
-            for emb in &embeddings {
-                for (i, value) in emb.vector.iter().enumerate() {
-                    sum[i] += *value;
-                }
-            }
-
-            let count = embeddings.len() as f32;
-            for value in &mut sum {
-                *value /= count;
-            }
-
-            let norm: f32 = sum.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for value in &mut sum {
-                    *value /= norm;
-                }
-            }
-
-            let centroid = FaceEmbedding::new(ndarray::Array1::from_vec(sum));
-            centroids.push((cluster_id, centroid));
-        }
-
-        Ok(centroids)
-    }
-
     /// Get all clusters, ordered by photo count descending
     pub fn get_all_clusters(&self) -> SqliteResult<Vec<FaceClusterRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, name, representative_face_id, face_count, photo_count
+            SELECT id, name, representative_face_id, photo_count
             FROM face_clusters
             ORDER BY photo_count DESC, face_count DESC
             "#,
@@ -186,8 +49,7 @@ impl<'a> FaceRepo<'a> {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 representative_face_id: row.get(2)?,
-                face_count: row.get(3)?,
-                photo_count: row.get(4)?,
+                photo_count: row.get(3)?,
                 face_thumbnail_path: None, // Set after query using drive path
             })
         })?;
@@ -410,28 +272,6 @@ impl<'a> FaceRepo<'a> {
         Ok(result)
     }
 
-    /// Get photos that need face processing (not yet processed)
-    pub fn get_unprocessed_photo_ids(&self) -> SqliteResult<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, file_path FROM photos
-            WHERE faces_processed = FALSE AND is_trashed = FALSE
-            ORDER BY date_taken DESC
-            "#,
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-
-        Ok(result)
-    }
-
     /// Get unprocessed photos with optional timestamp for contextual identity linking.
     pub fn get_unprocessed_photos_with_context(
         &self,
@@ -486,9 +326,9 @@ impl<'a> FaceRepo<'a> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT
-                q.id, q.face_id, f.photo_id,
+                q.id, q.face_id,
                 q.candidate_cluster_id, c.name, c.face_count,
-                q.score, q.ambiguity
+                q.score
             FROM face_review_queue q
             JOIN faces f ON f.id = q.face_id
             JOIN face_clusters c ON c.id = q.candidate_cluster_id
@@ -502,13 +342,11 @@ impl<'a> FaceRepo<'a> {
             Ok(ReviewItem {
                 queue_id: row.get(0)?,
                 face_id: row.get(1)?,
-                face_photo_id: row.get(2)?,
-                candidate_cluster_id: row.get(3)?,
-                candidate_cluster_name: row.get(4)?,
-                candidate_cluster_size: row.get(5)?,
+                candidate_cluster_id: row.get(2)?,
+                candidate_cluster_name: row.get(3)?,
+                candidate_cluster_size: row.get(4)?,
                 candidate_sample_face_ids: Vec::new(),
-                score: row.get(6)?,
-                ambiguity: row.get(7)?,
+                score: row.get(5)?,
             })
         })?;
 
