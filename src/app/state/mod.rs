@@ -260,6 +260,17 @@ pub struct PhotoVault {
     /// Which memory the user has drilled into (maps to MemoryCard::id).
     pub(crate) selected_memory_id: Option<String>,
 
+    /// Photos in the currently-open memory, in display order. Populated when
+    /// the user opens a memory; used by the slideshow view AND as the photo
+    /// detail navigation list when a photo is opened from a memory.
+    pub(crate) memory_photos: Vec<Photo>,
+
+    /// Current photo index in the slideshow (0-based).
+    pub(crate) memory_slideshow_index: usize,
+
+    /// True when the slideshow auto-advance is paused.
+    pub(crate) memory_slideshow_paused: bool,
+
     /// Global toggle mirrored from AppConfig.memories_enabled.
     pub(crate) memories_enabled: bool,
 
@@ -447,6 +458,9 @@ impl PhotoVault {
             memories: Vec::new(),
             memories_for_date: None,
             selected_memory_id: None,
+            memory_photos: Vec::new(),
+            memory_slideshow_index: 0,
+            memory_slideshow_paused: false,
             memories_enabled: config.memories_enabled,
             timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset::default(),
             cull_confirm_pending: false,
@@ -508,7 +522,11 @@ impl PhotoVault {
     }
 
     pub(crate) fn photo_detail_navigation_list(&self) -> &[Photo] {
-        if self.previous_view == Some(View::ClusterDetail) && !self.cluster_photos.is_empty() {
+        if self.previous_view == Some(View::MemoryDetail) && !self.memory_photos.is_empty() {
+            &self.memory_photos
+        } else if self.previous_view == Some(View::ClusterDetail)
+            && !self.cluster_photos.is_empty()
+        {
             &self.cluster_photos
         } else if self.previous_view == Some(View::Documents) && !self.documents.is_empty() {
             &self.documents

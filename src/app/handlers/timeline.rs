@@ -269,6 +269,22 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
         if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
             return super::handle(app, Message::BackToPeople);
         }
+    } else if app.current_view == View::MemoryDetail {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                return super::handle(app, Message::CloseMemoryDetail);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                return super::handle(app, Message::MemorySlideshowPrev);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                return super::handle(app, Message::MemorySlideshowNext);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Space) => {
+                return super::handle(app, Message::MemorySlideshowTogglePause);
+            }
+            _ => {}
+        }
     } else if app.current_view == View::FaceReview {
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {

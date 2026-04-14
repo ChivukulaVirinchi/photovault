@@ -288,6 +288,13 @@ pub enum Message {
     BlockMemoriesForPerson(i64),
     /// Global on/off for Memories.
     SetMemoriesEnabled(bool),
+    /// Slideshow auto-advance tick (every N seconds while not paused).
+    MemorySlideshowTick,
+    /// Manual prev/next within the open memory's slideshow.
+    MemorySlideshowPrev,
+    MemorySlideshowNext,
+    /// Toggle slideshow auto-advance.
+    MemorySlideshowTogglePause,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

@@ -201,18 +201,28 @@ fn wide_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Message
         .into()
 }
 
-/// Filmstrip detail for a single memory.
+/// Slideshow detail for a single memory. Shows one photo at a time
+/// big-and-centered, auto-advancing every 4 seconds (toggleable).
 pub fn memory_detail_view(
     card: &MemoryCard,
     photos: &[crate::models::Photo],
-    columns: usize,
+    drive_path: Option<&std::path::Path>,
+    current_index: usize,
+    paused: bool,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
+    let total = photos.len();
 
     let back_btn = button(text("← Back").size(13).color(p.text_primary))
         .on_press(Message::CloseMemoryDetail)
         .padding(Padding::from([8, 14]));
+
+    let counter_text = if total == 0 {
+        "0 / 0".to_string()
+    } else {
+        format!("{} / {}", current_index + 1, total)
+    };
 
     let header = row![
         back_btn,
@@ -220,24 +230,73 @@ pub fn memory_detail_view(
         column![
             text(card.title.clone()).size(22).color(p.text_primary),
             Space::with_height(2),
-            text(format!("{} photos", card.photo_count))
-                .size(13)
-                .color(p.text_secondary),
+            text(counter_text).size(12).color(p.text_secondary),
         ],
     ]
     .align_y(Alignment::Center)
     .padding(Padding::from([16, 24]));
 
-    let grid = crate::components::photo_grid::photo_grid_simple(
-        photos,
-        160.0,
-        columns,
-        None,
-        None,
-        theme,
-    );
+    if total == 0 {
+        let body = column![
+            header,
+            Space::with_height(64),
+            text("No photos in this memory.")
+                .size(14)
+                .color(p.text_secondary),
+        ]
+        .align_x(Alignment::Center);
+        return container(body).width(Length::Fill).height(Length::Fill).into();
+    }
 
-    container(scrollable(column![header, grid]))
+    // Resolve the absolute path for the current photo. Prefer the original
+    // file (full quality) but fall back to the stored thumbnail if the drive
+    // path is unknown (rare).
+    let current = &photos[current_index.min(total - 1)];
+    let abs_path: Option<String> = drive_path.map(|root| {
+        root.join(&current.file_path).to_string_lossy().to_string()
+    });
+
+    let hero: Element<'static, Message> = match abs_path {
+        Some(path) => container(
+            iced_image(path)
+                .content_fit(ContentFit::Contain)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into(),
+        None => container(text("(image unavailable)").color(p.text_tertiary))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into(),
+    };
+
+    let prev_btn = button(text("◀").size(20).color(p.text_primary))
+        .on_press(Message::MemorySlideshowPrev)
+        .padding(Padding::from([10, 16]));
+
+    let pause_label = if paused { "▶ Play" } else { "❚❚ Pause" };
+    let pause_btn = button(text(pause_label).size(13).color(p.text_primary))
+        .on_press(Message::MemorySlideshowTogglePause)
+        .padding(Padding::from([10, 18]));
+
+    let next_btn = button(text("▶").size(20).color(p.text_primary))
+        .on_press(Message::MemorySlideshowNext)
+        .padding(Padding::from([10, 16]));
+
+    let controls = container(
+        row![prev_btn, Space::with_width(12), pause_btn, Space::with_width(12), next_btn]
+            .align_y(Alignment::Center),
+    )
+    .center_x(Length::Fill)
+    .padding(Padding::from([12, 0]));
+
+    container(column![header, hero, controls])
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

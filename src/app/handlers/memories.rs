@@ -87,10 +87,60 @@ pub(crate) fn regenerated(app: &mut PhotoVault, cards: Vec<MemoryCard>) -> Task<
 }
 
 pub(crate) fn open_memory(app: &mut PhotoVault, id: String) -> Task<Message> {
+    // Resolve which photos belong to this memory (look them up in app.photos).
+    let photos: Vec<crate::models::Photo> = app
+        .memories
+        .iter()
+        .find(|c| c.id == id)
+        .map(|card| {
+            card.photo_ids
+                .iter()
+                .filter_map(|pid| app.photos.iter().find(|p| p.id == *pid).cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+
     app.previous_view = Some(app.current_view.clone());
     app.selected_memory_id = Some(id);
+    app.memory_photos = photos;
+    app.memory_slideshow_index = 0;
+    app.memory_slideshow_paused = false;
     app.current_view = View::MemoryDetail;
     Task::none()
+}
+
+pub(crate) fn slideshow_tick(app: &mut PhotoVault) -> Task<Message> {
+    if app.current_view != View::MemoryDetail || app.memory_slideshow_paused {
+        return Task::none();
+    }
+    advance(app, 1);
+    Task::none()
+}
+
+pub(crate) fn slideshow_next(app: &mut PhotoVault) -> Task<Message> {
+    advance(app, 1);
+    Task::none()
+}
+
+pub(crate) fn slideshow_prev(app: &mut PhotoVault) -> Task<Message> {
+    advance(app, -1);
+    Task::none()
+}
+
+pub(crate) fn slideshow_toggle_pause(app: &mut PhotoVault) -> Task<Message> {
+    app.memory_slideshow_paused = !app.memory_slideshow_paused;
+    Task::none()
+}
+
+fn advance(app: &mut PhotoVault, delta: i32) {
+    let n = app.memory_photos.len();
+    if n == 0 {
+        return;
+    }
+    let idx = app.memory_slideshow_index as i32 + delta;
+    let n_i = n as i32;
+    let wrapped = ((idx % n_i) + n_i) % n_i;
+    app.memory_slideshow_index = wrapped as usize;
 }
 
 pub(crate) fn close_memory_detail(app: &mut PhotoVault) -> Task<Message> {

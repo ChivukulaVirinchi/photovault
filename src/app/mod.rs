@@ -61,6 +61,18 @@ impl PhotoVault {
             );
         }
 
+        // Memory slideshow auto-advance — only when actually viewing a
+        // memory slideshow and not paused.
+        if self.current_view == state::View::MemoryDetail
+            && !self.memory_slideshow_paused
+            && !self.memory_photos.is_empty()
+        {
+            subs.push(
+                iced::time::every(std::time::Duration::from_secs(4))
+                    .map(|_| Message::MemorySlideshowTick),
+            );
+        }
+
         // Keyboard events for all views (shortcuts)
         if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {

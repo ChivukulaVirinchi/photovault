@@ -215,5 +215,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::CloseMemoryDetail => memories::close_memory_detail(app),
         Message::BlockMemoriesForPerson(cid) => memories::block_memories_for_person(app, cid),
         Message::SetMemoriesEnabled(v) => memories::set_memories_enabled(app, v),
+        Message::MemorySlideshowTick => memories::slideshow_tick(app),
+        Message::MemorySlideshowPrev => memories::slideshow_prev(app),
+        Message::MemorySlideshowNext => memories::slideshow_next(app),
+        Message::MemorySlideshowTogglePause => memories::slideshow_toggle_pause(app),
     }
 }

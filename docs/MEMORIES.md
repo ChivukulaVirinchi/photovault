@@ -41,8 +41,14 @@ on today's date.
 
 ### What you can do with a memory
 
-- **Click** to open the filmstrip view: header with title + photo
-  count, back button, full grid of all photos in that memory.
+- **Click** to open the slideshow: one photo at a time, big and
+  centered, auto-advancing every 4 seconds. Header shows the memory
+  title and a `current / total` counter.
+- **Slideshow controls**:
+  - ◀ and ▶ buttons (or `←` / `→` arrow keys) to step manually.
+  - Pause / Play button (or `Space` key) to stop / resume auto-advance.
+  - Back button (or `Esc`) to return to the previous view.
+  - Auto-advance loops back to the first photo at the end.
 - **Hide a person from Memories**: open a person's detail view (People
   → click the person), use the "Hide from Memories" button in the
   header. The block is durable — that person is removed from current

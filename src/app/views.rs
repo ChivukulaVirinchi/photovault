@@ -268,20 +268,14 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 .and_then(|id| app.memories.iter().find(|c| &c.id == id))
                 .cloned();
             match card {
-                Some(card) => {
-                    let photos: Vec<crate::models::Photo> = card
-                        .photo_ids
-                        .iter()
-                        .filter_map(|id| app.photos.iter().find(|p| p.id == *id).cloned())
-                        .collect();
-                    let columns = PhotoVault::timeline_columns_for_width(app.window_width);
-                    crate::views::memories::memory_detail_view(
-                        &card,
-                        &photos,
-                        columns,
-                        app.config.theme,
-                    )
-                }
+                Some(card) => crate::views::memories::memory_detail_view(
+                    &card,
+                    &app.memory_photos,
+                    app.selected_drive.as_deref(),
+                    app.memory_slideshow_index,
+                    app.memory_slideshow_paused,
+                    app.config.theme,
+                ),
                 None => crate::views::memories::memories_view(&app.memories, app.config.theme),
             }
         }
