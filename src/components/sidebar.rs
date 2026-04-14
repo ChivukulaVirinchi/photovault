@@ -60,13 +60,19 @@ impl Sidebar {
 
         let nav_items = column![
             Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
-            Self::nav_button("People", View::People, current_view, app_theme),
+            Self::nav_button("Search", View::Search, current_view, app_theme),
+            Space::with_height(12),
+            Self::group_header("People", app_theme),
+            Self::nav_button("All People", View::People, current_view, app_theme),
             Self::nav_button(&review_label, View::FaceReview, current_view, app_theme),
+            Space::with_height(12),
+            Self::group_header("Cleanup", app_theme),
             Self::nav_button("Duplicates", View::Duplicates, current_view, app_theme),
             Self::nav_button("Bursts", View::Bursts, current_view, app_theme),
-            Self::nav_button("Search", View::Search, current_view, app_theme),
-            Self::nav_button("Documents", View::Documents, current_view, app_theme),
             Self::nav_button("Trash", View::Trash, current_view, app_theme),
+            Space::with_height(12),
+            Self::group_header("Library", app_theme),
+            Self::nav_button("Documents", View::Documents, current_view, app_theme),
         ]
         .spacing(2)
         .padding(Padding::from([0, 8]));
@@ -102,6 +108,14 @@ impl Sidebar {
                 },
                 ..Default::default()
             })
+            .into()
+    }
+
+    /// Small caps-ish section header between nav groups.
+    fn group_header(label: &str, app_theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(app_theme);
+        container(text(label.to_uppercase()).size(10).color(p.text_tertiary))
+            .padding(Padding::from([4, 15]))
             .into()
     }
 

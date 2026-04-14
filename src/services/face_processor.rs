@@ -878,14 +878,154 @@ impl FaceProcessor {
             .refresh_all_galleries()
             .map_err(|e| format!("Failed to refresh galleries: {}", e))?;
 
+        // Post-pass: unify clusters that are actually the same person but
+        // got split by complete-link's strictness under lighting variance.
+        // Uses single-link (best pair) across gallery members with a stricter
+        // "multiple good pairs" requirement to avoid false positives.
+        let merged = Self::merge_similar_clusters(face_repo)?;
+
         tracing::info!(
-            "Agglomerative clustering: assigned {} faces, created {} new clusters from {} unresolved faces",
+            "Agglomerative clustering: assigned {} faces, created {} new clusters, merged {} fragments, from {} unresolved faces",
             assigned_to_existing,
             clusters_created,
+            merged,
             unresolved.len()
         );
 
-        Ok(clusters_created)
+        Ok(clusters_created.saturating_sub(merged))
+    }
+
+    /// Unify clusters that likely represent the same person but got split by
+    /// complete-link's strict pairwise requirement.
+    ///
+    /// For each pair (A, B) of existing clusters:
+    ///   - Skip if cannot-merge is set.
+    ///   - Skip if they share any photo (same-photo-different-faces means
+    ///     they must be different people).
+    ///   - Compute cross-cluster similarity using single-link on the gallery:
+    ///     mean of the top-3 cosine similarities across all member pairs.
+    ///   - If the mean top-3 exceeds `merge_threshold`, queue the merge.
+    ///
+    /// Merges are applied in descending score order with a union-find over
+    /// live cluster IDs, so a chain of fragments can all collapse into one.
+    fn merge_similar_clusters(face_repo: &FaceRepo) -> Result<usize, String> {
+        // Tunable: how aggressively to unify fragments. Higher = safer.
+        // Mean of top-3 cross-cluster similarities above this -> merge.
+        const MERGE_THRESHOLD: f32 = 0.55;
+        const TOP_K_PAIRS: usize = 3;
+
+        let galleries = face_repo
+            .get_gallery_embeddings()
+            .map_err(|e| format!("Failed to load galleries: {}", e))?;
+
+        let mut gallery_by_cluster: HashMap<i64, Vec<crate::ml::FaceEmbedding>> = HashMap::new();
+        for g in galleries {
+            gallery_by_cluster
+                .entry(g.cluster_id)
+                .or_default()
+                .push(g.embedding);
+        }
+
+        let cannot_merge = face_repo
+            .get_cannot_merge_map()
+            .map_err(|e| format!("Failed to load cannot-merge: {}", e))?;
+
+        let cluster_photo_rows = face_repo
+            .get_cluster_photo_ids()
+            .map_err(|e| format!("Failed to load cluster-photo map: {}", e))?;
+        let mut cluster_photos: HashMap<i64, std::collections::HashSet<i64>> = HashMap::new();
+        for (cid, pid) in cluster_photo_rows {
+            cluster_photos.entry(cid).or_default().insert(pid);
+        }
+
+        let cluster_ids: Vec<i64> = gallery_by_cluster.keys().copied().collect();
+        let mut candidates: Vec<(f32, i64, i64)> = Vec::new();
+
+        for i in 0..cluster_ids.len() {
+            for j in (i + 1)..cluster_ids.len() {
+                let a = cluster_ids[i];
+                let b = cluster_ids[j];
+
+                if cannot_merge.get(&a).map_or(false, |set| set.contains(&b)) {
+                    continue;
+                }
+
+                let photos_a = cluster_photos.get(&a);
+                let photos_b = cluster_photos.get(&b);
+                let shares_photo = match (photos_a, photos_b) {
+                    (Some(pa), Some(pb)) => pa.iter().any(|p| pb.contains(p)),
+                    _ => false,
+                };
+                if shares_photo {
+                    continue;
+                }
+
+                let ga = gallery_by_cluster.get(&a).map(|v| v.as_slice()).unwrap_or(&[]);
+                let gb = gallery_by_cluster.get(&b).map(|v| v.as_slice()).unwrap_or(&[]);
+                if ga.is_empty() || gb.is_empty() {
+                    continue;
+                }
+
+                let mut sims: Vec<f32> = Vec::with_capacity(ga.len() * gb.len());
+                for ea in ga {
+                    for eb in gb {
+                        sims.push(ea.cosine_similarity(eb));
+                    }
+                }
+                sims.sort_by(|x, y| y.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+                let k = TOP_K_PAIRS.min(sims.len());
+                let mean_top_k: f32 = sims.iter().take(k).sum::<f32>() / k as f32;
+
+                if mean_top_k >= MERGE_THRESHOLD {
+                    candidates.push((mean_top_k, a, b));
+                }
+            }
+        }
+
+        candidates.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Union-find: each cluster starts pointing to itself; merges redirect.
+        let mut parent: HashMap<i64, i64> = cluster_ids.iter().map(|&c| (c, c)).collect();
+        fn find(parent: &mut HashMap<i64, i64>, mut x: i64) -> i64 {
+            loop {
+                let p = *parent.get(&x).unwrap_or(&x);
+                if p == x {
+                    return x;
+                }
+                // Path compression.
+                let pp = *parent.get(&p).unwrap_or(&p);
+                parent.insert(x, pp);
+                x = pp;
+            }
+        }
+
+        let mut merged_count = 0usize;
+        for (score, a, b) in candidates {
+            let ra = find(&mut parent, a);
+            let rb = find(&mut parent, b);
+            if ra == rb {
+                continue;
+            }
+            // Keep the smaller cluster id as the survivor (arbitrary but stable).
+            let (survivor, casualty) = if ra < rb { (ra, rb) } else { (rb, ra) };
+            match face_repo.merge_clusters(casualty, survivor) {
+                Ok(_) => {
+                    parent.insert(casualty, survivor);
+                    merged_count += 1;
+                    tracing::info!(
+                        "Post-pass merge: cluster {} -> {} (score {:.3})",
+                        casualty,
+                        survivor,
+                        score
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("merge_similar_clusters: merge failed {}: {}", casualty, e);
+                }
+            }
+        }
+
+        Ok(merged_count)
     }
 
     /// Save a face crop image to disk as JPEG.
