@@ -37,6 +37,7 @@ pub enum View {
     Timeline,
     People,
     ClusterDetail,
+    FaceReview,
     Duplicates,
     DuplicateDetail,
     Bursts,
@@ -47,6 +48,52 @@ pub enum View {
     Trash,
     Settings,
     PhotoDetail,
+}
+
+/// Interactive face review deck state.
+#[derive(Debug, Clone)]
+pub struct FaceReviewState {
+    pub queue: Vec<crate::db::ReviewItem>,
+    pub current_index: usize,
+    pub confirmed: usize,
+    pub rejected: usize,
+    pub skipped: usize,
+    /// Queue IDs resolved in this session, latest last, for undo.
+    pub undo_stack: Vec<(i64, ReviewDecision)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Same,
+    Different,
+    Skip,
+}
+
+impl FaceReviewState {
+    pub fn new(queue: Vec<crate::db::ReviewItem>) -> Self {
+        Self {
+            queue,
+            current_index: 0,
+            confirmed: 0,
+            rejected: 0,
+            skipped: 0,
+            undo_stack: Vec::new(),
+        }
+    }
+
+    pub fn current(&self) -> Option<&crate::db::ReviewItem> {
+        self.queue.get(self.current_index)
+    }
+
+    pub fn advance(&mut self) {
+        if self.current_index + 1 <= self.queue.len() {
+            self.current_index += 1;
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.current_index >= self.queue.len()
+    }
 }
 
 /// Active scanning state
@@ -194,6 +241,12 @@ pub struct PhotoVault {
 
     /// Quick cull session state
     pub(crate) cull_state: Option<crate::views::CullState>,
+
+    /// Face review deck state
+    pub(crate) face_review_state: Option<FaceReviewState>,
+
+    /// Outstanding review queue size (for sidebar badge)
+    pub(crate) face_review_pending: i64,
 
     /// Whether cull finish confirmation is pending
     pub(crate) cull_confirm_pending: bool,
@@ -364,6 +417,8 @@ impl PhotoVault {
             search_result_photo_ids: Vec::new(),
             search_loading: false,
             cull_state: None,
+            face_review_state: None,
+            face_review_pending: 0,
             cull_confirm_pending: false,
             cull_return_view: None,
             trash_items: Vec::new(),

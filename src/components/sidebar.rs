@@ -14,8 +14,13 @@ use crate::theme::colors;
 pub struct Sidebar;
 
 impl Sidebar {
-    /// Render the sidebar
-    pub fn view(current_view: &View, app_theme: AppTheme) -> Element<'static, Message> {
+    /// Render the sidebar. `review_pending` is the face-review queue size and
+    /// drives the badge on the "Review Faces" entry.
+    pub fn view(
+        current_view: &View,
+        app_theme: AppTheme,
+        review_pending: i64,
+    ) -> Element<'static, Message> {
         let p = colors::palette(app_theme);
 
         let hover_bg = p.bg_hover;
@@ -47,9 +52,16 @@ impl Sidebar {
         )
         .padding(Padding::from([24, 16]));
 
+        let review_label = if review_pending > 0 {
+            format!("Review Faces · {}", review_pending)
+        } else {
+            "Review Faces".to_string()
+        };
+
         let nav_items = column![
             Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
             Self::nav_button("People", View::People, current_view, app_theme),
+            Self::nav_button(&review_label, View::FaceReview, current_view, app_theme),
             Self::nav_button("Duplicates", View::Duplicates, current_view, app_theme),
             Self::nav_button("Bursts", View::Bursts, current_view, app_theme),
             Self::nav_button("Search", View::Search, current_view, app_theme),

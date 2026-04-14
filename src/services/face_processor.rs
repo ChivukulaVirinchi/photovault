@@ -79,6 +79,7 @@ impl FaceProcessor {
         model_dir: &Path,
         detector_confidence: f32,
         clustering_threshold: f32,
+        resolver_weights: crate::ml::ResolverWeights,
         progress_tx: Option<async_channel::Sender<FaceProcessingProgress>>,
         cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<FaceProcessingResult, String> {
@@ -100,7 +101,8 @@ impl FaceProcessor {
 
         let total = unprocessed.len();
         if total == 0 {
-            let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
+            let clusters_created =
+                Self::run_clustering(&face_repo, clustering_threshold, resolver_weights)?;
             return Ok(FaceProcessingResult {
                 photos_processed: 0,
                 faces_detected: 0,
@@ -162,6 +164,9 @@ impl FaceProcessor {
 
         let processed_count = Arc::new(AtomicUsize::new(0));
         let faces_count = Arc::new(AtomicUsize::new(0));
+        let rejected_small = Arc::new(AtomicUsize::new(0));
+        let rejected_lowconf = Arc::new(AtomicUsize::new(0));
+        let rejected_blurry = Arc::new(AtomicUsize::new(0));
         let cancel = cancel_flag.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         // Shared paths for thread-local session init
@@ -290,22 +295,41 @@ impl FaceProcessor {
                         );
                     }
 
-                    // Embed each detected face
+                    // Embed each detected face (after quality filter)
                     let mut face_inserts = Vec::new();
                     for face in &detected {
-                        if let Some(ref aligned) = face.aligned_face {
-                            let embedding = EMBEDDER.with(|e| {
-                                let mut borrow = e.borrow_mut();
-                                borrow.as_mut().and_then(|emb| emb.embed(aligned))
+                        let (_bx, _by, bw, bh) = face.bbox;
+                        if bw * bh < Self::MIN_FACE_AREA_PX2 {
+                            rejected_small.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        if face.confidence < Self::MIN_FACE_CONFIDENCE {
+                            rejected_lowconf.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+
+                        let aligned = match face.aligned_face.as_ref() {
+                            Some(a) => a,
+                            None => continue,
+                        };
+
+                        let sharpness = Self::laplacian_variance(aligned);
+                        if sharpness < Self::MIN_LAPLACIAN_VAR {
+                            rejected_blurry.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+
+                        let embedding = EMBEDDER.with(|e| {
+                            let mut borrow = e.borrow_mut();
+                            borrow.as_mut().and_then(|emb| emb.embed(aligned))
+                        });
+                        if let Some(embedding) = embedding {
+                            face_inserts.push(FaceInsert {
+                                bbox_normalized: face.bbox_normalized,
+                                confidence: face.confidence,
+                                embedding,
+                                aligned_face: aligned.clone(),
                             });
-                            if let Some(embedding) = embedding {
-                                face_inserts.push(FaceInsert {
-                                    bbox_normalized: face.bbox_normalized,
-                                    confidence: face.confidence,
-                                    embedding,
-                                    aligned_face: aligned.clone(),
-                                });
-                            }
                         }
                     }
 
@@ -329,6 +353,16 @@ impl FaceProcessor {
 
         // Check if cancelled partway through
         let was_cancelled = cancel.load(Ordering::Relaxed);
+
+        let rej_small = rejected_small.load(Ordering::Relaxed);
+        let rej_lowconf = rejected_lowconf.load(Ordering::Relaxed);
+        let rej_blurry = rejected_blurry.load(Ordering::Relaxed);
+        if rej_small + rej_lowconf + rej_blurry > 0 {
+            tracing::info!(
+                "Quality filter: rejected {} small, {} low-confidence, {} blurry faces",
+                rej_small, rej_lowconf, rej_blurry
+            );
+        }
 
         // ---- Stage 2: Batched DB Writes ----
         let mut total_faces = 0usize;
@@ -437,7 +471,8 @@ impl FaceProcessor {
         }
 
         // ---- Stage 4: Clustering ----
-        let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
+        let clusters_created =
+            Self::run_clustering(&face_repo, clustering_threshold, resolver_weights)?;
 
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
@@ -540,6 +575,104 @@ impl FaceProcessor {
         Ok(inserted)
     }
 
+    /// Minimum bbox area (pixels^2) for a face to be worth embedding.
+    /// 20x20 px = 400.
+    const MIN_FACE_AREA_PX2: f32 = 400.0;
+
+    /// Minimum detection confidence to accept a face for embedding, even if the
+    /// detector's own threshold is looser.
+    const MIN_FACE_CONFIDENCE: f32 = 0.3;
+
+    /// Minimum Laplacian variance on the 112x112 aligned crop. Below this the
+    /// face is too blurry to produce a reliable embedding.
+    const MIN_LAPLACIAN_VAR: f32 = 10.0;
+
+    /// Laplacian-of-gaussian-style blur measure on a 112x112 aligned crop.
+    /// Higher = sharper. Very blurry faces score near 0.
+    fn laplacian_variance(img: &image::RgbImage) -> f32 {
+        let w = img.width() as i32;
+        let h = img.height() as i32;
+        if w < 3 || h < 3 {
+            return 0.0;
+        }
+
+        let mut gray = vec![0.0f32; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let p = img.get_pixel(x as u32, y as u32).0;
+                gray[(y * w + x) as usize] =
+                    0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
+            }
+        }
+
+        let mut sum = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        let mut count = 0usize;
+        for y in 1..(h - 1) {
+            for x in 1..(w - 1) {
+                let idx = (y * w + x) as usize;
+                let center = gray[idx];
+                let l = 4.0 * center
+                    - gray[(y * w + (x - 1)) as usize]
+                    - gray[(y * w + (x + 1)) as usize]
+                    - gray[((y - 1) * w + x) as usize]
+                    - gray[((y + 1) * w + x) as usize];
+                sum += l;
+                sum_sq += l * l;
+                count += 1;
+            }
+        }
+
+        let n = count as f32;
+        let mean = sum / n;
+        (sum_sq / n) - mean * mean
+    }
+
+    /// Build a resolver context for one face: co-occurrence counts between
+    /// candidate clusters and the already-assigned clusters in this photo,
+    /// plus temporal-neighbor assignments.
+    fn build_resolver_context(
+        face_repo: &FaceRepo,
+        photo_id: i64,
+        face_id: i64,
+        hits: &[crate::ml::RetrievalHit],
+    ) -> crate::ml::ResolverContext {
+        const TEMPORAL_WINDOW_SECS: i64 = 60;
+
+        let photo_other_clusters = face_repo
+            .get_photo_other_clusters(photo_id, face_id)
+            .unwrap_or_default();
+
+        let mut cooccurrence_scores: std::collections::HashMap<i64, i64> =
+            std::collections::HashMap::new();
+        if !photo_other_clusters.is_empty() {
+            for hit in hits {
+                let mut total: i64 = 0;
+                for other in &photo_other_clusters {
+                    total += face_repo
+                        .cooccurrence_count(hit.cluster_id, *other)
+                        .unwrap_or(0);
+                }
+                if total > 0 {
+                    cooccurrence_scores.insert(hit.cluster_id, total);
+                }
+            }
+        }
+
+        let temporal_neighbor_clusters: std::collections::HashSet<i64> = face_repo
+            .temporal_neighbor_clusters(photo_id, TEMPORAL_WINDOW_SECS)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(cid, _)| cid)
+            .collect();
+
+        crate::ml::ResolverContext {
+            photo_other_clusters,
+            cooccurrence_scores,
+            temporal_neighbor_clusters,
+        }
+    }
+
     fn average_brightness(image: &image::DynamicImage) -> f32 {
         let small = image
             .resize(64, 64, image::imageops::FilterType::Triangle)
@@ -570,19 +703,30 @@ impl FaceProcessor {
     }
 
     /// Run incremental clustering in two stages:
-    /// 1) Assign unclustered faces to existing clusters (high-confidence match)
-    /// 2) Run agglomerative clustering only on still-unclustered faces
-    fn run_clustering(face_repo: &FaceRepo, clustering_threshold: f32) -> Result<usize, String> {
+    /// 1) Gallery k-NN retrieval + confidence bands:
+    ///      HIGH      -> auto-assign to top cluster
+    ///      AMBIGUOUS -> queue for user review
+    ///      LOW       -> leave for Stage 2
+    /// 2) Complete-link agglomerative clustering on still-unresolved faces
+    fn run_clustering(
+        face_repo: &FaceRepo,
+        clustering_threshold: f32,
+        resolver_weights: crate::ml::ResolverWeights,
+    ) -> Result<usize, String> {
         let mut assigned_to_existing = 0usize;
-        let strict_max_distance = clustering_threshold.min(0.35).clamp(0.15, 0.6);
+        let mut queued_for_review = 0usize;
+        let strict_max_distance = clustering_threshold.clamp(0.15, 0.6);
 
-        // Stage A: assign unclustered faces to existing person gallery entries.
+        // Stage A: gallery-based retrieval with confidence bands.
         let galleries = face_repo
             .get_gallery_embeddings()
             .map_err(|e| format!("Failed to load person galleries: {}", e))?;
         let cluster_photo_rows = face_repo
             .get_cluster_photo_ids()
             .map_err(|e| format!("Failed to load cluster-photo map: {}", e))?;
+        let cannot_merge = face_repo
+            .get_cannot_merge_map()
+            .map_err(|e| format!("Failed to load cannot-merge constraints: {}", e))?;
 
         let mut cluster_photo_ids: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
             std::collections::HashMap::new();
@@ -593,52 +737,96 @@ impl FaceProcessor {
                 .insert(photo_id);
         }
 
-        let mut gallery_by_cluster: std::collections::HashMap<i64, Vec<crate::ml::FaceEmbedding>> =
-            std::collections::HashMap::new();
+        // Build the gallery slice form retrieve_candidates expects.
+        let mut gallery_by_cluster: std::collections::HashMap<
+            i64,
+            Vec<(i64, crate::ml::FaceEmbedding)>,
+        > = std::collections::HashMap::new();
         for g in galleries {
             gallery_by_cluster
                 .entry(g.cluster_id)
                 .or_default()
-                .push(g.embedding);
+                .push((g.face_id, g.embedding));
         }
+        let gallery_vec: Vec<(i64, Vec<(i64, crate::ml::FaceEmbedding)>)> =
+            gallery_by_cluster.into_iter().collect();
+
+        let banding = crate::ml::BandingConfig::default();
 
         let unclustered = face_repo
             .get_unclustered_faces_with_photo_embeddings()
             .map_err(|e| format!("Failed to get unclustered faces: {}", e))?;
 
         for (face_id, photo_id, embedding) in &unclustered {
-            let mut best: Option<(i64, f32)> = None;
-            for (cluster_id, gallery) in &gallery_by_cluster {
-                if cluster_photo_ids
-                    .get(cluster_id)
-                    .map(|set| set.contains(photo_id))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-
-                for sample in gallery {
-                    let distance = 1.0 - embedding.cosine_similarity(sample);
-                    if distance > strict_max_distance {
-                        continue;
-                    }
-                    match best {
-                        Some((_, best_dist)) if distance >= best_dist => {}
-                        _ => best = Some((*cluster_id, distance)),
+            // Build exclusion set: clusters already present in this photo
+            // (same-photo conflict) and anything cannot-merge with those.
+            let mut exclude: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            let clusters_in_photo: Vec<i64> = cluster_photo_ids
+                .iter()
+                .filter(|(_, set)| set.contains(photo_id))
+                .map(|(cid, _)| *cid)
+                .collect();
+            for cid in &clusters_in_photo {
+                exclude.insert(*cid);
+                if let Some(forbidden) = cannot_merge.get(cid) {
+                    for f in forbidden {
+                        exclude.insert(*f);
                     }
                 }
             }
 
-            if let Some((cluster_id, _)) = best {
-                face_repo
-                    .assign_face_to_cluster(*face_id, cluster_id)
-                    .map_err(|e| format!("Failed to assign face to cluster: {}", e))?;
-                cluster_photo_ids
-                    .entry(cluster_id)
-                    .or_default()
-                    .insert(*photo_id);
-                assigned_to_existing += 1;
+            let hits = crate::ml::retrieve_candidates(
+                embedding,
+                &gallery_vec,
+                5,
+                1.0 - strict_max_distance, // treat distance threshold as similarity lower bound
+                &exclude,
+            );
+
+            // Context re-rank using co-occurrence and temporal-neighbor signals.
+            let resolver_ctx = Self::build_resolver_context(
+                face_repo,
+                *photo_id,
+                *face_id,
+                &hits,
+            );
+            let reranked = crate::ml::rerank(&hits, &resolver_ctx, resolver_weights);
+            let band = crate::ml::retrieval::classify(&reranked, &banding);
+
+            match band {
+                crate::ml::ConfidenceBand::High { hit } => {
+                    face_repo
+                        .assign_face_to_cluster(*face_id, hit.cluster_id)
+                        .map_err(|e| format!("Failed to assign face to cluster: {}", e))?;
+                    cluster_photo_ids
+                        .entry(hit.cluster_id)
+                        .or_default()
+                        .insert(*photo_id);
+                    assigned_to_existing += 1;
+                }
+                crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
+                    let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
+                    if let Err(e) = face_repo.enqueue_review(
+                        *face_id,
+                        top.cluster_id,
+                        top.score,
+                        ambiguity,
+                    ) {
+                        tracing::warn!("Failed to enqueue review for face {}: {}", face_id, e);
+                    }
+                    queued_for_review += 1;
+                }
+                crate::ml::ConfidenceBand::Low => {
+                    // Leave unassigned; Stage B (agglomerative) will handle it.
+                }
             }
+        }
+
+        if queued_for_review > 0 {
+            tracing::info!(
+                "Queued {} ambiguous faces for user review",
+                queued_for_review
+            );
         }
 
         // Stage B: complete-link agglomerative clustering on unresolved faces.

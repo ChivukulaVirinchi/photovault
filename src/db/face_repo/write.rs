@@ -148,7 +148,26 @@ impl<'a> FaceRepo<'a> {
     /// Merge source cluster into target cluster
     ///
     /// Moves all faces from source to target, updates counts, deletes source.
+    /// Refuses if a cannot-merge constraint exists between the two clusters.
     pub fn merge_clusters(&self, source_id: i64, target_id: i64) -> SqliteResult<()> {
+        let blocked: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*) FROM cluster_cannot_merge
+            WHERE (cluster_a_id = ?1 AND cluster_b_id = ?2)
+               OR (cluster_a_id = ?2 AND cluster_b_id = ?1)
+            "#,
+            params![source_id, target_id],
+            |row| row.get(0),
+        )?;
+        if blocked > 0 {
+            tracing::warn!(
+                "Refusing to merge clusters {} and {}: user marked them different",
+                source_id,
+                target_id
+            );
+            return Ok(());
+        }
+
         let tx = self.conn.unchecked_transaction()?;
 
         // Move all faces from source to target
@@ -175,6 +194,241 @@ impl<'a> FaceRepo<'a> {
         tx.execute(
             "DELETE FROM face_clusters WHERE id = ?1",
             params![source_id],
+        )?;
+
+        tx.commit()
+    }
+
+    /// Record a "these two clusters are different people" user decision.
+    ///
+    /// Stored symmetrically as (min, max) to make the unique constraint
+    /// order-insensitive.
+    pub fn record_cannot_merge(&self, cluster_a: i64, cluster_b: i64) -> SqliteResult<()> {
+        if cluster_a == cluster_b {
+            return Ok(());
+        }
+        let (a, b) = if cluster_a < cluster_b {
+            (cluster_a, cluster_b)
+        } else {
+            (cluster_b, cluster_a)
+        };
+        self.conn.execute(
+            "INSERT OR IGNORE INTO cluster_cannot_merge (cluster_a_id, cluster_b_id) VALUES (?1, ?2)",
+            params![a, b],
+        )?;
+        Ok(())
+    }
+
+    /// Load all cannot-merge pairs (returns them in both directions for easy lookup).
+    pub fn get_cannot_merge_map(&self) -> SqliteResult<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT cluster_a_id, cluster_b_id FROM cluster_cannot_merge")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+
+        let mut map: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (a, b) = row?;
+            map.entry(a).or_default().insert(b);
+            map.entry(b).or_default().insert(a);
+        }
+        Ok(map)
+    }
+
+    /// Add a face to the review queue with its top candidate cluster.
+    ///
+    /// Idempotent via UNIQUE(face_id, candidate_cluster_id). Updates score
+    /// and ambiguity on conflict.
+    pub fn enqueue_review(
+        &self,
+        face_id: i64,
+        candidate_cluster_id: i64,
+        score: f32,
+        ambiguity: Option<f32>,
+    ) -> SqliteResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO face_review_queue (face_id, candidate_cluster_id, score, ambiguity)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(face_id, candidate_cluster_id) DO UPDATE SET
+                score = excluded.score,
+                ambiguity = excluded.ambiguity,
+                resolved_at = NULL,
+                resolved_as = NULL
+            "#,
+            params![face_id, candidate_cluster_id, score, ambiguity],
+        )?;
+        Ok(())
+    }
+
+    /// User confirmed this face is the same person as the candidate cluster.
+    ///
+    /// Atomic: assigns the face, marks user_confirmed=1, adds the face to the
+    /// cluster's gallery with source='user_confirmed' (sticky), resolves the
+    /// queue entry, refreshes cluster stats.
+    pub fn resolve_review_same(&self, queue_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        let (face_id, candidate_cluster_id): (i64, i64) = tx.query_row(
+            "SELECT face_id, candidate_cluster_id FROM face_review_queue WHERE id = ?1",
+            params![queue_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        tx.execute(
+            "UPDATE faces SET cluster_id = ?1, user_confirmed = 1 WHERE id = ?2",
+            params![candidate_cluster_id, face_id],
+        )?;
+
+        let embedding_bytes: Vec<u8> = tx.query_row(
+            "SELECT embedding FROM faces WHERE id = ?1",
+            params![face_id],
+            |row| row.get(0),
+        )?;
+        let confidence: Option<f32> = tx
+            .query_row(
+                "SELECT confidence FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        tx.execute(
+            r#"
+            INSERT INTO person_gallery_embeddings
+                (cluster_id, face_id, embedding, quality_score, source)
+            VALUES (?1, ?2, ?3, ?4, 'user_confirmed')
+            ON CONFLICT(cluster_id, face_id) DO UPDATE SET
+                source = 'user_confirmed',
+                quality_score = excluded.quality_score
+            "#,
+            params![
+                candidate_cluster_id,
+                face_id,
+                embedding_bytes,
+                confidence.unwrap_or(0.0),
+            ],
+        )?;
+
+        tx.execute(
+            "UPDATE face_review_queue SET resolved_at = CURRENT_TIMESTAMP, resolved_as = 'same' WHERE id = ?1",
+            params![queue_id],
+        )?;
+
+        Self::refresh_cluster_stats_tx(&tx, candidate_cluster_id)?;
+
+        tx.commit()
+    }
+
+    /// User rejected this candidate: the face is NOT the candidate cluster.
+    ///
+    /// - Marks the face with user_confirmed = -1 (rejected for this candidate).
+    /// - If the face was previously assigned to a different cluster, records
+    ///   a cluster_cannot_merge pair.
+    /// - Resolves the queue entry.
+    pub fn resolve_review_different(&self, queue_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        let (face_id, candidate_cluster_id): (i64, i64) = tx.query_row(
+            "SELECT face_id, candidate_cluster_id FROM face_review_queue WHERE id = ?1",
+            params![queue_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let prior_cluster: Option<i64> = tx
+            .query_row(
+                "SELECT cluster_id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        tx.execute(
+            "UPDATE faces SET user_confirmed = -1 WHERE id = ?1",
+            params![face_id],
+        )?;
+
+        if let Some(prior) = prior_cluster {
+            if prior != candidate_cluster_id {
+                let (a, b) = if prior < candidate_cluster_id {
+                    (prior, candidate_cluster_id)
+                } else {
+                    (candidate_cluster_id, prior)
+                };
+                tx.execute(
+                    "INSERT OR IGNORE INTO cluster_cannot_merge (cluster_a_id, cluster_b_id) VALUES (?1, ?2)",
+                    params![a, b],
+                )?;
+            }
+        }
+
+        tx.execute(
+            "UPDATE face_review_queue SET resolved_at = CURRENT_TIMESTAMP, resolved_as = 'different' WHERE id = ?1",
+            params![queue_id],
+        )?;
+
+        tx.commit()
+    }
+
+    /// User skipped this item: mark resolved_as = 'skipped' so it doesn't
+    /// resurface in the next review session (but can be re-queued on a
+    /// future scan if the situation changes).
+    pub fn resolve_review_skip(&self, queue_id: i64) -> SqliteResult<()> {
+        self.conn.execute(
+            "UPDATE face_review_queue SET resolved_at = CURRENT_TIMESTAMP, resolved_as = 'skipped' WHERE id = ?1",
+            params![queue_id],
+        )?;
+        Ok(())
+    }
+
+    /// Reverse a prior review resolution (for undo).
+    pub fn unresolve_review(&self, queue_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        let resolved_as: Option<String> = tx
+            .query_row(
+                "SELECT resolved_as FROM face_review_queue WHERE id = ?1",
+                params![queue_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let (face_id, candidate_cluster_id): (i64, i64) = tx.query_row(
+            "SELECT face_id, candidate_cluster_id FROM face_review_queue WHERE id = ?1",
+            params![queue_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        match resolved_as.as_deref() {
+            Some("same") => {
+                // Roll back cluster assignment + gallery insert.
+                tx.execute(
+                    "UPDATE faces SET cluster_id = NULL, user_confirmed = 0 WHERE id = ?1",
+                    params![face_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1 AND face_id = ?2 AND source = 'user_confirmed'",
+                    params![candidate_cluster_id, face_id],
+                )?;
+                Self::refresh_cluster_stats_tx(&tx, candidate_cluster_id)?;
+            }
+            Some("different") => {
+                tx.execute(
+                    "UPDATE faces SET user_confirmed = 0 WHERE id = ?1",
+                    params![face_id],
+                )?;
+                // Note: we don't remove the cannot_merge row; user may still
+                // want that constraint. If they didn't, they can merge manually.
+            }
+            _ => {}
+        }
+
+        tx.execute(
+            "UPDATE face_review_queue SET resolved_at = NULL, resolved_as = NULL WHERE id = ?1",
+            params![queue_id],
         )?;
 
         tx.commit()

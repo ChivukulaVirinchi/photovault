@@ -1,7 +1,7 @@
 //! Main application state and logic
 
 mod messages;
-mod state;
+pub mod state;
 mod views;
 mod handlers;
 

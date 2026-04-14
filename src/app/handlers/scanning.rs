@@ -38,6 +38,8 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     } else if view == View::Trash {
         app.current_view = view;
         return super::handle(app, Message::LoadTrash);
+    } else if view == View::FaceReview {
+        return super::handle(app, Message::EnterFaceReview);
     } else {
         Task::none()
     };

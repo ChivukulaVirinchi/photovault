@@ -8,6 +8,7 @@ use super::state::PhotoVault;
 mod bursts;
 mod documents;
 mod duplicates;
+mod face_review;
 mod faces;
 mod scanning;
 mod search_cull;
@@ -193,5 +194,14 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         } => settings::rotated_data_regenerated(app, cleared_thumbnails, reset_faces),
         Message::ToggleSidebar => settings::toggle_sidebar(app),
         Message::NoOp => settings::no_op(app),
+
+        // --- Face Review deck ---
+        Message::EnterFaceReview => face_review::enter(app),
+        Message::FaceReviewLoaded(items) => face_review::loaded(app, items),
+        Message::FaceReviewSame => face_review::same(app),
+        Message::FaceReviewDifferent => face_review::different(app),
+        Message::FaceReviewSkip => face_review::skip(app),
+        Message::FaceReviewUndo => face_review::undo(app),
+        Message::FaceReviewFinish => face_review::finish(app),
     }
 }

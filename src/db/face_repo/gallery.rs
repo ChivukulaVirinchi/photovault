@@ -29,10 +29,35 @@ impl<'a> FaceRepo<'a> {
         tx: &rusqlite::Transaction<'_>,
         cluster_id: i64,
     ) -> SqliteResult<()> {
+        // User-confirmed gallery members are sticky: never evicted by diversity
+        // replacement. Auto-selected members are rebuilt from scratch each call.
+        let mut sticky: Vec<(i64, FaceEmbedding)> = Vec::new();
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT face_id, embedding
+                FROM person_gallery_embeddings
+                WHERE cluster_id = ?1 AND source = 'user_confirmed'
+                "#,
+            )?;
+            let rows = stmt.query_map(params![cluster_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (face_id, bytes) = row?;
+                if let Some(emb) = FaceEmbedding::from_bytes(&bytes) {
+                    sticky.push((face_id, emb));
+                }
+            }
+        }
+
         tx.execute(
-            "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1",
+            "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1 AND source != 'user_confirmed'",
             params![cluster_id],
         )?;
+
+        let sticky_ids: std::collections::HashSet<i64> =
+            sticky.iter().map(|(id, _)| *id).collect();
 
         let mut stmt = tx.prepare(
             r#"
@@ -51,35 +76,59 @@ impl<'a> FaceRepo<'a> {
             ))
         })?;
 
-        let mut selected: Vec<(i64, FaceEmbedding, f32)> = Vec::new();
+        const MAX_GALLERY: usize = 30;
+        const DIVERSITY_THRESHOLD: f32 = 0.70;
+
+        // Auto members can't include faces already sticky.
+        let mut auto: Vec<(i64, FaceEmbedding, f32)> = Vec::new();
         for row in rows {
             let (face_id, bytes, confidence) = row?;
+            if sticky_ids.contains(&face_id) {
+                continue;
+            }
             let Some(emb) = FaceEmbedding::from_bytes(&bytes) else {
-                tracing::warn!("Corrupted embedding in refresh_gallery for face_id={}: {} bytes", face_id, bytes.len());
+                tracing::warn!(
+                    "Corrupted embedding in refresh_gallery for face_id={}: {} bytes",
+                    face_id,
+                    bytes.len()
+                );
                 continue;
             };
 
-            if selected.len() < 5 {
-                selected.push((face_id, emb, confidence));
+            // Seed with the top-N by confidence until we hit the cap.
+            let total = sticky.len() + auto.len();
+            if total < MAX_GALLERY {
+                auto.push((face_id, emb, confidence));
                 continue;
             }
 
+            // Check diversity against both sticky and auto members.
             let mut min_similarity = 1.0f32;
-            for (_, existing, _) in &selected {
+            for (_, existing) in &sticky {
+                let sim = emb.cosine_similarity(existing);
+                if sim < min_similarity {
+                    min_similarity = sim;
+                }
+            }
+            for (_, existing, _) in &auto {
                 let sim = emb.cosine_similarity(existing);
                 if sim < min_similarity {
                     min_similarity = sim;
                 }
             }
 
-            if min_similarity < 0.80 {
-                // Replace most redundant current item to preserve diversity.
+            if min_similarity < DIVERSITY_THRESHOLD {
+                // Replace the most redundant *auto* entry (sticky ones are untouchable).
                 let mut replace_idx = 0usize;
                 let mut replace_score = 2.0f32;
-                for (idx, (_, existing, _)) in selected.iter().enumerate() {
+                for (idx, (_, existing, _)) in auto.iter().enumerate() {
                     let mut avg = 0.0f32;
                     let mut cnt = 0.0f32;
-                    for (j, (_, other, _)) in selected.iter().enumerate() {
+                    for (_, other) in &sticky {
+                        avg += existing.cosine_similarity(other);
+                        cnt += 1.0;
+                    }
+                    for (j, (_, other, _)) in auto.iter().enumerate() {
                         if idx == j {
                             continue;
                         }
@@ -94,15 +143,17 @@ impl<'a> FaceRepo<'a> {
                         replace_idx = idx;
                     }
                 }
-                selected[replace_idx] = (face_id, emb, confidence);
+                if !auto.is_empty() {
+                    auto[replace_idx] = (face_id, emb, confidence);
+                }
             }
         }
 
-        for (face_id, emb, quality_score) in selected {
+        for (face_id, emb, quality_score) in auto {
             tx.execute(
                 r#"
-                INSERT INTO person_gallery_embeddings (cluster_id, face_id, embedding, quality_score)
-                VALUES (?1, ?2, ?3, ?4)
+                INSERT INTO person_gallery_embeddings (cluster_id, face_id, embedding, quality_score, source)
+                VALUES (?1, ?2, ?3, ?4, 'auto')
                 "#,
                 params![cluster_id, face_id, emb.to_bytes(), quality_score],
             )?;

@@ -255,6 +255,40 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
         if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
             return super::handle(app, Message::BackToPeople);
         }
+    } else if app.current_view == View::FaceReview {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                return super::handle(app, Message::FaceReviewSame);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                return super::handle(app, Message::FaceReviewDifferent);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                return super::handle(app, Message::FaceReviewFinish);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                return super::handle(app, Message::FaceReviewFinish);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Space) => {
+                return super::handle(app, Message::FaceReviewSkip);
+            }
+            keyboard::Key::Character(ref ch) => {
+                let lower = ch.to_lowercase();
+                if lower == "y" {
+                    return super::handle(app, Message::FaceReviewSame);
+                }
+                if lower == "n" {
+                    return super::handle(app, Message::FaceReviewDifferent);
+                }
+                if lower == "s" {
+                    return super::handle(app, Message::FaceReviewSkip);
+                }
+                if lower == "u" {
+                    return super::handle(app, Message::FaceReviewUndo);
+                }
+            }
+            _ => {}
+        }
     } else if app.current_view == View::DuplicateDetail {
         if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
             return super::handle(app, Message::CloseDuplicateDetail);

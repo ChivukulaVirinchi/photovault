@@ -19,7 +19,7 @@ pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
 pub use connection::Database;
 pub use document_repo::DocumentRepo;
 pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo};
-pub use face_repo::{FaceClusterRecord, FaceRepo};
+pub use face_repo::{FaceClusterRecord, FaceRepo, ReviewItem};
 pub use inferred_identity_repo::InferredIdentityRepo;
 pub use photo_repo::PhotoRepo;
 pub use schema::create_schema;

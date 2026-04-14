@@ -19,6 +19,23 @@ pub struct AppConfig {
     pub window_width: u32,
     pub window_height: u32,
     pub sidebar_collapsed: bool,
+
+    /// Weight applied to co-occurrence prior when multiple candidate
+    /// clusters exist for an unassigned face. 0 disables the signal.
+    #[serde(default = "default_weight_cooccurrence")]
+    pub weight_cooccurrence: f32,
+
+    /// Weight applied to temporal-neighbor prior (±60 s, same cluster).
+    #[serde(default = "default_weight_temporal")]
+    pub weight_temporal: f32,
+}
+
+fn default_weight_cooccurrence() -> f32 {
+    0.30
+}
+
+fn default_weight_temporal() -> f32 {
+    0.50
 }
 
 impl Default for AppConfig {
@@ -27,7 +44,7 @@ impl Default for AppConfig {
             theme: AppTheme::Dark,
             thumbnail_size: 300,
             face_detection_confidence: 0.35,
-            face_clustering_threshold: 0.35,
+            face_clustering_threshold: 0.42,
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
@@ -36,6 +53,8 @@ impl Default for AppConfig {
             window_width: 1400,
             window_height: 900,
             sidebar_collapsed: false,
+            weight_cooccurrence: default_weight_cooccurrence(),
+            weight_temporal: default_weight_temporal(),
         }
     }
 }
@@ -75,6 +94,8 @@ impl AppConfig {
         self.trash_auto_delete_days = self.trash_auto_delete_days.max(1).min(365);
         self.window_width = self.window_width.clamp(400, 7680);
         self.window_height = self.window_height.clamp(300, 4320);
+        self.weight_cooccurrence = self.weight_cooccurrence.clamp(0.0, 2.0);
+        self.weight_temporal = self.weight_temporal.clamp(0.0, 2.0);
     }
 
     /// Save config to disk.

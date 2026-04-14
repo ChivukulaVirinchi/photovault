@@ -33,6 +33,11 @@ pub(crate) fn process_faces(app: &mut PhotoVault) -> Task<Message> {
     let drive_path = drive_path.clone();
     let detector_confidence = app.config.face_detection_confidence;
     let clustering_threshold = app.config.face_clustering_threshold;
+    let resolver_weights = crate::ml::ResolverWeights {
+        embedding: 1.0,
+        cooccurrence: app.config.weight_cooccurrence,
+        temporal: app.config.weight_temporal,
+    };
     let model_dir = crate::bootstrap::model_dir();
 
     let detector_path = crate::bootstrap::detector_model_path();
@@ -63,6 +68,7 @@ pub(crate) fn process_faces(app: &mut PhotoVault) -> Task<Message> {
                     &model_dir,
                     detector_confidence,
                     clustering_threshold,
+                    resolver_weights,
                     Some(progress_tx),
                     Some(cancel_flag),
                 )
@@ -105,6 +111,15 @@ pub(crate) fn face_processing_complete(
                 result.faces_detected,
                 result.clusters_created
             );
+
+            // Refresh the review queue badge now that new items may be queued.
+            if let Some(ref drive_path) = app.selected_drive {
+                if let Ok(db) = Database::open_for_drive(drive_path) {
+                    if let Ok(n) = FaceRepo::new(&db.conn).review_queue_size() {
+                        app.face_review_pending = n;
+                    }
+                }
+            }
         }
         Err(e) => {
             app.face_processing_error = Some(e.clone());

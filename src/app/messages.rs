@@ -258,6 +258,22 @@ pub enum Message {
 
     /// Toggle sidebar collapsed/expanded
     ToggleSidebar,
+
+    // --- Face Review deck ---
+    /// Load pending review items from DB and enter review view
+    EnterFaceReview,
+    /// Async loader completed with the fetched review items
+    FaceReviewLoaded(Vec<crate::db::ReviewItem>),
+    /// Confirm the currently-shown face belongs to the candidate cluster
+    FaceReviewSame,
+    /// Reject the currently-shown face (not the same person as candidate)
+    FaceReviewDifferent,
+    /// Skip the current item without deciding
+    FaceReviewSkip,
+    /// Undo the most recent decision
+    FaceReviewUndo,
+    /// Leave the review view, return to People
+    FaceReviewFinish,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

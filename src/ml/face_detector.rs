@@ -13,7 +13,9 @@
 
 use std::path::Path;
 
-use image::{DynamicImage, GenericImageView, RgbImage};
+use image::{DynamicImage, RgbImage};
+#[allow(unused_imports)]
+use image::GenericImageView; // needed by `DynamicImage::dimensions()` in some configurations
 use ort::session::Session;
 use ort::value::TensorRef;
 
@@ -493,29 +495,27 @@ impl FaceDetector {
         }
     }
 
-    /// Align face using landmarks (crop around eyes and resize to 112x112)
-    ///
-    /// Uses a simplified similarity transform based on eye positions.
-    /// A full implementation would use proper affine transformation.
+    /// Align face using all 5 landmarks via similarity transform onto the
+    /// canonical InsightFace 112x112 template. Falls back to eye-center crop
+    /// if the landmarks are degenerate (rare).
     fn align_face(&self, image: &DynamicImage, landmarks: &[(f32, f32); 5]) -> RgbImage {
+        if let Some(aligned) = super::alignment::align_face_112(image, landmarks) {
+            return aligned;
+        }
+
+        // Degenerate landmarks: fall back to the old eye-center crop.
         let left_eye = landmarks[0];
         let right_eye = landmarks[1];
-
-        // Calculate eye center
         let eye_center = (
             (left_eye.0 + right_eye.0) / 2.0,
             (left_eye.1 + right_eye.1) / 2.0,
         );
-
-        // Calculate face size based on eye distance
         let eye_dist =
             ((right_eye.0 - left_eye.0).powi(2) + (right_eye.1 - left_eye.1).powi(2)).sqrt();
         let face_size = (eye_dist * 2.5).max(10.0);
 
-        // Calculate crop region (clamped to image bounds)
         let img_w = image.width();
         let img_h = image.height();
-
         let x = (eye_center.0 - face_size / 2.0).max(0.0) as u32;
         let y = (eye_center.1 - face_size / 2.0).max(0.0) as u32;
         let x = x.min(img_w.saturating_sub(1));
@@ -523,10 +523,8 @@ impl FaceDetector {
         let crop_w = (face_size as u32).min(img_w.saturating_sub(x)).max(1);
         let crop_h = (face_size as u32).min(img_h.saturating_sub(y)).max(1);
 
-        // Crop and resize to 112x112
         let cropped = image.crop_imm(x, y, crop_w, crop_h);
         let resized = cropped.resize_exact(112, 112, image::imageops::FilterType::Lanczos3);
-
         resized.to_rgb8()
     }
 }

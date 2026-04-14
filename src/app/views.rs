@@ -7,8 +7,8 @@ use crate::components::{ScanProgressView, Sidebar};
 use crate::services::ScanProgress;
 use crate::theme::colors;
 use crate::views::{
-    BurstsView, CullView, DocumentsView, DuplicatesView, PeopleView, PhotoDetailView,
-    SearchView, SettingsView, TimelineView, TrashView, WelcomeView,
+    BurstsView, CullView, DocumentsView, DuplicatesView, FaceReviewView, PeopleView,
+    PhotoDetailView, SearchView, SettingsView, TimelineView, TrashView, WelcomeView,
 };
 
 use super::messages::Message;
@@ -93,7 +93,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         })
         .into()
     } else {
-        Sidebar::view(&app.current_view, app.config.theme)
+        Sidebar::view(&app.current_view, app.config.theme, app.face_review_pending)
     };
 
     let content = match app.current_view {
@@ -244,6 +244,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.config.theme,
                 )
             }
+        }
+        View::FaceReview => {
+            let empty_state = crate::app::state::FaceReviewState::new(Vec::new());
+            let state = app.face_review_state.as_ref().unwrap_or(&empty_state);
+            FaceReviewView::view(state, app.selected_drive.as_deref(), app.config.theme)
         }
         View::Search => SearchView::view(
             &app.search_query,

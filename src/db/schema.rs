@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (9);
+INSERT INTO schema_version (version) VALUES (10);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -103,9 +103,12 @@ CREATE TABLE IF NOT EXISTS faces (
     -- Clustering
     cluster_id INTEGER,                -- NULL = unassigned
     confidence REAL,                   -- Detection confidence
-    
+
+    -- Interactive feedback: 0=untouched, 1=user confirmed, -1=user rejected from a candidate
+    user_confirmed INTEGER DEFAULT 0,
+
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
+
     FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
     FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE SET NULL
 );
@@ -121,10 +124,13 @@ CREATE TABLE IF NOT EXISTS face_clusters (
     representative_face_id INTEGER,    -- Best face for this cluster (for display)
     face_count INTEGER DEFAULT 0,
     photo_count INTEGER DEFAULT 0,
-    
+
+    -- 1 if the user has explicitly named/confirmed this cluster
+    is_user_named INTEGER DEFAULT 0,
+
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
+
     FOREIGN KEY (representative_face_id) REFERENCES faces(id) ON DELETE SET NULL
 );
 
@@ -155,11 +161,44 @@ CREATE TABLE IF NOT EXISTS person_gallery_embeddings (
     embedding BLOB NOT NULL,
     pose_label TEXT,
     quality_score REAL,
+    -- 'auto' = chosen by diversity sampling, 'user_confirmed' = sticky user decision
+    source TEXT DEFAULT 'auto',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
     FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
     UNIQUE(cluster_id, face_id)
+);
+
+-- ============================================================
+-- INTERACTIVE FEEDBACK
+-- User-driven constraints and review queue for face recognition
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS cluster_cannot_merge (
+    id INTEGER PRIMARY KEY,
+    cluster_a_id INTEGER NOT NULL,
+    cluster_b_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (cluster_a_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+    FOREIGN KEY (cluster_b_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+    UNIQUE(cluster_a_id, cluster_b_id)
+);
+
+CREATE TABLE IF NOT EXISTS face_review_queue (
+    id INTEGER PRIMARY KEY,
+    face_id INTEGER NOT NULL,
+    candidate_cluster_id INTEGER NOT NULL,
+    score REAL NOT NULL,               -- top match score (higher = better)
+    ambiguity REAL,                    -- score margin to 2nd candidate (lower = more ambiguous)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    resolved_as TEXT,                  -- 'same' | 'different' | 'skipped'
+
+    FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
+    FOREIGN KEY (candidate_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
+    UNIQUE(face_id, candidate_cluster_id)
 );
 
 -- ============================================================
@@ -273,6 +312,13 @@ CREATE INDEX IF NOT EXISTS idx_inferred_cluster ON photo_inferred_identities(clu
 CREATE INDEX IF NOT EXISTS idx_inferred_is_inferred ON photo_inferred_identities(is_inferred);
 CREATE INDEX IF NOT EXISTS idx_gallery_cluster ON person_gallery_embeddings(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_gallery_face ON person_gallery_embeddings(face_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_source ON person_gallery_embeddings(source);
+CREATE INDEX IF NOT EXISTS idx_cannot_merge_a ON cluster_cannot_merge(cluster_a_id);
+CREATE INDEX IF NOT EXISTS idx_cannot_merge_b ON cluster_cannot_merge(cluster_b_id);
+CREATE INDEX IF NOT EXISTS idx_review_queue_face ON face_review_queue(face_id);
+CREATE INDEX IF NOT EXISTS idx_review_queue_cluster ON face_review_queue(candidate_cluster_id);
+CREATE INDEX IF NOT EXISTS idx_review_queue_unresolved ON face_review_queue(resolved_at)
+    WHERE resolved_at IS NULL;
 
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);

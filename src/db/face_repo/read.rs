@@ -4,7 +4,7 @@ use rusqlite::{params, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
-use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding};
+use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding, ReviewItem};
 
 impl<'a> FaceRepo<'a> {
     /// Get all faces with embeddings (for clustering)
@@ -150,6 +150,13 @@ impl<'a> FaceRepo<'a> {
             let count = embeddings.len() as f32;
             for value in &mut sum {
                 *value /= count;
+            }
+
+            let norm: f32 = sum.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for value in &mut sum {
+                    *value /= norm;
+                }
             }
 
             let centroid = FaceEmbedding::new(ndarray::Array1::from_vec(sum));
@@ -454,5 +461,193 @@ impl<'a> FaceRepo<'a> {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    /// Count of unresolved entries in the face review queue.
+    pub fn review_queue_size(&self) -> SqliteResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM face_review_queue WHERE resolved_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Pull the top-N most informative unresolved review items.
+    ///
+    /// Ordered by ambiguity ascending (closer top-2 scores first = higher
+    /// information gain) then by candidate cluster size descending (resolving
+    /// ambiguity on big clusters propagates to more photos).
+    pub fn get_review_queue_items(&self, limit: usize) -> SqliteResult<Vec<ReviewItem>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+                q.id, q.face_id, f.photo_id,
+                q.candidate_cluster_id, c.name, c.face_count,
+                q.score, q.ambiguity
+            FROM face_review_queue q
+            JOIN faces f ON f.id = q.face_id
+            JOIN face_clusters c ON c.id = q.candidate_cluster_id
+            WHERE q.resolved_at IS NULL
+            ORDER BY COALESCE(q.ambiguity, 1.0) ASC, c.face_count DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(ReviewItem {
+                queue_id: row.get(0)?,
+                face_id: row.get(1)?,
+                face_photo_id: row.get(2)?,
+                candidate_cluster_id: row.get(3)?,
+                candidate_cluster_name: row.get(4)?,
+                candidate_cluster_size: row.get(5)?,
+                candidate_sample_face_ids: Vec::new(),
+                score: row.get(6)?,
+                ambiguity: row.get(7)?,
+            })
+        })?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        drop(stmt);
+
+        // Populate candidate sample face_ids per item (up to 4 best from the cluster).
+        let mut sample_stmt = self.conn.prepare(
+            r#"
+            SELECT id
+            FROM faces
+            WHERE cluster_id = ?1
+            ORDER BY confidence DESC, id ASC
+            LIMIT 4
+            "#,
+        )?;
+        for item in items.iter_mut() {
+            let ids = sample_stmt
+                .query_map(params![item.candidate_cluster_id], |row| row.get::<_, i64>(0))?;
+            let mut collected = Vec::new();
+            for id in ids {
+                collected.push(id?);
+            }
+            item.candidate_sample_face_ids = collected;
+        }
+
+        Ok(items)
+    }
+
+    /// Look up the embedding of a single face (used to add to a gallery after
+    /// a user "same person" confirmation).
+    pub fn get_face_embedding(&self, face_id: i64) -> SqliteResult<Option<FaceEmbedding>> {
+        let row: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(row.and_then(|bytes| FaceEmbedding::from_bytes(&bytes)))
+    }
+
+    /// Look up the prior cluster_id for a face (if the face already had an
+    /// assignment when queued). Used by the review UI to know which cluster
+    /// the "different" decision should forbid merging with.
+    pub fn get_face_cluster_id(&self, face_id: i64) -> SqliteResult<Option<i64>> {
+        let row: Option<Option<i64>> = self
+            .conn
+            .query_row(
+                "SELECT cluster_id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(row.flatten())
+    }
+
+    /// Cluster IDs of the already-assigned faces in the given photo (other
+    /// than the face we're resolving). Used as the "context" in co-occurrence.
+    pub fn get_photo_other_clusters(
+        &self,
+        photo_id: i64,
+        exclude_face_id: i64,
+    ) -> SqliteResult<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT cluster_id FROM faces
+             WHERE photo_id = ?1 AND id != ?2 AND cluster_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![photo_id, exclude_face_id], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// How many photos contain both cluster_a and cluster_b.
+    ///
+    /// Used as the co-occurrence strength between two clusters. High values
+    /// mean the two people appear together frequently and should bias
+    /// retrieval toward whichever matches the rest of the photo's cast.
+    pub fn cooccurrence_count(&self, cluster_a: i64, cluster_b: i64) -> SqliteResult<i64> {
+        if cluster_a == cluster_b {
+            return Ok(0);
+        }
+        self.conn.query_row(
+            r#"
+            SELECT COUNT(*) FROM (
+                SELECT photo_id FROM faces WHERE cluster_id = ?1
+                INTERSECT
+                SELECT photo_id FROM faces WHERE cluster_id = ?2
+            )
+            "#,
+            params![cluster_a, cluster_b],
+            |row| row.get(0),
+        )
+    }
+
+    /// Clusters assigned to faces within a time window around `date_taken`,
+    /// excluding the photo itself. Returns (cluster_id, delta_seconds).
+    ///
+    /// Used for temporal-chain propagation: if nearby-in-time photos contain
+    /// high-confidence assignments for cluster X, an ambiguous face in our
+    /// photo should be biased toward X.
+    pub fn temporal_neighbor_clusters(
+        &self,
+        photo_id: i64,
+        window_secs: i64,
+    ) -> SqliteResult<Vec<(i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            WITH base AS (
+                SELECT date_taken AS t
+                FROM photos
+                WHERE id = ?1 AND date_taken IS NOT NULL
+            )
+            SELECT DISTINCT f.cluster_id,
+                CAST(ABS(
+                    strftime('%s', p.date_taken) - strftime('%s', (SELECT t FROM base))
+                ) AS INTEGER) AS delta_sec
+            FROM faces f
+            JOIN photos p ON p.id = f.photo_id
+            WHERE f.cluster_id IS NOT NULL
+              AND p.id != ?1
+              AND p.is_trashed = FALSE
+              AND p.date_taken IS NOT NULL
+              AND ABS(
+                  strftime('%s', p.date_taken) - strftime('%s', (SELECT t FROM base))
+              ) <= ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![photo_id, window_secs], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 }
