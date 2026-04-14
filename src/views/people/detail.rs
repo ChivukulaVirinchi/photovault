@@ -148,6 +148,28 @@ pub fn view_cluster_detail(
         photo_grid_simple(photos, 160.0, columns, None, None, theme)
     };
 
+    let hide_btn = button(
+        text("Hide from Memories")
+            .size(12)
+            .color(text_secondary),
+    )
+    .padding(Padding::from([6, 12]))
+    .style(move |_theme: &iced::Theme, status: button::Status| {
+        let background = match status {
+            button::Status::Hovered => Some(bg_hover.into()),
+            _ => Some(bg_elevated.into()),
+        };
+        button::Style {
+            background,
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+    .on_press(Message::BlockMemoriesForPerson(cluster_id));
+
     let content = column![
         back_btn,
         Space::with_height(16),
@@ -155,6 +177,8 @@ pub fn view_cluster_detail(
             face_avatar,
             Space::with_width(16),
             column![name_element, subtitle,].spacing(4),
+            Space::with_width(Length::Fill),
+            hide_btn,
         ]
         .align_y(Alignment::Center),
         Space::with_height(24),

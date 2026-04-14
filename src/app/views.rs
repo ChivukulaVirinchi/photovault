@@ -100,7 +100,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Welcome => WelcomeView::view(&app.drives, app.config.theme),
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
-            if app.photos.is_empty() {
+            let banner = crate::views::memories::memories_banner(
+                &app.memories,
+                app.config.theme,
+            );
+            let body = if app.photos.is_empty() {
                 TimelineView::view(app.config.theme)
             } else {
                 // Calculate responsive column count:
@@ -196,6 +200,10 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
                     column![top_bar, timeline].into()
                 }
+            };
+            match banner {
+                Some(b) => column![b, body].into(),
+                None => body,
             }
         }
         View::People => PeopleView::view_with_clusters(

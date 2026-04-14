@@ -22,7 +22,7 @@ pub use drive_detector::{DriveDetector, DriveInfo};
 pub use duplicate_detector::DuplicateDetector;
 pub use face_processor::{FaceProcessingProgress, FaceProcessingResult, FaceProcessor};
 pub use geocoding::GeocodingService;
-pub use memories::{generate_for_today, library_is_old_enough, Memory, MemoryCard, MemoryKind};
+pub use memories::MemoryCard;
 pub use ocr_processor::{OcrProcessor, OcrProgress};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;

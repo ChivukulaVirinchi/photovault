@@ -60,6 +60,7 @@ impl Sidebar {
 
         let nav_items = column![
             Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
+            Self::nav_button("Memories", View::Memories, current_view, app_theme),
             Self::nav_button("Search", View::Search, current_view, app_theme),
             Space::with_height(12),
             Self::group_header("People", app_theme),

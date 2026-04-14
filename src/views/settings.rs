@@ -40,6 +40,9 @@ impl SettingsView {
             Space::with_height(24),
             Self::section_header(config.theme, "Date & Time"),
             Self::date_format_setting(config.theme, config.date_format),
+            Space::with_height(24),
+            Self::section_header(config.theme, "Memories"),
+            Self::memories_setting(config.theme, config.memories_enabled),
             Space::with_height(32),
             Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
         ]
@@ -110,6 +113,17 @@ impl SettingsView {
             "Include folders starting with '.'",
             toggler(enabled)
                 .on_toggle(Message::SetScanHiddenFolders)
+                .into(),
+        )
+    }
+
+    fn memories_setting(theme: AppTheme, enabled: bool) -> Element<'static, Message> {
+        Self::setting_row(
+            theme,
+            "Memories",
+            "Show 'N years ago today' cards on the Timeline",
+            toggler(enabled)
+                .on_toggle(Message::SetMemoriesEnabled)
                 .into(),
         )
     }

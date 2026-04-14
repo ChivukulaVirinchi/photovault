@@ -24,7 +24,6 @@ pub struct Memory {
     pub id: MemoryId,
     pub kind: MemoryKind,
     pub title: String,
-    pub subtitle: Option<String>,
     pub photo_ids: Vec<i64>,
     pub hero_photo_id: i64,
     pub score: f32,
@@ -35,9 +34,10 @@ pub struct Memory {
 #[derive(Debug, Clone)]
 pub struct MemoryCard {
     pub id: MemoryId,
+    /// Kind tag — used by tests and reserved for future filter UI.
+    #[allow(dead_code)]
     pub kind: MemoryKind,
     pub title: String,
-    pub subtitle: Option<String>,
     pub hero_photo_id: i64,
     pub hero_thumbnail_path: Option<String>,
     pub photo_count: usize,
@@ -50,7 +50,6 @@ impl From<Memory> for MemoryCard {
             id: m.id,
             kind: m.kind,
             title: m.title,
-            subtitle: m.subtitle,
             hero_photo_id: m.hero_photo_id,
             hero_thumbnail_path: None,
             photo_count: m.photo_ids.len(),
@@ -208,7 +207,6 @@ fn on_this_day(
             id: memory_id(MemoryKind::OnThisDay, yr, today),
             kind: MemoryKind::OnThisDay,
             title,
-            subtitle: None,
             photo_ids,
             hero_photo_id: 0, // populated later
             score: 0.0,
@@ -268,7 +266,6 @@ fn fallback_window(
             id: memory_id(MemoryKind::FallbackWindow, yr, today),
             kind: MemoryKind::FallbackWindow,
             title,
-            subtitle: None,
             photo_ids,
             hero_photo_id: 0,
             score: 0.0,
@@ -319,7 +316,6 @@ fn seasonal_recap(
             id: memory_id(MemoryKind::SeasonalRecap, yr, today),
             kind: MemoryKind::SeasonalRecap,
             title: format!("{} {}", month_name, yr),
-            subtitle: None,
             photo_ids,
             hero_photo_id: 0,
             score: 0.0,
