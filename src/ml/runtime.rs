@@ -1,9 +1,15 @@
 //! ONNX Runtime initialization and management
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
+
+/// Latch: only log the provider-probe result the first time a session is
+/// built. Subsequent sessions reuse whichever provider won without spamming.
+static EP_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Platform-specific ONNX Runtime library name
 #[cfg(target_os = "windows")]
@@ -116,19 +122,97 @@ impl OnnxRuntime {
 
     /// Load an ONNX model with a specific number of intra-op threads.
     ///
-    /// Use this when running multiple sessions in parallel to avoid
-    /// CPU oversubscription (each session gets fewer threads).
+    /// Attempts to register GPU execution providers in platform-specific
+    /// priority order, then falls back to CPU if none initialize. The CPU
+    /// provider is always appended last so session creation never fails due
+    /// to missing GPU drivers or runtime libraries.
+    ///
+    /// Platform priority:
+    ///   Windows: DirectML  (covers NVIDIA/AMD/Intel/Qualcomm via D3D12)
+    ///   Linux:   CUDA      (NVIDIA). ROCm could be added via a cargo flag later.
+    ///   macOS:   CoreML    (Apple Silicon + AMD on Intel Macs)
+    ///
+    /// `intra_threads` applies to the CPU provider; GPU providers ignore it.
     pub fn load_model_with_threads<P: AsRef<Path>>(
         &self,
         path: P,
         intra_threads: usize,
     ) -> ort::Result<Session> {
+        // Build the priority list. Every entry is a Dispatch value that ORT
+        // will try to initialize; if the underlying native library or driver
+        // is unavailable, ORT silently skips it and continues down the list.
+        let mut providers: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        {
+            providers
+                .push(ort::execution_providers::DirectMLExecutionProvider::default().build());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            providers.push(ort::execution_providers::CUDAExecutionProvider::default().build());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            providers.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
+        }
+
+        providers.push(ort::execution_providers::CPUExecutionProvider::default().build());
+
+        if !EP_LOGGED.swap(true, Ordering::Relaxed) {
+            Self::probe_and_log_providers();
+        }
+
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(intra_threads)?
+            .with_execution_providers(providers)?
             .commit_from_file(path)?;
 
         Ok(session)
+    }
+
+    /// One-shot probe: log which execution providers appear usable on this
+    /// machine. Best-effort — actual provider binding happens per-session.
+    fn probe_and_log_providers() {
+        let mut available: Vec<&'static str> = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        {
+            let ep = ort::execution_providers::DirectMLExecutionProvider::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("DirectML");
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let ep = ort::execution_providers::CUDAExecutionProvider::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("CUDA");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let ep = ort::execution_providers::CoreMLExecutionProvider::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("CoreML");
+            }
+        }
+
+        available.push("CPU");
+
+        if available.len() > 1 {
+            tracing::info!(
+                "Face inference will try execution providers in order: {}",
+                available.join(" -> ")
+            );
+        } else {
+            tracing::info!("Face inference will run on CPU (no GPU providers available)");
+        }
     }
 }
 

@@ -4,6 +4,12 @@ Track B is the performance track for the face pipeline. Separate from Track A
 (accuracy) because they're independent; Track B can land later without
 disturbing Track A's correctness work.
 
+Status:
+- B1 (GPU plumbing): **landed**
+- B2 (batched inference): pending
+- B3 (multi-scale detection): pending
+- B4 (rotation-invariant detection): pending
+
 User has explicitly dropped from this plan:
 - Buffalo_l (R50) model swap. Stays on glintr100 (R100) because the model
   swap could regress accuracy with no guaranteed speed win on CPU.
