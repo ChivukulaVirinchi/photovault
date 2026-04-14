@@ -17,6 +17,10 @@ pub enum MemoryKind {
     OnThisDay,
     FallbackWindow,
     SeasonalRecap,
+    /// Ultimate fallback: surfaces "X years ago" with photos from a prior
+    /// year when no other generator produced anything. Guarantees a sparse
+    /// library still sees something if it has any history at all.
+    YearRecap,
 }
 
 #[derive(Debug, Clone)]
@@ -66,8 +70,12 @@ const MIN_LIBRARY_AGE_MONTHS: i64 = 6;
 const MAX_CARDS: usize = 20;
 
 /// SeasonalRecap threshold — month needs at least this many photos to
-/// surface as a recap.
-const SEASONAL_MIN_PHOTOS: i64 = 10;
+/// surface as a recap. Lowered from 10 so sparse libraries (a few dozen
+/// photos a year) can still see monthly memories.
+const SEASONAL_MIN_PHOTOS: i64 = 5;
+
+/// Cap on photos per YearRecap card.
+const YEAR_RECAP_MAX_PHOTOS: usize = 50;
 
 /// Top entry point: full pipeline. Runs all three generators, scores,
 /// filters blocks, picks heroes, returns cards.
@@ -93,6 +101,15 @@ pub fn generate_for_today(
     let seasonal = seasonal_recap(conn, today, current_year)
         .map_err(|e| format!("SeasonalRecap query failed: {}", e))?;
     all.extend(seasonal);
+
+    // Ultimate fallback. Only fires when no specific anniversary or season
+    // qualifies; surfaces "X years ago" cards from prior years so a sparse
+    // library still has something to show.
+    if all.is_empty() {
+        let recaps = year_recap(conn, today, current_year)
+            .map_err(|e| format!("YearRecap query failed: {}", e))?;
+        all.extend(recaps);
+    }
 
     if all.is_empty() {
         return Ok(Vec::new());
@@ -150,6 +167,7 @@ fn memory_id(kind: MemoryKind, year: i32, today: NaiveDate) -> MemoryId {
             MemoryKind::OnThisDay => "otd",
             MemoryKind::FallbackWindow => "fw",
             MemoryKind::SeasonalRecap => "sr",
+            MemoryKind::YearRecap => "yr",
         },
         year,
         today.month(),
@@ -316,6 +334,61 @@ fn seasonal_recap(
             id: memory_id(MemoryKind::SeasonalRecap, yr, today),
             kind: MemoryKind::SeasonalRecap,
             title: format!("{} {}", month_name, yr),
+            photo_ids,
+            hero_photo_id: 0,
+            score: 0.0,
+            year: yr,
+            has_faces: false,
+        });
+    }
+    Ok(out)
+}
+
+fn year_recap(
+    conn: &Connection,
+    today: NaiveDate,
+    current_year: i32,
+) -> SqliteResult<Vec<Memory>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+               GROUP_CONCAT(id) AS photo_ids
+        FROM photos
+        WHERE is_trashed = FALSE
+          AND date_taken IS NOT NULL
+          AND CAST(strftime('%Y', date_taken) AS INTEGER) < ?1
+        GROUP BY yr
+        ORDER BY yr DESC
+        LIMIT 5
+        "#,
+    )?;
+
+    let rows = stmt.query_map(params![current_year], |row| {
+        Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (yr, csv) = row?;
+        let mut photo_ids = parse_ids(&csv);
+        if photo_ids.is_empty() {
+            continue;
+        }
+        // Cap at most-recent N photo ids per year.
+        photo_ids.sort_unstable();
+        photo_ids.reverse();
+        photo_ids.truncate(YEAR_RECAP_MAX_PHOTOS);
+
+        let years_ago = current_year - yr;
+        let title = if years_ago == 1 {
+            "1 year ago".to_string()
+        } else {
+            format!("{} years ago", years_ago)
+        };
+        out.push(Memory {
+            id: memory_id(MemoryKind::YearRecap, yr, today),
+            kind: MemoryKind::YearRecap,
+            title,
             photo_ids,
             hero_photo_id: 0,
             score: 0.0,
@@ -558,8 +631,8 @@ mod tests {
     #[test]
     fn seasonal_recap_respects_threshold() {
         let conn = fresh_db();
-        // Insert 9 photos in April 2020 - below threshold.
-        for i in 0..9 {
+        // 4 photos in April 2020 — below SEASONAL_MIN_PHOTOS (5).
+        for i in 0..4 {
             insert_photo(&conn, 100 + i, "2020-04-03 10:00:00");
         }
         let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
@@ -570,8 +643,8 @@ mod tests {
     #[test]
     fn seasonal_recap_surfaces_above_threshold() {
         let conn = fresh_db();
-        // 10 photos in April 2020 - at threshold.
-        for i in 0..10 {
+        // 5 photos in April 2020 — exactly at threshold.
+        for i in 0..5 {
             insert_photo(&conn, 200 + i, "2020-04-03 10:00:00");
         }
         let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
@@ -597,6 +670,33 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
         let cards = generate_for_today(&conn, today).unwrap();
         assert!(cards.iter().all(|c| c.kind != MemoryKind::FallbackWindow));
+    }
+
+    #[test]
+    fn year_recap_fires_when_nothing_else_qualifies() {
+        let conn = fresh_db();
+        // Sparse library: 5 photos all on Jan 5, 2022 - won't match today's
+        // exact date, won't fill the ±3 day window of today (April 15), won't
+        // hit the seasonal threshold for April. YearRecap should still fire.
+        for i in 0..5 {
+            insert_photo(&conn, 300 + i, "2022-01-05 10:00:00");
+        }
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let cards = generate_for_today(&conn, today).unwrap();
+        assert!(cards.iter().any(|c| c.kind == MemoryKind::YearRecap));
+        // And no on-this-day / fallback / seasonal should be present.
+        assert!(cards.iter().all(|c| c.kind == MemoryKind::YearRecap));
+    }
+
+    #[test]
+    fn year_recap_does_not_fire_when_others_qualify() {
+        let conn = fresh_db();
+        // Photo from today's date 4 years ago — on_this_day will fire.
+        insert_photo(&conn, 1, "2022-04-15 10:00:00");
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let cards = generate_for_today(&conn, today).unwrap();
+        assert!(cards.iter().any(|c| c.kind == MemoryKind::OnThisDay));
+        assert!(cards.iter().all(|c| c.kind != MemoryKind::YearRecap));
     }
 
     #[test]

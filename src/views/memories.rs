@@ -122,11 +122,11 @@ pub fn memories_view(
         let body = column![
             header,
             Space::with_height(48),
-            text("No memories to show yet.")
+            text("Nothing to show right now.")
                 .size(16)
                 .color(p.text_secondary),
             Space::with_height(8),
-            text("Memories appear once your library has at least six months of history.")
+            text("Memories appear when your library has photos from prior years. Newer libraries (under six months old) are skipped silently.")
                 .size(13)
                 .color(p.text_tertiary),
         ]

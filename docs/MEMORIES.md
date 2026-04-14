@@ -5,7 +5,7 @@ automatically on every launch and refresh themselves once a day.
 
 ## What you'll see
 
-### Three kinds of memory cards
+### Four kinds of memory cards
 
 **On This Day** — photos taken on the same calendar date in past years.
 The most common type. One card per prior year that has at least one
@@ -17,9 +17,19 @@ Photos taken within ±3 days of today's date in past years. Useful so
 quiet anniversaries don't leave the banner empty. Title: *"2 years ago
 this week"*.
 
-**Seasonal Recap** — full-month rollup for past years that have ≥10
+**Seasonal Recap** — full-month rollup for past years that have ≥5
 photos in the same month as today. Title: *"August 2020"*. Capped at
 the 5 most-recent prior years.
+
+**Year Recap** — ultimate fallback. Only fires when none of the three
+generators above produced anything (sparse libraries where today's
+calendar date doesn't happen to overlap with any photos). Surfaces up
+to 5 cards, one per prior year that has any photos at all. Title:
+*"3 years ago"*. Each card holds up to 50 photos from that year.
+
+This guarantees that any library with at least six months of history
+will always show *something*, even if the calendar luck didn't land
+on today's date.
 
 ### Where memories appear
 
