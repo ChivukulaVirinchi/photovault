@@ -398,6 +398,71 @@ pub(crate) fn toggle_sidebar(app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }
 
+pub(crate) fn regenerate_thumbnails(app: &mut PhotoVault) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    let drive_path = drive_path.clone();
+    app.begin_thumbnail_generation_epoch();
+
+    Task::perform(
+        async move {
+            let mut cleared = 0usize;
+
+            let thumb_root = drive_path.join(".photovault").join("thumbnails");
+            if thumb_root.exists() {
+                if let Ok(entries) = std::fs::read_dir(&thumb_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Ok(walker) = std::fs::read_dir(&path) {
+                                for sub in walker.flatten() {
+                                    let sub_path = sub.path();
+                                    if sub_path.is_dir() {
+                                        if let Ok(files) = std::fs::read_dir(&sub_path) {
+                                            for f in files.flatten() {
+                                                if std::fs::remove_file(f.path()).is_ok() {
+                                                    cleared += 1;
+                                                }
+                                            }
+                                        }
+                                    } else if std::fs::remove_file(&sub_path).is_ok() {
+                                        cleared += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Ok(db) = Database::open_for_drive(&drive_path) {
+                let _ = db.conn.execute(
+                    "UPDATE photos SET thumbnail_path = NULL WHERE is_trashed = FALSE",
+                    [],
+                );
+            }
+
+            Message::ThumbnailsRegenerated { cleared }
+        },
+        |m| m,
+    )
+}
+
+pub(crate) fn thumbnails_regenerated(app: &mut PhotoVault, cleared: usize) -> Task<Message> {
+    tracing::info!("Regenerated thumbnails: cleared {} old files", cleared);
+    let mut tasks = vec![app.load_photos()];
+    if app.current_view == View::Timeline {
+        app.begin_thumbnail_generation_epoch();
+        app.seed_thumbnail_queue_for_timeline();
+        app.schedule_thumbnail_chunk();
+        if !app.thumbnail_queue.is_empty() {
+            tasks.push(app.start_thumbnail_generation());
+        }
+    }
+    Task::batch(tasks)
+}
+
 pub(crate) fn no_op(_app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }

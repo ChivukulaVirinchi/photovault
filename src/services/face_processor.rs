@@ -884,15 +884,150 @@ impl FaceProcessor {
         // "multiple good pairs" requirement to avoid false positives.
         let merged = Self::merge_similar_clusters(face_repo)?;
 
+        // Rescue pass: faces that ended up as singletons (not placed into
+        // any cluster by Stage A or Stage B) need a second chance. Otherwise
+        // they're invisible to the user: they have cluster_id = NULL so they
+        // don't show in People, and nothing queues them for review.
+        let (rescued, queued) = Self::rescue_orphan_faces(face_repo)?;
+
         tracing::info!(
-            "Agglomerative clustering: assigned {} faces, created {} new clusters, merged {} fragments, from {} unresolved faces",
+            "Clustering: {} to-existing, {} new, merged {}, rescued {}, queued {}, from {} unresolved",
             assigned_to_existing,
             clusters_created,
             merged,
+            rescued,
+            queued,
             unresolved.len()
         );
 
         Ok(clusters_created.saturating_sub(merged))
+    }
+
+    /// Rescue pass for orphan faces (cluster_id IS NULL after all earlier
+    /// stages). For each orphan, k-NN retrieve against existing cluster
+    /// galleries with a looser threshold than the first-pass retrieval.
+    /// Classify into three bands:
+    ///   - HIGH       (mean top-k sim >= 0.60, 0.08 margin over runner-up):
+    ///                auto-assign to best cluster
+    ///   - AMBIGUOUS  (0.45 <= sim < 0.60):
+    ///                enqueue for user review — the review badge will prompt
+    ///                them to resolve without any explicit UI "check now" button
+    ///   - LOW        (< 0.45):
+    ///                leave as orphan; a future scan or better gallery may
+    ///                eventually pick it up
+    ///
+    /// Returns (auto_rescued, queued_for_review).
+    fn rescue_orphan_faces(face_repo: &FaceRepo) -> Result<(usize, usize), String> {
+        // Deliberately looser than first-pass retrieval:
+        // first-pass min_similarity = 1.0 - strict_max_distance ~= 0.58.
+        // We accept weaker gallery members here because the orphan either
+        // didn't fit Stage B's strict complete-link or matched nothing in
+        // Stage A — it may still be a valid match under some gallery member.
+        const RESCUE_MIN_SIM: f32 = 0.45;
+
+        let rescue_banding = crate::ml::BandingConfig {
+            low_threshold: 0.45,
+            high_threshold: 0.60,
+            margin: 0.08,
+        };
+
+        let galleries = face_repo
+            .get_gallery_embeddings()
+            .map_err(|e| format!("Failed to load galleries for rescue: {}", e))?;
+
+        if galleries.is_empty() {
+            // No clusters exist -> nothing to match against.
+            return Ok((0, 0));
+        }
+
+        let mut gallery_by_cluster: HashMap<i64, Vec<(i64, crate::ml::FaceEmbedding)>> =
+            HashMap::new();
+        for g in galleries {
+            gallery_by_cluster
+                .entry(g.cluster_id)
+                .or_default()
+                .push((g.face_id, g.embedding));
+        }
+        let gallery_vec: Vec<(i64, Vec<(i64, crate::ml::FaceEmbedding)>)> =
+            gallery_by_cluster.into_iter().collect();
+
+        let cannot_merge = face_repo
+            .get_cannot_merge_map()
+            .map_err(|e| format!("Failed to load cannot-merge: {}", e))?;
+
+        let cluster_photo_rows = face_repo
+            .get_cluster_photo_ids()
+            .map_err(|e| format!("Failed to load cluster-photo map: {}", e))?;
+        let mut cluster_photo_ids: HashMap<i64, std::collections::HashSet<i64>> = HashMap::new();
+        for (cid, pid) in cluster_photo_rows {
+            cluster_photo_ids.entry(cid).or_default().insert(pid);
+        }
+
+        let orphans = face_repo
+            .get_unclustered_faces_with_photo_embeddings()
+            .map_err(|e| format!("Failed to load orphan faces: {}", e))?;
+
+        let mut rescued = 0usize;
+        let mut queued = 0usize;
+
+        for (face_id, photo_id, embedding) in &orphans {
+            // Same-photo conflict + cannot-merge-transitively exclusions.
+            let mut exclude: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            let clusters_in_photo: Vec<i64> = cluster_photo_ids
+                .iter()
+                .filter(|(_, set)| set.contains(photo_id))
+                .map(|(cid, _)| *cid)
+                .collect();
+            for cid in &clusters_in_photo {
+                exclude.insert(*cid);
+                if let Some(forbidden) = cannot_merge.get(cid) {
+                    for f in forbidden {
+                        exclude.insert(*f);
+                    }
+                }
+            }
+
+            let hits = crate::ml::retrieve_candidates(
+                embedding,
+                &gallery_vec,
+                5,
+                RESCUE_MIN_SIM,
+                &exclude,
+            );
+            let band = crate::ml::retrieval::classify(&hits, &rescue_banding);
+
+            match band {
+                crate::ml::ConfidenceBand::High { hit } => {
+                    if let Err(e) = face_repo.assign_face_to_cluster(*face_id, hit.cluster_id) {
+                        tracing::warn!("rescue: assign_face_to_cluster failed: {}", e);
+                        continue;
+                    }
+                    cluster_photo_ids
+                        .entry(hit.cluster_id)
+                        .or_default()
+                        .insert(*photo_id);
+                    rescued += 1;
+                }
+                crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
+                    let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
+                    if let Err(e) = face_repo.enqueue_review(
+                        *face_id,
+                        top.cluster_id,
+                        top.score,
+                        ambiguity,
+                    ) {
+                        tracing::warn!("rescue: enqueue_review failed: {}", e);
+                        continue;
+                    }
+                    queued += 1;
+                }
+                crate::ml::ConfidenceBand::Low => {
+                    // Stays an orphan for now.
+                }
+            }
+        }
+
+        Ok((rescued, queued))
     }
 
     /// Unify clusters that likely represent the same person but got split by

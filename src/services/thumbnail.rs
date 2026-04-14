@@ -36,10 +36,13 @@ pub enum ThumbnailSize {
 
 impl ThumbnailSize {
     pub fn pixels(&self) -> u32 {
+        // ~15% smaller than the previous 300/500/1000 defaults. The quadratic
+        // pixel reduction (~30%) translates to similar CPU/IO savings per
+        // thumbnail with negligible visible-quality loss at typical grid sizes.
         match self {
-            ThumbnailSize::Small => 300,
-            ThumbnailSize::Medium => 500,
-            ThumbnailSize::Large => 1000,
+            ThumbnailSize::Small => 260,
+            ThumbnailSize::Medium => 430,
+            ThumbnailSize::Large => 860,
         }
     }
 
@@ -457,9 +460,9 @@ mod tests {
 
     #[test]
     fn test_thumbnail_sizes() {
-        assert_eq!(ThumbnailSize::Small.pixels(), 300);
-        assert_eq!(ThumbnailSize::Medium.pixels(), 500);
-        assert_eq!(ThumbnailSize::Large.pixels(), 1000);
+        assert_eq!(ThumbnailSize::Small.pixels(), 260);
+        assert_eq!(ThumbnailSize::Medium.pixels(), 430);
+        assert_eq!(ThumbnailSize::Large.pixels(), 860);
     }
 
     #[test]

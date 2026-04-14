@@ -22,7 +22,11 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     // If navigating to Timeline, always reload photos from DB
     // (photos may have new thumbnails, or user may have re-scanned)
     let task = if view == View::Timeline {
-        app.load_photos()
+        let restore = iced::widget::scrollable::scroll_to(
+            iced::widget::scrollable::Id::new("timeline"),
+            app.timeline_scroll_offset,
+        );
+        Task::batch(vec![app.load_photos(), restore])
     } else if view == View::People {
         app.load_face_clusters()
     } else if view == View::Documents {

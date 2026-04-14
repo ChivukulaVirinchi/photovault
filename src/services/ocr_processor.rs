@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use crate::db::Database;
 use crate::db::DocumentRepo;
+#[allow(unused_imports)]
 use crate::services::image_utils::apply_exif_orientation;
+#[allow(unused_imports)]
 use crate::services::DocumentDetector;
 
 #[derive(Debug, Clone)]
@@ -21,6 +23,7 @@ pub struct OcrProgress {
 pub struct OcrProcessor;
 
 impl OcrProcessor {
+    #[allow(dead_code)]
     fn lightweight_text_hints(image: &image::DynamicImage) -> Option<String> {
         let gray = image
             .resize(720, 720, image::imageops::FilterType::Triangle)
@@ -95,7 +98,7 @@ impl OcrProcessor {
         }
 
         let mut documents_found = 0usize;
-        for (idx, (photo_id, rel_path, orientation)) in targets.iter().enumerate() {
+        for (idx, (photo_id, rel_path, _orientation)) in targets.iter().enumerate() {
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::Relaxed) {
                     return Ok(documents_found);
@@ -103,25 +106,34 @@ impl OcrProcessor {
             }
 
             let full_path = drive_path.join(rel_path);
-            let (category, ocr_text, ocr_confidence) = match image::open(&full_path) {
-                Ok(img) => {
-                    let img = apply_exif_orientation(img, *orientation);
-                    let rough = DocumentDetector::classify(&img, rel_path);
-                    let text_hint = if rough != crate::models::ContentCategory::Photo {
-                        Self::lightweight_text_hints(&img)
-                    } else {
-                        None
-                    };
-                    let final_cat = DocumentDetector::classify_with_text_hints(
-                        &img,
-                        rel_path,
-                        text_hint.as_deref(),
-                    );
-                    let conf = text_hint.as_ref().map(|_| 0.55f32);
-                    (final_cat, text_hint, conf)
-                }
-                Err(_) => (crate::models::ContentCategory::Photo, None, None),
-            };
+            // Document classification temporarily disabled: the heuristics
+            // (edge density + aspect ratio + filename keywords) were too
+            // noisy. Revisit with a learned classifier later.
+            // let (category, ocr_text, ocr_confidence) = match image::open(&full_path) {
+            //     Ok(img) => {
+            //         let img = apply_exif_orientation(img, *orientation);
+            //         let rough = DocumentDetector::classify(&img, rel_path);
+            //         let text_hint = if rough != crate::models::ContentCategory::Photo {
+            //             Self::lightweight_text_hints(&img)
+            //         } else {
+            //             None
+            //         };
+            //         let final_cat = DocumentDetector::classify_with_text_hints(
+            //             &img,
+            //             rel_path,
+            //             text_hint.as_deref(),
+            //         );
+            //         let conf = text_hint.as_ref().map(|_| 0.55f32);
+            //         (final_cat, text_hint, conf)
+            //     }
+            //     Err(_) => (crate::models::ContentCategory::Photo, None, None),
+            // };
+            let _ = &full_path;
+            let (category, ocr_text, ocr_confidence) = (
+                crate::models::ContentCategory::Photo,
+                None::<String>,
+                None::<f32>,
+            );
 
             if category != crate::models::ContentCategory::Photo {
                 documents_found += 1;

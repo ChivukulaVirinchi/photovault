@@ -190,7 +190,12 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
             cleared_thumbnails,
             reset_faces,
         } => settings::rotated_data_regenerated(app, cleared_thumbnails, reset_faces),
+        Message::RegenerateThumbnails => settings::regenerate_thumbnails(app),
+        Message::ThumbnailsRegenerated { cleared } => {
+            settings::thumbnails_regenerated(app, cleared)
+        }
         Message::ToggleSidebar => settings::toggle_sidebar(app),
+        Message::TimelineScrolled(offset) => timeline::scrolled(app, offset),
         Message::NoOp => settings::no_op(app),
 
         // --- Face Review deck ---

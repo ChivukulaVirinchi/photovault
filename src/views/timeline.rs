@@ -81,6 +81,7 @@ impl TimelineView {
 
         scrollable(content)
             .id(iced::widget::scrollable::Id::new("timeline"))
+            .on_scroll(|vp| Message::TimelineScrolled(vp.absolute_offset()))
             .into()
     }
 

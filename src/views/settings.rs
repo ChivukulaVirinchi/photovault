@@ -267,6 +267,8 @@ impl SettingsView {
                 Space::with_width(16),
                 Self::action_button(theme, "Check for Changes", Message::CheckForChanges),
                 Space::with_width(16),
+                Self::action_button(theme, "Regenerate Thumbnails", Message::RegenerateThumbnails),
+                Space::with_width(16),
                 geocode_button,
                 Space::with_width(16),
                 rotated_button,

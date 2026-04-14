@@ -1,4 +1,8 @@
 //! Heuristic document detector (Stage 1 fast filter).
+//!
+//! Temporarily disabled - call sites in ocr_processor.rs are commented out.
+//! Kept compilable so we can revisit with a learned classifier later.
+#![allow(dead_code)]
 
 use std::path::Path;
 

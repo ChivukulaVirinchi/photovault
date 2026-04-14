@@ -248,6 +248,10 @@ pub struct PhotoVault {
     /// Outstanding review queue size (for sidebar badge)
     pub(crate) face_review_pending: i64,
 
+    /// Last-known Timeline scroll offset. Restored when the user navigates
+    /// back to Timeline after opening a photo / switching views.
+    pub(crate) timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset,
+
     /// Whether cull finish confirmation is pending
     pub(crate) cull_confirm_pending: bool,
 
@@ -362,10 +366,11 @@ impl PhotoVault {
 
     pub(crate) fn configured_thumbnail_size(&self) -> ThumbnailSize {
         // Map user-chosen pixel size (from Settings) onto the three quality
-        // tiers the thumbnail service generates.
+        // tiers the thumbnail service generates. Boundaries chosen relative
+        // to the post-reduction tier sizes (260 / 430 / 860).
         match self.config.thumbnail_size {
-            0..=350 => ThumbnailSize::Small,
-            351..=700 => ThumbnailSize::Medium,
+            0..=320 => ThumbnailSize::Small,
+            321..=600 => ThumbnailSize::Medium,
             _ => ThumbnailSize::Large,
         }
     }
@@ -424,6 +429,7 @@ impl PhotoVault {
             cull_state: None,
             face_review_state: None,
             face_review_pending: 0,
+            timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset::default(),
             cull_confirm_pending: false,
             cull_return_view: None,
             trash_items: Vec::new(),

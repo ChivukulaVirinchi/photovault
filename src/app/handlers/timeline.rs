@@ -10,6 +10,14 @@ use crate::models::Photo;
 use super::super::messages::Message;
 use super::super::state::{PhotoVault, View};
 
+pub(crate) fn scrolled(
+    app: &mut PhotoVault,
+    offset: iced::widget::scrollable::AbsoluteOffset,
+) -> Task<Message> {
+    app.timeline_scroll_offset = offset;
+    Task::none()
+}
+
 pub(crate) fn photos_loaded(app: &mut PhotoVault, photos: Vec<Photo>) -> Task<Message> {
     tracing::info!("Loaded {} photos for timeline", photos.len());
     app.begin_thumbnail_generation_epoch();
@@ -130,6 +138,12 @@ pub(crate) fn close_photo_detail(app: &mut PhotoVault) -> Task<Message> {
     app.selected_photo_index = None;
     // Return to whatever view we came from
     app.current_view = app.previous_view.take().unwrap_or(View::Timeline);
+    if app.current_view == View::Timeline {
+        return iced::widget::scrollable::scroll_to(
+            iced::widget::scrollable::Id::new("timeline"),
+            app.timeline_scroll_offset,
+        );
+    }
     Task::none()
 }
 

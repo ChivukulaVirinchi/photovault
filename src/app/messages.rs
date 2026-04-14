@@ -238,6 +238,9 @@ pub enum Message {
     RegenerateRotatedData,
     RotatedDataRegenerated { cleared_thumbnails: usize, reset_faces: usize },
 
+    RegenerateThumbnails,
+    ThumbnailsRegenerated { cleared: usize },
+
     /// Cancel face processing
     CancelFaceProcessing,
 
@@ -252,6 +255,9 @@ pub enum Message {
 
     /// Toggle sidebar collapsed/expanded
     ToggleSidebar,
+
+    /// Timeline scrolled (absolute offset) — persisted for resume-on-back.
+    TimelineScrolled(iced::widget::scrollable::AbsoluteOffset),
 
     // --- Face Review deck ---
     /// Load pending review items from DB and enter review view
