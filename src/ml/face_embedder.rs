@@ -77,6 +77,17 @@ impl FaceEmbedder {
         Ok(Self { session })
     }
 
+    /// Load the ArcFace model with a specific thread count per session.
+    pub fn new_with_threads<P: AsRef<Path>>(
+        runtime: &OnnxRuntime,
+        model_path: P,
+        intra_threads: usize,
+    ) -> ort::Result<Self> {
+        let session = runtime.load_model_with_threads(model_path, intra_threads)?;
+
+        Ok(Self { session })
+    }
+
     /// Generate embedding for an aligned face image (112x112)
     pub fn embed(&mut self, aligned_face: &RgbImage) -> Option<FaceEmbedding> {
         if aligned_face.width() != 112 || aligned_face.height() != 112 {

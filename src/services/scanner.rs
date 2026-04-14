@@ -2,14 +2,15 @@
 //!
 //! Recursively scans directories to find supported image files,
 //! extracts EXIF metadata, and stores everything in the database.
-//! Runs in a background thread with progress reporting.
+//! Uses rayon for parallel hash computation and EXIF extraction.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use async_channel::{bounded, Receiver, Sender};
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use walkdir::{DirEntry, WalkDir};
 
@@ -73,15 +74,19 @@ pub struct ScanResult {
     pub final_progress: ScanProgress,
 }
 
+/// A candidate file discovered during directory walk
+struct FileCandidate {
+    path: PathBuf,
+    relative_path: String,
+    file_name: String,
+    file_size: i64,
+    mtime: Option<i64>,
+}
+
 /// Start a scan in a background thread.
 ///
 /// Takes ownership of the Database (moved into the scanner thread),
 /// and returns it via the `ScanResult` when complete.
-///
-/// Returns:
-/// - A `Receiver<ScanProgress>` for progress updates
-/// - An `Arc<AtomicBool>` cancel flag
-/// - A `tokio::task::JoinHandle<ScanResult>` to await the result
 pub fn start_scan(
     root_path: PathBuf,
     database: Database,
@@ -118,38 +123,20 @@ fn run_scan(
 ) -> ScanResult {
     let start_time = Instant::now();
     let mut errors = Vec::new();
-    let mut current_dir = String::new();
-    let mut files_found: u64 = 0;
-    let mut files_processed: u64 = 0;
-    let mut bytes_processed: u64 = 0;
-    let mut batch: Vec<PhotoInsert> = Vec::with_capacity(DB_BATCH_SIZE);
 
     let repo = PhotoRepo::new(&database.conn);
 
-    // Initialize geocoder for inline reverse geocoding during scan
-    let geonames_path = crate::db::geonames::geonames_db_path();
-    let geocoder = if geonames_path.exists() {
-        GeocodingService::new(&geonames_path).ok()
-    } else {
-        None
-    };
+    // ---- Phase 1: Collect candidate files (serial walkdir, fast) ----
+    let mut candidates: Vec<FileCandidate> = Vec::new();
 
-    // Walk the directory tree
     let walker = WalkDir::new(&root_path)
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| !should_skip(e, scan_hidden_folders));
 
     for entry in walker {
-        // Check for cancellation
         if cancel_flag.load(Ordering::Relaxed) {
-            tracing::info!("Scan cancelled by user");
-            // Flush remaining batch before exit
-            if !batch.is_empty() {
-                if let Err(e) = repo.insert_batch(&batch) {
-                    errors.push(format!("Batch insert error: {}", e));
-                }
-            }
+            tracing::info!("Scan cancelled during discovery");
             break;
         }
 
@@ -161,27 +148,14 @@ fn run_scan(
             }
         };
 
-        // Update current directory for progress
-        if entry.file_type().is_dir() {
-            current_dir = entry
-                .path()
-                .strip_prefix(&root_path)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| entry.path().to_string_lossy().to_string());
-            continue;
-        }
-
-        // Skip non-files
         if !entry.file_type().is_file() {
             continue;
         }
 
-        // Check extension
         if !is_supported_file(&entry) {
             continue;
         }
 
-        // Get file metadata
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
@@ -190,80 +164,126 @@ fn run_scan(
             }
         };
 
-        // Skip small files (likely thumbnails)
         if metadata.len() < MIN_FILE_SIZE {
             continue;
         }
 
-        files_found += 1;
-
-        // Calculate hash
-        let hash = match calculate_hash(entry.path()) {
-            Ok(h) => h,
-            Err(e) => {
-                errors.push(format!("Hash error for {:?}: {}", entry.path(), e));
-                continue;
-            }
-        };
-
-        // Get relative path
         let relative_path = entry
             .path()
             .strip_prefix(&root_path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| entry.path().to_string_lossy().to_string());
 
-        // Get modification time
         let mtime = metadata
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
 
-        // Extract EXIF metadata
-        let exif = ExifExtractor::extract(entry.path());
-
-        // Reverse-geocode GPS coordinates inline (~1ms per lookup)
-        let (location_city, location_country) = if let (Some(lat), Some(lon), Some(geo)) =
-            (exif.gps_latitude, exif.gps_longitude, geocoder.as_ref())
-        {
-            match geo.reverse_geocode(lat, lon) {
-                Some(result) => (Some(result.city), Some(result.country)),
-                None => (None, None),
-            }
-        } else {
-            (None, None)
-        };
-
-        let photo_insert = PhotoInsert {
+        candidates.push(FileCandidate {
+            path: entry.path().to_path_buf(),
             relative_path,
             file_name: entry.file_name().to_string_lossy().to_string(),
-            file_hash: hash,
             file_size: metadata.len() as i64,
-            file_mtime: mtime,
-            date_taken: exif.date_taken.map(|d| d.to_rfc3339()),
-            date_taken_source: exif.date_taken_source,
-            gps_latitude: exif.gps_latitude,
-            gps_longitude: exif.gps_longitude,
-            location_city,
-            location_country,
-            camera_make: exif.camera_make,
-            camera_model: exif.camera_model,
-            iso: exif.iso,
-            aperture: exif.aperture,
-            shutter_speed: exif.shutter_speed,
-            focal_length: exif.focal_length,
-            lens_model: exif.lens_model,
-            flash: exif.flash,
-            gps_altitude: exif.gps_altitude,
-            width: exif.width.map(|v| v as i32),
-            height: exif.height.map(|v| v as i32),
-            orientation: exif.orientation.unwrap_or(1) as i32,
-        };
+            mtime,
+        });
+    }
 
-        batch.push(photo_insert);
+    let total_found = candidates.len() as u64;
 
-        // Flush batch when full
+    // Send discovery progress
+    let _ = progress_tx.send_blocking(ScanProgress {
+        files_found: total_found,
+        files_processed: 0,
+        bytes_processed: 0,
+        current_directory: String::new(),
+        current_file: format!("Processing {} files...", total_found),
+        errors: errors.clone(),
+        is_complete: false,
+        elapsed_seconds: start_time.elapsed().as_secs_f64(),
+    });
+
+    // ---- Phase 2: Parallel hash + EXIF extraction ----
+    let processed_count = Arc::new(AtomicU64::new(0));
+    let bytes_count = Arc::new(AtomicU64::new(0));
+
+    let processed: Vec<Option<PhotoInsert>> = candidates
+        .par_iter()
+        .map(|candidate| {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            let hash = match calculate_hash(&candidate.path) {
+                Ok(h) => h,
+                Err(_) => return None,
+            };
+
+            let exif = ExifExtractor::extract(&candidate.path);
+
+            processed_count.fetch_add(1, Ordering::Relaxed);
+            bytes_count.fetch_add(candidate.file_size as u64, Ordering::Relaxed);
+
+            Some(PhotoInsert {
+                relative_path: candidate.relative_path.clone(),
+                file_name: candidate.file_name.clone(),
+                file_hash: hash,
+                file_size: candidate.file_size,
+                file_mtime: candidate.mtime,
+                date_taken: exif.date_taken.map(|d| d.to_rfc3339()),
+                date_taken_source: exif.date_taken_source,
+                gps_latitude: exif.gps_latitude,
+                gps_longitude: exif.gps_longitude,
+                location_city: None, // Geocoding done in Phase 3 (serial)
+                location_country: None,
+                camera_make: exif.camera_make,
+                camera_model: exif.camera_model,
+                iso: exif.iso,
+                aperture: exif.aperture,
+                shutter_speed: exif.shutter_speed,
+                focal_length: exif.focal_length,
+                lens_model: exif.lens_model,
+                flash: exif.flash,
+                gps_altitude: exif.gps_altitude,
+                width: exif.width.map(|v| v as i32),
+                height: exif.height.map(|v| v as i32),
+                orientation: exif.orientation.unwrap_or(1) as i32,
+            })
+        })
+        .collect();
+
+    // ---- Phase 3: Serial geocoding + batched DB insert ----
+    let geonames_path = crate::db::geonames::geonames_db_path();
+    let geocoder = if geonames_path.exists() {
+        GeocodingService::new(&geonames_path).ok()
+    } else {
+        None
+    };
+
+    let mut files_processed: u64 = 0;
+    let mut bytes_processed: u64 = 0;
+    let mut batch: Vec<PhotoInsert> = Vec::with_capacity(DB_BATCH_SIZE);
+
+    for item in processed.into_iter().flatten() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let mut photo = item;
+
+        // Reverse-geocode GPS coordinates (~1ms per lookup)
+        if let (Some(lat), Some(lon), Some(geo)) =
+            (photo.gps_latitude, photo.gps_longitude, geocoder.as_ref())
+        {
+            if let Some(result) = geo.reverse_geocode(lat, lon) {
+                photo.location_city = Some(result.city);
+                photo.location_country = Some(result.country);
+            }
+        }
+
+        bytes_processed += photo.file_size as u64;
+        batch.push(photo);
+
         if batch.len() >= DB_BATCH_SIZE {
             match repo.insert_batch(&batch) {
                 Ok(_) => {}
@@ -271,25 +291,22 @@ fn run_scan(
                     errors.push(format!("Batch insert error: {}", e));
                 }
             }
+            files_processed += batch.len() as u64;
             batch.clear();
-        }
 
-        files_processed += 1;
-        bytes_processed += metadata.len();
-
-        // Send progress update periodically (every 50 files or every file if < 50 total)
-        if files_processed % 50 == 0 || files_processed <= 5 {
-            let progress = ScanProgress {
-                files_found,
-                files_processed,
-                bytes_processed,
-                current_directory: current_dir.clone(),
-                current_file: entry.file_name().to_string_lossy().to_string(),
-                errors: errors.clone(),
-                is_complete: false,
-                elapsed_seconds: start_time.elapsed().as_secs_f64(),
-            };
-            let _ = progress_tx.send_blocking(progress);
+            // Send progress
+            if files_processed % 50 == 0 || files_processed <= 5 {
+                let _ = progress_tx.send_blocking(ScanProgress {
+                    files_found: total_found,
+                    files_processed,
+                    bytes_processed,
+                    current_directory: String::new(),
+                    current_file: String::new(),
+                    errors: errors.clone(),
+                    is_complete: false,
+                    elapsed_seconds: start_time.elapsed().as_secs_f64(),
+                });
+            }
         }
     }
 
@@ -298,10 +315,11 @@ fn run_scan(
         if let Err(e) = repo.insert_batch(&batch) {
             errors.push(format!("Final batch insert error: {}", e));
         }
+        files_processed += batch.len() as u64;
     }
 
     let final_progress = ScanProgress {
-        files_found,
+        files_found: total_found,
         files_processed,
         bytes_processed,
         current_directory: String::new(),
@@ -311,12 +329,11 @@ fn run_scan(
         elapsed_seconds: start_time.elapsed().as_secs_f64(),
     };
 
-    // Send final progress
     let _ = progress_tx.send_blocking(final_progress.clone());
 
     tracing::info!(
         "Scan complete: {} files in {:.2}s",
-        files_found,
+        total_found,
         start_time.elapsed().as_secs_f64()
     );
 
@@ -330,12 +347,10 @@ fn run_scan(
 fn should_skip(entry: &DirEntry, scan_hidden_folders: bool) -> bool {
     let file_name = entry.file_name().to_string_lossy();
 
-    // Skip hidden files/directories (starting with .)
     if !scan_hidden_folders && file_name.starts_with('.') {
         return true;
     }
 
-    // Skip known system directories
     for skip in SKIP_DIRECTORIES {
         if file_name == *skip {
             return true;
@@ -424,7 +439,7 @@ mod tests {
             match name.as_str() {
                 "test.jpg" => assert!(is_supported_file(&entry)),
                 "test.txt" => assert!(!is_supported_file(&entry)),
-                "test.PNG" => assert!(is_supported_file(&entry)), // case insensitive
+                "test.PNG" => assert!(is_supported_file(&entry)),
                 _ => {}
             }
         }
@@ -438,7 +453,6 @@ mod tests {
         f.write_all(b"hello world").unwrap();
 
         let hash = calculate_hash(&file_path).unwrap();
-        // SHA256 of "hello world"
         assert_eq!(
             hash,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
@@ -447,7 +461,6 @@ mod tests {
 
     #[test]
     fn test_min_file_size_filter() {
-        // Files under 10KB should be skipped
         assert!(MIN_FILE_SIZE == 10 * 1024);
     }
 }

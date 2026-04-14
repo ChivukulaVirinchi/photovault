@@ -1,18 +1,20 @@
 //! Face processing pipeline
 //!
 //! Orchestrates the face detection -> embedding -> clustering workflow.
-//! Designed to run as a background task without blocking the UI.
+//! Uses rayon for parallel photo processing with thread-local ONNX sessions.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use rayon::prelude::*;
 
 use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
 use crate::db::InferredIdentityRepo;
-use crate::ml::{ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, OnnxRuntime};
+use crate::ml::{ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime};
 use crate::services::image_utils::apply_exif_orientation;
 
 /// Progress information for face processing
@@ -41,6 +43,24 @@ pub struct FaceProcessingResult {
     pub clusters_created: usize,
 }
 
+/// Result of processing a single photo (collected from parallel workers)
+struct PhotoFaceResult {
+    photo_id: i64,
+    file_path: String,
+    faces: Vec<FaceInsert>,
+    taken_ts: Option<i64>,
+    brightness: f32,
+    had_error: bool,
+}
+
+/// A face ready for DB insertion
+struct FaceInsert {
+    bbox_normalized: (f32, f32, f32, f32),
+    confidence: f32,
+    embedding: FaceEmbedding,
+    aligned_face: image::RgbImage,
+}
+
 /// Face processing pipeline
 ///
 /// Call `process_photos` to run the full detect -> embed -> cluster pipeline.
@@ -52,13 +72,8 @@ impl FaceProcessor {
 
     /// Run the full face processing pipeline on unprocessed photos.
     ///
-    /// This is designed to be called from `spawn_blocking` as it does
-    /// heavy CPU work (ML inference) and blocking DB operations.
-    ///
-    /// # Arguments
-    /// * `drive_path` - Root drive path
-    /// * `model_dir` - Directory containing ONNX model files
-    /// * `progress_tx` - Channel to send progress updates
+    /// Uses rayon for parallel detection/embedding with thread-local ONNX sessions,
+    /// then batches DB writes for efficiency.
     pub fn process_photos(
         drive_path: &Path,
         model_dir: &Path,
@@ -85,7 +100,6 @@ impl FaceProcessor {
 
         let total = unprocessed.len();
         if total == 0 {
-            // No photos to process; still run clustering on any unclustered faces
             let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
             return Ok(FaceProcessingResult {
                 photos_processed: 0,
@@ -94,7 +108,7 @@ impl FaceProcessor {
             });
         }
 
-        // Initialize ONNX Runtime and load models
+        // Initialize ONNX Runtime
         let runtime = OnnxRuntime::init().map_err(|e| {
             format!(
                 "Failed to init ONNX Runtime: {}. Install ONNX Runtime 1.23.x and set ORT_DYLIB_PATH, or place the runtime library in libs/onnxruntime/.",
@@ -105,7 +119,6 @@ impl FaceProcessor {
         let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
         let embedder_path = model_dir.join("glintr100.onnx");
 
-        // Check if model files exist
         if !detector_path.exists() {
             return Err(format!(
                 "Face detection model not found at: {}. \
@@ -121,167 +134,314 @@ impl FaceProcessor {
             ));
         }
 
-        let mut detector = FaceDetector::new(&runtime, &detector_path)
-            .map_err(|e| format!("Failed to load face detector: {}", e))?;
-        detector = detector.with_confidence_threshold(detector_confidence);
-
-        let mut embedder = FaceEmbedder::new(&runtime, &embedder_path)
-            .map_err(|e| format!("Failed to load face embedder: {}", e))?;
-
-        tracing::info!("Face processing: {} photos to process", total);
-
-        let mut total_faces = 0usize;
-        let mut last_progress_emit = Instant::now()
-            .checked_sub(Duration::from_millis(250))
-            .unwrap_or_else(Instant::now);
-
-        // Create faces directory for storing cropped face thumbnails
+        // Create faces directory
         let faces_dir = drive_path.join(".photovault").join("faces");
         if let Err(e) = std::fs::create_dir_all(&faces_dir) {
             tracing::warn!("Failed to create faces directory: {}", e);
         }
 
-        // Phase 1: Detect faces and generate embeddings
-        for (idx, (photo_id, file_path, orientation, taken_ts)) in unprocessed.iter().enumerate() {
-            // Check for cancellation
-            if let Some(ref flag) = cancel_flag {
-                if flag.load(Ordering::Relaxed) {
-                    tracing::info!("Face processing cancelled at photo {}/{}", idx, total);
-                    // Still run clustering on whatever faces we've found so far
-                    let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
-                    return Ok(FaceProcessingResult {
-                        photos_processed: idx,
-                        faces_detected: total_faces,
-                        clusters_created,
-                    });
-                }
-            }
+        tracing::info!("Face processing: {} photos to process", total);
 
-            // Send progress
-            if let Some(ref tx) = progress_tx {
-                let now = Instant::now();
-                if now.duration_since(last_progress_emit) >= Duration::from_millis(250)
-                    || idx + 1 == total
-                {
-                    if tx
-                        .try_send(FaceProcessingProgress {
-                            processed: idx,
+        // Determine parallelism
+        let available_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let num_workers = available_cpus.min(6).max(1);
+        let intra_threads = (available_cpus / num_workers).max(1);
+
+        tracing::info!(
+            "Face pipeline: {} workers, {} intra-threads per session ({} CPUs)",
+            num_workers, intra_threads, available_cpus
+        );
+
+        // Build a custom rayon thread pool so we don't pollute the global pool
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_workers)
+            .build()
+            .map_err(|e| format!("Failed to create thread pool: {}", e))?;
+
+        let processed_count = Arc::new(AtomicUsize::new(0));
+        let faces_count = Arc::new(AtomicUsize::new(0));
+        let cancel = cancel_flag.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+
+        // Shared paths for thread-local session init
+        let detector_path = Arc::new(detector_path);
+        let embedder_path = Arc::new(embedder_path);
+        let drive_path_arc = Arc::new(drive_path.to_path_buf());
+
+        // Spawn a lightweight progress reporter
+        let progress_handle = {
+            let progress_tx = progress_tx.clone();
+            let processed_count = processed_count.clone();
+            let faces_count = faces_count.clone();
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                while !cancel.load(Ordering::Relaxed) {
+                    let processed = processed_count.load(Ordering::Relaxed);
+                    if let Some(ref tx) = progress_tx {
+                        let _ = tx.try_send(FaceProcessingProgress {
+                            processed,
                             total,
-                            faces_found: total_faces,
-                        })
-                        .is_ok()
-                    {
-                        last_progress_emit = now;
+                            faces_found: faces_count.load(Ordering::Relaxed),
+                        });
                     }
+                    if processed >= total {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
                 }
-            }
+            })
+        };
 
-            // Load image and pre-resize for faster inference
-            // SCRFD input is 640x640 but larger images help detect smaller faces
-            let full_path = drive_path.join(file_path);
-            let image = match image::open(&full_path) {
-                Ok(img) => {
-                    let img = apply_exif_orientation(img, *orientation);
-                    let (w, h) = (img.width(), img.height());
-                    let max_dim = w.max(h);
-                    if max_dim > 2048 {
-                        img.resize(2048, 2048, image::imageops::FilterType::Triangle)
-                    } else {
-                        img
+        // ---- Stage 1: Parallel Detection + Embedding ----
+        let results: Vec<PhotoFaceResult> = pool.install(|| {
+            unprocessed
+                .par_iter()
+                .map(|(photo_id, file_path, orientation, taken_ts)| {
+                    // Check cancellation
+                    if cancel.load(Ordering::Relaxed) {
+                        return PhotoFaceResult {
+                            photo_id: *photo_id,
+                            file_path: file_path.clone(),
+                            faces: Vec::new(),
+                            taken_ts: *taken_ts,
+                            brightness: 0.0,
+                            had_error: true,
+                        };
                     }
-                }
-                Err(e) => {
-                    tracing::debug!("Failed to open image {}: {}", file_path, e);
-                    // Mark as processed so we don't retry
-                    let _ = face_repo.mark_photo_processed(*photo_id);
+
+                    // Thread-local ONNX sessions
+                    thread_local! {
+                        static DETECTOR: std::cell::RefCell<Option<FaceDetector>> = const { std::cell::RefCell::new(None) };
+                        static EMBEDDER: std::cell::RefCell<Option<FaceEmbedder>> = const { std::cell::RefCell::new(None) };
+                    }
+
+                    // Ensure sessions are initialized for this thread
+                    let det_path = detector_path.clone();
+                    let emb_path = embedder_path.clone();
+                    DETECTOR.with(|d| {
+                        if d.borrow().is_none() {
+                            match FaceDetector::new_with_threads(&runtime, det_path.as_ref(), intra_threads) {
+                                Ok(det) => {
+                                    *d.borrow_mut() = Some(det.with_confidence_threshold(detector_confidence));
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to init detector in worker: {}", e);
+                                }
+                            }
+                        }
+                    });
+                    EMBEDDER.with(|e| {
+                        if e.borrow().is_none() {
+                            match FaceEmbedder::new_with_threads(&runtime, emb_path.as_ref(), intra_threads) {
+                                Ok(emb) => {
+                                    *e.borrow_mut() = Some(emb);
+                                }
+                                Err(e_err) => {
+                                    tracing::error!("Failed to init embedder in worker: {}", e_err);
+                                }
+                            }
+                        }
+                    });
+
+                    // Load and orient image (once!)
+                    let full_path = drive_path_arc.join(file_path);
+                    let image = match image::open(&full_path) {
+                        Ok(img) => {
+                            let img = apply_exif_orientation(img, *orientation);
+                            let max_dim = img.width().max(img.height());
+                            if max_dim > 2048 {
+                                img.resize(2048, 2048, image::imageops::FilterType::Triangle)
+                            } else {
+                                img
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to open image {}: {}", file_path, e);
+                            processed_count.fetch_add(1, Ordering::Relaxed);
+                            return PhotoFaceResult {
+                                photo_id: *photo_id,
+                                file_path: file_path.clone(),
+                                faces: Vec::new(),
+                                taken_ts: *taken_ts,
+                                brightness: 0.0,
+                                had_error: true,
+                            };
+                        }
+                    };
+
+                    // Compute brightness once (eliminates redundant image reload)
+                    let brightness = Self::average_brightness(&image);
+
+                    // Detect faces
+                    let detected = DETECTOR.with(|d| {
+                        let mut borrow = d.borrow_mut();
+                        match borrow.as_mut() {
+                            Some(det) => det.detect_adaptive(&image),
+                            None => Vec::new(),
+                        }
+                    });
+
+                    if !detected.is_empty() {
+                        tracing::info!(
+                            "Photo: {} faces detected in {}",
+                            detected.len(),
+                            file_path
+                        );
+                    }
+
+                    // Embed each detected face
+                    let mut face_inserts = Vec::new();
+                    for face in &detected {
+                        if let Some(ref aligned) = face.aligned_face {
+                            let embedding = EMBEDDER.with(|e| {
+                                let mut borrow = e.borrow_mut();
+                                borrow.as_mut().and_then(|emb| emb.embed(aligned))
+                            });
+                            if let Some(embedding) = embedding {
+                                face_inserts.push(FaceInsert {
+                                    bbox_normalized: face.bbox_normalized,
+                                    confidence: face.confidence,
+                                    embedding,
+                                    aligned_face: aligned.clone(),
+                                });
+                            }
+                        }
+                    }
+
+                    faces_count.fetch_add(face_inserts.len(), Ordering::Relaxed);
+                    processed_count.fetch_add(1, Ordering::Relaxed);
+
+                    PhotoFaceResult {
+                        photo_id: *photo_id,
+                        file_path: file_path.clone(),
+                        faces: face_inserts,
+                        taken_ts: *taken_ts,
+                        brightness,
+                        had_error: false,
+                    }
+                })
+                .collect()
+        });
+
+        // Wait for progress reporter to finish
+        let _ = progress_handle.join();
+
+        // Check if cancelled partway through
+        let was_cancelled = cancel.load(Ordering::Relaxed);
+
+        // ---- Stage 2: Batched DB Writes ----
+        let mut total_faces = 0usize;
+        let mut photos_processed = 0usize;
+        let mut brightness_map: HashMap<i64, f32> = HashMap::new();
+
+        // Batch in groups of 100 photos per transaction
+        for chunk in results.chunks(100) {
+            let tx = db.conn.unchecked_transaction()
+                .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+            for result in chunk {
+                if result.had_error && result.faces.is_empty() {
+                    // Mark errored/cancelled photos as processed so we don't retry
+                    let _ = tx.execute(
+                        "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
+                        rusqlite::params![result.photo_id],
+                    );
+                    if !was_cancelled {
+                        photos_processed += 1;
+                    }
                     continue;
                 }
-            };
 
-            // Detect faces
-            let faces = detector.detect_adaptive(&image);
-
-            // Clear any previous inferred identities for this photo before writing fresh results.
-            let _ = inferred_repo.delete_for_photo(*photo_id);
-
-            if !faces.is_empty() {
-                tracing::info!(
-                    "Photo {}/{}: {} faces detected in {}",
-                    idx + 1,
-                    total,
-                    faces.len(),
-                    file_path
+                // Clear previous inferred identities
+                let _ = tx.execute(
+                    "DELETE FROM photo_inferred_identities WHERE photo_id = ?1",
+                    rusqlite::params![result.photo_id],
                 );
-            }
 
-            // Generate embeddings and store in DB
-            for face in &faces {
-                if let Some(ref aligned) = face.aligned_face {
-                    if let Some(embedding) = embedder.embed(aligned) {
-                        match face_repo.insert_face(
-                            *photo_id,
+                // Insert each detected face
+                for face in &result.faces {
+                    match tx.execute(
+                        r#"
+                        INSERT INTO faces (
+                            photo_id,
+                            bbox_x, bbox_y, bbox_width, bbox_height,
+                            confidence, embedding
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                        "#,
+                        rusqlite::params![
+                            result.photo_id,
                             face.bbox_normalized.0,
                             face.bbox_normalized.1,
                             face.bbox_normalized.2,
                             face.bbox_normalized.3,
                             face.confidence,
-                            &embedding,
-                        ) {
-                            Ok(face_id) => {
-                                // Save face crop to disk for display in People view
-                                let crop_path = faces_dir.join(format!("{}.jpg", face_id));
-                                if let Err(e) = Self::save_face_crop(aligned, &crop_path) {
-                                    tracing::warn!(
-                                        "Failed to save face crop for face {} ({}): {}",
-                                        face_id,
-                                        crop_path.display(),
-                                        e
-                                    );
-                                }
-                                total_faces += 1;
+                            face.embedding.to_bytes(),
+                        ],
+                    ) {
+                        Ok(_) => {
+                            let face_id = tx.last_insert_rowid();
+                            // Save face crop
+                            let crop_path = faces_dir.join(format!("{}.jpg", face_id));
+                            if let Err(e) = Self::save_face_crop(&face.aligned_face, &crop_path) {
+                                tracing::warn!("Failed to save face crop {}: {}", face_id, e);
                             }
-                            Err(e) => {
-                                tracing::warn!("Failed to insert face: {}", e);
-                            }
+                            total_faces += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to insert face: {}", e);
                         }
                     }
                 }
+
+                // Mark photo as processed
+                let _ = tx.execute(
+                    "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
+                    rusqlite::params![result.photo_id],
+                );
+
+                brightness_map.insert(result.photo_id, result.brightness);
+                photos_processed += 1;
             }
 
-            // Mark photo as processed
-            let _ = face_repo.mark_photo_processed(*photo_id);
+            tx.commit().map_err(|e| format!("Failed to commit batch: {}", e))?;
+        }
 
-            if faces.is_empty() {
-                if let Some(target_ts) = taken_ts {
-                    let _ = Self::propagate_identity_from_context(
-                        &face_repo,
-                        &inferred_repo,
-                        drive_path,
-                        *photo_id,
-                        file_path,
-                        *target_ts,
-                        &image,
-                    );
-                }
+        // ---- Stage 3: Contextual Identity Propagation ----
+        // Uses precomputed brightness values (no image reloading)
+        for result in &results {
+            if result.had_error || !result.faces.is_empty() {
+                continue; // Only propagate for photos with no detected faces
+            }
+            if let Some(target_ts) = result.taken_ts {
+                let _ = Self::propagate_identity_from_context(
+                    &face_repo,
+                    &inferred_repo,
+                    drive_path,
+                    result.photo_id,
+                    &result.file_path,
+                    target_ts,
+                    result.brightness,
+                    &brightness_map,
+                );
             }
         }
 
-        // Send clustering phase progress
+        // Send final progress
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
-                processed: total,
+                processed: photos_processed,
                 total,
                 faces_found: total_faces,
             });
         }
 
-        // Phase 2: Cluster faces
+        // ---- Stage 4: Clustering ----
         let clusters_created = Self::run_clustering(&face_repo, clustering_threshold)?;
 
-        // Send completion
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
-                processed: total,
+                processed: photos_processed,
                 total,
                 faces_found: total_faces,
             });
@@ -289,13 +449,13 @@ impl FaceProcessor {
 
         tracing::info!(
             "Face processing complete: {} photos, {} faces, {} clusters",
-            total,
+            photos_processed,
             total_faces,
             clusters_created
         );
 
         Ok(FaceProcessingResult {
-            photos_processed: total,
+            photos_processed,
             faces_detected: total_faces,
             clusters_created,
         })
@@ -308,7 +468,8 @@ impl FaceProcessor {
         photo_id: i64,
         file_path: &str,
         target_ts: i64,
-        target_image: &image::DynamicImage,
+        target_brightness: f32,
+        brightness_map: &HashMap<i64, f32>,
     ) -> Result<usize, String> {
         let folder_like = std::path::Path::new(file_path).parent().map(|p| {
             let s = p.to_string_lossy();
@@ -332,7 +493,6 @@ impl FaceProcessor {
             return Ok(0);
         }
 
-        let target_brightness = Self::average_brightness(target_image);
         let mut best_by_cluster: HashMap<i64, (i64, f32)> = HashMap::new();
 
         for (source_photo_id, cluster_id, source_ts, source_file_path) in candidates {
@@ -340,15 +500,17 @@ impl FaceProcessor {
             let temporal_score = 1.0 - (delta / Self::CONTEXT_WINDOW_SECS as f32).clamp(0.0, 1.0);
             let mut confidence = 0.5 + (temporal_score * 0.4);
 
-            // Lightweight visual consistency: compare average brightness from current image
-            // and source image if available. This reduces mistaken links across dissimilar scenes.
-            if let Some(source_brightness) =
-                Self::load_average_brightness_from_relative(drive_path, &source_file_path)
-            {
+            // Use precomputed brightness if available, otherwise load from disk
+            let source_brightness = brightness_map
+                .get(&source_photo_id)
+                .copied()
+                .or_else(|| Self::load_average_brightness_from_relative(drive_path, &source_file_path));
+
+            if let Some(source_brightness) = source_brightness {
+                // Smooth falloff instead of hard cutoff (Phase 2 fix included)
                 let diff = (target_brightness - source_brightness).abs();
-                if diff < 0.12 {
-                    confidence += 0.1;
-                }
+                let brightness_bonus = 0.1 * (1.0 - (diff / 0.3).clamp(0.0, 1.0));
+                confidence += brightness_bonus;
             }
 
             confidence = confidence.clamp(0.0, 1.0);
@@ -409,7 +571,7 @@ impl FaceProcessor {
 
     /// Run incremental clustering in two stages:
     /// 1) Assign unclustered faces to existing clusters (high-confidence match)
-    /// 2) Run DBSCAN only on still-unclustered faces to form new clusters
+    /// 2) Run agglomerative clustering only on still-unclustered faces
     fn run_clustering(face_repo: &FaceRepo, clustering_threshold: f32) -> Result<usize, String> {
         let mut assigned_to_existing = 0usize;
         let strict_max_distance = clustering_threshold.min(0.35).clamp(0.15, 0.6);
@@ -452,7 +614,6 @@ impl FaceProcessor {
                     .map(|set| set.contains(photo_id))
                     .unwrap_or(false)
                 {
-                    // Conflict: cannot put two faces from same photo in one person cluster.
                     continue;
                 }
 
@@ -545,16 +706,11 @@ impl FaceProcessor {
         path: &Path,
     ) -> Result<(), image::ImageError> {
         let dynamic = image::DynamicImage::ImageRgb8(aligned_face.clone());
-        // Resize to 80x80 for thumbnail display (the aligned face is 112x112)
         let resized = dynamic.resize_exact(80, 80, image::imageops::FilterType::Lanczos3);
         resized.save(path)
     }
 
     /// Regenerate missing face crop files from stored bounding box data.
-    ///
-    /// This handles the case where faces were detected before the crop-saving
-    /// code was added. It reads original images, crops using the stored bbox
-    /// coordinates, and saves 80x80 JPEG thumbnails.
     pub fn regenerate_missing_crops(drive_path: &Path) -> Result<usize, String> {
         let db = Database::open_for_drive(drive_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
@@ -573,7 +729,7 @@ impl FaceProcessor {
         for (face_id, file_path, orientation, bbox_x, bbox_y, bbox_w, bbox_h) in &all_faces {
             let crop_path = faces_dir.join(format!("{}.jpg", face_id));
             if crop_path.exists() {
-                continue; // Already has crop
+                continue;
             }
 
             let full_path = drive_path.join(file_path);
@@ -584,13 +740,11 @@ impl FaceProcessor {
 
             let (img_w, img_h) = (img.width() as f32, img.height() as f32);
 
-            // Convert normalized bbox back to pixel coordinates
             let px = (bbox_x * img_w) as u32;
             let py = (bbox_y * img_h) as u32;
             let pw = (bbox_w * img_w) as u32;
             let ph = (bbox_h * img_h) as u32;
 
-            // Expand crop area slightly for context (20% padding)
             let pad_x = (pw as f32 * 0.2) as u32;
             let pad_y = (ph as f32 * 0.2) as u32;
             let crop_x = px.saturating_sub(pad_x);

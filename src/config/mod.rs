@@ -50,7 +50,10 @@ impl AppConfig {
 
         match std::fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str::<Self>(&content) {
-                Ok(cfg) => cfg,
+                Ok(mut cfg) => {
+                    cfg.validate();
+                    cfg
+                }
                 Err(e) => {
                     tracing::warn!("Failed to parse config {}: {}", path.display(), e);
                     Self::default()
@@ -61,6 +64,17 @@ impl AppConfig {
                 Self::default()
             }
         }
+    }
+
+    /// Clamp all values to valid ranges.
+    fn validate(&mut self) {
+        self.face_detection_confidence = self.face_detection_confidence.clamp(0.1, 0.95);
+        self.face_clustering_threshold = self.face_clustering_threshold.clamp(0.1, 0.8);
+        self.thumbnail_size = self.thumbnail_size.clamp(100, 1000);
+        self.burst_time_window_seconds = self.burst_time_window_seconds.max(1).min(30);
+        self.trash_auto_delete_days = self.trash_auto_delete_days.max(1).min(365);
+        self.window_width = self.window_width.clamp(400, 7680);
+        self.window_height = self.window_height.clamp(300, 4320);
     }
 
     /// Save config to disk.

@@ -201,7 +201,6 @@ impl<'a> PhotoRepo<'a> {
                     indexed_at, updated_at
                 FROM photos
                 WHERE is_trashed = FALSE AND id IN ({})
-                ORDER BY date_taken DESC
                 "#,
                 placeholders
             );

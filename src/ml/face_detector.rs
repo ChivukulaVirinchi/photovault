@@ -69,6 +69,22 @@ impl FaceDetector {
         })
     }
 
+    /// Load the SCRFD model with a specific thread count per session.
+    pub fn new_with_threads<P: AsRef<Path>>(
+        runtime: &OnnxRuntime,
+        model_path: P,
+        intra_threads: usize,
+    ) -> ort::Result<Self> {
+        let session = runtime.load_model_with_threads(model_path, intra_threads)?;
+
+        Ok(Self {
+            session,
+            input_size: (640, 640),
+            confidence_threshold: 0.5,
+            nms_threshold: 0.4,
+        })
+    }
+
     /// Set confidence threshold for detection
     pub fn with_confidence_threshold(mut self, threshold: f32) -> Self {
         self.confidence_threshold = threshold;

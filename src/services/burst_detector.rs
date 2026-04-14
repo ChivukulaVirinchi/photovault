@@ -43,7 +43,7 @@ impl Default for BurstConfig {
             max_gap_seconds: 3,
             min_photos: 3,
             max_burst_span_seconds: 30,
-            similarity_threshold: 0.90,
+            similarity_threshold: 0.80,
             require_same_folder: true,
         }
     }
@@ -208,9 +208,9 @@ impl BurstDetector {
     fn signature_from_image(img: &DynamicImage) -> Vec<f32> {
         let gray = img
             .grayscale()
-            .resize_exact(32, 32, FilterType::Triangle)
+            .resize_exact(48, 48, FilterType::Triangle)
             .to_luma8();
-        let mut sig = Vec::with_capacity(32 * 32);
+        let mut sig = Vec::with_capacity(48 * 48);
         for px in gray.pixels() {
             sig.push(f32::from(px.0[0]) / 255.0);
         }

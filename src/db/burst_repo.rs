@@ -61,39 +61,77 @@ impl<'a> BurstRepo<'a> {
         Ok(group_id)
     }
 
-    /// Sync burst groups from detection results
+    /// Sync burst groups from detection results, preserving user decisions.
+    ///
+    /// Uses merge-based approach: existing groups whose photo sets match are kept
+    /// intact (preserving `is_suggested_best`), new groups are created, and groups
+    /// that no longer match any detection result are removed.
     pub fn sync_burst_groups(
         &self,
         groups: &[(String, String, Vec<i64>)], // (start, end, photo_ids)
     ) -> SqliteResult<()> {
+        use std::collections::{BTreeSet, HashMap, HashSet};
+
         let tx = self.conn.unchecked_transaction()?;
 
-        // Clear existing
-        self.conn.execute("DELETE FROM burst_group_members", [])?;
-        self.conn.execute("DELETE FROM burst_groups", [])?;
+        // Load existing groups with their photo_id sets
+        let mut existing_sets: HashMap<BTreeSet<i64>, i64> = HashMap::new();
+        {
+            let mut grp_stmt = self.conn.prepare("SELECT id FROM burst_groups")?;
+            let group_ids: Vec<i64> = grp_stmt
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for gid in group_ids {
+                let mut mem_stmt = self.conn.prepare(
+                    "SELECT photo_id FROM burst_group_members WHERE group_id = ?1",
+                )?;
+                let members: BTreeSet<i64> = mem_stmt
+                    .query_map(params![gid], |row| row.get::<_, i64>(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                existing_sets.insert(members, gid);
+            }
+        }
+
+        let mut seen_sets: HashSet<BTreeSet<i64>> = HashSet::new();
 
         for (start_time, end_time, photo_ids) in groups {
+            let set: BTreeSet<i64> = photo_ids.iter().copied().collect();
+            seen_sets.insert(set.clone());
+
+            if existing_sets.contains_key(&set) {
+                continue; // Group exists — preserve user decisions
+            }
             self.create_group(start_time, end_time, photo_ids)?;
+        }
+
+        // Remove groups that no longer match any detection
+        for (set, group_id) in &existing_sets {
+            if !seen_sets.contains(set) {
+                self.delete_group(*group_id)?;
+            }
         }
 
         tx.commit()
     }
 
-    /// Set the suggested best photo for a group
+    /// Set the suggested best photo for a group (atomic)
     pub fn set_suggested_best(&self, group_id: i64, photo_id: i64) -> SqliteResult<()> {
-        // Clear existing
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
             "UPDATE burst_group_members SET is_suggested_best = FALSE WHERE group_id = ?1",
             params![group_id],
         )?;
 
-        // Set new
-        self.conn.execute(
+        tx.execute(
             "UPDATE burst_group_members SET is_suggested_best = TRUE WHERE group_id = ?1 AND photo_id = ?2",
             params![group_id, photo_id],
         )?;
 
-        Ok(())
+        tx.commit()
     }
 
     /// Get all burst groups

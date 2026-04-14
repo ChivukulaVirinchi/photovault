@@ -32,20 +32,44 @@ impl<'a> DuplicateRepo<'a> {
         Self { conn }
     }
 
-    /// Create or update duplicate groups from detection results
+    /// Create or update duplicate groups from detection results, preserving user decisions.
+    ///
+    /// Uses merge-based approach: existing groups whose hash matches are kept
+    /// intact (preserving `is_suggested_keep`), new groups are created, and groups
+    /// whose hash no longer has duplicates are removed.
     pub fn sync_duplicate_groups(
         &self,
         groups: &[(String, Vec<i64>, Option<i64>)], // (hash, photo_ids, suggested_keep)
     ) -> SqliteResult<()> {
+        use std::collections::{HashMap, HashSet};
+
         let tx = self.conn.unchecked_transaction()?;
 
-        // Clear existing groups (full resync for now)
-        self.conn
-            .execute("DELETE FROM duplicate_group_members", [])?;
-        self.conn.execute("DELETE FROM duplicate_groups", [])?;
+        // Load existing groups by hash
+        let mut existing_hashes: HashMap<String, i64> = HashMap::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, group_hash FROM duplicate_groups")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, hash) = row?;
+                existing_hashes.insert(hash, id);
+            }
+        }
+
+        let mut seen_hashes: HashSet<String> = HashSet::new();
 
         for (hash, photo_ids, suggested_keep) in groups {
-            // Create group
+            seen_hashes.insert(hash.clone());
+
+            if existing_hashes.contains_key(hash) {
+                continue; // Group exists — keep user's keep/dismiss choices
+            }
+
+            // Create new duplicate group
             self.conn.execute(
                 r#"
                 INSERT INTO duplicate_groups (group_hash, duplicate_type)
@@ -56,10 +80,8 @@ impl<'a> DuplicateRepo<'a> {
 
             let group_id = self.conn.last_insert_rowid();
 
-            // Add members
             for photo_id in photo_ids {
                 let is_suggested = suggested_keep.map(|s| s == *photo_id).unwrap_or(false);
-
                 self.conn.execute(
                     r#"
                     INSERT INTO duplicate_group_members (group_id, photo_id, is_suggested_keep)
@@ -67,6 +89,13 @@ impl<'a> DuplicateRepo<'a> {
                     "#,
                     params![group_id, photo_id, is_suggested],
                 )?;
+            }
+        }
+
+        // Remove groups whose hash no longer has duplicates
+        for (hash, group_id) in &existing_hashes {
+            if !seen_hashes.contains(hash) {
+                self.delete_group(*group_id)?;
             }
         }
 
@@ -142,21 +171,21 @@ impl<'a> DuplicateRepo<'a> {
         Ok(members)
     }
 
-    /// Mark a photo as the one to keep in a group
+    /// Mark a photo as the one to keep in a group (atomic)
     pub fn set_keep_photo(&self, group_id: i64, photo_id: i64) -> SqliteResult<()> {
-        // Clear existing
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
             "UPDATE duplicate_group_members SET is_suggested_keep = FALSE WHERE group_id = ?1",
             params![group_id],
         )?;
 
-        // Set new
-        self.conn.execute(
+        tx.execute(
             "UPDATE duplicate_group_members SET is_suggested_keep = TRUE WHERE group_id = ?1 AND photo_id = ?2",
             params![group_id, photo_id],
         )?;
 
-        Ok(())
+        tx.commit()
     }
 
     /// Delete a duplicate group (after resolution)

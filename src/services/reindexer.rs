@@ -1,6 +1,6 @@
 //! Incremental re-indexing service.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -77,25 +77,19 @@ impl Reindexer {
     ) -> SqliteResult<IndexChanges> {
         let mut changes = IndexChanges::default();
 
-        let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, updated_at FROM photos WHERE is_trashed = FALSE",
+        // Use a temp table instead of loading everything into a HashMap.
+        // This keeps memory usage O(1) in Rust regardless of library size.
+        conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS found_files (
+                path TEXT PRIMARY KEY,
+                mtime TEXT
+            );
+            DELETE FROM found_files;"
         )?;
 
-        let indexed_files: HashMap<String, (i64, String, Option<String>)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    (
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ),
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let mut found_paths: HashSet<String> = HashSet::new();
+        let mut insert_stmt = conn.prepare(
+            "INSERT OR IGNORE INTO found_files (path, mtime) VALUES (?1, ?2)"
+        )?;
 
         for entry in WalkDir::new(drive_root)
             .follow_links(false)
@@ -122,62 +116,112 @@ impl Reindexer {
                 continue;
             }
 
-            let relative_path = entry
+            let relative_path = match entry
                 .path()
                 .strip_prefix(drive_root)
                 .ok()
                 .and_then(|p| p.to_str())
-                .map(|s| s.to_string());
-
-            let relative_path = match relative_path {
+                .map(|s| s.to_string())
+            {
                 Some(p) => p,
                 None => continue,
             };
 
-            found_paths.insert(relative_path.clone());
+            let mtime_str = fs::metadata(entry.path())
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| Self::system_time_to_string(t))
+                .unwrap_or_default();
 
-            if let Some((id, _hash, updated_at)) = indexed_files.get(&relative_path) {
-                if let Some(updated) = updated_at {
-                    if let Ok(metadata) = fs::metadata(entry.path()) {
-                        if let Ok(mtime) = metadata.modified() {
-                            let file_time = Self::system_time_to_string(mtime);
-                            if file_time > *updated {
-                                changes.modified.push((*id, entry.path().to_path_buf()));
-                            }
-                        }
-                    }
-                }
-            } else {
-                changes.added.push(entry.path().to_path_buf());
+            let _ = insert_stmt.execute(params![relative_path, mtime_str]);
+        }
+        drop(insert_stmt);
+
+        // Added files: on disk but not in DB
+        {
+            let mut stmt = conn.prepare(
+                "SELECT f.path FROM temp.found_files f
+                 LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
+                 WHERE p.id IS NULL"
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                let path = row?;
+                changes.added.push(drive_root.join(&path));
             }
         }
 
-        for (path, (id, hash, _)) in &indexed_files {
-            if !found_paths.contains(path) {
-                let mut was_moved = false;
+        // Modified files: matching path but newer mtime
+        {
+            let mut stmt = conn.prepare(
+                "SELECT p.id, p.file_path FROM photos p
+                 INNER JOIN temp.found_files f ON f.path = p.file_path
+                 WHERE p.is_trashed = FALSE AND f.mtime > COALESCE(p.updated_at, '')"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, path) = row?;
+                changes.modified.push((id, drive_root.join(&path)));
+            }
+        }
 
-                for found_path in &found_paths {
-                    if !indexed_files.contains_key(found_path) {
-                        let new_full_path = drive_root.join(found_path);
-                        if let Ok(new_hash) = Self::quick_hash(&new_full_path) {
-                            if &new_hash == hash {
-                                changes.moved.push((
-                                    *id,
-                                    PathBuf::from(path),
-                                    PathBuf::from(found_path),
-                                ));
-                                was_moved = true;
-                                break;
-                            }
+        // Removed files: in DB but not on disk
+        // Also check for moves (same hash, different path)
+        {
+            let mut stmt = conn.prepare(
+                "SELECT p.id, p.file_path, p.file_hash FROM photos p
+                 LEFT JOIN temp.found_files f ON f.path = p.file_path
+                 WHERE p.is_trashed = FALSE AND f.path IS NULL"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+
+            let mut missing: Vec<(i64, String, String)> = Vec::new();
+            for row in rows {
+                missing.push(row?);
+            }
+
+            // Check for moves: find new paths with matching hash
+            for (id, old_path, hash) in &missing {
+                let mut found_move = false;
+
+                // Look for an added file with the same quick hash
+                let mut move_stmt = conn.prepare(
+                    "SELECT f.path FROM temp.found_files f
+                     LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
+                     WHERE p.id IS NULL"
+                )?;
+                let candidates = move_stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for candidate in candidates {
+                    let new_path = candidate?;
+                    let new_full_path = drive_root.join(&new_path);
+                    if let Ok(new_hash) = Self::quick_hash(&new_full_path) {
+                        if &new_hash == hash {
+                            changes.moved.push((
+                                *id,
+                                PathBuf::from(old_path),
+                                PathBuf::from(new_path),
+                            ));
+                            found_move = true;
+                            break;
                         }
                     }
                 }
 
-                if !was_moved {
-                    changes.removed.push((*id, PathBuf::from(path)));
+                if !found_move {
+                    changes.removed.push((*id, PathBuf::from(old_path)));
                 }
             }
         }
+
+        conn.execute("DROP TABLE IF EXISTS temp.found_files", [])?;
 
         Ok(changes)
     }
