@@ -166,6 +166,26 @@ pub fn view_cluster_detail(
         })
         .on_press(Message::BlockMemoriesForPerson(cluster_id));
 
+    let add_album_btn = button(text("Add all to Album").size(12).color(text_primary))
+        .padding(Padding::from([6, 12]))
+        .style(move |_theme: &iced::Theme, status: button::Status| {
+            let background = match status {
+                button::Status::Hovered => Some(bg_hover.into()),
+                _ => Some(bg_elevated.into()),
+            };
+            button::Style {
+                background,
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(Message::OpenAlbumPicker(
+            photos.iter().map(|p| p.id).collect(),
+        ));
+
     let content = column![
         back_btn,
         Space::with_height(16),
@@ -174,6 +194,8 @@ pub fn view_cluster_detail(
             Space::with_width(16),
             column![name_element, subtitle,].spacing(4),
             Space::with_width(Length::Fill),
+            add_album_btn,
+            Space::with_width(8),
             hide_btn,
         ]
         .align_y(Alignment::Center),

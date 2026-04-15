@@ -5,6 +5,7 @@ use iced::Task;
 use super::messages::Message;
 use super::state::PhotoVault;
 
+mod albums;
 mod bursts;
 mod documents;
 mod duplicates;
@@ -255,5 +256,29 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::MemorySlideshowPrev => memories::slideshow_prev(app),
         Message::MemorySlideshowNext => memories::slideshow_next(app),
         Message::MemorySlideshowTogglePause => memories::slideshow_toggle_pause(app),
+
+        // --- Albums ---
+        Message::CreateAlbum(name) => albums::create_album(app, name),
+        Message::AlbumsLoaded(list) => albums::albums_loaded(app, list),
+        Message::RenameAlbum(id, name) => albums::rename_album(app, id, name),
+        Message::DeleteAlbum(id) => albums::delete_album(app, id),
+        Message::SetAlbumCover(aid, pid) => albums::set_album_cover(app, aid, pid),
+        Message::OpenAlbum(id) => albums::open_album(app, id),
+        Message::AlbumPhotosLoaded(photos) => albums::album_photos_loaded(app, photos),
+        Message::AddPhotosToAlbum(aid, pids) => albums::add_photos_to_album(app, aid, pids),
+        Message::RemovePhotosFromAlbum(aid, pids) => {
+            albums::remove_photos_from_album(app, aid, pids)
+        }
+        Message::OpenAlbumPicker(ids) => albums::open_album_picker(app, ids),
+        Message::AlbumPickerSelect(id) => albums::album_picker_select(app, id),
+        Message::CloseAlbumPicker => albums::close_album_picker(app),
+        Message::AlbumPickerNameChanged(name) => albums::album_picker_name_changed(app, name),
+        Message::AlbumPickerToggleCreate => albums::album_picker_toggle_create(app),
+        Message::AlbumPickerCreateAndAdd => albums::album_picker_create_and_add(app),
+        Message::StartEditAlbumName(id) => albums::start_edit_album_name(app, id),
+        Message::EditAlbumName(name) => albums::edit_album_name(app, name),
+        Message::SaveAlbumName(id) => albums::save_album_name(app, id),
+        Message::SaveMemoryAsAlbum => albums::save_memory_as_album(app),
+        Message::BackToAlbums => albums::back_to_albums(app),
     }
 }

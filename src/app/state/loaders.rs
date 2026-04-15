@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use iced::Task;
 
-use crate::db::{Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
+use crate::db::{AlbumRepo, Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
 use crate::services::image_utils::apply_exif_orientation;
 use crate::services::map_math;
 use crate::services::{FaceProcessor, TrashService, TrashStats};
@@ -15,6 +15,85 @@ use super::PhotoVault;
 const WGPU_MAX_DIM: u32 = 8192;
 
 impl PhotoVault {
+    pub(crate) fn load_albums(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+        let drive_path = drive_path.clone();
+
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let repo = AlbumRepo::new(&db.conn);
+                        let mut albums = repo.get_all().unwrap_or_default();
+                        let photo_repo = PhotoRepo::new(&db.conn);
+
+                        for album in &mut albums {
+                            if let Some(cover_id) = album.cover_photo_id {
+                                if let Ok(Some(photo)) = photo_repo.get_by_id(cover_id) {
+                                    album.cover_thumbnail_path = photo
+                                        .thumbnail_path
+                                        .map(|p| drive_path.join(p).to_string_lossy().to_string());
+                                }
+                            }
+                        }
+
+                        albums
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load albums: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::AlbumsLoaded,
+        )
+    }
+
+    pub(crate) fn load_album_photos(&self, album_id: i64) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+        let drive_path = drive_path.clone();
+
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let album_repo = AlbumRepo::new(&db.conn);
+                        let photo_ids = album_repo.get_album_photo_ids(album_id).unwrap_or_default();
+
+                        if photo_ids.is_empty() {
+                            return Vec::new();
+                        }
+
+                        let photo_repo = PhotoRepo::new(&db.conn);
+                        let mut photos: Vec<crate::models::Photo> = photo_ids
+                            .iter()
+                            .filter_map(|id| photo_repo.get_by_id(*id).ok())
+                            .flatten()
+                            .collect();
+
+                        for photo in &mut photos {
+                            if let Some(ref rel_path) = photo.thumbnail_path {
+                                let abs_path = drive_path.join(rel_path);
+                                photo.thumbnail_path = Some(abs_path.to_string_lossy().to_string());
+                            }
+                        }
+
+                        photos
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load album photos: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::AlbumPhotosLoaded,
+        )
+    }
+
     /// Load photos from database
     pub(crate) fn load_photos(&self) -> Task<Message> {
         let Some(ref drive_path) = self.selected_drive else {
@@ -213,11 +292,16 @@ impl PhotoVault {
 
         self.current_photo_people.clear();
         self.current_photo_face_count = 0;
+        self.current_photo_albums.clear();
         self.current_photo_location = None;
         if let Some(ref db) = self.database {
             let face_repo = FaceRepo::new(&db.conn);
             if let Ok(people) = face_repo.get_people_for_photo(photo_id) {
                 self.current_photo_people = people;
+            }
+            let album_repo = AlbumRepo::new(&db.conn);
+            if let Ok(albums) = album_repo.get_albums_for_photo(photo_id) {
+                self.current_photo_albums = albums;
             }
             if let Ok(count) = db.conn.query_row(
                 "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",

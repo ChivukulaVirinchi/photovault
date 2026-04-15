@@ -218,6 +218,35 @@ impl<'a> PhotoRepo<'a> {
         all.sort_by(|a, b| b.date_taken.cmp(&a.date_taken));
         Ok(all)
     }
+
+    /// Get a single photo by ID.
+    pub fn get_by_id(&self, id: i64) -> SqliteResult<Option<Photo>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+                id, file_path, file_name, file_hash, file_size,
+                date_taken, date_taken_source,
+                gps_latitude, gps_longitude,
+                location_city, location_country,
+                camera_make, camera_model,
+                iso, aperture, shutter_speed, focal_length,
+                lens_model, flash, gps_altitude,
+                width, height, orientation,
+                thumbnail_path, faces_processed,
+                content_category, ocr_text, ocr_processed, ocr_confidence,
+                is_trashed, trashed_at,
+                indexed_at, updated_at
+            FROM photos
+            WHERE id = ?1
+            "#,
+        )?;
+
+        match stmt.query_row(params![id], row_to_photo) {
+            Ok(photo) => Ok(Some(photo)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// Convert a database row to a Photo struct.

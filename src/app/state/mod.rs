@@ -38,6 +38,8 @@ pub enum View {
     FaceReview,
     Memories,
     MemoryDetail,
+    Albums,
+    AlbumDetail,
     Duplicates,
     DuplicateDetail,
     Bursts,
@@ -290,6 +292,37 @@ pub struct PhotoVault {
     /// True when the slideshow auto-advance is paused.
     pub(crate) memory_slideshow_paused: bool,
 
+    // --- Albums ---
+    /// All albums (loaded from DB, ordered by updated_at DESC)
+    pub(crate) albums: Vec<crate::db::AlbumRecord>,
+
+    /// Currently selected album ID (for detail view)
+    pub(crate) selected_album_id: Option<i64>,
+
+    /// Photos in the currently open album (loaded when entering detail)
+    pub(crate) album_photos: Vec<Photo>,
+
+    /// Whether the album picker overlay is open
+    pub(crate) album_picker_open: bool,
+
+    /// Photo IDs queued for the album picker (the photos being added)
+    pub(crate) album_picker_target_ids: Vec<i64>,
+
+    /// Inline text for creating a new album from the picker
+    pub(crate) album_picker_new_name: String,
+
+    /// Whether the "create new album" input is visible in the picker
+    pub(crate) album_picker_creating: bool,
+
+    /// Album name being edited (rename flow in album detail)
+    pub(crate) edit_album_name: String,
+
+    /// Album ID being renamed (None = not editing)
+    pub(crate) editing_album_id: Option<i64>,
+
+    /// Album names for the currently viewed photo (populated in detail view)
+    pub(crate) current_photo_albums: Vec<(i64, String)>,
+
     /// Global toggle mirrored from AppConfig.memories_enabled.
     pub(crate) memories_enabled: bool,
 
@@ -507,6 +540,16 @@ impl PhotoVault {
             memory_photos: Vec::new(),
             memory_slideshow_index: 0,
             memory_slideshow_paused: false,
+            albums: Vec::new(),
+            selected_album_id: None,
+            album_photos: Vec::new(),
+            album_picker_open: false,
+            album_picker_target_ids: Vec::new(),
+            album_picker_new_name: String::new(),
+            album_picker_creating: false,
+            edit_album_name: String::new(),
+            editing_album_id: None,
+            current_photo_albums: Vec::new(),
             memories_enabled: config.memories_enabled,
             timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset::default(),
             cull_confirm_pending: false,
@@ -575,6 +618,8 @@ impl PhotoVault {
             &self.cluster_photos
         } else if self.previous_view == Some(View::Documents) && !self.documents.is_empty() {
             &self.documents
+        } else if self.previous_view == Some(View::AlbumDetail) && !self.album_photos.is_empty() {
+            &self.album_photos
         } else {
             &self.photos
         }

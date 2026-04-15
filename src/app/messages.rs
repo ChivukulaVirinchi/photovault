@@ -316,6 +316,48 @@ pub enum Message {
     /// Toggle slideshow auto-advance.
     MemorySlideshowTogglePause,
 
+    // --- Albums ---
+    /// Create a new album with the given name
+    CreateAlbum(String),
+    /// Rename an existing album
+    RenameAlbum(i64, String),
+    /// Delete an album (photos are NOT trashed)
+    DeleteAlbum(i64),
+    /// Set the cover photo for an album
+    SetAlbumCover(i64, i64),
+    /// Navigate into an album's detail view
+    OpenAlbum(i64),
+    /// Album list loaded from DB
+    AlbumsLoaded(Vec<crate::db::AlbumRecord>),
+    /// Album photos loaded for the detail view
+    AlbumPhotosLoaded(Vec<Photo>),
+    /// Add photos to an existing album
+    AddPhotosToAlbum(i64, Vec<i64>),
+    /// Remove photos from an album
+    RemovePhotosFromAlbum(i64, Vec<i64>),
+    /// Open the album picker overlay for these photo IDs
+    OpenAlbumPicker(Vec<i64>),
+    /// User selected an album from the picker
+    AlbumPickerSelect(i64),
+    /// Close the album picker without acting
+    CloseAlbumPicker,
+    /// Text changed in the "new album" input inside the picker
+    AlbumPickerNameChanged(String),
+    /// Toggle the "create new" input in the picker
+    AlbumPickerToggleCreate,
+    /// Create album from picker and add the queued photos to it
+    AlbumPickerCreateAndAdd,
+    /// Start editing an album's name (inline rename)
+    StartEditAlbumName(i64),
+    /// Album name text changed during editing
+    EditAlbumName(String),
+    /// Save the edited album name
+    SaveAlbumName(i64),
+    /// Create album from current memory's photos ("Save as album")
+    SaveMemoryAsAlbum,
+    /// Return from album detail to albums grid
+    BackToAlbums,
+
     // --- Map view ---
     MapPan {
         dx: f32,
