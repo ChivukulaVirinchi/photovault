@@ -581,6 +581,12 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 )
             }
         }
+        View::Insights => crate::views::insights::insights_view(
+            app.insights_data.as_ref(),
+            app.insights_selected_year,
+            app.insights_loading,
+            app.config.theme,
+        ),
         View::Albums => crate::views::albums::albums_view(
             &app.albums,
             app.selected_drive.as_deref(),

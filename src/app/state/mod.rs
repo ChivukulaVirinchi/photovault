@@ -50,6 +50,7 @@ pub enum View {
     PhotoDetail,
     Albums,
     AlbumDetail,
+    Insights,
 }
 
 /// Interactive face review deck state.
@@ -434,6 +435,16 @@ pub struct PhotoVault {
 
     /// Editable name for the album being created from a suggestion
     pub(crate) accepting_suggestion_name: String,
+
+    // --- Insights Dashboard ---
+    /// Computed insights data (None until loaded)
+    pub(crate) insights_data: Option<crate::services::insights::InsightsData>,
+
+    /// User-selected year filter for insights (None = All Time)
+    pub(crate) insights_selected_year: Option<i32>,
+
+    /// Whether insights computation is in progress
+    pub(crate) insights_loading: bool,
 }
 
 impl PhotoVault {
@@ -603,6 +614,10 @@ impl PhotoVault {
             suggestion_detection_running: false,
             accepting_suggestion_id: None,
             accepting_suggestion_name: String::new(),
+            // Insights
+            insights_data: None,
+            insights_selected_year: None,
+            insights_loading: false,
         };
 
         // Detect drives on startup

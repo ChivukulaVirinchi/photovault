@@ -57,6 +57,9 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     } else if view == View::Albums {
         app.current_view = view;
         return app.load_albums();
+    } else if view == View::Insights {
+        app.current_view = view;
+        return super::insights::load_insights(app);
     } else {
         Task::none()
     };

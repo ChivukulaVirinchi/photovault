@@ -432,6 +432,16 @@ pub enum Message {
     DismissSuggestion(i64),
     /// User set or cleared the home city override in settings
     SetHomeCity(String),
+
+    // --- Insights Dashboard ---
+    /// User selected a year (or None = All Time) in the insights view
+    InsightsSelectYear(Option<i32>),
+    /// Insights data computation completed
+    InsightsLoaded(Box<crate::services::insights::InsightsData>),
+    /// Jump to a date in search from the heatmap
+    InsightsJumpToDate(String),
+    /// Search for a city from the top-locations list
+    InsightsSearchCity(String),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

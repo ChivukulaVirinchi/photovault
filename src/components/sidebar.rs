@@ -63,6 +63,7 @@ impl Sidebar {
             Self::nav_button("Map", View::Map, current_view, app_theme),
             Self::nav_button("Memories", View::Memories, current_view, app_theme),
             Self::nav_button("Albums", View::Albums, current_view, app_theme),
+            Self::nav_button("Insights", View::Insights, current_view, app_theme),
             Self::nav_button("Search", View::Search, current_view, app_theme),
             Space::with_height(12),
             Self::group_header("People", app_theme),

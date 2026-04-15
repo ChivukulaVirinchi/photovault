@@ -2,6 +2,7 @@
 
 pub mod albums;
 pub mod bursts;
+pub mod insights;
 pub mod cull;
 pub mod documents;
 pub mod duplicates;

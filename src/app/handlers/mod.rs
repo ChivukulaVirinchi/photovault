@@ -11,6 +11,7 @@ mod documents;
 mod duplicates;
 mod face_review;
 mod faces;
+mod insights;
 mod map;
 mod memories;
 mod scanning;
@@ -291,5 +292,11 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::CancelAcceptSuggestion => albums::cancel_accept_suggestion(app),
         Message::DismissSuggestion(id) => albums::dismiss_suggestion(app, id),
         Message::SetHomeCity(city) => settings::set_home_city(app, city),
+
+        // --- Insights Dashboard ---
+        Message::InsightsSelectYear(year) => insights::select_year(app, year),
+        Message::InsightsLoaded(data) => insights::loaded(app, data),
+        Message::InsightsJumpToDate(date) => insights::jump_to_date(app, date),
+        Message::InsightsSearchCity(city) => insights::search_city(app, city),
     }
 }
