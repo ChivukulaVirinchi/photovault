@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use iced::Task;
 
 use crate::db::{Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
-use crate::services::{FaceProcessor, TrashService, TrashStats};
 use crate::services::image_utils::apply_exif_orientation;
+use crate::services::map_math;
+use crate::services::{FaceProcessor, TrashService, TrashStats};
 
 use super::super::messages::Message;
 use super::PhotoVault;
@@ -36,8 +37,7 @@ impl PhotoVault {
                         for photo in &mut photos {
                             if let Some(ref rel_path) = photo.thumbnail_path {
                                 let abs_path = drive_path.join(rel_path);
-                                photo.thumbnail_path =
-                                    Some(abs_path.to_string_lossy().to_string());
+                                photo.thumbnail_path = Some(abs_path.to_string_lossy().to_string());
                             }
                         }
 
@@ -91,7 +91,8 @@ impl PhotoVault {
                             "load_face_clusters: got {} clusters from DB",
                             clusters.len()
                         );
-                        if let Err(e) = face_repo.populate_face_thumbnails(&mut clusters, &drive_path)
+                        if let Err(e) =
+                            face_repo.populate_face_thumbnails(&mut clusters, &drive_path)
                         {
                             tracing::warn!("Failed to populate face thumbnails: {}", e);
                         }
@@ -184,6 +185,15 @@ impl PhotoVault {
         self.photo_rotation = 0;
         self.current_display_image = None;
 
+        // Reset mini-map state to this photo's GPS (if present).
+        if let (Some(lat), Some(lng)) = (photo.gps_latitude, photo.gps_longitude) {
+            self.photo_map_center = Some(map_math::LatLng { lat, lng });
+            self.photo_map_zoom = 13;
+            self.photo_map_drag_origin = None;
+        } else {
+            self.photo_map_center = None;
+        }
+
         let photo_id = photo.id;
 
         self.current_photo_people.clear();
@@ -224,7 +234,34 @@ impl PhotoVault {
 
         if let Some(path) = image_path {
             let orientation = photo.orientation;
-            return Task::perform(
+
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+
+            // Pre-fetch the mini-map tile. Dispatch MapTileFetched on
+            // completion so iced re-renders and the mini-map picks up
+            // the newly cached tile.
+            if let (Some(lat), Some(lng), Some(cache)) = (
+                photo.gps_latitude,
+                photo.gps_longitude,
+                self.tile_cache.clone(),
+            ) {
+                let tile = map_math::TileId {
+                    z: 13,
+                    x: map_math::lng_to_tile_x(lng, 13) as u32,
+                    y: map_math::lat_to_tile_y(lat, 13) as u32,
+                };
+                tasks.push(Task::perform(
+                    async move {
+                        match cache.get_or_fetch(tile).await {
+                            Ok(_) => Message::MapTileFetched(tile),
+                            Err(e) => Message::MapTileFetchFailed(tile, e),
+                        }
+                    },
+                    |m| m,
+                ));
+            }
+
+            tasks.push(Task::perform(
                 async move {
                     let result = tokio::task::spawn_blocking(move || {
                         let img = image::open(&path).ok()?;
@@ -242,7 +279,9 @@ impl PhotoVault {
                     }
                 },
                 |msg| msg,
-            );
+            ));
+
+            return Task::batch(tasks);
         }
 
         Task::none()

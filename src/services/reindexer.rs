@@ -84,12 +84,11 @@ impl Reindexer {
                 path TEXT PRIMARY KEY,
                 mtime TEXT
             );
-            DELETE FROM found_files;"
+            DELETE FROM found_files;",
         )?;
 
-        let mut insert_stmt = conn.prepare(
-            "INSERT OR IGNORE INTO found_files (path, mtime) VALUES (?1, ?2)"
-        )?;
+        let mut insert_stmt =
+            conn.prepare("INSERT OR IGNORE INTO found_files (path, mtime) VALUES (?1, ?2)")?;
 
         for entry in WalkDir::new(drive_root)
             .follow_links(false)
@@ -142,7 +141,7 @@ impl Reindexer {
             let mut stmt = conn.prepare(
                 "SELECT f.path FROM temp.found_files f
                  LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
-                 WHERE p.id IS NULL"
+                 WHERE p.id IS NULL",
             )?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
@@ -156,7 +155,7 @@ impl Reindexer {
             let mut stmt = conn.prepare(
                 "SELECT p.id, p.file_path FROM photos p
                  INNER JOIN temp.found_files f ON f.path = p.file_path
-                 WHERE p.is_trashed = FALSE AND f.mtime > COALESCE(p.updated_at, '')"
+                 WHERE p.is_trashed = FALSE AND f.mtime > COALESCE(p.updated_at, '')",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -173,7 +172,7 @@ impl Reindexer {
             let mut stmt = conn.prepare(
                 "SELECT p.id, p.file_path, p.file_hash FROM photos p
                  LEFT JOIN temp.found_files f ON f.path = p.file_path
-                 WHERE p.is_trashed = FALSE AND f.path IS NULL"
+                 WHERE p.is_trashed = FALSE AND f.path IS NULL",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -196,7 +195,7 @@ impl Reindexer {
                 let mut move_stmt = conn.prepare(
                     "SELECT f.path FROM temp.found_files f
                      LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
-                     WHERE p.id IS NULL"
+                     WHERE p.id IS NULL",
                 )?;
                 let candidates = move_stmt.query_map([], |row| row.get::<_, String>(0))?;
                 for candidate in candidates {

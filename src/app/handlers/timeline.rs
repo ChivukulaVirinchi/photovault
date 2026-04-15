@@ -78,14 +78,20 @@ pub(crate) fn select_photo(app: &mut PhotoVault, photo_id: i64) -> Task<Message>
     Task::none()
 }
 
-pub(crate) fn toggle_timeline_photo_selection(app: &mut PhotoVault, photo_id: i64) -> Task<Message> {
+pub(crate) fn toggle_timeline_photo_selection(
+    app: &mut PhotoVault,
+    photo_id: i64,
+) -> Task<Message> {
     if !app.selected_timeline_photo_ids.insert(photo_id) {
         app.selected_timeline_photo_ids.remove(&photo_id);
     }
     Task::none()
 }
 
-pub(crate) fn toggle_timeline_day_selection(app: &mut PhotoVault, day_key: String) -> Task<Message> {
+pub(crate) fn toggle_timeline_day_selection(
+    app: &mut PhotoVault,
+    day_key: String,
+) -> Task<Message> {
     let source_photos = if app.current_view == View::Documents {
         &app.documents
     } else {
@@ -315,6 +321,50 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
                 }
                 if lower == "u" {
                     return super::handle(app, Message::FaceReviewUndo);
+                }
+            }
+            _ => {}
+        }
+    } else if app.current_view == View::Map {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                return super::handle(app, Message::MapPanBy { dx: 50.0, dy: 0.0 });
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                return super::handle(app, Message::MapPanBy { dx: -50.0, dy: 0.0 });
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return super::handle(app, Message::MapPanBy { dx: 0.0, dy: 50.0 });
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return super::handle(app, Message::MapPanBy { dx: 0.0, dy: -50.0 });
+            }
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                if !app.open_popovers.is_empty() {
+                    return super::handle(app, Message::MapClosePopover);
+                }
+            }
+            keyboard::Key::Character(ref ch) => {
+                let lower = ch.to_lowercase();
+                if lower == "+" || lower == "=" {
+                    return super::handle(
+                        app,
+                        Message::MapZoomAt {
+                            x: app.window_width / 2.0,
+                            y: app.window_height / 2.0,
+                            delta: 1,
+                        },
+                    );
+                }
+                if lower == "-" || lower == "_" {
+                    return super::handle(
+                        app,
+                        Message::MapZoomAt {
+                            x: app.window_width / 2.0,
+                            y: app.window_height / 2.0,
+                            delta: -1,
+                        },
+                    );
                 }
             }
             _ => {}

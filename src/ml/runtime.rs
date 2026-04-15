@@ -145,8 +145,7 @@ impl OnnxRuntime {
 
         #[cfg(target_os = "windows")]
         {
-            providers
-                .push(ort::execution_providers::DirectMLExecutionProvider::default().build());
+            providers.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
         }
 
         #[cfg(target_os = "linux")]

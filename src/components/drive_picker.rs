@@ -35,13 +35,9 @@ impl DrivePicker {
             .color(text_secondary);
 
         let drive_list: Element<'static, Message> = if drives.is_empty() {
-            container(
-                text("No drives detected")
-                    .size(13)
-                    .color(text_tertiary),
-            )
-            .padding(24)
-            .into()
+            container(text("No drives detected").size(13).color(text_tertiary))
+                .padding(24)
+                .into()
         } else {
             // Show indexed drives first, then unindexed
             let mut sorted_drives: Vec<&DriveInfo> = drives.iter().collect();
@@ -57,31 +53,27 @@ impl DrivePicker {
                 .into()
         };
 
-        let browse_button = button(
-            text("Browse for folder...")
-                .size(13)
-                .color(text_secondary),
-        )
-        .padding(Padding::from([10, 18]))
-        .style(move |_theme: &iced::Theme, status| {
-            let background = match status {
-                button::Status::Hovered => Some(bg_hover.into()),
-                button::Status::Pressed => Some(bg_active.into()),
-                _ => None,
-            };
+        let browse_button = button(text("Browse for folder...").size(13).color(text_secondary))
+            .padding(Padding::from([10, 18]))
+            .style(move |_theme: &iced::Theme, status| {
+                let background = match status {
+                    button::Status::Hovered => Some(bg_hover.into()),
+                    button::Status::Pressed => Some(bg_active.into()),
+                    _ => None,
+                };
 
-            button::Style {
-                background,
-                text_color: text_secondary,
-                border: iced::Border {
-                    color: border_visible,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .on_press(Message::BrowseForFolder);
+                button::Style {
+                    background,
+                    text_color: text_secondary,
+                    border: iced::Border {
+                        color: border_visible,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .on_press(Message::BrowseForFolder);
 
         let content = column![
             title,
@@ -111,9 +103,7 @@ impl DrivePicker {
         let border_subtle = p.border_subtle;
 
         let status_text = if drive.has_photovault_db {
-            text("Previously indexed")
-                .size(11)
-                .color(accent_primary)
+            text("Previously indexed").size(11).color(accent_primary)
         } else {
             text("Not indexed").size(11).color(text_tertiary)
         };

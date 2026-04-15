@@ -270,7 +270,9 @@ pub(crate) fn save_cluster_name(app: &mut PhotoVault, cluster_id: i64) -> Task<M
                 for source_id in same_name_ids {
                     tracing::info!(
                         "Auto-merging cluster {} into {} (same name: {})",
-                        source_id, cluster_id, name
+                        source_id,
+                        cluster_id,
+                        name
                     );
                     let _ = face_repo.merge_clusters(source_id, cluster_id);
                 }
@@ -293,7 +295,11 @@ pub(crate) fn toggle_merge_mode(app: &mut PhotoVault) -> Task<Message> {
 }
 
 pub(crate) fn toggle_merge_select(app: &mut PhotoVault, cluster_id: i64) -> Task<Message> {
-    if let Some(pos) = app.merge_selected_clusters.iter().position(|&id| id == cluster_id) {
+    if let Some(pos) = app
+        .merge_selected_clusters
+        .iter()
+        .position(|&id| id == cluster_id)
+    {
         app.merge_selected_clusters.remove(pos);
     } else {
         app.merge_selected_clusters.push(cluster_id);

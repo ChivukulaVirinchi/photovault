@@ -32,7 +32,8 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                     similarity_threshold: 0.90,
                     require_same_folder: true,
                 });
-                let burst_groups = detector.find_bursts(&db.conn, Some(&drive_path))
+                let burst_groups = detector
+                    .find_bursts(&db.conn, Some(&drive_path))
                     .map_err(|e| format!("Burst detection failed: {}", e))?;
 
                 // Sync to database
@@ -51,7 +52,8 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                     .map_err(|e| format!("Failed to sync burst groups: {}", e))?;
 
                 // Set a default best pick quickly (first/earliest member).
-                let groups_from_db = repo.get_all_groups()
+                let groups_from_db = repo
+                    .get_all_groups()
                     .map_err(|e| format!("Failed to load groups: {}", e))?;
 
                 for group in &groups_from_db {
@@ -62,7 +64,8 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                 }
 
                 // Reload groups
-                let final_groups = repo.get_all_groups()
+                let final_groups = repo
+                    .get_all_groups()
                     .map_err(|e| format!("Failed to reload groups: {}", e))?;
 
                 // Calculate saveable count
@@ -81,11 +84,14 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                     previews.push((g.id, ids));
                 }
 
-                Ok::<(Vec<crate::db::BurstGroupRecord>, usize, Vec<(i64, Vec<i64>)>), String>((
-                    final_groups,
-                    saveable,
-                    previews,
-                ))
+                Ok::<
+                    (
+                        Vec<crate::db::BurstGroupRecord>,
+                        usize,
+                        Vec<(i64, Vec<i64>)>,
+                    ),
+                    String,
+                >((final_groups, saveable, previews))
             });
 
             match handle.await {
@@ -100,9 +106,7 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                 }
             }
         },
-        |(groups, saveable, previews)| {
-            Message::BurstDetectionComplete(groups, saveable, previews)
-        },
+        |(groups, saveable, previews)| Message::BurstDetectionComplete(groups, saveable, previews),
     )
 }
 
@@ -125,11 +129,7 @@ pub(crate) fn burst_detection_complete(
 }
 
 pub(crate) fn open_burst_group(app: &mut PhotoVault, group_id: i64) -> Task<Message> {
-    let group = app
-        .burst_groups
-        .iter()
-        .find(|g| g.id == group_id)
-        .cloned();
+    let group = app.burst_groups.iter().find(|g| g.id == group_id).cloned();
 
     if let Some(group) = group {
         app.selected_burst_group = Some(group);
@@ -138,8 +138,7 @@ pub(crate) fn open_burst_group(app: &mut PhotoVault, group_id: i64) -> Task<Mess
         if let Some(ref drive_path) = app.selected_drive {
             if let Ok(db) = Database::open_for_drive(drive_path) {
                 let repo = BurstRepo::new(&db.conn);
-                app.selected_burst_members =
-                    repo.get_group_members(group_id).unwrap_or_default();
+                app.selected_burst_members = repo.get_group_members(group_id).unwrap_or_default();
             }
         }
 
@@ -166,8 +165,7 @@ pub(crate) fn set_best_from_burst(
             let _ = repo.set_suggested_best(group_id, photo_id);
 
             // Reload members
-            app.selected_burst_members =
-                repo.get_group_members(group_id).unwrap_or_default();
+            app.selected_burst_members = repo.get_group_members(group_id).unwrap_or_default();
         }
     }
     Task::none()

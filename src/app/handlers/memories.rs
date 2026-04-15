@@ -145,17 +145,11 @@ fn advance(app: &mut PhotoVault, delta: i32) {
 
 pub(crate) fn close_memory_detail(app: &mut PhotoVault) -> Task<Message> {
     app.selected_memory_id = None;
-    app.current_view = app
-        .previous_view
-        .take()
-        .unwrap_or(View::Timeline);
+    app.current_view = app.previous_view.take().unwrap_or(View::Timeline);
     Task::none()
 }
 
-pub(crate) fn block_memories_for_person(
-    app: &mut PhotoVault,
-    cluster_id: i64,
-) -> Task<Message> {
+pub(crate) fn block_memories_for_person(app: &mut PhotoVault, cluster_id: i64) -> Task<Message> {
     let Some(drive_path) = app.selected_drive.clone() else {
         return Task::none();
     };

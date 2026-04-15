@@ -33,9 +33,7 @@ pub(crate) fn documents_filter_category(
     app: &mut PhotoVault,
     category: Option<String>,
 ) -> Task<Message> {
-    app.documents_filter = category
-        .as_deref()
-        .map(ContentCategory::from_db);
+    app.documents_filter = category.as_deref().map(ContentCategory::from_db);
     app.load_documents()
 }
 

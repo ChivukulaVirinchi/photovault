@@ -5,15 +5,21 @@ use std::path::PathBuf;
 use iced::keyboard;
 
 use crate::config::{AppTheme, DateFormat};
-use crate::db::{
-    BurstGroupRecord, DuplicateGroupRecord, FaceClusterRecord, TrashedPhotoRecord,
-};
+use crate::db::{BurstGroupRecord, DuplicateGroupRecord, FaceClusterRecord, TrashedPhotoRecord};
 use crate::models::Photo;
 use crate::services::{
     ApplyResult, DriveInfo, FaceProcessingResult, IndexChanges, ScanProgress, TrashStats,
 };
 
 use super::state::View;
+
+/// One open popover on the map. Anchored geographically so the card
+/// follows the map when panned.
+#[derive(Debug, Clone)]
+pub struct MapPopover {
+    pub anchor: crate::services::map_math::LatLng,
+    pub photo_ids: Vec<i64>,
+}
 
 /// Application messages
 #[derive(Debug, Clone)]
@@ -93,6 +99,12 @@ pub enum Message {
 
     /// No-op message (used as callback when we don't need the result)
     NoOp,
+
+    /// Window resized (logical pixels)
+    WindowResized {
+        width: f32,
+        height: f32,
+    },
 
     // --- Phase 4: Face processing ---
     /// Start face processing pipeline
@@ -232,14 +244,22 @@ pub enum Message {
     ChangesApplied(ApplyResult),
 
     RunGeocoding,
-    GeocodingProgress { processed: usize, total: usize },
+    GeocodingProgress {
+        processed: usize,
+        total: usize,
+    },
     GeocodingComplete,
 
     RegenerateRotatedData,
-    RotatedDataRegenerated { cleared_thumbnails: usize, reset_faces: usize },
+    RotatedDataRegenerated {
+        cleared_thumbnails: usize,
+        reset_faces: usize,
+    },
 
     RegenerateThumbnails,
-    ThumbnailsRegenerated { cleared: usize },
+    ThumbnailsRegenerated {
+        cleared: usize,
+    },
 
     /// Cancel face processing
     CancelFaceProcessing,
@@ -295,6 +315,56 @@ pub enum Message {
     MemorySlideshowNext,
     /// Toggle slideshow auto-advance.
     MemorySlideshowTogglePause,
+
+    // --- Map view ---
+    MapPan {
+        dx: f32,
+        dy: f32,
+    },
+    MapPanBy {
+        dx: f32,
+        dy: f32,
+    },
+    MapPanStart {
+        x: f32,
+        y: f32,
+    },
+    MapPanEnd,
+    MapZoomAt {
+        x: f32,
+        y: f32,
+        delta: i8,
+    },
+    MapResetView,
+    MapPinsLoaded(Vec<(i64, crate::services::map_math::LatLng)>),
+    MapTileFetched(crate::services::map_math::TileId),
+    MapTileFetchFailed(crate::services::map_math::TileId, String),
+    MapPinClicked {
+        photo_ids: Vec<i64>,
+        anchor: crate::services::map_math::LatLng,
+    },
+    MapClosePopover,
+    MapClosePopoverAt(usize),
+    MapOpenClusterFilmstrip(Vec<i64>),
+    SetMapCacheLimit(u32),
+    ClearMapCache,
+    MapCacheCleared,
+
+    // --- Photo detail mini-map (separate interaction state) ---
+    PhotoMapPanStart {
+        x: f32,
+        y: f32,
+    },
+    PhotoMapPan {
+        dx: f32,
+        dy: f32,
+    },
+    PhotoMapPanEnd,
+    PhotoMapZoomAt {
+        x: f32,
+        y: f32,
+        delta: i8,
+    },
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

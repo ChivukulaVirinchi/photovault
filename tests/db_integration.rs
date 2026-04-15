@@ -3,8 +3,8 @@
 //! Tests the full DB lifecycle: schema creation, photo insertion,
 //! querying, geocoding updates, trash flow, and data integrity.
 
-use photovault::db::{create_schema, Database, PhotoRepo, TrashRepo};
 use photovault::db::photo_repo::PhotoInsert;
+use photovault::db::{create_schema, Database, PhotoRepo, TrashRepo};
 use photovault::services::TrashService;
 use tempfile::tempdir;
 
@@ -48,12 +48,25 @@ fn test_schema_creation() {
     let (_temp, db) = setup_db();
 
     // Verify key tables exist
-    for table in &["photos", "faces", "face_clusters", "duplicate_groups", "burst_groups", "trash"] {
-        let count: i32 = db.conn.query_row(
-            &format!("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{}'", table),
-            [],
-            |row| row.get(0),
-        ).unwrap();
+    for table in &[
+        "photos",
+        "faces",
+        "face_clusters",
+        "duplicate_groups",
+        "burst_groups",
+        "trash",
+    ] {
+        let count: i32 = db
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{}'",
+                    table
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1, "Table '{}' should exist", table);
     }
 }
@@ -93,13 +106,15 @@ fn test_photo_count() {
 
     assert_eq!(repo.count().unwrap(), 0);
 
-    repo.insert_batch(&[sample_photo("a.jpg", "hash1")]).unwrap();
+    repo.insert_batch(&[sample_photo("a.jpg", "hash1")])
+        .unwrap();
     assert_eq!(repo.count().unwrap(), 1);
 
     repo.insert_batch(&[
         sample_photo("b.jpg", "hash2"),
         sample_photo("c.jpg", "hash3"),
-    ]).unwrap();
+    ])
+    .unwrap();
     assert_eq!(repo.count().unwrap(), 3);
 }
 
@@ -136,11 +151,16 @@ fn test_trash_and_restore_flow() {
         sample_photo("keep.jpg", "h1"),
         sample_photo("trash_me.jpg", "h2"),
         sample_photo("also_keep.jpg", "h3"),
-    ]).unwrap();
+    ])
+    .unwrap();
 
     // Get the photo to trash
     let photos = repo.get_all_by_date(10, 0).unwrap();
-    let trash_id = photos.iter().find(|p| p.file_name == "trash_me.jpg").unwrap().id;
+    let trash_id = photos
+        .iter()
+        .find(|p| p.file_name == "trash_me.jpg")
+        .unwrap()
+        .id;
 
     // Trash it
     TrashService::trash_photos(&db.conn, &[trash_id]).unwrap();
@@ -228,10 +248,12 @@ fn test_database_backup() {
 
     // Backup should be a valid DB
     let backup_db = rusqlite::Connection::open(&backup_path).unwrap();
-    let count: i32 = backup_db.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
-        [],
-        |row| row.get(0),
-    ).unwrap();
+    let count: i32 = backup_db
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert!(count > 0);
 }

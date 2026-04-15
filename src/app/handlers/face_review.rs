@@ -39,7 +39,8 @@ fn load_queue(drive_path: &std::path::Path) -> Vec<ReviewItem> {
         }
     };
     let repo = FaceRepo::new(&db.conn);
-    repo.get_review_queue_items(REVIEW_BATCH).unwrap_or_default()
+    repo.get_review_queue_items(REVIEW_BATCH)
+        .unwrap_or_default()
 }
 
 pub(crate) fn loaded(app: &mut PhotoVault, items: Vec<ReviewItem>) -> Task<Message> {
@@ -59,7 +60,11 @@ pub(crate) fn same(app: &mut PhotoVault) -> Task<Message> {
 
     std::thread::spawn(move || {
         if let Err(e) = apply_same(&drive_path, queue_id) {
-            tracing::warn!("resolve_review_same failed for queue_id={}: {}", queue_id, e);
+            tracing::warn!(
+                "resolve_review_same failed for queue_id={}: {}",
+                queue_id,
+                e
+            );
         }
     });
 
@@ -109,7 +114,11 @@ pub(crate) fn skip(app: &mut PhotoVault) -> Task<Message> {
 
     std::thread::spawn(move || {
         if let Err(e) = apply_skip(&drive_path, queue_id) {
-            tracing::warn!("resolve_review_skip failed for queue_id={}: {}", queue_id, e);
+            tracing::warn!(
+                "resolve_review_skip failed for queue_id={}: {}",
+                queue_id,
+                e
+            );
         }
     });
 

@@ -79,10 +79,7 @@ const YEAR_RECAP_MAX_PHOTOS: usize = 50;
 
 /// Top entry point: full pipeline. Runs all three generators, scores,
 /// filters blocks, picks heroes, returns cards.
-pub fn generate_for_today(
-    conn: &Connection,
-    today: NaiveDate,
-) -> Result<Vec<MemoryCard>, String> {
+pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<MemoryCard>, String> {
     let current_year = today.year();
 
     let mut all: Vec<Memory> = Vec::new();
@@ -115,8 +112,7 @@ pub fn generate_for_today(
         return Ok(Vec::new());
     }
 
-    populate_hero_and_faces(conn, &mut all)
-        .map_err(|e| format!("Hero selection failed: {}", e))?;
+    populate_hero_and_faces(conn, &mut all).map_err(|e| format!("Hero selection failed: {}", e))?;
     rank(&mut all, current_year);
 
     let blocks = load_person_blocks(conn).map_err(|e| format!("Block load failed: {}", e))?;
@@ -150,7 +146,9 @@ pub fn library_is_old_enough(conn: &Connection, today: NaiveDate) -> bool {
     // Parse "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD" prefix.
     let parsed = chrono::NaiveDateTime::parse_from_str(&oldest_str, "%Y-%m-%d %H:%M:%S")
         .map(|dt| dt.date())
-        .or_else(|_| NaiveDate::parse_from_str(&oldest_str[..oldest_str.len().min(10)], "%Y-%m-%d"));
+        .or_else(|_| {
+            NaiveDate::parse_from_str(&oldest_str[..oldest_str.len().min(10)], "%Y-%m-%d")
+        });
 
     let Ok(oldest_date) = parsed else {
         return false;
@@ -263,7 +261,16 @@ fn fallback_window(
     )?;
 
     let rows = stmt.query_map(
-        params![mds[0], mds[1], mds[2], mds[3], mds[4], mds[5], mds[6], current_year],
+        params![
+            mds[0],
+            mds[1],
+            mds[2],
+            mds[3],
+            mds[4],
+            mds[5],
+            mds[6],
+            current_year
+        ],
         |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
     )?;
 
@@ -317,10 +324,9 @@ fn seasonal_recap(
         "#,
     )?;
 
-    let rows = stmt.query_map(
-        params![month, current_year, SEASONAL_MIN_PHOTOS],
-        |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
-    )?;
+    let rows = stmt.query_map(params![month, current_year, SEASONAL_MIN_PHOTOS], |row| {
+        Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
+    })?;
 
     let month_name = month_name(today.month());
     let mut out = Vec::new();
@@ -344,11 +350,7 @@ fn seasonal_recap(
     Ok(out)
 }
 
-fn year_recap(
-    conn: &Connection,
-    today: NaiveDate,
-    current_year: i32,
-) -> SqliteResult<Vec<Memory>> {
+fn year_recap(conn: &Connection, today: NaiveDate, current_year: i32) -> SqliteResult<Vec<Memory>> {
     let mut stmt = conn.prepare(
         r#"
         SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
@@ -482,8 +484,7 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
 
             // Landscape orientations are 1 (unrotated wide) and 3 (180).
             // 6/8 are rotated portraits. Treat width >= height as landscape too.
-            let is_landscape =
-                matches!(m.orientation, 1 | 3) && m.width >= m.height && m.width > 0;
+            let is_landscape = matches!(m.orientation, 1 | 3) && m.width >= m.height && m.width > 0;
 
             let mut score = 0.0_f32;
             if is_landscape {
@@ -526,15 +527,17 @@ fn rank(memories: &mut Vec<Memory>, current_year: i32) {
         };
         m.score = count_factor * age_factor * face_factor * kind_factor;
     }
-    memories.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    memories.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 // ---------- Block filter ----------
 
 fn load_person_blocks(conn: &Connection) -> SqliteResult<HashSet<i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT target_key FROM memory_blocks WHERE kind = 'person'",
-    )?;
+    let mut stmt = conn.prepare("SELECT target_key FROM memory_blocks WHERE kind = 'person'")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut out = HashSet::new();
     for row in rows {
@@ -575,7 +578,11 @@ fn filter_blocked(
     let blocked_photos: HashSet<i64> = rows.filter_map(|r| r.ok()).collect();
 
     memories.retain(|m| {
-        let blocked_count = m.photo_ids.iter().filter(|id| blocked_photos.contains(id)).count();
+        let blocked_count = m
+            .photo_ids
+            .iter()
+            .filter(|id| blocked_photos.contains(id))
+            .count();
         blocked_count * 2 <= m.photo_ids.len() // keep if blocked photos are not majority
     });
 

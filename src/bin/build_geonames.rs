@@ -79,7 +79,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let timezone = parts[17];
 
                 stmt.execute(rusqlite::params![
-                    id, name, ascii_name, lat, lon, country_code, population, timezone
+                    id,
+                    name,
+                    ascii_name,
+                    lat,
+                    lon,
+                    country_code,
+                    population,
+                    timezone
                 ])?;
                 count += 1;
             }
@@ -91,7 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tx.commit()?;
 
     // Create index after bulk insert (faster than during)
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_cities_coords ON cities(latitude, longitude);")?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_cities_coords ON cities(latitude, longitude);",
+    )?;
 
     println!("GeoNames database created at data/geonames.db");
     Ok(())

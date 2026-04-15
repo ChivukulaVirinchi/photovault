@@ -97,7 +97,9 @@ pub(crate) fn check_for_changes(app: &mut PhotoVault) -> Task<Message> {
             match Database::open_for_drive(&drive_path) {
                 Ok(db) => {
                     let reindexer = Reindexer::new_with_options(scan_hidden_folders);
-                    reindexer.detect_changes(&db.conn, &drive_path).unwrap_or_default()
+                    reindexer
+                        .detect_changes(&db.conn, &drive_path)
+                        .unwrap_or_default()
                 }
                 Err(e) => {
                     tracing::error!("CheckForChanges DB open failed: {}", e);
@@ -134,7 +136,9 @@ pub(crate) fn apply_changes(app: &mut PhotoVault) -> Task<Message> {
             match Database::open_for_drive(&drive_path) {
                 Ok(db) => {
                     let reindexer = Reindexer::new_with_options(scan_hidden_folders);
-                    reindexer.apply_changes(&db.conn, &changes).unwrap_or_default()
+                    reindexer
+                        .apply_changes(&db.conn, &changes)
+                        .unwrap_or_default()
                 }
                 Err(e) => {
                     tracing::error!("ApplyChanges DB open failed: {}", e);

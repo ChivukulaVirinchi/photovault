@@ -19,7 +19,10 @@ pub(crate) fn thumbnail_batch_ready(
         tracing::debug!("Ignoring stale thumbnail batch for epoch {}", epoch);
         return Task::none();
     }
-    tracing::info!("Thumbnail batch ready: {} thumbnails generated", results.len());
+    tracing::info!(
+        "Thumbnail batch ready: {} thumbnails generated",
+        results.len()
+    );
 
     // Restore the thumbnail service from the Arc (it was taken in start_thumbnail_generation)
     // If the Arc still has other refs, just recreate from drive_path
@@ -36,8 +39,7 @@ pub(crate) fn thumbnail_batch_ready(
         // Update in-memory list (keep absolute paths for UI display)
         for (photo_id, path) in &results {
             if let Some(photo) = app.photos.iter_mut().find(|p| p.id == *photo_id) {
-                photo.thumbnail_path =
-                    Some(path.to_string_lossy().to_string());
+                photo.thumbnail_path = Some(path.to_string_lossy().to_string());
             }
         }
 
@@ -84,7 +86,10 @@ pub(crate) fn thumbnail_batch_ready(
 
 pub(crate) fn thumbnail_batch_saved(app: &mut PhotoVault, epoch: u64) -> Task<Message> {
     if epoch != app.thumbnail_generation_epoch {
-        tracing::debug!("Ignoring stale thumbnail saved callback for epoch {}", epoch);
+        tracing::debug!(
+            "Ignoring stale thumbnail saved callback for epoch {}",
+            epoch
+        );
         return Task::none();
     }
     app.thumbnail_generation_active = false;
@@ -112,7 +117,10 @@ pub(crate) fn thumbnail_batch_saved(app: &mut PhotoVault, epoch: u64) -> Task<Me
 
 pub(crate) fn continue_thumbnail_scheduling(app: &mut PhotoVault, epoch: u64) -> Task<Message> {
     if epoch != app.thumbnail_generation_epoch {
-        tracing::debug!("Ignoring stale thumbnail scheduling tick for epoch {}", epoch);
+        tracing::debug!(
+            "Ignoring stale thumbnail scheduling tick for epoch {}",
+            epoch
+        );
         return Task::none();
     }
     if app.current_view != View::Timeline {

@@ -6,7 +6,7 @@
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
-use crate::app::Message;
+use crate::app::{Message, PhotoVault};
 use crate::config::AppTheme;
 use crate::models::Photo;
 use crate::theme::colors;
@@ -15,6 +15,7 @@ pub struct PhotoDetailView;
 
 impl PhotoDetailView {
     pub fn view(
+        app: &PhotoVault,
         photo: &Photo,
         has_prev: bool,
         has_next: bool,
@@ -104,7 +105,7 @@ impl PhotoDetailView {
 
         // === Metadata panel ===
         let meta_panel: Element<'static, Message> = if show_metadata {
-            Self::build_metadata(photo, people, face_count, p)
+            Self::build_metadata(app, photo, people, face_count, p)
         } else {
             Space::with_height(0).into()
         };
@@ -185,6 +186,7 @@ impl PhotoDetailView {
 
     /// Structured metadata panel with grouped info
     fn build_metadata(
+        app: &PhotoVault,
         photo: &Photo,
         people: &[String],
         face_count: usize,
@@ -231,6 +233,11 @@ impl PhotoDetailView {
                 .spacing(1)
                 .into(),
             );
+        }
+
+        if let Some(mini) = crate::views::photo_detail_map::photo_mini_map(app, photo) {
+            date_loc_items.push(mini);
+            date_loc_items.push(Space::with_height(12).into());
         }
 
         if let Some(alt) = photo.gps_altitude {

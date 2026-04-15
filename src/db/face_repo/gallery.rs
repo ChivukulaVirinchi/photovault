@@ -56,8 +56,7 @@ impl<'a> FaceRepo<'a> {
             params![cluster_id],
         )?;
 
-        let sticky_ids: std::collections::HashSet<i64> =
-            sticky.iter().map(|(id, _)| *id).collect();
+        let sticky_ids: std::collections::HashSet<i64> = sticky.iter().map(|(id, _)| *id).collect();
 
         let mut stmt = tx.prepare(
             r#"

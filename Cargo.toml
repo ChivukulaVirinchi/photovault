@@ -6,13 +6,14 @@ description = "Offline-first photo library manager"
 
 [dependencies]
 # UI Framework
-iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced"] }
+iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced", "canvas"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

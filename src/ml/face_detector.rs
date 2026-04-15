@@ -13,9 +13,9 @@
 
 use std::path::Path;
 
-use image::{DynamicImage, RgbImage};
 #[allow(unused_imports)]
 use image::GenericImageView; // needed by `DynamicImage::dimensions()` in some configurations
+use image::{DynamicImage, RgbImage};
 use ort::session::Session;
 use ort::value::TensorRef;
 
@@ -519,8 +519,6 @@ impl FaceDetector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// Helper to create a FaceDetector-like struct for testing IoU
     struct IouTester;
 

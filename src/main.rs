@@ -77,7 +77,10 @@ fn main() -> iced::Result {
     }
 
     if !std::path::Path::new("libs/onnxruntime").exists() {
-        tracing::warn!("ONNX Runtime missing under libs/onnxruntime. Run {}", crate::bootstrap::SETUP_ASSETS_HINT);
+        tracing::warn!(
+            "ONNX Runtime missing under libs/onnxruntime. Run {}",
+            crate::bootstrap::SETUP_ASSETS_HINT
+        );
     }
 
     crate::bootstrap::ensure_geonames_db();

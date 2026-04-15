@@ -90,9 +90,7 @@ pub fn rerank(
                 score += weights.cooccurrence * cooccurrence_bonus(raw);
             }
 
-            if weights.temporal > 0.0
-                && ctx.temporal_neighbor_clusters.contains(&h.cluster_id)
-            {
+            if weights.temporal > 0.0 && ctx.temporal_neighbor_clusters.contains(&h.cluster_id) {
                 score += weights.temporal * 0.1;
             }
 

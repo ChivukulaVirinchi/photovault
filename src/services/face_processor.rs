@@ -14,7 +14,9 @@ use rayon::prelude::*;
 use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
 use crate::db::InferredIdentityRepo;
-use crate::ml::{ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime};
+use crate::ml::{
+    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime,
+};
 use crate::services::image_utils::apply_exif_orientation;
 
 /// Progress information for face processing
@@ -153,7 +155,9 @@ impl FaceProcessor {
 
         tracing::info!(
             "Face pipeline: {} workers, {} intra-threads per session ({} CPUs)",
-            num_workers, intra_threads, available_cpus
+            num_workers,
+            intra_threads,
+            available_cpus
         );
 
         // Build a custom rayon thread pool so we don't pollute the global pool
@@ -167,7 +171,9 @@ impl FaceProcessor {
         let rejected_small = Arc::new(AtomicUsize::new(0));
         let rejected_lowconf = Arc::new(AtomicUsize::new(0));
         let rejected_blurry = Arc::new(AtomicUsize::new(0));
-        let cancel = cancel_flag.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        let cancel = cancel_flag
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         // Shared paths for thread-local session init
         let detector_path = Arc::new(detector_path);
@@ -360,7 +366,9 @@ impl FaceProcessor {
         if rej_small + rej_lowconf + rej_blurry > 0 {
             tracing::info!(
                 "Quality filter: rejected {} small, {} low-confidence, {} blurry faces",
-                rej_small, rej_lowconf, rej_blurry
+                rej_small,
+                rej_lowconf,
+                rej_blurry
             );
         }
 
@@ -371,7 +379,9 @@ impl FaceProcessor {
 
         // Batch in groups of 100 photos per transaction
         for chunk in results.chunks(100) {
-            let tx = db.conn.unchecked_transaction()
+            let tx = db
+                .conn
+                .unchecked_transaction()
                 .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
             for result in chunk {
@@ -438,7 +448,8 @@ impl FaceProcessor {
                 photos_processed += 1;
             }
 
-            tx.commit().map_err(|e| format!("Failed to commit batch: {}", e))?;
+            tx.commit()
+                .map_err(|e| format!("Failed to commit batch: {}", e))?;
         }
 
         // ---- Stage 3: Contextual Identity Propagation ----
@@ -536,10 +547,9 @@ impl FaceProcessor {
             let mut confidence = 0.5 + (temporal_score * 0.4);
 
             // Use precomputed brightness if available, otherwise load from disk
-            let source_brightness = brightness_map
-                .get(&source_photo_id)
-                .copied()
-                .or_else(|| Self::load_average_brightness_from_relative(drive_path, &source_file_path));
+            let source_brightness = brightness_map.get(&source_photo_id).copied().or_else(|| {
+                Self::load_average_brightness_from_relative(drive_path, &source_file_path)
+            });
 
             if let Some(source_brightness) = source_brightness {
                 // Smooth falloff instead of hard cutoff (Phase 2 fix included)
@@ -784,12 +794,7 @@ impl FaceProcessor {
             );
 
             // Context re-rank using co-occurrence and temporal-neighbor signals.
-            let resolver_ctx = Self::build_resolver_context(
-                face_repo,
-                *photo_id,
-                *face_id,
-                &hits,
-            );
+            let resolver_ctx = Self::build_resolver_context(face_repo, *photo_id, *face_id, &hits);
             let reranked = crate::ml::rerank(&hits, &resolver_ctx, resolver_weights);
             let band = crate::ml::retrieval::classify(&reranked, &banding);
 
@@ -806,12 +811,9 @@ impl FaceProcessor {
                 }
                 crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
                     let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
-                    if let Err(e) = face_repo.enqueue_review(
-                        *face_id,
-                        top.cluster_id,
-                        top.score,
-                        ambiguity,
-                    ) {
+                    if let Err(e) =
+                        face_repo.enqueue_review(*face_id, top.cluster_id, top.score, ambiguity)
+                    {
                         tracing::warn!("Failed to enqueue review for face {}: {}", face_id, e);
                     }
                     queued_for_review += 1;
@@ -1010,12 +1012,9 @@ impl FaceProcessor {
                 }
                 crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
                     let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
-                    if let Err(e) = face_repo.enqueue_review(
-                        *face_id,
-                        top.cluster_id,
-                        top.score,
-                        ambiguity,
-                    ) {
+                    if let Err(e) =
+                        face_repo.enqueue_review(*face_id, top.cluster_id, top.score, ambiguity)
+                    {
                         tracing::warn!("rescue: enqueue_review failed: {}", e);
                         continue;
                     }
@@ -1095,8 +1094,14 @@ impl FaceProcessor {
                     continue;
                 }
 
-                let ga = gallery_by_cluster.get(&a).map(|v| v.as_slice()).unwrap_or(&[]);
-                let gb = gallery_by_cluster.get(&b).map(|v| v.as_slice()).unwrap_or(&[]);
+                let ga = gallery_by_cluster
+                    .get(&a)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let gb = gallery_by_cluster
+                    .get(&b)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
                 if ga.is_empty() || gb.is_empty() {
                     continue;
                 }

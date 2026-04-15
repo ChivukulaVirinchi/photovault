@@ -1,24 +1,21 @@
 //! Application state types and helpers
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::collections::HashSet;
 
 use async_channel::Receiver;
 use iced::Task;
 
 use crate::config::AppConfig;
 use crate::db::{
-    BurstGroupMemberRecord, BurstGroupRecord, Database,
-    DuplicateGroupMemberRecord, DuplicateGroupRecord,
-    FaceClusterRecord, TrashedPhotoRecord,
+    BurstGroupMemberRecord, BurstGroupRecord, Database, DuplicateGroupMemberRecord,
+    DuplicateGroupRecord, FaceClusterRecord, TrashedPhotoRecord,
 };
 use crate::models::{ContentCategory, Photo};
 use crate::services::{
-    DriveDetector, DriveInfo,
-    FaceProcessingProgress,
-    IndexChanges, OcrProgress, ScanProgress,
+    DriveDetector, DriveInfo, FaceProcessingProgress, IndexChanges, OcrProgress, ScanProgress,
     ThumbnailService, ThumbnailSize, TrashStats,
 };
 
@@ -35,6 +32,7 @@ pub enum View {
     Welcome,
     Scanning,
     Timeline,
+    Map,
     People,
     ClusterDetail,
     FaceReview,
@@ -150,6 +148,25 @@ pub struct PhotoVault {
 
     /// Current window width in pixels (for responsive grid columns)
     pub(crate) window_width: f32,
+
+    /// Current window height in pixels (for map viewport math)
+    pub(crate) window_height: f32,
+
+    // --- Map view state ---
+    pub(crate) tile_cache: Option<crate::services::TileCache>,
+    pub(crate) map_center: crate::services::map_math::LatLng,
+    pub(crate) map_zoom: u8,
+    pub(crate) map_drag_origin: Option<(f32, f32)>,
+    pub(crate) map_pins_cache: Vec<(i64, crate::services::map_math::LatLng)>,
+    pub(crate) map_cache_limit_bytes: u64,
+    pub(crate) open_popovers: Vec<crate::app::messages::MapPopover>,
+    pub(crate) map_recent_fetch_failure: bool,
+    pub(crate) map_inflight_tiles: std::collections::HashSet<crate::services::map_math::TileId>,
+
+    // --- Photo detail mini-map state (independent of main map) ---
+    pub(crate) photo_map_center: Option<crate::services::map_math::LatLng>,
+    pub(crate) photo_map_zoom: u8,
+    pub(crate) photo_map_drag_origin: Option<(f32, f32)>,
 
     // --- Phase 4 additions ---
     /// Face clusters loaded from database
@@ -365,11 +382,13 @@ pub struct PhotoVault {
 
     /// OCR processing cancel flag
     pub(crate) ocr_cancel_flag: Option<Arc<AtomicBool>>,
-
 }
 
 impl PhotoVault {
-    pub(crate) fn merge_detected_and_remembered_drives(&self, detected: Vec<DriveInfo>) -> Vec<DriveInfo> {
+    pub(crate) fn merge_detected_and_remembered_drives(
+        &self,
+        detected: Vec<DriveInfo>,
+    ) -> Vec<DriveInfo> {
         let mut merged = detected;
         let mut seen = std::collections::HashSet::new();
 
@@ -401,6 +420,10 @@ impl PhotoVault {
         }
     }
 
+    pub fn map_cache_limit_bytes_display(&self) -> String {
+        (self.map_cache_limit_bytes / 1024 / 1024).to_string()
+    }
+
     /// Create new application instance
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load();
@@ -419,7 +442,23 @@ impl PhotoVault {
             thumbnail_queue: Vec::new(),
             thumbnail_scan_cursor: 0,
             thumbnail_generation_epoch: 0,
-            window_width: 1280.0, // sensible default until first resize event
+            window_width: config.window_width as f32,
+            window_height: config.window_height as f32,
+            tile_cache: None,
+            map_center: crate::services::map_math::LatLng {
+                lat: 20.0,
+                lng: 0.0,
+            },
+            map_zoom: 2,
+            map_drag_origin: None,
+            map_pins_cache: Vec::new(),
+            map_cache_limit_bytes: (config.map_cache_limit_mb as u64) * 1024 * 1024,
+            open_popovers: Vec::new(),
+            map_recent_fetch_failure: false,
+            map_inflight_tiles: std::collections::HashSet::new(),
+            photo_map_center: None,
+            photo_map_zoom: 13,
+            photo_map_drag_origin: None,
             // Phase 4
             face_clusters: Vec::new(),
             face_processing_active: false,
@@ -483,7 +522,7 @@ impl PhotoVault {
             current_photo_face_count: 0,
             photo_rotation: 0,
             current_display_image: None,
-            show_metadata_panel: true,
+            show_metadata_panel: false,
             selected_timeline_photo_ids: HashSet::new(),
             hovered_timeline_photo_id: None,
             hovered_timeline_day_key: None,
@@ -497,10 +536,7 @@ impl PhotoVault {
         };
 
         // Detect drives on startup
-        let task = Task::perform(
-            async { DriveDetector::detect() },
-            Message::DrivesDetected,
-        );
+        let task = Task::perform(async { DriveDetector::detect() }, Message::DrivesDetected);
 
         (app, task)
     }
@@ -524,8 +560,9 @@ impl PhotoVault {
     pub(crate) fn photo_detail_navigation_list(&self) -> &[Photo] {
         if self.previous_view == Some(View::MemoryDetail) && !self.memory_photos.is_empty() {
             &self.memory_photos
-        } else if self.previous_view == Some(View::ClusterDetail)
-            && !self.cluster_photos.is_empty()
+        } else if self.previous_view == Some(View::Map) && !self.memory_photos.is_empty() {
+            &self.memory_photos
+        } else if self.previous_view == Some(View::ClusterDetail) && !self.cluster_photos.is_empty()
         {
             &self.cluster_photos
         } else if self.previous_view == Some(View::Documents) && !self.documents.is_empty() {

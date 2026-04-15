@@ -27,7 +27,11 @@ impl<'a> FaceRepo<'a> {
             let (id, photo_id, bytes) = row?;
             match FaceEmbedding::from_bytes(&bytes) {
                 Some(emb) => faces.push((id, photo_id, emb)),
-                None => tracing::warn!("Corrupted face embedding for face_id={}: {} bytes", id, bytes.len()),
+                None => tracing::warn!(
+                    "Corrupted face embedding for face_id={}: {} bytes",
+                    id,
+                    bytes.len()
+                ),
             }
         }
 
@@ -86,7 +90,12 @@ impl<'a> FaceRepo<'a> {
                         embedding,
                     });
                 }
-                None => tracing::warn!("Corrupted gallery embedding for cluster_id={}, face_id={}: {} bytes", cluster_id, face_id, bytes.len()),
+                None => tracing::warn!(
+                    "Corrupted gallery embedding for cluster_id={}, face_id={}: {} bytes",
+                    cluster_id,
+                    face_id,
+                    bytes.len()
+                ),
             }
         }
 
@@ -367,8 +376,9 @@ impl<'a> FaceRepo<'a> {
             "#,
         )?;
         for item in items.iter_mut() {
-            let ids = sample_stmt
-                .query_map(params![item.candidate_cluster_id], |row| row.get::<_, i64>(0))?;
+            let ids = sample_stmt.query_map(params![item.candidate_cluster_id], |row| {
+                row.get::<_, i64>(0)
+            })?;
             let mut collected = Vec::new();
             for id in ids {
                 collected.push(id?);

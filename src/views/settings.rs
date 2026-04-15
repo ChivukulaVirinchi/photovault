@@ -1,6 +1,6 @@
 //! Settings view.
 
-use iced::widget::{button, column, container, row, slider, text, toggler, Row, Space};
+use iced::widget::{button, column, container, row, slider, text, text_input, toggler, Row, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
@@ -14,6 +14,8 @@ impl SettingsView {
         config: &AppConfig,
         geocoding_progress: Option<(usize, usize)>,
         rotated_fix_running: bool,
+        map_cache_size_mb: f64,
+        map_cache_limit_mb: u32,
     ) -> Element<'static, Message> {
         let p = colors::palette(config.theme);
         let bg_primary = p.bg_primary;
@@ -43,6 +45,9 @@ impl SettingsView {
             Space::with_height(24),
             Self::section_header(config.theme, "Memories"),
             Self::memories_setting(config.theme, config.memories_enabled),
+            Space::with_height(24),
+            Self::section_header(config.theme, "Map"),
+            Self::map_cache_setting(config.theme, map_cache_size_mb, map_cache_limit_mb,),
             Space::with_height(32),
             Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
         ]
@@ -126,6 +131,70 @@ impl SettingsView {
                 .on_toggle(Message::SetMemoriesEnabled)
                 .into(),
         )
+    }
+
+    fn map_cache_setting(
+        theme: AppTheme,
+        cache_size_mb: f64,
+        cache_limit_mb: u32,
+    ) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let text_secondary = p.text_secondary;
+
+        let limit_value = cache_limit_mb.to_string();
+
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+        let text_primary_btn = p.text_primary;
+
+        column![
+            row![
+                text("Tile cache size:").size(12).color(text_secondary),
+                Space::with_width(8),
+                text(format!("{:.1} MB", cache_size_mb))
+                    .size(12)
+                    .color(text_primary),
+                Space::with_width(Length::Fill),
+                button(text("Clear cache").size(12).color(text_primary_btn))
+                    .padding(Padding::from([6, 10]))
+                    .style(move |_theme, status| button::Style {
+                        background: Some(match status {
+                            button::Status::Hovered => bg_hover.into(),
+                            _ => bg_elevated.into(),
+                        }),
+                        border: iced::Border {
+                            color: border_subtle,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::ClearMapCache),
+            ]
+            .align_y(Alignment::Center),
+            Space::with_height(8),
+            row![
+                text("Cache size limit:").size(12).color(text_secondary),
+                Space::with_width(8),
+                text_input("MB", &limit_value)
+                    .on_input(|s: String| {
+                        let default_mb = (crate::services::tile_cache::DEFAULT_CACHE_LIMIT_BYTES
+                            / 1024
+                            / 1024) as u32;
+                        s.parse::<u32>()
+                            .map(Message::SetMapCacheLimit)
+                            .unwrap_or(Message::SetMapCacheLimit(default_mb))
+                    })
+                    .width(Length::Fixed(80.0)),
+                Space::with_width(4),
+                text("MB").size(12).color(text_secondary),
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(0)
+        .into()
     }
 
     fn face_confidence_setting(theme: AppTheme, current: f32) -> Element<'static, Message> {
@@ -281,7 +350,11 @@ impl SettingsView {
                 Space::with_width(16),
                 Self::action_button(theme, "Check for Changes", Message::CheckForChanges),
                 Space::with_width(16),
-                Self::action_button(theme, "Regenerate Thumbnails", Message::RegenerateThumbnails),
+                Self::action_button(
+                    theme,
+                    "Regenerate Thumbnails",
+                    Message::RegenerateThumbnails
+                ),
                 Space::with_width(16),
                 geocode_button,
                 Space::with_width(16),

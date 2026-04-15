@@ -116,7 +116,11 @@ pub fn retrieve_candidates(
         });
     }
 
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits
 }
 
@@ -129,7 +133,10 @@ pub fn classify(hits: &[RetrievalHit], cfg: &BandingConfig) -> ConfidenceBand {
             if top.score >= cfg.high_threshold {
                 ConfidenceBand::High { hit: top }
             } else if top.score >= cfg.low_threshold {
-                ConfidenceBand::Ambiguous { top, runner_up: None }
+                ConfidenceBand::Ambiguous {
+                    top,
+                    runner_up: None,
+                }
             } else {
                 ConfidenceBand::Low
             }
@@ -139,8 +146,7 @@ pub fn classify(hits: &[RetrievalHit], cfg: &BandingConfig) -> ConfidenceBand {
             let runner_up = hits[1].clone();
             if top.score < cfg.low_threshold {
                 ConfidenceBand::Low
-            } else if top.score >= cfg.high_threshold
-                && (top.score - runner_up.score) >= cfg.margin
+            } else if top.score >= cfg.high_threshold && (top.score - runner_up.score) >= cfg.margin
             {
                 ConfidenceBand::High { hit: top }
             } else {
@@ -176,7 +182,13 @@ mod tests {
     fn near_identical_gallery_scores_highest() {
         let q = emb(vec![1.0, 0.0, 0.0]);
         let galleries: Vec<(i64, Vec<(i64, FaceEmbedding)>)> = vec![
-            (1, vec![(10, emb(vec![0.99, 0.01, 0.0])), (11, emb(vec![0.98, 0.0, 0.1]))]),
+            (
+                1,
+                vec![
+                    (10, emb(vec![0.99, 0.01, 0.0])),
+                    (11, emb(vec![0.98, 0.0, 0.1])),
+                ],
+            ),
             (2, vec![(20, emb(vec![0.0, 1.0, 0.0]))]),
         ];
 
@@ -205,15 +217,35 @@ mod tests {
     fn classify_bands() {
         let cfg = BandingConfig::default();
 
-        let low = vec![RetrievalHit { cluster_id: 1, score: 0.2, best_match_face_id: 1, num_matches: 1 }];
+        let low = vec![RetrievalHit {
+            cluster_id: 1,
+            score: 0.2,
+            best_match_face_id: 1,
+            num_matches: 1,
+        }];
         assert!(matches!(classify(&low, &cfg), ConfidenceBand::Low));
 
-        let high = vec![RetrievalHit { cluster_id: 1, score: 0.7, best_match_face_id: 1, num_matches: 3 }];
+        let high = vec![RetrievalHit {
+            cluster_id: 1,
+            score: 0.7,
+            best_match_face_id: 1,
+            num_matches: 3,
+        }];
         assert!(matches!(classify(&high, &cfg), ConfidenceBand::High { .. }));
 
         let ambiguous_pair = vec![
-            RetrievalHit { cluster_id: 1, score: 0.60, best_match_face_id: 1, num_matches: 2 },
-            RetrievalHit { cluster_id: 2, score: 0.57, best_match_face_id: 2, num_matches: 2 },
+            RetrievalHit {
+                cluster_id: 1,
+                score: 0.60,
+                best_match_face_id: 1,
+                num_matches: 2,
+            },
+            RetrievalHit {
+                cluster_id: 2,
+                score: 0.57,
+                best_match_face_id: 2,
+                num_matches: 2,
+            },
         ];
         assert!(matches!(
             classify(&ambiguous_pair, &cfg),

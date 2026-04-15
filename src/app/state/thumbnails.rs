@@ -18,7 +18,8 @@ impl PhotoVault {
 
     pub(crate) fn seed_thumbnail_queue_for_timeline(&mut self) {
         let columns = Self::timeline_columns_for_width(self.window_width);
-        let priority_count = columns * (Self::THUMBNAIL_VISIBLE_ROWS + Self::THUMBNAIL_PREFETCH_ROWS);
+        let priority_count =
+            columns * (Self::THUMBNAIL_VISIBLE_ROWS + Self::THUMBNAIL_PREFETCH_ROWS);
         let initial_end = priority_count.min(self.photos.len());
 
         for photo in self.photos.iter().take(initial_end) {
@@ -97,7 +98,8 @@ impl PhotoVault {
 
         // Drain the next batch from the front of the queue
         let batch_end = self.thumbnail_queue.len().min(Self::THUMBNAIL_BATCH_SIZE);
-        let batch: Vec<(i64, String, String, i32)> = self.thumbnail_queue.drain(..batch_end).collect();
+        let batch: Vec<(i64, String, String, i32)> =
+            self.thumbnail_queue.drain(..batch_end).collect();
         let remaining = self.thumbnail_queue.len();
 
         tracing::info!(

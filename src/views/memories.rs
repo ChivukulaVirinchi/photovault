@@ -11,10 +11,7 @@ use crate::theme::colors;
 /// Horizontal carousel banner embedded above the Timeline grid.
 /// Returns None when there are no memories so the caller can omit the
 /// banner entirely (no empty space).
-pub fn memories_banner(
-    cards: &[MemoryCard],
-    theme: AppTheme,
-) -> Option<Element<'static, Message>> {
+pub fn memories_banner(cards: &[MemoryCard], theme: AppTheme) -> Option<Element<'static, Message>> {
     if cards.is_empty() {
         return None;
     }
@@ -28,9 +25,9 @@ pub fn memories_banner(
     }
 
     let banner = container(
-        scrollable(strip).direction(
-            scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(6)),
-        ),
+        scrollable(strip).direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new().width(6),
+        )),
     )
     .padding(Padding {
         top: 12.0,
@@ -72,11 +69,7 @@ fn banner_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Messa
     ]
     .spacing(0);
 
-    let inner = column![
-        hero,
-        container(caption).padding(Padding::from([8, 12])),
-    ]
-    .spacing(0);
+    let inner = column![hero, container(caption).padding(Padding::from([8, 12])),].spacing(0);
 
     let id_clone = card.id.clone();
     let border_color = p.border_subtle;
@@ -102,16 +95,10 @@ fn banner_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Messa
 }
 
 /// Dedicated "Memories" sidebar view — all active memory cards as wide rows.
-pub fn memories_view(
-    cards: &[MemoryCard],
-    theme: AppTheme,
-) -> Element<'static, Message> {
+pub fn memories_view(cards: &[MemoryCard], theme: AppTheme) -> Element<'static, Message> {
     let p = colors::palette(theme);
 
-    let header = container(
-        text("Memories").size(28).color(p.text_primary),
-    )
-    .padding(Padding {
+    let header = container(text("Memories").size(28).color(p.text_primary)).padding(Padding {
         top: 24.0,
         right: 32.0,
         bottom: 8.0,
@@ -245,16 +232,18 @@ pub fn memory_detail_view(
                 .color(p.text_secondary),
         ]
         .align_x(Alignment::Center);
-        return container(body).width(Length::Fill).height(Length::Fill).into();
+        return container(body)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
     }
 
     // Resolve the absolute path for the current photo. Prefer the original
     // file (full quality) but fall back to the stored thumbnail if the drive
     // path is unknown (rare).
     let current = &photos[current_index.min(total - 1)];
-    let abs_path: Option<String> = drive_path.map(|root| {
-        root.join(&current.file_path).to_string_lossy().to_string()
-    });
+    let abs_path: Option<String> =
+        drive_path.map(|root| root.join(&current.file_path).to_string_lossy().to_string());
 
     let hero: Element<'static, Message> = match abs_path {
         Some(path) => container(
@@ -290,8 +279,14 @@ pub fn memory_detail_view(
         .padding(Padding::from([10, 16]));
 
     let controls = container(
-        row![prev_btn, Space::with_width(12), pause_btn, Space::with_width(12), next_btn]
-            .align_y(Alignment::Center),
+        row![
+            prev_btn,
+            Space::with_width(12),
+            pause_btn,
+            Space::with_width(12),
+            next_btn
+        ]
+        .align_y(Alignment::Center),
     )
     .center_x(Length::Fill)
     .padding(Padding::from([12, 0]));

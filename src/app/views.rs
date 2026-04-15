@@ -29,18 +29,28 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
     if app.current_view == View::PhotoDetail {
         if let Some(idx) = app.selected_photo_index {
             if let Some(photo) = app.photos.get(idx) {
-                let has_prev = idx > 0;
-                let has_next = idx + 1 < app.photos.len();
+                let nav = app.photo_detail_navigation_list();
+                let nav_idx = nav
+                    .iter()
+                    .position(|p| p.id == photo.id)
+                    .unwrap_or(idx.min(nav.len().saturating_sub(1)));
+                let has_prev = nav_idx > 0;
+                let has_next = nav_idx + 1 < nav.len();
                 if app.selected_drive.is_some() {
                     // Only render pre-decoded oriented image to avoid orientation flicker.
                     let handle = if let Some(ref img) = app.current_display_image {
                         let rgba = img.to_rgba8();
                         let (w, h) = (rgba.width(), rgba.height());
-                        Some(iced::widget::image::Handle::from_rgba(w, h, rgba.into_raw()))
+                        Some(iced::widget::image::Handle::from_rgba(
+                            w,
+                            h,
+                            rgba.into_raw(),
+                        ))
                     } else {
                         None
                     };
                     return PhotoDetailView::view(
+                        app,
                         photo,
                         has_prev,
                         has_next,
@@ -71,7 +81,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         let hover_bg = p.bg_hover;
         container(
             iced::widget::button(
-                text("\u{00BB}").size(16).color(tc) // » double right arrow
+                text("\u{00BB}").size(16).color(tc), // » double right arrow
             )
             .padding(iced::Padding::from([8, 8]))
             .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
@@ -79,10 +89,13 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     iced::widget::button::Status::Hovered => Some(hover_bg.into()),
                     _ => None,
                 },
-                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
-            .on_press(Message::ToggleSidebar)
+            .on_press(Message::ToggleSidebar),
         )
         .width(Length::Fixed(36.0))
         .height(Length::Fill)
@@ -100,10 +113,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Welcome => WelcomeView::view(&app.drives, app.config.theme),
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
-            let banner = crate::views::memories::memories_banner(
-                &app.memories,
-                app.config.theme,
-            );
+            let banner = crate::views::memories::memories_banner(&app.memories, app.config.theme);
             let body = if app.photos.is_empty() {
                 TimelineView::view(app.config.theme)
             } else {
@@ -206,6 +216,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 None => body,
             }
         }
+        View::Map => crate::views::map::map_view(app),
         View::People => PeopleView::view_with_clusters(
             &app.face_clusters,
             app.editing_cluster_id,
@@ -258,9 +269,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             let state = app.face_review_state.as_ref().unwrap_or(&empty_state);
             FaceReviewView::view(state, app.selected_drive.as_deref(), app.config.theme)
         }
-        View::Memories => {
-            crate::views::memories::memories_view(&app.memories, app.config.theme)
-        }
+        View::Memories => crate::views::memories::memories_view(&app.memories, app.config.theme),
         View::MemoryDetail => {
             let card = app
                 .selected_memory_id
@@ -418,18 +427,23 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             &app.config,
             app.geocoding_progress,
             app.rotated_data_regen_active,
+            app.tile_cache
+                .as_ref()
+                .map(|c| c.current_size_bytes() as f64 / 1024.0 / 1024.0)
+                .unwrap_or(0.0),
+            app.map_cache_limit_bytes_display()
+                .parse::<u32>()
+                .unwrap_or(500),
         ),
-        View::Duplicates => {
-            DuplicatesView::view(
-                &app.duplicate_groups,
-                app.duplicate_wasted_space,
-                app.duplicate_detection_running,
-                app.selected_drive.as_deref(),
-                &app.photos,
-                &app.duplicate_overview,
-                app.config.theme,
-            )
-        }
+        View::Duplicates => DuplicatesView::view(
+            &app.duplicate_groups,
+            app.duplicate_wasted_space,
+            app.duplicate_detection_running,
+            app.selected_drive.as_deref(),
+            &app.photos,
+            &app.duplicate_overview,
+            app.config.theme,
+        ),
         View::DuplicateDetail => {
             if let Some(ref group) = app.selected_duplicate_group {
                 if let Some(ref drive_path) = app.selected_drive {
@@ -462,17 +476,15 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 )
             }
         }
-        View::Bursts => {
-            BurstsView::view(
-                &app.burst_groups,
-                app.burst_saveable_count,
-                app.burst_detection_running,
-                app.selected_drive.as_deref(),
-                &app.photos,
-                &app.burst_overview_previews,
-                app.config.theme,
-            )
-        }
+        View::Bursts => BurstsView::view(
+            &app.burst_groups,
+            app.burst_saveable_count,
+            app.burst_detection_running,
+            app.selected_drive.as_deref(),
+            &app.photos,
+            &app.burst_overview_previews,
+            app.config.theme,
+        ),
         View::BurstDetail => {
             if let Some(ref group) = app.selected_burst_group {
                 BurstsView::group_detail_view(
@@ -565,22 +577,18 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         let status_border = p.border_subtle;
         let status_text_color = p.text_secondary;
 
-        let status_bar = container(
-            text(status_text)
-                .size(11)
-                .color(status_text_color),
-        )
-        .width(Length::Fill)
-        .padding([4, 16])
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(status_bg.into()),
-            border: iced::Border {
-                color: status_border,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..Default::default()
-        });
+        let status_bar = container(text(status_text).size(11).color(status_text_color))
+            .width(Length::Fill)
+            .padding([4, 16])
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(status_bg.into()),
+                border: iced::Border {
+                    color: status_border,
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            });
 
         let layout = column![main_row, status_bar];
         let bg = p.bg_primary;

@@ -84,9 +84,9 @@ impl<'a> BurstRepo<'a> {
                 .collect();
 
             for gid in group_ids {
-                let mut mem_stmt = self.conn.prepare(
-                    "SELECT photo_id FROM burst_group_members WHERE group_id = ?1",
-                )?;
+                let mut mem_stmt = self
+                    .conn
+                    .prepare("SELECT photo_id FROM burst_group_members WHERE group_id = ?1")?;
                 let members: BTreeSet<i64> = mem_stmt
                     .query_map(params![gid], |row| row.get::<_, i64>(0))?
                     .filter_map(|r| r.ok())

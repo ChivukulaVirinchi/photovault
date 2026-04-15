@@ -143,13 +143,13 @@ impl<'a> FaceRepo<'a> {
     }
 
     /// Load all cannot-merge pairs (returns them in both directions for easy lookup).
-    pub fn get_cannot_merge_map(&self) -> SqliteResult<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
+    pub fn get_cannot_merge_map(
+        &self,
+    ) -> SqliteResult<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
         let mut stmt = self
             .conn
             .prepare("SELECT cluster_a_id, cluster_b_id FROM cluster_cannot_merge")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
 
         let mut map: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
             std::collections::HashMap::new();

@@ -1,16 +1,16 @@
 //! Main application state and logic
 
+mod handlers;
 mod messages;
 pub mod state;
 mod views;
-mod handlers;
 
-pub use messages::Message;
+pub use messages::{MapPopover, Message};
 #[allow(unused_imports)]
 pub use messages::ScanResult;
-pub use state::{PhotoVault, View};
 #[allow(unused_imports)]
 pub use state::ScanState;
+pub use state::{PhotoVault, View};
 
 use iced::keyboard;
 use iced::{event, Element, Subscription, Task};
@@ -78,6 +78,12 @@ impl PhotoVault {
             subs.push(event::listen_with(|event, _status, _id| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
                     Some(Message::KeyPressed(key))
+                }
+                iced::Event::Window(iced::window::Event::Resized(size)) => {
+                    Some(Message::WindowResized {
+                        width: size.width,
+                        height: size.height,
+                    })
                 }
                 _ => None,
             }));

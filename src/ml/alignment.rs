@@ -43,7 +43,10 @@ impl SimilarityTransform {
         }
         let qx = q.0 - self.tx;
         let qy = q.1 - self.ty;
-        Some(((self.a * qx + self.b * qy) / det, (-self.b * qx + self.a * qy) / det))
+        Some((
+            (self.a * qx + self.b * qy) / det,
+            (-self.b * qx + self.a * qy) / det,
+        ))
     }
 
     #[cfg(test)]
@@ -113,10 +116,7 @@ pub fn estimate_similarity(
 ///
 /// Returns None only if the landmarks are degenerate (e.g. all collinear or
 /// coincident), which signals a bad detection that should be rejected.
-pub fn align_face_112(
-    image: &DynamicImage,
-    landmarks: &[(f32, f32); 5],
-) -> Option<RgbImage> {
+pub fn align_face_112(image: &DynamicImage, landmarks: &[(f32, f32); 5]) -> Option<RgbImage> {
     let transform = estimate_similarity(landmarks, &CANONICAL_TEMPLATE_112)?;
     let rgb = image.to_rgb8();
     let (w, h) = (rgb.width() as i32, rgb.height() as i32);
@@ -163,10 +163,8 @@ fn bilinear_sample(img: &RgbImage, x: f32, y: f32, w: i32, h: i32) -> Rgb<u8> {
     let w11 = dx * dy;
 
     let blend = |i: usize| -> u8 {
-        let v = p00[i] as f32 * w00
-            + p10[i] as f32 * w10
-            + p01[i] as f32 * w01
-            + p11[i] as f32 * w11;
+        let v =
+            p00[i] as f32 * w00 + p10[i] as f32 * w10 + p01[i] as f32 * w01 + p11[i] as f32 * w11;
         v.round().clamp(0.0, 255.0) as u8
     };
 
@@ -207,7 +205,12 @@ mod tests {
 
     #[test]
     fn inverse_roundtrip() {
-        let t = SimilarityTransform { a: 0.8, b: 0.4, tx: 10.0, ty: -5.0 };
+        let t = SimilarityTransform {
+            a: 0.8,
+            b: 0.4,
+            tx: 10.0,
+            ty: -5.0,
+        };
         let p = (42.0f32, 17.0f32);
         let q = t.apply(p);
         let p_back = t.apply_inverse(q).unwrap();

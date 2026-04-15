@@ -46,9 +46,10 @@ pub(crate) fn trash_photos(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Me
     // If trashing from photo detail, navigate back to previous view
     // and advance to the next photo (or close if last)
     if app.current_view == View::PhotoDetail {
+        let nav_len = app.photo_detail_navigation_list().len();
         if let Some(idx) = app.selected_photo_index {
             // Will be shown after reload; adjust index
-            if idx + 1 < app.photos.len() {
+            if idx + 1 < nav_len {
                 // Stay at same index (next photo slides in)
             } else if idx > 0 {
                 app.selected_photo_index = Some(idx - 1);

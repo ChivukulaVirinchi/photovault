@@ -87,12 +87,9 @@ impl ScanProgressView {
             };
             text(display).size(11).color(text_tertiary)
         } else {
-            text(format!(
-                "Completed in {:.1}s",
-                progress.elapsed_seconds
-            ))
-            .size(12)
-            .color(semantic_success)
+            text(format!("Completed in {:.1}s", progress.elapsed_seconds))
+                .size(12)
+                .color(semantic_success)
         };
 
         // Errors summary

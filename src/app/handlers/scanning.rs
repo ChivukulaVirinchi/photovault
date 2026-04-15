@@ -29,6 +29,12 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
         Task::batch(vec![app.load_photos(), restore])
     } else if view == View::People {
         app.load_face_clusters()
+    } else if view == View::Map {
+        app.current_view = view;
+        if app.map_pins_cache.is_empty() {
+            return super::map::load_pins(app);
+        }
+        return Task::none();
     } else if view == View::Documents {
         app.load_documents()
     } else if view == View::Duplicates {
@@ -99,6 +105,9 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
             }
             app.database = Some(db);
 
+            super::map::init_tile_cache(app);
+            let pin_task = super::map::load_pins(app);
+
             // Kick off background geocoding once a drive is selected.
             if app.geocoding_progress.is_none() {
                 let _ = super::handle(app, Message::RunGeocoding);
@@ -119,7 +128,7 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 // Existing library: auto-sync incremental changes first.
                 super::handle(app, Message::CheckForChanges)
             };
-            return Task::batch(vec![memories_task, next]);
+            return Task::batch(vec![pin_task, memories_task, next]);
         }
         Err(e) => {
             tracing::error!("Failed to open database: {}", e);
@@ -179,11 +188,7 @@ pub(crate) fn start_scan(app: &mut PhotoVault) -> Task<Message> {
 
     // Start the scanner
     let (progress_rx, cancel_flag, join_handle) =
-        crate::services::scanner::start_scan(
-            drive_path,
-            database,
-            app.config.scan_hidden_folders,
-        );
+        crate::services::scanner::start_scan(drive_path, database, app.config.scan_hidden_folders);
 
     // Store scan state
     app.scan_state = Some(ScanState {
@@ -197,9 +202,7 @@ pub(crate) fn start_scan(app: &mut PhotoVault) -> Task<Message> {
         async move {
             match join_handle.await {
                 Ok(result) => {
-                    let count = PhotoRepo::new(&result.database.conn)
-                        .count()
-                        .unwrap_or(0);
+                    let count = PhotoRepo::new(&result.database.conn).count().unwrap_or(0);
                     (
                         result.database,
                         ScanResult {
@@ -265,10 +268,7 @@ pub(crate) fn cancel_scan(app: &mut PhotoVault) -> Task<Message> {
 }
 
 pub(crate) fn scan_finished(app: &mut PhotoVault, result: ScanResult) -> Task<Message> {
-    tracing::info!(
-        "Scan finished: {} photos indexed",
-        result.photo_count
-    );
+    tracing::info!("Scan finished: {} photos indexed", result.photo_count);
     app.photo_count = result.photo_count;
 
     // Update the final progress in scan state so UI shows completion

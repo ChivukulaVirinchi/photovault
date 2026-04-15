@@ -20,6 +20,9 @@ pub struct AppConfig {
     pub window_height: u32,
     pub sidebar_collapsed: bool,
 
+    #[serde(default = "default_map_cache_limit_mb")]
+    pub map_cache_limit_mb: u32,
+
     /// Weight applied to co-occurrence prior when multiple candidate
     /// clusters exist for an unassigned face. 0 disables the signal.
     #[serde(default = "default_weight_cooccurrence")]
@@ -46,6 +49,10 @@ fn default_memories_enabled() -> bool {
     true
 }
 
+fn default_map_cache_limit_mb() -> u32 {
+    500
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -61,6 +68,7 @@ impl Default for AppConfig {
             window_width: 1400,
             window_height: 900,
             sidebar_collapsed: false,
+            map_cache_limit_mb: default_map_cache_limit_mb(),
             weight_cooccurrence: default_weight_cooccurrence(),
             weight_temporal: default_weight_temporal(),
             memories_enabled: default_memories_enabled(),
@@ -105,6 +113,7 @@ impl AppConfig {
         self.window_height = self.window_height.clamp(300, 4320);
         self.weight_cooccurrence = self.weight_cooccurrence.clamp(0.0, 2.0);
         self.weight_temporal = self.weight_temporal.clamp(0.0, 2.0);
+        self.map_cache_limit_mb = self.map_cache_limit_mb.clamp(50, 10_000);
     }
 
     /// Save config to disk.

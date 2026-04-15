@@ -10,6 +10,7 @@ mod documents;
 mod duplicates;
 mod face_review;
 mod faces;
+mod map;
 mod memories;
 mod scanning;
 mod search_cull;
@@ -31,6 +32,42 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::CancelScan => scanning::cancel_scan(app),
         Message::ScanFinished(result) => scanning::scan_finished(app, result),
         Message::ScanComplete => scanning::scan_complete(app),
+        Message::WindowResized { width, height } => {
+            app.window_width = width.max(1.0);
+            app.window_height = height.max(1.0);
+            app.config.window_width = app.window_width.round().clamp(400.0, 7680.0) as u32;
+            app.config.window_height = app.window_height.round().clamp(300.0, 4320.0) as u32;
+            if app.current_view == super::state::View::Map {
+                map::enqueue_visible_tile_fetches(app)
+            } else {
+                Task::none()
+            }
+        }
+
+        // --- Map ---
+        Message::MapPan { dx, dy } => map::pan(app, dx, dy),
+        Message::MapPanBy { dx, dy } => map::pan_by(app, dx, dy),
+        Message::MapPanStart { x, y } => map::pan_start(app, x, y),
+        Message::MapPanEnd => map::pan_end(app),
+        Message::MapZoomAt { x, y, delta } => map::zoom_at(app, x, y, delta),
+        Message::MapResetView => map::reset_view(app),
+        Message::MapPinsLoaded(pins) => map::pins_loaded(app, pins),
+        Message::MapTileFetched(tile) => map::tile_fetched(app, tile),
+        Message::MapTileFetchFailed(tile, err) => map::tile_fetch_failed(app, tile, err),
+        Message::MapPinClicked { photo_ids, anchor } => {
+            map::pin_clicked(app, photo_ids, anchor)
+        }
+        Message::MapClosePopover => map::close_popover(app),
+        Message::MapClosePopoverAt(idx) => map::close_popover_at(app, idx),
+        Message::MapOpenClusterFilmstrip(ids) => map::open_cluster_filmstrip(app, ids),
+        Message::SetMapCacheLimit(mb) => map::set_cache_limit(app, mb),
+        Message::ClearMapCache => map::clear_cache(app),
+        Message::MapCacheCleared => map::cache_cleared(app),
+
+        Message::PhotoMapPanStart { x, y } => map::photo_map_pan_start(app, x, y),
+        Message::PhotoMapPan { dx, dy } => map::photo_map_pan(app, dx, dy),
+        Message::PhotoMapPanEnd => map::photo_map_pan_end(app),
+        Message::PhotoMapZoomAt { x, y, delta } => map::photo_map_zoom_at(app, x, y, delta),
 
         // --- Timeline / photo detail ---
         Message::PhotosLoaded(photos) => timeline::photos_loaded(app, photos),
@@ -146,9 +183,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::RestorePhoto(photo_id) => trash::restore_photo(app, photo_id),
         Message::RestoreSelected => trash::restore_selected(app),
         Message::ToggleTrashSelection(photo_id) => trash::toggle_trash_selection(app, photo_id),
-        Message::PermanentlyDeletePhoto(photo_id) => {
-            trash::permanently_delete_photo(app, photo_id)
-        }
+        Message::PermanentlyDeletePhoto(photo_id) => trash::permanently_delete_photo(app, photo_id),
         Message::ConfirmPermanentlyDeletePhoto(photo_id) => {
             trash::confirm_permanently_delete_photo(app, photo_id)
         }

@@ -35,9 +35,7 @@ impl FaceReviewView {
                 column![
                     header,
                     Space::with_height(48),
-                    text("No faces to review.")
-                        .size(18)
-                        .color(p.text_secondary),
+                    text("No faces to review.").size(18).color(p.text_secondary),
                     Space::with_height(8),
                     text("Run face processing, or come back later.")
                         .size(13)
@@ -149,21 +147,13 @@ impl FaceReviewView {
         ]
         .align_y(Alignment::Start);
 
-        let same_btn = button(
-            text("Same person  (Y)")
-                .size(14)
-                .color(p.text_primary),
-        )
-        .on_press(Message::FaceReviewSame)
-        .padding(Padding::from([10, 22]));
+        let same_btn = button(text("Same person  (Y)").size(14).color(p.text_primary))
+            .on_press(Message::FaceReviewSame)
+            .padding(Padding::from([10, 22]));
 
-        let different_btn = button(
-            text("Different  (N)")
-                .size(14)
-                .color(p.text_primary),
-        )
-        .on_press(Message::FaceReviewDifferent)
-        .padding(Padding::from([10, 22]));
+        let different_btn = button(text("Different  (N)").size(14).color(p.text_primary))
+            .on_press(Message::FaceReviewDifferent)
+            .padding(Padding::from([10, 22]));
 
         let skip_btn = button(text("Skip  (S)").size(13).color(p.text_secondary))
             .on_press(Message::FaceReviewSkip)
@@ -226,12 +216,16 @@ fn face_box(
             .width(Length::Fixed(size))
             .height(Length::Fixed(size))
             .into(),
-        None => container(text("no crop").size(11).color(iced::Color::from_rgb8(128, 128, 128)))
-            .width(Length::Fixed(size))
-            .height(Length::Fixed(size))
-            .center_x(Length::Fixed(size))
-            .center_y(Length::Fixed(size))
-            .into(),
+        None => container(
+            text("no crop")
+                .size(11)
+                .color(iced::Color::from_rgb8(128, 128, 128)),
+        )
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .center_x(Length::Fixed(size))
+        .center_y(Length::Fixed(size))
+        .into(),
     };
 
     container(inner)

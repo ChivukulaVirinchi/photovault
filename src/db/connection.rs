@@ -22,6 +22,16 @@ pub struct Database {
     pub conn: Connection,
 }
 
+/// Returns the `.photovault` metadata directory for a drive root.
+pub fn photovault_dir(drive_root: &Path) -> PathBuf {
+    drive_root.join(".photovault")
+}
+
+/// Returns the map tile cache directory for a drive root.
+pub fn tile_cache_dir(drive_root: &Path) -> PathBuf {
+    photovault_dir(drive_root).join("tile_cache")
+}
+
 impl Database {
     /// Open or create database on a drive
     ///
@@ -38,7 +48,7 @@ impl Database {
         }
 
         // Create .photovault directory if it doesn't exist
-        let photovault_dir = drive_root.join(".photovault");
+        let photovault_dir = photovault_dir(&drive_root);
         if !photovault_dir.exists() {
             std::fs::create_dir_all(&photovault_dir)
                 .map_err(DatabaseError::DirectoryCreationError)?;
@@ -131,7 +141,7 @@ impl Database {
     ///
     /// Copies the DB to `<db_path>.backup`. Keeps up to `max_backups` copies.
     pub fn backup(drive_root: &Path, max_backups: usize) -> std::io::Result<PathBuf> {
-        let db_path = drive_root.join(".photovault").join("photovault.db");
+        let db_path = photovault_dir(drive_root).join("photovault.db");
         if !db_path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -139,7 +149,7 @@ impl Database {
             ));
         }
 
-        let backup_dir = drive_root.join(".photovault").join("backups");
+        let backup_dir = photovault_dir(drive_root).join("backups");
         std::fs::create_dir_all(&backup_dir)?;
 
         // Name with timestamp

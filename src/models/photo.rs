@@ -40,7 +40,6 @@ impl ContentCategory {
             _ => Self::Photo,
         }
     }
-
 }
 
 /// Represents a photo in the library

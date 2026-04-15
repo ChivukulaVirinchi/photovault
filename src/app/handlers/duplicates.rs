@@ -37,10 +37,10 @@ pub(crate) fn run_duplicate_detection(app: &mut PhotoVault) -> Task<Message> {
                     .map_err(|e| format!("Failed to sync duplicate groups: {}", e))?;
 
                 // Load groups and wasted space
-                let groups = repo.get_all_groups()
+                let groups = repo
+                    .get_all_groups()
                     .map_err(|e| format!("Failed to load groups: {}", e))?;
-                let wasted = DuplicateDetector::calculate_wasted_space(&db.conn)
-                    .unwrap_or(0);
+                let wasted = DuplicateDetector::calculate_wasted_space(&db.conn).unwrap_or(0);
 
                 // Build overview summaries per group
                 let mut overview = Vec::new();
@@ -74,9 +74,14 @@ pub(crate) fn run_duplicate_detection(app: &mut PhotoVault) -> Task<Message> {
                     overview.push((g.id, recoverable, preview_photo_id));
                 }
 
-                Ok::<(Vec<crate::db::DuplicateGroupRecord>, u64, Vec<(i64, u64, Option<i64>)>), String>((
-                    groups, wasted, overview,
-                ))
+                Ok::<
+                    (
+                        Vec<crate::db::DuplicateGroupRecord>,
+                        u64,
+                        Vec<(i64, u64, Option<i64>)>,
+                    ),
+                    String,
+                >((groups, wasted, overview))
             });
 
             match handle.await {
@@ -91,9 +96,7 @@ pub(crate) fn run_duplicate_detection(app: &mut PhotoVault) -> Task<Message> {
                 }
             }
         },
-        |(groups, wasted, overview)| {
-            Message::DuplicateDetectionComplete(groups, wasted, overview)
-        },
+        |(groups, wasted, overview)| Message::DuplicateDetectionComplete(groups, wasted, overview),
     )
 }
 
@@ -158,8 +161,7 @@ pub(crate) fn set_keep_duplicate(
             let _ = repo.set_keep_photo(group_id, photo_id);
 
             // Reload members
-            app.selected_duplicate_members =
-                repo.get_group_members(group_id).unwrap_or_default();
+            app.selected_duplicate_members = repo.get_group_members(group_id).unwrap_or_default();
         }
     }
     Task::none()
@@ -192,10 +194,7 @@ pub(crate) fn keep_suggested_duplicate(app: &mut PhotoVault, group_id: i64) -> T
     Task::none()
 }
 
-pub(crate) fn trash_non_suggested_duplicates(
-    app: &mut PhotoVault,
-    group_id: i64,
-) -> Task<Message> {
+pub(crate) fn trash_non_suggested_duplicates(app: &mut PhotoVault, group_id: i64) -> Task<Message> {
     // Same as KeepSuggested — soft-delete non-keep photos and remove group
     if let Some(ref drive_path) = app.selected_drive {
         let drive_path = drive_path.clone();

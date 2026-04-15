@@ -20,8 +20,7 @@ pub(crate) fn search_input_changed(app: &mut PhotoVault, input: String) -> Task<
                     return Vec::new();
                 }
                 match Database::open_for_drive(&drive_path) {
-                    Ok(db) => SearchService::get_suggestions(&db.conn, &input)
-                        .unwrap_or_default(),
+                    Ok(db) => SearchService::get_suggestions(&db.conn, &input).unwrap_or_default(),
                     Err(_) => Vec::new(),
                 }
             },
@@ -59,8 +58,7 @@ pub(crate) fn execute_search(app: &mut PhotoVault) -> Task<Message> {
             match Database::open_for_drive(&drive_path) {
                 Ok(db) => {
                     let parsed = crate::search::QueryParser::parse(&query_text);
-                    let rows = SearchService::search(&db.conn, &parsed)
-                        .unwrap_or_default();
+                    let rows = SearchService::search(&db.conn, &parsed).unwrap_or_default();
                     let ids = rows.iter().map(|r| r.photo_id).collect::<Vec<_>>();
                     let groups = SearchService::group_by_date(rows);
                     (groups, ids)
@@ -87,7 +85,10 @@ pub(crate) fn enter_cull_from_search(app: &mut PhotoVault) -> Task<Message> {
     if app.search_result_photo_ids.is_empty() {
         return Task::none();
     }
-    super::handle(app, Message::EnterCullMode(app.search_result_photo_ids.clone()))
+    super::handle(
+        app,
+        Message::EnterCullMode(app.search_result_photo_ids.clone()),
+    )
 }
 
 pub(crate) fn enter_cull_mode(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Message> {
