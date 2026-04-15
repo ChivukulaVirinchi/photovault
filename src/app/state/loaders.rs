@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use iced::Task;
 
-use crate::db::{AlbumRepo, Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
+use crate::db::{AlbumRepo, AlbumSuggestionRepo, Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
 use crate::services::image_utils::apply_exif_orientation;
 use crate::services::map_math;
 use crate::services::{FaceProcessor, TrashService, TrashStats};
@@ -417,5 +417,43 @@ impl PhotoVault {
         }
 
         Task::none()
+    }
+
+    /// Load pending album suggestions from the database.
+    pub(crate) fn load_suggestions(&self) -> Task<Message> {
+        let Some(ref drive_path) = self.selected_drive else {
+            return Task::none();
+        };
+        let drive_path = drive_path.clone();
+
+        Task::perform(
+            async move {
+                match Database::open_for_drive(&drive_path) {
+                    Ok(db) => {
+                        let repo = AlbumSuggestionRepo::new(&db.conn);
+                        let mut suggestions = repo.get_pending().unwrap_or_default();
+
+                        // Resolve cover thumbnail paths
+                        let photo_repo = PhotoRepo::new(&db.conn);
+                        for s in &mut suggestions {
+                            if let Some(cover_id) = s.cover_photo_id {
+                                if let Ok(Some(photo)) = photo_repo.get_by_id(cover_id) {
+                                    s.cover_thumbnail_path = photo
+                                        .thumbnail_path
+                                        .map(|p| drive_path.join(p).to_string_lossy().to_string());
+                                }
+                            }
+                        }
+
+                        suggestions
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load suggestions: {}", e);
+                        Vec::new()
+                    }
+                }
+            },
+            Message::SuggestionsLoaded,
+        )
     }
 }

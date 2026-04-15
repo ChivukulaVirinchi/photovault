@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 
 use iced::Task;
 
-use crate::db::{create_schema, migrations, Database, PhotoRepo};
+use crate::db::{create_schema, migrations, AlbumSuggestionRepo, Database, PhotoRepo};
 use crate::services::{DriveInfo, ScanProgress};
 
 use super::super::messages::{Message, ScanResult};
@@ -108,6 +108,12 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
             }
             app.database = Some(db);
 
+            // Increment seen_count for pending suggestions on drive select
+            if let Some(ref db) = app.database {
+                let sug_repo = AlbumSuggestionRepo::new(&db.conn);
+                let _ = sug_repo.increment_seen_counts();
+            }
+
             super::map::init_tile_cache(app);
             let pin_task = super::map::load_pins(app);
 
@@ -124,6 +130,9 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 Task::none()
             };
 
+            // Load existing suggestions
+            let suggestions_task = app.load_suggestions();
+
             // If library is empty, start scanning
             let next = if app.photo_count == 0 {
                 super::handle(app, Message::StartScan)
@@ -131,7 +140,7 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 // Existing library: auto-sync incremental changes first.
                 super::handle(app, Message::CheckForChanges)
             };
-            return Task::batch(vec![pin_task, memories_task, next]);
+            return Task::batch(vec![pin_task, memories_task, suggestions_task, next]);
         }
         Err(e) => {
             tracing::error!("Failed to open database: {}", e);
@@ -309,6 +318,9 @@ pub(crate) fn scan_finished(app: &mut PhotoVault, result: ScanResult) -> Task<Me
             app.run_face_processing_after_scan = false;
             tasks.push(super::handle(app, Message::ProcessFaces));
         }
+
+        // Trigger suggestion detection after scan completes
+        tasks.push(super::handle(app, Message::RunSuggestionDetection));
 
         if tasks.is_empty() {
             Task::none()

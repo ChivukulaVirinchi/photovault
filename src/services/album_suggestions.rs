@@ -1,0 +1,596 @@
+//! Album suggestion detection service.
+//!
+//! Analyses photo metadata (location, time, faces) to propose trip and event
+//! albums that the user can accept, dismiss, or ignore.
+
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use chrono::{Datelike, NaiveDate};
+use rusqlite::{params, Connection};
+
+use crate::db::album_suggestion_repo::AlbumSuggestionRepo;
+
+/// A detected suggestion before persistence.
+#[derive(Debug, Clone)]
+pub struct DetectedSuggestion {
+    pub kind: String,
+    pub title: String,
+    pub photo_ids: Vec<i64>,
+    pub cover_photo_id: Option<i64>,
+    pub fingerprint: String,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Haversine distance in kilometres between two lat/lng pairs.
+pub fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    let r = 6371.0; // Earth radius km
+    let dlat = (lat2 - lat1).to_radians();
+    let dlng = (lng2 - lng1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlng / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+    r * c
+}
+
+/// Compute a stable fingerprint from a sorted set of photo IDs.
+/// Uses std DefaultHasher for speed (no crypto needed).
+pub fn compute_fingerprint(photo_ids: &[i64]) -> String {
+    let mut sorted = photo_ids.to_vec();
+    sorted.sort_unstable();
+    let mut hasher = DefaultHasher::new();
+    sorted.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Pick the best cover photo from a list of IDs: prefer landscape with faces,
+/// newest first. Falls back to the first photo if nothing matches.
+pub fn pick_cover(conn: &Connection, photo_ids: &[i64]) -> Option<i64> {
+    if photo_ids.is_empty() {
+        return None;
+    }
+
+    // Build a comma-separated list for IN clause
+    let placeholders: Vec<String> = photo_ids.iter().map(|_| "?".to_string()).collect();
+    let in_clause = placeholders.join(",");
+
+    let sql = format!(
+        r#"SELECT p.id FROM photos p
+           LEFT JOIN faces f ON p.id = f.photo_id
+           WHERE p.id IN ({})
+             AND p.is_trashed = FALSE
+           GROUP BY p.id
+           ORDER BY
+             COUNT(f.id) > 0 DESC,
+             p.width > p.height DESC,
+             p.date_taken DESC
+           LIMIT 1"#,
+        in_clause,
+    );
+
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let params: Vec<rusqlite::types::Value> = photo_ids
+        .iter()
+        .map(|id| rusqlite::types::Value::Integer(*id))
+        .collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+        .iter()
+        .map(|v| v as &dyn rusqlite::types::ToSql)
+        .collect();
+    stmt.query_row(&*param_refs, |row| row.get::<_, i64>(0))
+        .ok()
+}
+
+// ---------------------------------------------------------------------------
+// Home city detection
+// ---------------------------------------------------------------------------
+
+/// Determine the user's "home city" — the city with the most distinct photo-weeks.
+/// Returns (city, country, centroid_lat, centroid_lng) or None.
+pub fn detect_home_city(
+    conn: &Connection,
+    override_city: Option<&str>,
+) -> Option<(String, String, f64, f64)> {
+    // If user provided an override, look it up
+    if let Some(city_name) = override_city {
+        if !city_name.trim().is_empty() {
+            let result: Option<(String, String, f64, f64)> = conn
+                .query_row(
+                    r#"SELECT location_city, COALESCE(location_country,''),
+                              AVG(gps_latitude), AVG(gps_longitude)
+                       FROM photos
+                       WHERE location_city = ?1
+                         AND gps_latitude IS NOT NULL
+                         AND is_trashed = FALSE
+                       GROUP BY location_city
+                       LIMIT 1"#,
+                    params![city_name.trim()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .ok();
+            if result.is_some() {
+                return result;
+            }
+        }
+    }
+
+    // Auto-detect: city with most distinct weeks of photos
+    conn.query_row(
+        r#"SELECT location_city, COALESCE(location_country,''),
+                  AVG(gps_latitude), AVG(gps_longitude)
+           FROM photos
+           WHERE location_city IS NOT NULL
+             AND gps_latitude IS NOT NULL
+             AND is_trashed = FALSE
+           GROUP BY location_city
+           ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
+           LIMIT 1"#,
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .ok()
+}
+
+// ---------------------------------------------------------------------------
+// Trip detection
+// ---------------------------------------------------------------------------
+
+/// Intermediate: a city visit span.
+#[allow(dead_code)]
+struct CitySpan {
+    city: String,
+    country: String,
+    start: NaiveDate,
+    end: NaiveDate,
+    photo_ids: Vec<i64>,
+}
+
+/// Detect trip suggestions.
+/// A trip is a contiguous span of >= 2 days in a non-home city with >= 8 photos,
+/// where the city appears in < 10% of total photo-weeks and is >= 50 km from home.
+pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>) -> Vec<DetectedSuggestion> {
+    // Query: all photos with city + date, ordered by city then date
+    let rows: Vec<(i64, String, String, String)> = {
+        let mut stmt = match conn.prepare(
+            r#"SELECT p.id, p.location_city, COALESCE(p.location_country,''), p.date_taken
+               FROM photos p
+               WHERE p.location_city IS NOT NULL
+                 AND p.date_taken IS NOT NULL
+                 AND p.is_trashed = FALSE
+               ORDER BY p.location_city, p.date_taken"#,
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    };
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    // Total distinct weeks across entire library (for rarity gate)
+    let total_weeks: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT strftime('%Y-%W', date_taken)) FROM photos WHERE date_taken IS NOT NULL AND is_trashed = FALSE",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(1)
+        .max(1);
+
+    // Count of distinct weeks per city
+    let city_weeks: HashMap<String, i64> = {
+        let mut stmt = conn
+            .prepare(
+                r#"SELECT location_city, COUNT(DISTINCT strftime('%Y-%W', date_taken))
+                   FROM photos
+                   WHERE location_city IS NOT NULL AND date_taken IS NOT NULL AND is_trashed = FALSE
+                   GROUP BY location_city"#,
+            )
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    };
+
+    // City GPS centroids (for distance check)
+    let city_centroids: HashMap<String, (f64, f64)> = {
+        let mut stmt = conn
+            .prepare(
+                r#"SELECT location_city, AVG(gps_latitude), AVG(gps_longitude)
+                   FROM photos
+                   WHERE location_city IS NOT NULL AND gps_latitude IS NOT NULL AND is_trashed = FALSE
+                   GROUP BY location_city"#,
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, f64>(1)?, row.get::<_, f64>(2)?),
+            ))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    };
+
+    // How many photos are already in user albums, keyed by photo_id
+    let album_photo_set: HashSet<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT photo_id FROM album_photos")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, i64>(0))
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    };
+
+    let home_city = home.as_ref().map(|h| h.0.as_str());
+    let home_coords = home.as_ref().map(|h| (h.2, h.3));
+
+    // Group rows by city and split into contiguous date spans
+    let mut spans: Vec<CitySpan> = Vec::new();
+    let mut current_city = String::new();
+    let mut current_country = String::new();
+    let mut current_dates: Vec<(NaiveDate, i64)> = Vec::new();
+
+    let flush_city = |city: &str,
+                      country: &str,
+                      dates: &[(NaiveDate, i64)],
+                      out: &mut Vec<CitySpan>| {
+        if dates.is_empty() {
+            return;
+        }
+        // Split into contiguous spans (gap > 3 days = new span)
+        let mut span_start = dates[0].0;
+        let mut span_end = dates[0].0;
+        let mut span_ids: Vec<i64> = vec![dates[0].1];
+
+        for &(d, id) in &dates[1..] {
+            if (d - span_end).num_days() > 3 {
+                out.push(CitySpan {
+                    city: city.to_string(),
+                    country: country.to_string(),
+                    start: span_start,
+                    end: span_end,
+                    photo_ids: std::mem::take(&mut span_ids),
+                });
+                span_start = d;
+            }
+            span_end = d;
+            span_ids.push(id);
+        }
+        out.push(CitySpan {
+            city: city.to_string(),
+            country: country.to_string(),
+            start: span_start,
+            end: span_end,
+            photo_ids: span_ids,
+        });
+    };
+
+    for (id, city, country, date_str) in &rows {
+        let date = match NaiveDate::parse_from_str(&date_str[..10], "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        if city != &current_city {
+            flush_city(&current_city, &current_country, &current_dates, &mut spans);
+            current_city = city.clone();
+            current_country = country.clone();
+            current_dates.clear();
+        }
+        current_dates.push((date, *id));
+    }
+    flush_city(&current_city, &current_country, &current_dates, &mut spans);
+
+    // Filter spans through the 5 gates
+    let mut suggestions = Vec::new();
+    for span in spans {
+        let duration_days = (span.end - span.start).num_days() + 1;
+
+        // Gate 1: >= 2 days
+        if duration_days < 2 {
+            continue;
+        }
+        // Gate 2: >= 8 photos
+        if span.photo_ids.len() < 8 {
+            continue;
+        }
+        // Gate 3: city in < 10% of weeks (rarity)
+        let cw = city_weeks.get(&span.city).copied().unwrap_or(0);
+        if cw as f64 / total_weeks as f64 >= 0.10 {
+            continue;
+        }
+        // Gate 4: not the home city and >= 50 km from home
+        if home_city == Some(span.city.as_str()) {
+            continue;
+        }
+        if let Some((hlat, hlng)) = home_coords {
+            if let Some(&(clat, clng)) = city_centroids.get(&span.city) {
+                if haversine_km(hlat, hlng, clat, clng) < 50.0 {
+                    continue;
+                }
+            }
+        }
+        // Gate 5: not > 60% already in albums
+        let in_album = span
+            .photo_ids
+            .iter()
+            .filter(|id| album_photo_set.contains(id))
+            .count();
+        if span.photo_ids.len() > 0 && in_album as f64 / span.photo_ids.len() as f64 > 0.60 {
+            continue;
+        }
+
+        let title = if span.start.year() == span.end.year()
+            && span.start.month() == span.end.month()
+        {
+            format!(
+                "{}, {} - {} {}",
+                span.city,
+                span.start.format("%b %d"),
+                span.end.format("%d"),
+                span.start.format("%Y"),
+            )
+        } else {
+            format!(
+                "{}, {} - {}",
+                span.city,
+                span.start.format("%b %d, %Y"),
+                span.end.format("%b %d, %Y"),
+            )
+        };
+
+        let fp = compute_fingerprint(&span.photo_ids);
+        let cover = pick_cover(conn, &span.photo_ids);
+
+        suggestions.push(DetectedSuggestion {
+            kind: "trip".to_string(),
+            title,
+            photo_ids: span.photo_ids,
+            cover_photo_id: cover,
+            fingerprint: fp,
+        });
+    }
+
+    suggestions
+}
+
+// ---------------------------------------------------------------------------
+// Event detection
+// ---------------------------------------------------------------------------
+
+/// Detect event suggestions via a 4-hour sliding window.
+/// An event is a burst of >= 8 photos separated by <= 4 hours from their
+/// neighbours, with a signal check (faces or single-location).
+pub fn detect_events(
+    conn: &Connection,
+    trip_photo_ids: &HashSet<i64>,
+) -> Vec<DetectedSuggestion> {
+    // Query all photos with date_taken, ordered chronologically
+    let rows: Vec<(i64, String, Option<String>, Option<i64>)> = {
+        let mut stmt = match conn.prepare(
+            r#"SELECT p.id, p.date_taken, p.location_city,
+                      (SELECT f.cluster_id FROM faces f WHERE f.photo_id = p.id AND f.cluster_id IS NOT NULL LIMIT 1)
+               FROM photos p
+               WHERE p.date_taken IS NOT NULL AND p.is_trashed = FALSE
+               ORDER BY p.date_taken"#,
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    };
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    // Photo IDs already in user albums
+    let album_photo_set: HashSet<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT photo_id FROM album_photos")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, i64>(0))
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    };
+
+    // Parse timestamps
+    struct EventPhoto {
+        id: i64,
+        ts: i64, // unix epoch seconds
+        city: Option<String>,
+        cluster_id: Option<i64>,
+    }
+
+    let parsed: Vec<EventPhoto> = rows
+        .into_iter()
+        .filter_map(|(id, dt, city, cluster)| {
+            let ts = chrono::NaiveDateTime::parse_from_str(&dt, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|ndt| ndt.and_utc().timestamp())
+                .or_else(|| {
+                    NaiveDate::parse_from_str(&dt[..10], "%Y-%m-%d")
+                        .ok()
+                        .map(|d| {
+                            d.and_hms_opt(0, 0, 0)
+                                .unwrap()
+                                .and_utc()
+                                .timestamp()
+                        })
+                })?;
+            Some(EventPhoto {
+                id,
+                ts,
+                city,
+                cluster_id: cluster,
+            })
+        })
+        .collect();
+
+    // Split into windows at 4-hour gaps
+    let four_hours = 4 * 3600;
+    let mut windows: Vec<Vec<&EventPhoto>> = Vec::new();
+    let mut current_window: Vec<&EventPhoto> = Vec::new();
+
+    for photo in &parsed {
+        if let Some(last) = current_window.last() {
+            if photo.ts - last.ts > four_hours {
+                if !current_window.is_empty() {
+                    windows.push(std::mem::take(&mut current_window));
+                }
+            }
+        }
+        current_window.push(photo);
+    }
+    if !current_window.is_empty() {
+        windows.push(current_window);
+    }
+
+    let mut suggestions = Vec::new();
+
+    for window in &windows {
+        // Gate 1: >= 8 photos
+        if window.len() < 8 {
+            continue;
+        }
+
+        let ids: Vec<i64> = window.iter().map(|p| p.id).collect();
+
+        // Gate 2: not > 70% in trips
+        let in_trip = ids.iter().filter(|id| trip_photo_ids.contains(id)).count();
+        if ids.len() > 0 && in_trip as f64 / ids.len() as f64 > 0.70 {
+            continue;
+        }
+
+        // Gate 3: signal check — 2+ face clusters OR location spans < 3 days
+        let cluster_ids: HashSet<i64> = window
+            .iter()
+            .filter_map(|p| p.cluster_id)
+            .collect();
+        let distinct_days: HashSet<i64> = window
+            .iter()
+            .map(|p| p.ts / 86400)
+            .collect();
+        let location_days: HashSet<String> = window
+            .iter()
+            .filter_map(|p| p.city.clone())
+            .collect();
+
+        let has_face_signal = cluster_ids.len() >= 2;
+        let has_location_signal = !location_days.is_empty() && distinct_days.len() <= 3;
+
+        if !has_face_signal && !has_location_signal {
+            continue;
+        }
+
+        // Gate 4: not > 60% already in albums
+        let in_album = ids.iter().filter(|id| album_photo_set.contains(id)).count();
+        if ids.len() > 0 && in_album as f64 / ids.len() as f64 > 0.60 {
+            continue;
+        }
+
+        // Title: derive from location or date
+        let primary_city = window
+            .iter()
+            .filter_map(|p| p.city.as_ref())
+            .fold(HashMap::new(), |mut acc, c| {
+                *acc.entry(c.clone()).or_insert(0usize) += 1;
+                acc
+            })
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(c, _)| c);
+
+        let first_ts = window.first().map(|p| p.ts).unwrap_or(0);
+        let date = chrono::DateTime::from_timestamp(first_ts, 0)
+            .map(|dt| dt.format("%b %d, %Y").to_string())
+            .unwrap_or_else(|| "Event".to_string());
+
+        let title = if let Some(city) = primary_city {
+            format!("{} - {}", city, date)
+        } else {
+            format!("Event - {}", date)
+        };
+
+        let fp = compute_fingerprint(&ids);
+        let cover = pick_cover(conn, &ids);
+
+        suggestions.push(DetectedSuggestion {
+            kind: "event".to_string(),
+            title,
+            photo_ids: ids,
+            cover_photo_id: cover,
+            fingerprint: fp,
+        });
+    }
+
+    suggestions
+}
+
+// ---------------------------------------------------------------------------
+// Top-level pipeline
+// ---------------------------------------------------------------------------
+
+/// Run the full suggestion detection pipeline: trips then events.
+/// Newly detected suggestions that don't match existing fingerprints are
+/// persisted to the database.
+pub fn detect_suggestions(
+    conn: &Connection,
+    home_city_override: Option<&str>,
+) -> Vec<DetectedSuggestion> {
+    let repo = AlbumSuggestionRepo::new(conn);
+    let existing_fps: HashSet<String> = repo
+        .get_all_fingerprints()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let home = detect_home_city(conn, home_city_override);
+    let trips = detect_trips(conn, home.as_ref());
+
+    // Collect all trip photo IDs for the event filter gate
+    let trip_photo_ids: HashSet<i64> = trips
+        .iter()
+        .flat_map(|t| t.photo_ids.iter().copied())
+        .collect();
+
+    let events = detect_events(conn, &trip_photo_ids);
+
+    let mut all: Vec<DetectedSuggestion> = Vec::new();
+    all.extend(trips);
+    all.extend(events);
+
+    // Persist only new suggestions (no matching fingerprint)
+    let mut persisted = Vec::new();
+    for s in all {
+        if existing_fps.contains(&s.fingerprint) {
+            continue;
+        }
+        match repo.insert(&s.kind, &s.title, &s.photo_ids, s.cover_photo_id, &s.fingerprint) {
+            Ok(_id) => {
+                tracing::info!("New {} suggestion: {}", s.kind, s.title);
+                persisted.push(s);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to insert suggestion: {}", e);
+            }
+        }
+    }
+
+    // Cleanup old non-pending records (> 180 days)
+    let _ = repo.cleanup_old(180);
+
+    persisted
+}

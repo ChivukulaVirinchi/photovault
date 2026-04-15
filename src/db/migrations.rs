@@ -52,8 +52,38 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 12 {
         migrate_v11_to_v12(conn)?;
     }
+    if current_version < 13 {
+        migrate_v12_to_v13(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v12_to_v13(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS album_suggestions (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            photo_ids_json TEXT NOT NULL,
+            cover_photo_id INTEGER,
+            fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            seen_count INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_album_suggestions_status ON album_suggestions(status);
+        CREATE INDEX IF NOT EXISTS idx_album_suggestions_fingerprint ON album_suggestions(fingerprint);
+
+        INSERT INTO schema_version (version) VALUES (13);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 13 (album suggestions)");
     Ok(())
 }
 

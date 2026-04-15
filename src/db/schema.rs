@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (12);
+INSERT INTO schema_version (version) VALUES (13);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -242,6 +242,24 @@ CREATE TABLE IF NOT EXISTS album_photos (
 );
 
 -- ============================================================
+-- ALBUM SUGGESTIONS
+-- Auto-detected trip/event album proposals
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS album_suggestions (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,                 -- 'trip' | 'event'
+    title TEXT NOT NULL,
+    photo_ids_json TEXT NOT NULL,       -- JSON array of photo IDs
+    cover_photo_id INTEGER,
+    fingerprint TEXT NOT NULL,          -- Hash of sorted photo IDs
+    status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'accepted' | 'dismissed'
+    seen_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL
+);
+
+-- ============================================================
 -- DUPLICATE GROUPS
 -- Groups of identical or near-identical photos
 -- ============================================================
@@ -370,6 +388,10 @@ CREATE INDEX IF NOT EXISTS idx_trash_trashed_at ON trash(trashed_at);
 -- Albums
 CREATE INDEX IF NOT EXISTS idx_album_photos_album ON album_photos(album_id);
 CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
+
+-- Album suggestions
+CREATE INDEX IF NOT EXISTS idx_album_suggestions_status ON album_suggestions(status);
+CREATE INDEX IF NOT EXISTS idx_album_suggestions_fingerprint ON album_suggestions(fingerprint);
 "#;
 
 #[cfg(test)]

@@ -280,5 +280,16 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::SaveAlbumName(id) => albums::save_album_name(app, id),
         Message::SaveMemoryAsAlbum => albums::save_memory_as_album(app),
         Message::BackToAlbums => albums::back_to_albums(app),
+
+        // --- Album Suggestions ---
+        Message::RunSuggestionDetection => albums::run_suggestion_detection(app),
+        Message::SuggestionsDetected(suggestions) => albums::suggestions_detected(app, suggestions),
+        Message::SuggestionsLoaded(suggestions) => albums::suggestions_loaded(app, suggestions),
+        Message::BeginAcceptSuggestion(id) => albums::begin_accept_suggestion(app, id),
+        Message::AcceptSuggestionNameChanged(name) => albums::accept_suggestion_name_changed(app, name),
+        Message::ConfirmAcceptSuggestion(id) => albums::confirm_accept_suggestion(app, id),
+        Message::CancelAcceptSuggestion => albums::cancel_accept_suggestion(app),
+        Message::DismissSuggestion(id) => albums::dismiss_suggestion(app, id),
+        Message::SetHomeCity(city) => settings::set_home_city(app, city),
     }
 }

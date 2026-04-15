@@ -421,6 +421,19 @@ pub struct PhotoVault {
 
     /// Album names for the currently viewed photo (populated in detail view)
     pub(crate) current_photo_albums: Vec<(i64, String)>,
+
+    // --- Album Suggestions ---
+    /// Pending album suggestions (loaded from DB)
+    pub(crate) album_suggestions: Vec<crate::db::AlbumSuggestionRecord>,
+
+    /// Whether suggestion detection is running in the background
+    pub(crate) suggestion_detection_running: bool,
+
+    /// Suggestion ID being accepted (in-progress accept flow)
+    pub(crate) accepting_suggestion_id: Option<i64>,
+
+    /// Editable name for the album being created from a suggestion
+    pub(crate) accepting_suggestion_name: String,
 }
 
 impl PhotoVault {
@@ -585,6 +598,11 @@ impl PhotoVault {
             edit_album_name: String::new(),
             editing_album_id: None,
             current_photo_albums: Vec::new(),
+            // Album Suggestions
+            album_suggestions: Vec::new(),
+            suggestion_detection_running: false,
+            accepting_suggestion_id: None,
+            accepting_suggestion_name: String::new(),
         };
 
         // Detect drives on startup

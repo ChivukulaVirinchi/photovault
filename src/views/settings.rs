@@ -46,6 +46,9 @@ impl SettingsView {
             Self::section_header(config.theme, "Memories"),
             Self::memories_setting(config.theme, config.memories_enabled),
             Space::with_height(24),
+            Self::section_header(config.theme, "Album Suggestions"),
+            Self::home_city_setting(config.theme, config.home_city_override.as_deref()),
+            Space::with_height(24),
             Self::section_header(config.theme, "Map"),
             Self::map_cache_setting(config.theme, map_cache_size_mb, map_cache_limit_mb,),
             Space::with_height(32),
@@ -195,6 +198,20 @@ impl SettingsView {
         ]
         .spacing(0)
         .into()
+    }
+
+    fn home_city_setting(theme: AppTheme, current: Option<&str>) -> Element<'static, Message> {
+        let value = current.unwrap_or("").to_string();
+        Self::setting_row(
+            theme,
+            "Home City",
+            "Override auto-detected home city for trip suggestions (leave blank for auto)",
+            text_input("Auto-detect", &value)
+                .on_input(|s| Message::SetHomeCity(s))
+                .size(13)
+                .width(Length::Fixed(200.0))
+                .into(),
+        )
     }
 
     fn face_confidence_setting(theme: AppTheme, current: f32) -> Element<'static, Message> {

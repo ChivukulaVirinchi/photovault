@@ -10,7 +10,7 @@ use iced::{Alignment, ContentFit, Element, Length, Padding};
 use crate::app::Message;
 use crate::components::photo_grid::photo_grid_simple;
 use crate::config::AppTheme;
-use crate::db::AlbumRecord;
+use crate::db::{AlbumRecord, AlbumSuggestionRecord};
 use crate::models::Photo;
 use crate::theme::colors;
 
@@ -23,6 +23,9 @@ pub fn albums_view(
     _drive_path: Option<&std::path::Path>,
     creating: bool,
     create_name: &str,
+    suggestions: &[AlbumSuggestionRecord],
+    accepting_id: Option<i64>,
+    accepting_name: &str,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
@@ -122,10 +125,41 @@ pub fn albums_view(
         Space::with_height(0).into()
     };
 
+    // Suggestion section (shown when there are pending suggestions)
+    let suggestions_section: Element<'static, Message> = if !suggestions.is_empty() {
+        let mut sug_cards: Vec<Element<'static, Message>> = Vec::new();
+        for sug in suggestions {
+            sug_cards.push(suggestion_card(sug, accepting_id, accepting_name, p));
+        }
+        let sug_row = iced::widget::Row::with_children(sug_cards).spacing(12);
+        let section = column![
+            text("Suggested Albums").size(16).color(text_primary),
+            Space::with_height(4),
+            text("Based on your trips and events")
+                .size(12)
+                .color(text_tertiary),
+            Space::with_height(8),
+            scrollable(sug_row).direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::new().width(6),
+            )),
+        ]
+        .spacing(0)
+        .padding(Padding {
+            top: 0.0,
+            right: 32.0,
+            bottom: 16.0,
+            left: 32.0,
+        });
+        section.into()
+    } else {
+        Space::with_height(0).into()
+    };
+
     if albums.is_empty() {
         let body = column![
             header,
             create_input,
+            suggestions_section,
             container(
                 column![
                     text("No albums yet.").size(16).color(text_secondary),
@@ -182,7 +216,7 @@ pub fn albums_view(
             left: 32.0,
         });
 
-    container(scrollable(column![header, create_input, grid]))
+    container(scrollable(column![header, create_input, suggestions_section, grid]))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced::Theme| container::Style {
@@ -748,5 +782,319 @@ fn picker_album_row(
             ..Default::default()
         })
         .on_press(Message::AlbumPickerSelect(album_id))
+        .into()
+}
+
+// ---------------------------------------------------------------------------
+// Suggestion card (used in albums view)
+// ---------------------------------------------------------------------------
+
+fn suggestion_card(
+    sug: &AlbumSuggestionRecord,
+    accepting_id: Option<i64>,
+    accepting_name: &str,
+    p: &'static colors::Palette,
+) -> Element<'static, Message> {
+    let card_w: f32 = 220.0;
+    let thumb_h: f32 = 140.0;
+    let sug_id = sug.id;
+    let is_accepting = accepting_id == Some(sug_id);
+
+    let cover: Element<'static, Message> = match &sug.cover_thumbnail_path {
+        Some(path) => iced::widget::image(path.clone())
+            .content_fit(ContentFit::Cover)
+            .width(Length::Fixed(card_w))
+            .height(Length::Fixed(thumb_h))
+            .into(),
+        None => {
+            let bg = p.bg_elevated;
+            let tc = p.text_tertiary;
+            container(text("No cover").size(11).color(tc))
+                .width(Length::Fixed(card_w))
+                .height(Length::Fixed(thumb_h))
+                .center_x(Length::Fixed(card_w))
+                .center_y(Length::Fixed(thumb_h))
+                .style(move |_t: &iced::Theme| container::Style {
+                    background: Some(bg.into()),
+                    ..Default::default()
+                })
+                .into()
+        }
+    };
+
+    let kind_badge = text(sug.kind.clone()).size(9).color(p.text_tertiary);
+    let title = text(sug.title.clone()).size(13).color(p.text_primary);
+    let count = text(format!("{} photos", sug.photo_count()))
+        .size(10)
+        .color(p.text_tertiary);
+
+    // Action buttons or accept form
+    let actions: Element<'static, Message> = if is_accepting {
+        suggestion_accept_form(sug_id, accepting_name, p)
+    } else {
+        let accent = p.accent_primary;
+        let bg_hover_c = p.bg_hover;
+        let bg_el = p.bg_elevated;
+        let tc_sec = p.text_secondary;
+        let border = p.border_subtle;
+
+        let accept_btn = button(text("Accept").size(11).color(accent))
+            .padding(Padding::from([4, 10]))
+            .style(move |_t: &iced::Theme, s| button::Style {
+                background: match s {
+                    button::Status::Hovered => Some(bg_hover_c.into()),
+                    _ => Some(bg_el.into()),
+                },
+                border: iced::Border {
+                    color: border,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .on_press(Message::BeginAcceptSuggestion(sug_id));
+
+        let dismiss_btn = button(text("Dismiss").size(11).color(tc_sec))
+            .padding(Padding::from([4, 10]))
+            .style(move |_t: &iced::Theme, s| button::Style {
+                background: match s {
+                    button::Status::Hovered => Some(bg_hover_c.into()),
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::DismissSuggestion(sug_id));
+
+        row![accept_btn, Space::with_width(4), dismiss_btn]
+            .align_y(Alignment::Center)
+            .into()
+    };
+
+    let caption = column![kind_badge, title, count, Space::with_height(4), actions]
+        .spacing(2)
+        .padding(Padding::from([6, 8]));
+
+    let inner = column![cover, caption].spacing(0);
+
+    let border_color = p.border_subtle;
+    let bg = p.bg_elevated;
+
+    // Use container (NOT button) so Accept/Dismiss buttons inside work
+    container(inner)
+        .width(Length::Fixed(card_w))
+        .style(move |_t: &iced::Theme| container::Style {
+            background: Some(bg.into()),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+fn suggestion_accept_form(
+    sug_id: i64,
+    name: &str,
+    p: &'static colors::Palette,
+) -> Element<'static, Message> {
+    let name_owned = name.to_owned();
+    let accent = p.accent_primary;
+    let tc_sec = p.text_secondary;
+    let bg_hover_c = p.bg_hover;
+
+    let input = text_input("Album name...", &name_owned)
+        .on_input(|s| Message::AcceptSuggestionNameChanged(s))
+        .on_submit(Message::ConfirmAcceptSuggestion(sug_id))
+        .size(12)
+        .width(Length::Fill);
+
+    let confirm_btn = button(text("Create").size(11).color(iced::Color::WHITE))
+        .padding(Padding::from([4, 8]))
+        .style(move |_t: &iced::Theme, s| button::Style {
+            background: Some(match s {
+                button::Status::Hovered => iced::Color {
+                    a: 0.9,
+                    ..accent
+                }
+                .into(),
+                _ => accent.into(),
+            }),
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::ConfirmAcceptSuggestion(sug_id));
+
+    let cancel_btn = button(text("Cancel").size(11).color(tc_sec))
+        .padding(Padding::from([4, 8]))
+        .style(move |_t: &iced::Theme, s| button::Style {
+            background: match s {
+                button::Status::Hovered => Some(bg_hover_c.into()),
+                _ => None,
+            },
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::CancelAcceptSuggestion);
+
+    column![
+        input,
+        Space::with_height(4),
+        row![confirm_btn, Space::with_width(4), cancel_btn].align_y(Alignment::Center),
+    ]
+    .spacing(0)
+    .into()
+}
+
+// ---------------------------------------------------------------------------
+// Timeline suggestions banner
+// ---------------------------------------------------------------------------
+
+/// Horizontal strip of fresh suggestions (seen_count < 3) for the Timeline.
+/// Returns None when empty.
+pub fn suggestions_banner(
+    suggestions: &[AlbumSuggestionRecord],
+    theme: AppTheme,
+) -> Option<Element<'static, Message>> {
+    let fresh: Vec<&AlbumSuggestionRecord> = suggestions
+        .iter()
+        .filter(|s| s.seen_count < 3)
+        .take(5)
+        .collect();
+
+    if fresh.is_empty() {
+        return None;
+    }
+
+    let p = colors::palette(theme);
+    let mut strip = row![].spacing(12);
+
+    for sug in fresh {
+        strip = strip.push(suggestion_banner_card(sug, p));
+    }
+
+    let banner = container(
+        scrollable(strip).direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new().width(6),
+        )),
+    )
+    .padding(Padding {
+        top: 8.0,
+        right: 24.0,
+        bottom: 8.0,
+        left: 24.0,
+    });
+
+    Some(banner.into())
+}
+
+/// Compact banner card for the timeline. Uses container (NOT button) as
+/// wrapper so Accept/Dismiss buttons inside are interactive.
+fn suggestion_banner_card(
+    sug: &AlbumSuggestionRecord,
+    p: &'static colors::Palette,
+) -> Element<'static, Message> {
+    let card_w: f32 = 280.0;
+    let thumb_h: f32 = 100.0;
+    let sug_id = sug.id;
+
+    let cover: Element<'static, Message> = match &sug.cover_thumbnail_path {
+        Some(path) => iced::widget::image(path.clone())
+            .content_fit(ContentFit::Cover)
+            .width(Length::Fixed(card_w))
+            .height(Length::Fixed(thumb_h))
+            .into(),
+        None => {
+            let bg = p.bg_elevated;
+            container(Space::new(Length::Fixed(card_w), Length::Fixed(thumb_h)))
+                .style(move |_t: &iced::Theme| container::Style {
+                    background: Some(bg.into()),
+                    ..Default::default()
+                })
+                .into()
+        }
+    };
+
+    let accent = p.accent_primary;
+    let tc_sec = p.text_secondary;
+    let bg_hover_c = p.bg_hover;
+    let bg_el = p.bg_elevated;
+    let border = p.border_subtle;
+
+    let accept_btn = button(text("Accept").size(10).color(accent))
+        .padding(Padding::from([3, 8]))
+        .style(move |_t: &iced::Theme, s| button::Style {
+            background: match s {
+                button::Status::Hovered => Some(bg_hover_c.into()),
+                _ => Some(bg_el.into()),
+            },
+            border: iced::Border {
+                color: border,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .on_press(Message::BeginAcceptSuggestion(sug_id));
+
+    let dismiss_btn = button(text("Dismiss").size(10).color(tc_sec))
+        .padding(Padding::from([3, 8]))
+        .style(move |_t: &iced::Theme, s| button::Style {
+            background: match s {
+                button::Status::Hovered => Some(bg_hover_c.into()),
+                _ => None,
+            },
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::DismissSuggestion(sug_id));
+
+    let caption = row![
+        column![
+            text(sug.title.clone()).size(12).color(p.text_primary),
+            text(format!("{} photos", sug.photo_count()))
+                .size(10)
+                .color(p.text_tertiary),
+        ]
+        .spacing(1),
+        Space::with_width(Length::Fill),
+        accept_btn,
+        Space::with_width(4),
+        dismiss_btn,
+    ]
+    .align_y(Alignment::Center)
+    .padding(Padding::from([6, 8]));
+
+    let inner = column![cover, caption].spacing(0);
+
+    let border_color = p.border_subtle;
+    let bg = p.bg_elevated;
+
+    // Use container (NOT button) as wrapper so buttons inside work
+    container(inner)
+        .width(Length::Fixed(card_w))
+        .style(move |_t: &iced::Theme| container::Style {
+            background: Some(bg.into()),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..Default::default()
+        })
         .into()
 }

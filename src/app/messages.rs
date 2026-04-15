@@ -412,6 +412,26 @@ pub enum Message {
     SaveMemoryAsAlbum,
     /// Return from album detail to albums grid
     BackToAlbums,
+
+    // --- Album Suggestions ---
+    /// Trigger background detection of trip/event suggestions
+    RunSuggestionDetection,
+    /// Detection pipeline finished (newly detected suggestions returned)
+    SuggestionsDetected(Vec<crate::db::AlbumSuggestionRecord>),
+    /// Pending suggestions loaded from DB
+    SuggestionsLoaded(Vec<crate::db::AlbumSuggestionRecord>),
+    /// Begin the accept flow: show inline name editor
+    BeginAcceptSuggestion(i64),
+    /// Name field changed during accept flow
+    AcceptSuggestionNameChanged(String),
+    /// Confirm: create album from suggestion + mark accepted
+    ConfirmAcceptSuggestion(i64),
+    /// Cancel accept flow without creating album
+    CancelAcceptSuggestion,
+    /// Dismiss suggestion permanently (fingerprint prevents re-detection)
+    DismissSuggestion(i64),
+    /// User set or cleared the home city override in settings
+    SetHomeCity(String),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

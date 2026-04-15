@@ -129,7 +129,16 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Welcome => WelcomeView::view(&app.drives, app.config.theme),
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
-            let banner = crate::views::memories::memories_banner(&app.memories, app.config.theme);
+            let mem_banner = crate::views::memories::memories_banner(&app.memories, app.config.theme);
+            let sug_banner =
+                crate::views::albums::suggestions_banner(&app.album_suggestions, app.config.theme);
+            // Combine: show suggestions banner first, then memories banner
+            let banner: Option<Element<'_, Message>> = match (sug_banner, mem_banner) {
+                (Some(s), Some(m)) => Some(column![s, m].into()),
+                (Some(s), None) => Some(s),
+                (None, Some(m)) => Some(m),
+                (None, None) => None,
+            };
             if app.photos.is_empty() {
                 TimelineView::view(app.config.theme)
             } else {
@@ -577,6 +586,9 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.selected_drive.as_deref(),
             app.album_picker_creating,
             &app.album_picker_new_name,
+            &app.album_suggestions,
+            app.accepting_suggestion_id,
+            &app.accepting_suggestion_name,
             app.config.theme,
         ),
         View::AlbumDetail => {
@@ -601,6 +613,9 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.selected_drive.as_deref(),
                         app.album_picker_creating,
                         &app.album_picker_new_name,
+                        &app.album_suggestions,
+                        app.accepting_suggestion_id,
+                        &app.accepting_suggestion_name,
                         app.config.theme,
                     )
                 }
@@ -610,6 +625,9 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.selected_drive.as_deref(),
                     app.album_picker_creating,
                     &app.album_picker_new_name,
+                    &app.album_suggestions,
+                    app.accepting_suggestion_id,
+                    &app.accepting_suggestion_name,
                     app.config.theme,
                 )
             }

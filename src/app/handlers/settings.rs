@@ -467,6 +467,15 @@ pub(crate) fn thumbnails_regenerated(app: &mut PhotoVault, cleared: usize) -> Ta
     Task::batch(tasks)
 }
 
+pub(crate) fn set_home_city(app: &mut PhotoVault, city: String) -> Task<Message> {
+    let city = city.trim().to_string();
+    app.config.home_city_override = if city.is_empty() { None } else { Some(city) };
+    if let Err(e) = app.config.save() {
+        tracing::warn!("Failed to save config: {}", e);
+    }
+    Task::none()
+}
+
 pub(crate) fn no_op(_app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }

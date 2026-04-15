@@ -4,6 +4,7 @@
 //! making the index fully portable.
 
 pub mod album_repo;
+pub mod album_suggestion_repo;
 pub mod burst_repo;
 pub mod connection;
 pub mod document_repo;
@@ -17,6 +18,7 @@ pub mod schema;
 pub mod trash_repo;
 
 pub use album_repo::{AlbumRecord, AlbumRepo};
+pub use album_suggestion_repo::{AlbumSuggestionRecord, AlbumSuggestionRepo};
 pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
 pub use connection::{tile_cache_dir, Database};
 pub use document_repo::DocumentRepo;

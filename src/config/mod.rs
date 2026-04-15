@@ -35,6 +35,11 @@ pub struct AppConfig {
     /// Whether the Memories feature (N years ago today, seasonal recaps) is on.
     #[serde(default = "default_memories_enabled")]
     pub memories_enabled: bool,
+
+    /// Optional user-specified home city for album suggestions.
+    /// When set, the suggestion engine skips auto-detection of the home city.
+    #[serde(default)]
+    pub home_city_override: Option<String>,
 }
 
 fn default_weight_cooccurrence() -> f32 {
@@ -72,6 +77,7 @@ impl Default for AppConfig {
             weight_cooccurrence: default_weight_cooccurrence(),
             weight_temporal: default_weight_temporal(),
             memories_enabled: default_memories_enabled(),
+            home_city_override: None,
         }
     }
 }

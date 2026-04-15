@@ -1,5 +1,6 @@
 //! Application services
 
+pub mod album_suggestions;
 pub mod burst_detector;
 pub mod document_detector;
 pub mod drive_detector;
