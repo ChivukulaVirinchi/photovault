@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (12);
+INSERT INTO schema_version (version) VALUES (11);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -216,32 +216,6 @@ CREATE TABLE IF NOT EXISTS memory_blocks (
 );
 
 -- ============================================================
--- ALBUMS
--- User-created photo collections
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS albums (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    cover_photo_id INTEGER,
-    cover_auto_picked BOOLEAN DEFAULT TRUE,
-    photo_count INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS album_photos (
-    id INTEGER PRIMARY KEY,
-    album_id INTEGER NOT NULL,
-    photo_id INTEGER NOT NULL,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
-    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
-    UNIQUE(album_id, photo_id)
-);
-
--- ============================================================
 -- DUPLICATE GROUPS
 -- Groups of identical or near-identical photos
 -- ============================================================
@@ -360,9 +334,6 @@ CREATE INDEX IF NOT EXISTS idx_review_queue_cluster ON face_review_queue(candida
 CREATE INDEX IF NOT EXISTS idx_review_queue_unresolved ON face_review_queue(resolved_at)
     WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_memory_blocks_kind ON memory_blocks(kind);
-CREATE INDEX IF NOT EXISTS idx_album_photos_album ON album_photos(album_id);
-CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
-
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_dup_members_photo ON duplicate_group_members(photo_id);

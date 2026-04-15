@@ -276,24 +276,7 @@ pub fn memory_detail_view(
         .on_press(Message::MemorySlideshowTogglePause)
         .padding(Padding::from([10, 18]));
 
-    let save_album_btn = button(text("Save as Album").size(12).color(p.text_primary))
-        .padding([8, 12])
-        .style(
-            move |_theme: &iced::Theme, status: button::Status| button::Style {
-                background: Some(match status {
-                    button::Status::Hovered => p.accent_hover.into(),
-                    _ => p.accent_muted.into(),
-                }),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        )
-        .on_press(Message::SaveMemoryAsAlbum);
-
-    let next_btn = button(text("▶").size(20).color(p.text_primary))
+    let next_btn = button(text("\u{25B6}").size(20).color(p.text_primary))
         .on_press(Message::MemorySlideshowNext)
         .padding(Padding::from([10, 16]));
 
@@ -302,8 +285,6 @@ pub fn memory_detail_view(
             prev_btn,
             Space::with_width(12),
             pause_btn,
-            Space::with_width(12),
-            save_album_btn,
             Space::with_width(12),
             next_btn
         ]

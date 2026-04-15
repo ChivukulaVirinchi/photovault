@@ -62,7 +62,6 @@ impl Sidebar {
             Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
             Self::nav_button("Map", View::Map, current_view, app_theme),
             Self::nav_button("Memories", View::Memories, current_view, app_theme),
-            Self::nav_button("Albums", View::Albums, current_view, app_theme),
             Self::nav_button("Search", View::Search, current_view, app_theme),
             Space::with_height(12),
             Self::group_header("People", app_theme),
@@ -135,8 +134,7 @@ impl Sidebar {
             || (matches!(target, View::People) && matches!(current, View::ClusterDetail))
             || (matches!(target, View::Duplicates) && matches!(current, View::DuplicateDetail))
             || (matches!(target, View::Bursts) && matches!(current, View::BurstDetail))
-            || (matches!(target, View::Search) && matches!(current, View::Cull))
-            || (matches!(target, View::Albums) && matches!(current, View::AlbumDetail));
+            || (matches!(target, View::Search) && matches!(current, View::Cull));
 
         let label_color = if is_active {
             p.text_primary

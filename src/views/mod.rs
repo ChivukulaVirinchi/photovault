@@ -1,6 +1,5 @@
 //! Application views
 
-pub mod albums;
 pub mod bursts;
 pub mod cull;
 pub mod documents;

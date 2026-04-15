@@ -31,7 +31,6 @@ impl PhotoDetailView {
         // === Top bar: labeled tool buttons ===
         let rotate_btn = Self::tool_btn("Rotate", Message::RotatePhoto, p);
         let info_btn = Self::tool_btn("Info", Message::ToggleMetadataPanel, p);
-        let album_btn = Self::tool_btn("Album", Message::OpenAlbumPicker(vec![photo_id]), p);
         let trash_btn = {
             let danger = p.semantic_danger;
             button(text("Delete").size(11).color(danger))
@@ -58,8 +57,6 @@ impl PhotoDetailView {
                 rotate_btn,
                 Space::with_width(4),
                 info_btn,
-                Space::with_width(4),
-                album_btn,
                 Space::with_width(Length::Fill),
                 trash_btn,
                 Space::with_width(8),
@@ -306,23 +303,6 @@ impl PhotoDetailView {
                 iced::widget::Column::with_children(people_col)
                     .spacing(2)
                     .into(),
-            );
-        }
-
-        if !app.current_photo_albums.is_empty() {
-            let album_names = app
-                .current_photo_albums
-                .iter()
-                .map(|(_, name)| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            date_loc_items.push(
-                column![
-                    text("ALBUMS").size(9).color(label_color),
-                    text(album_names).size(12).color(value_color),
-                ]
-                .spacing(1)
-                .into(),
             );
         }
 

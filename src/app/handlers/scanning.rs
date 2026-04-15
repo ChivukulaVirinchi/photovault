@@ -54,9 +54,6 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
         // Cards already in app.memories from startup/tick; just switch view.
         app.current_view = view;
         return Task::none();
-    } else if view == View::Albums {
-        app.current_view = view;
-        return app.load_albums();
     } else {
         Task::none()
     };

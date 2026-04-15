@@ -6,7 +6,6 @@ use iced::{Element, Length};
 use crate::components::{ScanProgressView, Sidebar};
 use crate::services::ScanProgress;
 use crate::theme::colors;
-use crate::views::albums;
 use crate::views::{
     BurstsView, CullView, DocumentsView, DuplicatesView, FaceReviewView, PeopleView,
     PhotoDetailView, SearchView, SettingsView, TimelineView, TrashView, WelcomeView,
@@ -163,27 +162,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         .on_press(Message::ClearTimelinePhotoSelection);
 
                     let delete_bg = p.semantic_danger;
-                    let accent_hover = p.accent_hover;
-                    let accent_muted = p.accent_muted;
-                    let album_btn = button(text("Add to Album").size(12).color(p.text_primary))
-                        .padding([6, 12])
-                        .style(move |_theme: &iced::Theme, status| button::Style {
-                            background: Some(match status {
-                                button::Status::Hovered => accent_hover.into(),
-                                _ => accent_muted.into(),
-                            }),
-                            border: iced::Border {
-                                radius: 6.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        })
-                        .on_press(Message::OpenAlbumPicker(
-                            app.selected_timeline_photo_ids
-                                .iter()
-                                .copied()
-                                .collect::<Vec<_>>(),
-                        ));
 
                     let delete_btn = button(text("Delete").size(12).color(iced::Color::WHITE))
                         .padding([6, 12])
@@ -221,8 +199,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                                 .size(12)
                                 .color(p.text_secondary),
                             iced::widget::Space::with_width(Length::Fill),
-                            album_btn,
-                            iced::widget::Space::with_width(8),
                             delete_btn,
                         ]
                         .align_y(iced::Alignment::Center)
@@ -315,48 +291,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 None => crate::views::memories::memories_view(&app.memories, app.config.theme),
             }
         }
-        View::Albums => albums::albums_view(
-            &app.albums,
-            app.selected_drive.as_deref(),
-            app.album_picker_creating,
-            &app.album_picker_new_name,
-            app.config.theme,
-        ),
-        View::AlbumDetail => {
-            if let Some(album_id) = app.selected_album_id {
-                let album = app.albums.iter().find(|a| a.id == album_id);
-                if let Some(album) = album {
-                    let available_width = (app.window_width - 200.0 - 32.0).max(168.0);
-                    let columns = (available_width / 168.0).floor().max(2.0) as usize;
-                    albums::album_detail_view(
-                        album,
-                        &app.album_photos,
-                        columns,
-                        app.editing_album_id == Some(album_id),
-                        &app.edit_album_name,
-                        &app.selected_timeline_photo_ids,
-                        app.hovered_timeline_photo_id,
-                        app.config.theme,
-                    )
-                } else {
-                    albums::albums_view(
-                        &app.albums,
-                        app.selected_drive.as_deref(),
-                        app.album_picker_creating,
-                        &app.album_picker_new_name,
-                        app.config.theme,
-                    )
-                }
-            } else {
-                albums::albums_view(
-                    &app.albums,
-                    app.selected_drive.as_deref(),
-                    app.album_picker_creating,
-                    &app.album_picker_new_name,
-                    app.config.theme,
-                )
-            }
-        }
         View::Search => SearchView::view(
             &app.search_query,
             &app.search_suggestions,
@@ -406,27 +340,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     .on_press(Message::ClearTimelinePhotoSelection);
 
                 let delete_bg = p.semantic_danger;
-                let accent_hover = p.accent_hover;
-                let accent_muted = p.accent_muted;
-                let album_btn = button(text("Add to Album").size(12).color(p.text_primary))
-                    .padding([6, 12])
-                    .style(move |_theme: &iced::Theme, status| button::Style {
-                        background: Some(match status {
-                            button::Status::Hovered => accent_hover.into(),
-                            _ => accent_muted.into(),
-                        }),
-                        border: iced::Border {
-                            radius: 6.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
-                    .on_press(Message::OpenAlbumPicker(
-                        app.selected_timeline_photo_ids
-                            .iter()
-                            .copied()
-                            .collect::<Vec<_>>(),
-                    ));
 
                 let delete_btn = button(text("Delete").size(12).color(iced::Color::WHITE))
                     .padding([6, 12])
@@ -464,8 +377,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                             .size(12)
                             .color(p.text_secondary),
                         iced::widget::Space::with_width(Length::Fill),
-                        album_btn,
-                        iced::widget::Space::with_width(8),
                         delete_btn,
                     ]
                     .align_y(iced::Alignment::Center)
@@ -600,19 +511,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             }
         }
         View::PhotoDetail => unreachable!(), // Handled above
-    };
-
-    let content = if app.album_picker_open {
-        let overlay = albums::album_picker_overlay(
-            &app.albums,
-            app.album_picker_target_ids.len(),
-            app.album_picker_creating,
-            &app.album_picker_new_name,
-            app.config.theme,
-        );
-        iced::widget::stack![content, overlay].into()
-    } else {
-        content
     };
 
     let main_row = row![sidebar, content,];
