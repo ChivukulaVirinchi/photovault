@@ -37,14 +37,21 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 let has_prev = nav_idx > 0;
                 let has_next = nav_idx + 1 < nav.len();
                 if app.selected_drive.is_some() {
-                    // Only render pre-decoded oriented image to avoid orientation flicker.
+                    // Build GPU handle from the pre-decoded, orientation-corrected,
+                    // resolution-capped image stored in app state.
                     let handle = if let Some(ref img) = app.current_display_image {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = (rgba.width(), rgba.height());
+                        let rgba = img.as_rgba8().map_or_else(
+                            || {
+                                let converted = img.to_rgba8();
+                                let (w, h) = (converted.width(), converted.height());
+                                (converted.into_raw(), w, h)
+                            },
+                            |rgba| (rgba.as_raw().clone(), rgba.width(), rgba.height()),
+                        );
                         Some(iced::widget::image::Handle::from_rgba(
-                            w,
-                            h,
-                            rgba.into_raw(),
+                            rgba.1,
+                            rgba.2,
+                            rgba.0,
                         ))
                     } else {
                         None
@@ -114,7 +121,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
             let banner = crate::views::memories::memories_banner(&app.memories, app.config.theme);
-            let body = if app.photos.is_empty() {
+            if app.photos.is_empty() {
                 TimelineView::view(app.config.theme)
             } else {
                 // Calculate responsive column count:
@@ -127,6 +134,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     &app.selected_timeline_photo_ids,
                     app.hovered_timeline_photo_id,
                     app.hovered_timeline_day_key.as_deref(),
+                    banner,
                     app.config.theme,
                 );
 
@@ -210,10 +218,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
                     column![top_bar, timeline].into()
                 }
-            };
-            match banner {
-                Some(b) => column![b, body].into(),
-                None => body,
             }
         }
         View::Map => crate::views::map::map_view(app),
@@ -536,9 +540,24 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
         if app.face_processing_active {
             if let Some(ref prog) = app.face_processing_progress {
+                let eta = if prog.processed > 0 && prog.total > 0 && prog.elapsed_secs > 0.5 {
+                    let frac = prog.processed as f64 / prog.total as f64;
+                    if frac < 1.0 {
+                        let rem = prog.elapsed_secs / frac * (1.0 - frac);
+                        if rem > 60.0 {
+                            format!(" ~{}m", (rem / 60.0).ceil() as u32)
+                        } else {
+                            format!(" ~{}s", rem.ceil() as u32)
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
                 status_parts.push(format!(
-                    "Faces: {}/{} photos ({} found)",
-                    prog.processed, prog.total, prog.faces_found
+                    "Faces: {}/{} ({} found){}",
+                    prog.processed, prog.total, prog.faces_found, eta
                 ));
             } else {
                 status_parts.push("Faces: initializing...".to_string());

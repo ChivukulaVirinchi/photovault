@@ -27,13 +27,16 @@ pub struct DateGroup {
 pub struct TimelineView;
 
 impl TimelineView {
-    /// Render the timeline view with photos
+    /// Render the timeline view with photos.
+    /// An optional `banner` element (e.g. memories carousel) is placed at the
+    /// top of the scrollable area so it scrolls with the photo content.
     pub fn view_with_photos(
         photos: &[Photo],
         columns: usize,
         selected_photo_ids: &HashSet<i64>,
         hovered_photo_id: Option<i64>,
         hovered_day_key: Option<&str>,
+        banner: Option<Element<'static, Message>>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         if photos.is_empty() {
@@ -46,6 +49,11 @@ impl TimelineView {
         // Build the timeline content
         let mut timeline_items: Vec<Element<'static, Message>> = Vec::new();
 
+        // Banner scrolls with the rest of the content
+        if let Some(b) = banner {
+            timeline_items.push(b);
+        }
+
         for group in groups {
             let selected_count_for_day = group
                 .photos
@@ -57,7 +65,6 @@ impl TimelineView {
             timeline_items.push(day_header(
                 &group.day_key,
                 &group.display_date,
-                group.location.as_deref(),
                 group.photos.len(),
                 selected_count_for_day,
                 hovered_day_key == Some(group.day_key.as_str()),

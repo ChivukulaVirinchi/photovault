@@ -1,7 +1,7 @@
 //! Full-screen map view.
 
 use iced::widget::{button, column, container, row, text, Space};
-use iced::{Alignment, Element, Length, Padding, Size};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{MapPopover, Message, PhotoVault};
 use crate::components::map_widget::{map_widget, InteractionMode, MapWidgetConfig};
@@ -28,7 +28,8 @@ pub fn map_view(app: &PhotoVault) -> Element<'static, Message> {
         center: app.map_center,
         zoom: app.map_zoom,
         pins: &app.map_pins_cache,
-        viewport_size: Size::new(viewport_w, viewport_h),
+        width: viewport_w,
+        height: viewport_h,
         interaction: InteractionMode::Main,
         show_attribution: true,
         theme: app.config.theme,
@@ -103,8 +104,9 @@ pub fn map_view(app: &PhotoVault) -> Element<'static, Message> {
     }
 
     container(column![header, body])
-        .width(Length::Fill)
+        .width(Length::Fixed(viewport_w))
         .height(Length::Fill)
+        .clip(true)
         .into()
 }
 

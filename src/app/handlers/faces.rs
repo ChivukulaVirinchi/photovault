@@ -159,6 +159,9 @@ pub(crate) fn face_clusters_loaded(
 
 pub(crate) fn select_cluster(app: &mut PhotoVault, cluster_id: i64) -> Task<Message> {
     app.selected_cluster_id = Some(cluster_id);
+    if app.current_view != View::ClusterDetail {
+        app.previous_view = Some(app.current_view.clone());
+    }
     app.current_view = View::ClusterDetail;
 
     // Load photos for this cluster directly from DB to avoid in-memory
@@ -312,9 +315,23 @@ pub(crate) fn merge_selected_clusters(app: &mut PhotoVault) -> Task<Message> {
         return Task::none();
     }
 
-    // Merge all selected into the first selected (target)
-    let target_id = app.merge_selected_clusters[0];
-    let source_ids: Vec<i64> = app.merge_selected_clusters[1..].to_vec();
+    // Prefer a named cluster as the merge target so the name survives.
+    let named_target = app
+        .merge_selected_clusters
+        .iter()
+        .find(|&&id| {
+            app.face_clusters
+                .iter()
+                .any(|c| c.id == id && c.name.is_some())
+        })
+        .copied();
+    let target_id = named_target.unwrap_or(app.merge_selected_clusters[0]);
+    let source_ids: Vec<i64> = app
+        .merge_selected_clusters
+        .iter()
+        .copied()
+        .filter(|&id| id != target_id)
+        .collect();
 
     app.merge_mode_active = false;
     app.merge_selected_clusters.clear();

@@ -162,6 +162,8 @@ pub struct PhotoVault {
     pub(crate) open_popovers: Vec<crate::app::messages::MapPopover>,
     pub(crate) map_recent_fetch_failure: bool,
     pub(crate) map_inflight_tiles: std::collections::HashSet<crate::services::map_math::TileId>,
+    /// Last-known cursor position on the map canvas (for scroll-to-zoom).
+    pub(crate) map_last_cursor: Option<(f32, f32)>,
 
     // --- Photo detail mini-map state (independent of main map) ---
     pub(crate) photo_map_center: Option<crate::services::map_math::LatLng>,
@@ -338,11 +340,15 @@ pub struct PhotoVault {
     /// Whether ML models are available (checked once at startup)
     pub(crate) ml_available: bool,
 
-    /// People names detected in the currently viewed photo
-    pub(crate) current_photo_people: Vec<String>,
+    /// People detected in the currently viewed photo: (cluster_id, display_name).
+    pub(crate) current_photo_people: Vec<(i64, String)>,
 
     /// Number of faces detected in the currently viewed photo
     pub(crate) current_photo_face_count: usize,
+
+    /// Geocoded place name for the currently viewed photo (populated on demand
+    /// when the photo has GPS coordinates but no stored city/country).
+    pub(crate) current_photo_location: Option<String>,
 
     /// Current rotation offset in photo detail (0, 90, 180, 270)
     pub(crate) photo_rotation: i32,
@@ -456,6 +462,7 @@ impl PhotoVault {
             open_popovers: Vec::new(),
             map_recent_fetch_failure: false,
             map_inflight_tiles: std::collections::HashSet::new(),
+            map_last_cursor: None,
             photo_map_center: None,
             photo_map_zoom: 13,
             photo_map_drag_origin: None,
@@ -520,6 +527,7 @@ impl PhotoVault {
             ml_available: crate::bootstrap::has_face_models(),
             current_photo_people: Vec::new(),
             current_photo_face_count: 0,
+            current_photo_location: None,
             photo_rotation: 0,
             current_display_image: None,
             show_metadata_panel: false,

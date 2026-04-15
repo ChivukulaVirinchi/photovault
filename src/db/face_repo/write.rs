@@ -113,6 +113,33 @@ impl<'a> FaceRepo<'a> {
 
         let tx = self.conn.unchecked_transaction()?;
 
+        // Preserve names: if the target is unnamed but the source has a name,
+        // carry the name over so we never lose a user-assigned label.
+        let target_name: Option<String> = tx
+            .query_row(
+                "SELECT name FROM face_clusters WHERE id = ?1",
+                params![target_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        if target_name.is_none() {
+            let source_name: Option<String> = tx
+                .query_row(
+                    "SELECT name FROM face_clusters WHERE id = ?1",
+                    params![source_id],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+            if let Some(name) = source_name {
+                tx.execute(
+                    "UPDATE face_clusters SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    params![name, target_id],
+                )?;
+            }
+        }
+
         // Move all faces from source to target
         tx.execute(
             "UPDATE faces SET cluster_id = ?1 WHERE cluster_id = ?2",

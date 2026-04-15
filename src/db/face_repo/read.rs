@@ -116,34 +116,37 @@ impl<'a> FaceRepo<'a> {
     }
 
     /// Get person names for a photo (faces detected in this photo with cluster names)
-    pub fn get_person_names_for_photo(&self, photo_id: i64) -> SqliteResult<Vec<String>> {
+    /// Get (cluster_id, display_name) pairs for all people detected in a photo.
+    pub fn get_people_for_photo(&self, photo_id: i64) -> SqliteResult<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT DISTINCT name FROM (
-                SELECT fc.name AS name
+            SELECT DISTINCT cluster_id, name FROM (
+                SELECT fc.id AS cluster_id, COALESCE(fc.name, 'Person ' || fc.id) AS name
                 FROM faces f
                 JOIN face_clusters fc ON f.cluster_id = fc.id
                 WHERE f.photo_id = ?1
 
                 UNION
 
-                SELECT fc.name AS name
+                SELECT fc.id AS cluster_id, COALESCE(fc.name, 'Person ' || fc.id) AS name
                 FROM photo_inferred_identities pii
                 JOIN face_clusters fc ON pii.cluster_id = fc.id
                 WHERE pii.photo_id = ?1
             )
-            WHERE name IS NOT NULL AND name != ''
             ORDER BY name
             "#,
         )?;
 
-        let names = stmt
-            .query_map(params![photo_id], |row| row.get::<_, String>(0))?
+        let people = stmt
+            .query_map(params![photo_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
 
-        Ok(names)
+        Ok(people)
     }
+
 
     /// Get all photo IDs that contain faces from a given cluster
     pub fn get_photos_for_cluster(&self, cluster_id: i64) -> SqliteResult<Vec<i64>> {

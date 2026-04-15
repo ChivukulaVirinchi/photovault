@@ -67,17 +67,37 @@ pub(crate) fn regenerated(app: &mut PhotoVault, cards: Vec<MemoryCard>) -> Task<
     let mut enriched = cards;
     if let Ok(db) = Database::open_for_drive(&drive_path) {
         for card in enriched.iter_mut() {
-            let rel: Option<String> = db
+            // Prefer the original file for hero display — iced downscales it
+            // with good quality, whereas upscaling a small thumbnail looks
+            // blurry on the 340×190 banner card.
+            let orig: Option<String> = db
                 .conn
                 .query_row(
-                    "SELECT thumbnail_path FROM photos WHERE id = ?1",
+                    "SELECT file_path FROM photos WHERE id = ?1",
                     rusqlite::params![card.hero_photo_id],
                     |row| row.get(0),
                 )
                 .ok()
                 .flatten();
-            card.hero_thumbnail_path =
-                rel.map(|p| drive_path.join(p).to_string_lossy().to_string());
+            let orig_abs = orig
+                .map(|p| drive_path.join(p))
+                .filter(|p| p.exists());
+            if let Some(p) = orig_abs {
+                card.hero_thumbnail_path = Some(p.to_string_lossy().to_string());
+            } else {
+                // Fall back to thumbnail
+                let rel: Option<String> = db
+                    .conn
+                    .query_row(
+                        "SELECT thumbnail_path FROM photos WHERE id = ?1",
+                        rusqlite::params![card.hero_photo_id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                card.hero_thumbnail_path =
+                    rel.map(|p| drive_path.join(p).to_string_lossy().to_string());
+            }
         }
     }
 

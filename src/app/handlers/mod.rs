@@ -50,6 +50,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::MapPanStart { x, y } => map::pan_start(app, x, y),
         Message::MapPanEnd => map::pan_end(app),
         Message::MapZoomAt { x, y, delta } => map::zoom_at(app, x, y, delta),
+        Message::MapScrollZoom { delta } => map::scroll_zoom(app, delta),
         Message::MapResetView => map::reset_view(app),
         Message::MapPinsLoaded(pins) => map::pins_loaded(app, pins),
         Message::MapTileFetched(tile) => map::tile_fetched(app, tile),

@@ -226,7 +226,6 @@ fn placeholder_card(file_name: &str, size: f32, theme: AppTheme) -> Element<'sta
 pub fn day_header(
     day_key: &str,
     date: &str,
-    location: Option<&str>,
     count: usize,
     selected_count: usize,
     is_hovered: bool,
@@ -270,11 +269,6 @@ pub fn day_header(
 
     header_items.push(date_text.into());
     header_items.push(Space::with_width(Length::Fill).into());
-
-    if let Some(loc) = location {
-        header_items.push(text(loc.to_owned()).size(12).color(p.text_secondary).into());
-        header_items.push(Space::with_width(16).into());
-    }
 
     header_items.push(
         text(format!("{}", count))

@@ -34,7 +34,10 @@ pub struct MapWidgetConfig<'a> {
     pub center: LatLng,
     pub zoom: u8,
     pub pins: &'a [(i64, LatLng)],
-    pub viewport_size: Size,
+    /// Explicit pixel dimensions. When set, canvases use Fixed sizing
+    /// instead of Fill, ensuring they never exceed the allocated area.
+    pub width: f32,
+    pub height: f32,
     pub interaction: InteractionMode,
     pub show_attribution: bool,
     pub theme: AppTheme,
@@ -42,14 +45,17 @@ pub struct MapWidgetConfig<'a> {
 }
 
 pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
+    let w = Length::Fixed(cfg.width);
+    let h = Length::Fixed(cfg.height);
+
     let tile_canvas: Element<'static, Message> = canvas_widget(TileCanvas {
         cache: cfg.cache.clone(),
         center: cfg.center,
         zoom: cfg.zoom,
         theme: cfg.theme,
     })
-    .width(Length::Fill)
-    .height(Length::Fill)
+    .width(w)
+    .height(h)
     .into();
 
     let pin_canvas: Element<'static, Message> = canvas_widget(PinCanvas {
@@ -58,13 +64,11 @@ pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
         pins: cfg.pins.to_vec(),
         interaction: cfg.interaction,
     })
-    .width(Length::Fill)
-    .height(Length::Fill)
+    .width(w)
+    .height(h)
     .into();
 
-    let mut layers = stack![tile_canvas, pin_canvas]
-        .width(Length::Fill)
-        .height(Length::Fill);
+    let mut layers = stack![tile_canvas, pin_canvas].width(w).height(h);
 
     if cfg.show_attribution {
         layers = layers.push(attribution_layer(cfg.theme));
@@ -75,22 +79,34 @@ pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
     }
 
     let base: Element<'static, Message> = container(layers)
-        .width(Length::Fill)
-        .height(Length::Fill)
+        .width(w)
+        .height(h)
+        .clip(true)
         .into();
 
     if cfg.interaction == InteractionMode::None {
         return base;
     }
 
-    let zoom_anchor_x = cfg.viewport_size.width / 2.0;
-    let zoom_anchor_y = cfg.viewport_size.height / 2.0;
-    let mode = cfg.interaction;
+    // Photo mini-map: canvas Program::update handles all events directly
+    // (pan, zoom) and returns Captured. No mouse_area wrapper needed —
+    // adding one would cause duplicate/conflicting event handling and
+    // scroll events leaking to parent widgets.
+    if cfg.interaction == InteractionMode::Photo {
+        return base;
+    }
 
+    // Main map: use mouse_area for pan/zoom (canvas only handles pin clicks).
     mouse_area(base)
-        .on_press(build_pan_start_msg(mode, f32::NAN, f32::NAN))
-        .on_release(build_pan_end_msg(mode))
-        .on_move(move |p| build_pan_msg(mode, p.x, p.y))
+        .on_press(Message::MapPanStart {
+            x: f32::NAN,
+            y: f32::NAN,
+        })
+        .on_release(Message::MapPanEnd)
+        .on_move(|p| Message::MapPan {
+            dx: p.x,
+            dy: p.y,
+        })
         .on_scroll(move |delta| {
             let amount = match delta {
                 mouse::ScrollDelta::Lines { y, .. } => y,
@@ -103,37 +119,9 @@ pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
             } else {
                 0
             };
-            build_zoom_at_msg(mode, zoom_anchor_x, zoom_anchor_y, step)
+            Message::MapScrollZoom { delta: step }
         })
         .into()
-}
-
-fn build_pan_start_msg(mode: InteractionMode, x: f32, y: f32) -> Message {
-    match mode {
-        InteractionMode::Photo => Message::PhotoMapPanStart { x, y },
-        _ => Message::MapPanStart { x, y },
-    }
-}
-
-fn build_pan_msg(mode: InteractionMode, dx: f32, dy: f32) -> Message {
-    match mode {
-        InteractionMode::Photo => Message::PhotoMapPan { dx, dy },
-        _ => Message::MapPan { dx, dy },
-    }
-}
-
-fn build_pan_end_msg(mode: InteractionMode) -> Message {
-    match mode {
-        InteractionMode::Photo => Message::PhotoMapPanEnd,
-        _ => Message::MapPanEnd,
-    }
-}
-
-fn build_zoom_at_msg(mode: InteractionMode, x: f32, y: f32, delta: i8) -> Message {
-    match mode {
-        InteractionMode::Photo => Message::PhotoMapZoomAt { x, y, delta },
-        _ => Message::MapZoomAt { x, y, delta },
-    }
 }
 
 // --------------------------------------------------------------------
@@ -175,6 +163,15 @@ impl canvas::Program<Message> for TileCanvas {
 
         for tile in map_math::visible_tiles(&v) {
             let (tx, ty) = tile_top_left(tile, &v);
+            // Skip tiles fully outside the frame bounds to prevent
+            // canvas overflow into adjacent layout regions.
+            if tx + TILE_PX < 0.0
+                || ty + TILE_PX < 0.0
+                || tx > bounds.width
+                || ty > bounds.height
+            {
+                continue;
+            }
             draw_tile(&mut frame, tile, tx, ty, &self.cache, grey);
         }
 
@@ -251,15 +248,48 @@ impl canvas::Program<Message> for PinCanvas {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        // Pin clicks are a main-map feature (the mini-map's single pin
-        // doesn't need a popover).
-        if self.interaction != InteractionMode::Main {
+        if self.interaction == InteractionMode::None {
             return (canvas::event::Status::Ignored, None);
         }
+
         let Some(pos) = cursor.position_in(bounds) else {
             return (canvas::event::Status::Ignored, None);
         };
 
+        // For the photo mini-map, capture mouse events so they don't
+        // propagate to parent widgets and cause the panel to move.
+        if self.interaction == InteractionMode::Photo {
+            let msg = match event {
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                    Some(Message::PhotoMapPanStart { x: pos.x, y: pos.y })
+                }
+                canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                    Some(Message::PhotoMapPanEnd)
+                }
+                canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                    Some(Message::PhotoMapPan {
+                        dx: pos.x,
+                        dy: pos.y,
+                    })
+                }
+                canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                    let amount = match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => y,
+                        mouse::ScrollDelta::Pixels { y, .. } => y,
+                    };
+                    let step = if amount > 0.0 { 1 } else if amount < 0.0 { -1 } else { 0 };
+                    Some(Message::PhotoMapZoomAt {
+                        x: pos.x,
+                        y: pos.y,
+                        delta: step,
+                    })
+                }
+                _ => None,
+            };
+            return (canvas::event::Status::Captured, msg);
+        }
+
+        // Main map: only handle pin clicks here (pan/zoom via mouse_area).
         if let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             let mut hit: Option<Message> = None;
             self.with_clusters(state, bounds, |clusters| {

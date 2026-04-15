@@ -238,12 +238,14 @@ pub fn memory_detail_view(
             .into();
     }
 
-    // Resolve the absolute path for the current photo. Prefer the original
-    // file (full quality) but fall back to the stored thumbnail if the drive
-    // path is unknown (rare).
+    // Prefer original file for the slideshow; iced_image handles
+    // downscaling. Fall back to thumbnail if original is unavailable.
     let current = &photos[current_index.min(total - 1)];
-    let abs_path: Option<String> =
-        drive_path.map(|root| root.join(&current.file_path).to_string_lossy().to_string());
+    let abs_path: Option<String> = drive_path
+        .map(|root| root.join(&current.file_path))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+        .or_else(|| current.thumbnail_path.clone());
 
     let hero: Element<'static, Message> = match abs_path {
         Some(path) => container(

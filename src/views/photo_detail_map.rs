@@ -2,7 +2,7 @@
 //! using its own center/zoom state, reset to photo GPS on open.
 
 use iced::widget::{column, container, text, Space};
-use iced::{Alignment, Element, Length, Size};
+use iced::{Alignment, Element, Length};
 
 use crate::app::{Message, PhotoVault};
 use crate::components::map_widget::{map_widget, InteractionMode, MapWidgetConfig};
@@ -33,7 +33,8 @@ pub fn photo_mini_map(app: &PhotoVault, photo: &Photo) -> Option<Element<'static
         center,
         zoom,
         pins: std::slice::from_ref(&pin),
-        viewport_size: Size::new(MINI_W, MINI_H),
+        width: MINI_W,
+        height: MINI_H,
         interaction: InteractionMode::Photo,
         show_attribution: false,
         theme: app.config.theme,
@@ -41,8 +42,10 @@ pub fn photo_mini_map(app: &PhotoVault, photo: &Photo) -> Option<Element<'static
     });
 
     let p = colors::palette(app.config.theme);
-    let place = photo
-        .location_string()
+    let place = app
+        .current_photo_location
+        .clone()
+        .or_else(|| photo.location_string())
         .unwrap_or_else(|| format!("{:.4}, {:.4}", lat, lng));
 
     let border = p.border_subtle;

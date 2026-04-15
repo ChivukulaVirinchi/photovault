@@ -25,6 +25,8 @@ pub struct FaceProcessingProgress {
     pub processed: usize,
     pub total: usize,
     pub faces_found: usize,
+    /// Wall-clock seconds since processing started.
+    pub elapsed_secs: f64,
 }
 
 impl Default for FaceProcessingProgress {
@@ -33,6 +35,7 @@ impl Default for FaceProcessingProgress {
             processed: 0,
             total: 0,
             faces_found: 0,
+            elapsed_secs: 0.0,
         }
     }
 }
@@ -112,6 +115,8 @@ impl FaceProcessor {
             });
         }
 
+        let pipeline_start = std::time::Instant::now();
+
         // Initialize ONNX Runtime
         let runtime = OnnxRuntime::init().map_err(|e| {
             format!(
@@ -186,6 +191,7 @@ impl FaceProcessor {
             let processed_count = processed_count.clone();
             let faces_count = faces_count.clone();
             let cancel = cancel.clone();
+            let start_time = std::time::Instant::now();
             std::thread::spawn(move || {
                 while !cancel.load(Ordering::Relaxed) {
                     let processed = processed_count.load(Ordering::Relaxed);
@@ -194,6 +200,7 @@ impl FaceProcessor {
                             processed,
                             total,
                             faces_found: faces_count.load(Ordering::Relaxed),
+                            elapsed_secs: start_time.elapsed().as_secs_f64(),
                         });
                     }
                     if processed >= total {
@@ -478,6 +485,7 @@ impl FaceProcessor {
                 processed: photos_processed,
                 total,
                 faces_found: total_faces,
+                elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
             });
         }
 
@@ -490,6 +498,7 @@ impl FaceProcessor {
                 processed: photos_processed,
                 total,
                 faces_found: total_faces,
+                elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
             });
         }
 

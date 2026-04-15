@@ -19,7 +19,7 @@ impl PhotoDetailView {
         photo: &Photo,
         has_prev: bool,
         has_next: bool,
-        people: &[String],
+        people: &[(i64, String)],
         face_count: usize,
         image_handle: Option<&iced::widget::image::Handle>,
         show_metadata: bool,
@@ -188,7 +188,7 @@ impl PhotoDetailView {
     fn build_metadata(
         app: &PhotoVault,
         photo: &Photo,
-        people: &[String],
+        people: &[(i64, String)],
         face_count: usize,
         p: &'static colors::Palette,
     ) -> Element<'static, Message> {
@@ -212,7 +212,9 @@ impl PhotoDetailView {
             );
         }
 
-        let location_text = photo.location_string().or_else(|| {
+        // Use the pre-resolved location name (from DB or on-demand geocode),
+        // falling back to raw coordinates only as a last resort.
+        let location_text = app.current_photo_location.clone().or_else(|| {
             if photo.has_location() {
                 Some(format!(
                     "{:.4}, {:.4}",
@@ -235,14 +237,13 @@ impl PhotoDetailView {
             );
         }
 
-        if let Some(mini) = crate::views::photo_detail_map::photo_mini_map(app, photo) {
-            date_loc_items.push(mini);
-            date_loc_items.push(Space::with_height(12).into());
-        }
+        // Mini-map is placed in its own group (rightmost) so it doesn't
+        // crowd the EXIF columns. Capture it now, push to groups later.
+        let mini_map = crate::views::photo_detail_map::photo_mini_map(app, photo);
 
         if let Some(alt) = photo.gps_altitude {
             date_loc_items.push(
-                text(format!("{:.0}m", alt))
+                text(format!("{:.0}m altitude", alt))
                     .size(11)
                     .color(secondary_color)
                     .into(),
@@ -250,22 +251,58 @@ impl PhotoDetailView {
         }
 
         if !people.is_empty() || face_count > 0 {
-            let people_text = if !people.is_empty() {
-                people.join(", ")
+            let mut people_col: Vec<Element<'static, Message>> = Vec::new();
+            people_col.push(text("PEOPLE").size(9).color(label_color).into());
+
+            if !people.is_empty() {
+                // Clickable people links that navigate to their cluster detail
+                let accent = p.accent_primary;
+                let hover_bg = p.bg_hover;
+                let mut people_row: Vec<Element<'static, Message>> = Vec::new();
+                for (cluster_id, name) in people.iter() {
+                    let name = name.clone();
+                    let cid = *cluster_id;
+                    people_row.push(
+                        button(text(name).size(12).color(accent))
+                            .padding(Padding::from([2, 6]))
+                            .style(move |_t: &iced::Theme, s| button::Style {
+                                background: match s {
+                                    button::Status::Hovered => Some(hover_bg.into()),
+                                    _ => None,
+                                },
+                                border: iced::Border {
+                                    radius: 4.0.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            })
+                            .on_press(Message::SelectCluster(cid))
+                            .into(),
+                    );
+                }
+                people_col.push(
+                    iced::widget::Row::with_children(people_row)
+                        .spacing(4)
+                        .wrap()
+                        .into(),
+                );
             } else {
-                format!(
-                    "{} face{} detected",
-                    face_count,
-                    if face_count == 1 { "" } else { "s" }
-                )
-            };
+                people_col.push(
+                    text(format!(
+                        "{} face{} detected",
+                        face_count,
+                        if face_count == 1 { "" } else { "s" }
+                    ))
+                    .size(12)
+                    .color(value_color)
+                    .into(),
+                );
+            }
+
             date_loc_items.push(
-                column![
-                    text("PEOPLE").size(9).color(label_color),
-                    text(people_text).size(12).color(value_color),
-                ]
-                .spacing(1)
-                .into(),
+                iced::widget::Column::with_children(people_col)
+                    .spacing(2)
+                    .into(),
             );
         }
 
@@ -375,6 +412,14 @@ impl PhotoDetailView {
         if !file_items.is_empty() {
             let group = iced::widget::Column::with_children(file_items).spacing(2);
             groups.push(group.into());
+        }
+
+        // Flexible spacer pushes the mini-map to the right edge.
+        if mini_map.is_some() {
+            groups.push(Space::with_width(Length::Fill).into());
+        }
+        if let Some(mini) = mini_map {
+            groups.push(mini);
         }
 
         let meta_row = iced::widget::Row::with_children(groups)

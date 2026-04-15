@@ -40,15 +40,33 @@ pub fn view_with_clusters(
 
     let title = text("People").size(28).color(text_primary);
 
-    // Processing status bar
+    // Processing status bar with progress bar and ETA
     let status_bar: Element<'static, Message> = if processing_active {
-        let progress_text = if let Some(p) = progress {
-            format!(
-                "Processing faces... {}/{} photos ({} faces found)",
-                p.processed, p.total, p.faces_found
+        let (progress_text, pct) = if let Some(p) = progress {
+            let fraction = if p.total > 0 {
+                p.processed as f32 / p.total as f32
+            } else {
+                0.0
+            };
+            let eta_str = if p.processed > 0 && p.elapsed_secs > 0.5 && fraction < 1.0 {
+                let remaining = p.elapsed_secs / fraction as f64 * (1.0 - fraction as f64);
+                if remaining > 60.0 {
+                    format!("  ~{}m left", (remaining / 60.0).ceil() as u32)
+                } else {
+                    format!("  ~{}s left", remaining.ceil() as u32)
+                }
+            } else {
+                String::new()
+            };
+            (
+                format!(
+                    "Processing faces... {}/{} photos ({} faces found){}",
+                    p.processed, p.total, p.faces_found, eta_str
+                ),
+                fraction,
             )
         } else {
-            "Starting face processing...".to_string()
+            ("Starting face processing...".to_string(), 0.0)
         };
 
         let cancel_btn = button(text("Cancel").size(12).color(text_primary))
@@ -81,14 +99,46 @@ pub fn view_with_clusters(
             })
             .on_press(Message::CancelFaceProcessing);
 
+        // Visual progress bar
+        let bar_bg = border_subtle;
+        let bar_fill = accent_primary;
+        let bar_width = 200.0_f32;
+        let filled = (bar_width * pct).clamp(0.0, bar_width);
+        let progress_bar = container(
+            container(Space::new(Length::Fixed(filled), Length::Fixed(6.0)))
+                .style(move |_t: &iced::Theme| container::Style {
+                    background: Some(bar_fill.into()),
+                    border: iced::Border {
+                        radius: 3.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+        )
+        .width(Length::Fixed(bar_width))
+        .height(Length::Fixed(6.0))
+        .style(move |_t: &iced::Theme| container::Style {
+            background: Some(bar_bg.into()),
+            border: iced::Border {
+                radius: 3.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
         container(
-            row![
-                text(progress_text).size(13).color(accent_primary),
-                Space::with_width(Length::Fill),
-                cancel_btn,
+            column![
+                row![
+                    text(progress_text).size(13).color(accent_primary),
+                    Space::with_width(Length::Fill),
+                    cancel_btn,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                Space::with_height(6),
+                progress_bar,
             ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+            .spacing(0),
         )
         .padding(Padding::from([8, 16]))
         .style(move |_theme: &iced::Theme| container::Style {

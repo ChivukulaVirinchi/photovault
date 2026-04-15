@@ -36,6 +36,51 @@ impl PhotoVault {
         self.thumbnail_scan_cursor = initial_end;
     }
 
+    /// Re-prioritize thumbnail generation for the currently visible region
+    /// after a scroll event. Inserts missing thumbnails near the scroll
+    /// position at the front of the queue so they generate first.
+    pub(crate) fn reprioritize_thumbnails_for_scroll(&mut self, scroll_y: f32) {
+        let columns = Self::timeline_columns_for_width(self.window_width);
+        // Each row is ~168px tall (thumbnail 160 + 8 gap). Day headers add
+        // ~48px. Rough estimate: 168px per photo row.
+        let row_height = 168.0_f32;
+        let start_row = (scroll_y / row_height).floor().max(0.0) as usize;
+        let visible_rows = Self::THUMBNAIL_VISIBLE_ROWS + Self::THUMBNAIL_PREFETCH_ROWS;
+        let start_idx = start_row * columns;
+        let end_idx = ((start_row + visible_rows) * columns).min(self.photos.len());
+
+        if start_idx >= self.photos.len() {
+            return;
+        }
+
+        // Collect photo ids that need thumbnails in the visible region
+        let mut urgent: Vec<(i64, String, String, i32)> = Vec::new();
+        for photo in &self.photos[start_idx..end_idx] {
+            if photo.thumbnail_path.is_none() {
+                // Only add if not already in queue
+                let already_queued = self.thumbnail_queue.iter().any(|(id, _, _, _)| *id == photo.id);
+                if !already_queued {
+                    urgent.push((
+                        photo.id,
+                        photo.file_path.clone(),
+                        photo.file_hash.clone(),
+                        photo.orientation,
+                    ));
+                }
+            }
+        }
+
+        if !urgent.is_empty() {
+            // Prepend urgent items to front of queue
+            urgent.append(&mut self.thumbnail_queue);
+            self.thumbnail_queue = urgent;
+            // Advance scan cursor past this region to avoid re-scanning
+            if end_idx > self.thumbnail_scan_cursor {
+                self.thumbnail_scan_cursor = end_idx;
+            }
+        }
+    }
+
     pub(crate) fn schedule_thumbnail_chunk(&mut self) {
         if self.thumbnail_queue.len() >= Self::THUMBNAIL_QUEUE_TARGET {
             return;

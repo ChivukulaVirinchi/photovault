@@ -10,6 +10,10 @@ use crate::services::{FaceProcessor, TrashService, TrashStats};
 use super::super::messages::Message;
 use super::PhotoVault;
 
+/// wgpu maximum buffer is 268 435 456 bytes → 8192×8192 RGBA.
+/// Only images exceeding this hard GPU limit get downscaled.
+const WGPU_MAX_DIM: u32 = 8192;
+
 impl PhotoVault {
     /// Load photos from database
     pub(crate) fn load_photos(&self) -> Task<Message> {
@@ -183,7 +187,18 @@ impl PhotoVault {
         };
 
         self.photo_rotation = 0;
+
+        // --- Progressive loading: show thumbnail immediately for instant feedback ---
         self.current_display_image = None;
+        if let Some(ref thumb_path) = photo.thumbnail_path {
+            let tp = PathBuf::from(thumb_path);
+            if tp.exists() {
+                if let Ok(img) = image::open(&tp) {
+                    let img = apply_exif_orientation(img, photo.orientation);
+                    self.current_display_image = Some(img);
+                }
+            }
+        }
 
         // Reset mini-map state to this photo's GPS (if present).
         if let (Some(lat), Some(lng)) = (photo.gps_latitude, photo.gps_longitude) {
@@ -198,10 +213,11 @@ impl PhotoVault {
 
         self.current_photo_people.clear();
         self.current_photo_face_count = 0;
+        self.current_photo_location = None;
         if let Some(ref db) = self.database {
             let face_repo = FaceRepo::new(&db.conn);
-            if let Ok(names) = face_repo.get_person_names_for_photo(photo_id) {
-                self.current_photo_people = names;
+            if let Ok(people) = face_repo.get_people_for_photo(photo_id) {
+                self.current_photo_people = people;
             }
             if let Ok(count) = db.conn.query_row(
                 "SELECT COUNT(*) FROM faces WHERE photo_id = ?1",
@@ -211,6 +227,20 @@ impl PhotoVault {
                 self.current_photo_face_count = count as usize;
             }
         }
+
+        // Resolve display location: prefer stored city/country, fall back to
+        // an on-the-fly geocode lookup from the GeoNames DB.
+        self.current_photo_location = photo.location_string().or_else(|| {
+            let lat = photo.gps_latitude?;
+            let lng = photo.gps_longitude?;
+            let geonames_path = crate::db::geonames::geonames_db_path();
+            if !geonames_path.exists() {
+                return None;
+            }
+            let geo = crate::services::GeocodingService::new(&geonames_path).ok()?;
+            let result = geo.reverse_geocode(lat, lng)?;
+            Some(format!("{}, {}", result.city, result.country))
+        });
 
         // Always prefer original image for full-quality photo detail viewing.
         // Fall back to thumbnail only when the original is unavailable.
@@ -266,6 +296,17 @@ impl PhotoVault {
                     let result = tokio::task::spawn_blocking(move || {
                         let img = image::open(&path).ok()?;
                         let img = apply_exif_orientation(img, orientation);
+                        // Only downscale if the image exceeds the GPU hard
+                        // limit (wgpu max buffer = 268 MB ≈ 8192×8192 RGBA).
+                        let img = if img.width() > WGPU_MAX_DIM || img.height() > WGPU_MAX_DIM {
+                            img.resize(
+                                WGPU_MAX_DIM,
+                                WGPU_MAX_DIM,
+                                image::imageops::FilterType::Lanczos3,
+                            )
+                        } else {
+                            img
+                        };
                         let rgba = img.to_rgba8();
                         let (w, h) = (rgba.width(), rgba.height());
                         Some((rgba.into_raw(), w, h))

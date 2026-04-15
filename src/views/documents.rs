@@ -108,7 +108,6 @@ impl DocumentsView {
                 items.push(day_header(
                     &group.day_key,
                     &group.display_date,
-                    group.location.as_deref(),
                     group.photos.len(),
                     selected_count_for_day,
                     hovered_day_key == Some(group.day_key.as_str()),

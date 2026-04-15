@@ -335,6 +335,11 @@ pub enum Message {
         y: f32,
         delta: i8,
     },
+    /// Scroll-wheel zoom on the main map. Uses last-known cursor position
+    /// so the zoom anchors where the user is pointing.
+    MapScrollZoom {
+        delta: i8,
+    },
     MapResetView,
     MapPinsLoaded(Vec<(i64, crate::services::map_math::LatLng)>),
     MapTileFetched(crate::services::map_math::TileId),

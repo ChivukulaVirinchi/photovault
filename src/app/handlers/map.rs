@@ -102,6 +102,11 @@ pub(crate) fn pan_start(app: &mut PhotoVault, x: f32, y: f32) -> Task<Message> {
 }
 
 pub(crate) fn pan(app: &mut PhotoVault, cursor_x: f32, cursor_y: f32) -> Task<Message> {
+    // Always track cursor for scroll-to-zoom, even when not dragging.
+    if cursor_x.is_finite() && cursor_y.is_finite() {
+        app.map_last_cursor = Some((cursor_x, cursor_y));
+    }
+
     if app.map_drag_origin.is_none() {
         return Task::none();
     }
@@ -198,6 +203,12 @@ pub(crate) fn zoom_at(app: &mut PhotoVault, x: f32, y: f32, delta: i8) -> Task<M
     app.map_zoom = new_zoom;
 
     enqueue_visible_tile_fetches(app)
+}
+
+pub(crate) fn scroll_zoom(app: &mut PhotoVault, delta: i8) -> Task<Message> {
+    let (vw, vh) = viewport_size(app);
+    let (x, y) = app.map_last_cursor.unwrap_or((vw / 2.0, vh / 2.0));
+    zoom_at(app, x, y, delta)
 }
 
 pub(crate) fn reset_view(app: &mut PhotoVault) -> Task<Message> {
@@ -454,9 +465,14 @@ pub(crate) fn tile_fetch_failed(
     err: String,
 ) -> Task<Message> {
     app.map_inflight_tiles.remove(&tid);
-    tracing::warn!("Tile fetch failed: {}", err);
+    // Only log the first failure per offline episode to avoid log spam.
+    if !app.map_recent_fetch_failure {
+        tracing::warn!("Tile fetch failed (further failures suppressed): {}", err);
+    }
     app.map_recent_fetch_failure = true;
-    enqueue_visible_tile_fetches(app)
+    // Don't re-enqueue on failure — tiles will be retried on next
+    // user interaction (pan/zoom) which calls enqueue_visible_tile_fetches.
+    Task::none()
 }
 
 pub(crate) fn enqueue_visible_tile_fetches(app: &mut PhotoVault) -> Task<Message> {

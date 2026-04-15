@@ -15,6 +15,11 @@ pub(crate) fn scrolled(
     offset: iced::widget::scrollable::AbsoluteOffset,
 ) -> Task<Message> {
     app.timeline_scroll_offset = offset;
+    // Reprioritize thumbnail generation for newly-visible photos
+    app.reprioritize_thumbnails_for_scroll(offset.y);
+    if !app.thumbnail_generation_active && !app.thumbnail_queue.is_empty() {
+        return app.start_thumbnail_generation();
+    }
     Task::none()
 }
 

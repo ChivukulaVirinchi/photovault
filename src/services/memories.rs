@@ -64,7 +64,11 @@ impl From<Memory> for MemoryCard {
 
 /// Minimum library age before Memories surface. If the oldest non-trashed
 /// photo is newer than this many months ago, hide the feature.
-const MIN_LIBRARY_AGE_MONTHS: i64 = 6;
+const MIN_LIBRARY_AGE_MONTHS: i64 = 3;
+
+/// Minimum age (in months) for a photo to appear in memories. Photos newer
+/// than this are too recent to be nostalgic.
+const MIN_PHOTO_AGE_MONTHS: i64 = 3;
 
 /// Maximum memory cards returned by the generator.
 const MAX_CARDS: usize = 20;
@@ -184,9 +188,13 @@ fn parse_ids(csv: &str) -> Vec<i64> {
 fn on_this_day(
     conn: &Connection,
     today: NaiveDate,
-    current_year: i32,
+    _current_year: i32,
 ) -> SqliteResult<Vec<Memory>> {
     let today_md = format!("{:02}-{:02}", today.month(), today.day());
+    // Include same-year photos as long as they're old enough (>= MIN_PHOTO_AGE_MONTHS).
+    // The cutoff date excludes photos from the recent N months.
+    let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
+    let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
     let mut stmt = conn.prepare(
         r#"
         SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
@@ -195,14 +203,14 @@ fn on_this_day(
         WHERE is_trashed = FALSE
           AND date_taken IS NOT NULL
           AND strftime('%m-%d', date_taken) = ?1
-          AND CAST(strftime('%Y', date_taken) AS INTEGER) < ?2
+          AND date_taken < ?2
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 10
         "#,
     )?;
 
-    let rows = stmt.query_map(params![today_md, current_year], |row| {
+    let rows = stmt.query_map(params![today_md, cutoff_str], |row| {
         Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
     })?;
 
@@ -213,18 +221,15 @@ fn on_this_day(
         if photo_ids.is_empty() {
             continue;
         }
-        let years_ago = current_year - yr;
-        let title = if years_ago == 1 {
-            "1 year ago today".to_string()
-        } else {
-            format!("{} years ago today", years_ago)
-        };
+        let photo_date = NaiveDate::from_ymd_opt(yr, today.month(), today.day())
+            .unwrap_or(NaiveDate::from_ymd_opt(yr, 1, 1).unwrap());
+        let title = format!("{} today", age_label(photo_date, today));
         out.push(Memory {
             id: memory_id(MemoryKind::OnThisDay, yr, today),
             kind: MemoryKind::OnThisDay,
             title,
             photo_ids,
-            hero_photo_id: 0, // populated later
+            hero_photo_id: 0,
             score: 0.0,
             year: yr,
             has_faces: false,
@@ -236,7 +241,7 @@ fn on_this_day(
 fn fallback_window(
     conn: &Connection,
     today: NaiveDate,
-    current_year: i32,
+    _current_year: i32,
 ) -> SqliteResult<Vec<Memory>> {
     let mds: Vec<String> = (-3..=3)
         .map(|offset| {
@@ -244,6 +249,9 @@ fn fallback_window(
             format!("{:02}-{:02}", d.month(), d.day())
         })
         .collect();
+
+    let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
+    let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
     let mut stmt = conn.prepare(
         r#"
@@ -253,7 +261,7 @@ fn fallback_window(
         WHERE is_trashed = FALSE
           AND date_taken IS NOT NULL
           AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-          AND CAST(strftime('%Y', date_taken) AS INTEGER) < ?8
+          AND date_taken < ?8
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 10
@@ -262,14 +270,7 @@ fn fallback_window(
 
     let rows = stmt.query_map(
         params![
-            mds[0],
-            mds[1],
-            mds[2],
-            mds[3],
-            mds[4],
-            mds[5],
-            mds[6],
-            current_year
+            mds[0], mds[1], mds[2], mds[3], mds[4], mds[5], mds[6], cutoff_str
         ],
         |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
     )?;
@@ -281,12 +282,9 @@ fn fallback_window(
         if photo_ids.is_empty() {
             continue;
         }
-        let years_ago = current_year - yr;
-        let title = if years_ago == 1 {
-            "1 year ago this week".to_string()
-        } else {
-            format!("{} years ago this week", years_ago)
-        };
+        let photo_date = NaiveDate::from_ymd_opt(yr, today.month(), today.day())
+            .unwrap_or(NaiveDate::from_ymd_opt(yr, 1, 1).unwrap());
+        let title = format!("{} this week", age_label(photo_date, today));
         out.push(Memory {
             id: memory_id(MemoryKind::FallbackWindow, yr, today),
             kind: MemoryKind::FallbackWindow,
@@ -304,9 +302,12 @@ fn fallback_window(
 fn seasonal_recap(
     conn: &Connection,
     today: NaiveDate,
-    current_year: i32,
+    _current_year: i32,
 ) -> SqliteResult<Vec<Memory>> {
     let month = format!("{:02}", today.month());
+    let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
+    let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+
     let mut stmt = conn.prepare(
         r#"
         SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
@@ -316,7 +317,7 @@ fn seasonal_recap(
         WHERE is_trashed = FALSE
           AND date_taken IS NOT NULL
           AND strftime('%m', date_taken) = ?1
-          AND CAST(strftime('%Y', date_taken) AS INTEGER) < ?2
+          AND date_taken < ?2
         GROUP BY yr
         HAVING photo_count >= ?3
         ORDER BY yr DESC
@@ -324,7 +325,7 @@ fn seasonal_recap(
         "#,
     )?;
 
-    let rows = stmt.query_map(params![month, current_year, SEASONAL_MIN_PHOTOS], |row| {
+    let rows = stmt.query_map(params![month, cutoff_str, SEASONAL_MIN_PHOTOS], |row| {
         Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
     })?;
 
@@ -350,7 +351,10 @@ fn seasonal_recap(
     Ok(out)
 }
 
-fn year_recap(conn: &Connection, today: NaiveDate, current_year: i32) -> SqliteResult<Vec<Memory>> {
+fn year_recap(conn: &Connection, today: NaiveDate, _current_year: i32) -> SqliteResult<Vec<Memory>> {
+    let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
+    let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+
     let mut stmt = conn.prepare(
         r#"
         SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
@@ -358,14 +362,14 @@ fn year_recap(conn: &Connection, today: NaiveDate, current_year: i32) -> SqliteR
         FROM photos
         WHERE is_trashed = FALSE
           AND date_taken IS NOT NULL
-          AND CAST(strftime('%Y', date_taken) AS INTEGER) < ?1
+          AND date_taken < ?1
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 5
         "#,
     )?;
 
-    let rows = stmt.query_map(params![current_year], |row| {
+    let rows = stmt.query_map(params![cutoff_str], |row| {
         Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
     })?;
 
@@ -376,17 +380,14 @@ fn year_recap(conn: &Connection, today: NaiveDate, current_year: i32) -> SqliteR
         if photo_ids.is_empty() {
             continue;
         }
-        // Cap at most-recent N photo ids per year.
         photo_ids.sort_unstable();
         photo_ids.reverse();
         photo_ids.truncate(YEAR_RECAP_MAX_PHOTOS);
 
-        let years_ago = current_year - yr;
-        let title = if years_ago == 1 {
-            "1 year ago".to_string()
-        } else {
-            format!("{} years ago", years_ago)
-        };
+        // Use July 1 of that year as a reasonable midpoint for age calculation.
+        let photo_date = NaiveDate::from_ymd_opt(yr, 7, 1)
+            .unwrap_or(NaiveDate::from_ymd_opt(yr, 1, 1).unwrap());
+        let title = age_label(photo_date, today);
         out.push(Memory {
             id: memory_id(MemoryKind::YearRecap, yr, today),
             kind: MemoryKind::YearRecap,
@@ -418,6 +419,28 @@ fn month_name(m: u32) -> &'static str {
         _ => "",
     }
 }
+
+/// Human-readable age string from a photo date to today.
+/// Uses months when < 24 months; years otherwise.
+fn age_label(photo_date: NaiveDate, today: NaiveDate) -> String {
+    let months = (today.year() - photo_date.year()) * 12
+        + (today.month() as i32 - photo_date.month() as i32);
+    if months < 12 {
+        if months == 1 {
+            "1 month ago".to_string()
+        } else {
+            format!("{} months ago", months)
+        }
+    } else {
+        let years = months / 12;
+        if years == 1 {
+            "1 year ago".to_string()
+        } else {
+            format!("{} years ago", years)
+        }
+    }
+}
+
 
 // ---------- Hero selection ----------
 
