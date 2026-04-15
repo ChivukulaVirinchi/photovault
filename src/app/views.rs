@@ -54,7 +54,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     } else {
                         None
                     };
-                    return PhotoDetailView::view(
+                    let detail = PhotoDetailView::view(
                         app,
                         photo,
                         has_prev,
@@ -65,6 +65,17 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.show_metadata_panel,
                         app.config.theme,
                     );
+                    if app.album_picker_open {
+                        let overlay = crate::views::albums::album_picker_overlay(
+                            &app.albums,
+                            app.album_picker_target_ids.len(),
+                            app.album_picker_creating,
+                            &app.album_picker_new_name,
+                            app.config.theme,
+                        );
+                        return iced::widget::stack![detail, overlay].into();
+                    }
+                    return detail;
                 }
             }
         }
@@ -190,6 +201,29 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                                 .collect::<Vec<_>>(),
                         ));
 
+                    let album_accent = p.accent_primary;
+                    let album_hover = p.bg_hover;
+                    let album_bg_btn = p.bg_elevated;
+                    let album_btn = button(text("Add to Album").size(12).color(album_accent))
+                        .padding([6, 12])
+                        .style(move |_theme: &iced::Theme, status| button::Style {
+                            background: Some(match status {
+                                button::Status::Hovered => album_hover.into(),
+                                _ => album_bg_btn.into(),
+                            }),
+                            border: iced::Border {
+                                radius: 6.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::OpenAlbumPicker(
+                            app.selected_timeline_photo_ids
+                                .iter()
+                                .copied()
+                                .collect::<Vec<_>>(),
+                        ));
+
                     let bar_bg = p.bg_secondary;
                     let bar_border = p.border_subtle;
                     let top_bar = container(
@@ -199,6 +233,8 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                                 .size(12)
                                 .color(p.text_secondary),
                             iced::widget::Space::with_width(Length::Fill),
+                            album_btn,
+                            iced::widget::Space::with_width(8),
                             delete_btn,
                         ]
                         .align_y(iced::Alignment::Center)
@@ -368,6 +404,30 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                             .collect::<Vec<_>>(),
                     ));
 
+                let doc_album_accent = p.accent_primary;
+                let doc_album_hover = p.bg_hover;
+                let doc_album_bg_btn = p.bg_elevated;
+                let doc_album_btn =
+                    button(text("Add to Album").size(12).color(doc_album_accent))
+                        .padding([6, 12])
+                        .style(move |_theme: &iced::Theme, status| button::Style {
+                            background: Some(match status {
+                                button::Status::Hovered => doc_album_hover.into(),
+                                _ => doc_album_bg_btn.into(),
+                            }),
+                            border: iced::Border {
+                                radius: 6.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::OpenAlbumPicker(
+                            app.selected_timeline_photo_ids
+                                .iter()
+                                .copied()
+                                .collect::<Vec<_>>(),
+                        ));
+
                 let bar_bg = p.bg_secondary;
                 let bar_border = p.border_subtle;
                 let top_bar = container(
@@ -377,6 +437,8 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                             .size(12)
                             .color(p.text_secondary),
                         iced::widget::Space::with_width(Length::Fill),
+                        doc_album_btn,
+                        iced::widget::Space::with_width(8),
                         delete_btn,
                     ]
                     .align_y(iced::Alignment::Center)
@@ -510,7 +572,63 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 )
             }
         }
+        View::Albums => crate::views::albums::albums_view(
+            &app.albums,
+            app.selected_drive.as_deref(),
+            app.album_picker_creating,
+            &app.album_picker_new_name,
+            app.config.theme,
+        ),
+        View::AlbumDetail => {
+            if let Some(album_id) = app.selected_album_id {
+                let album = app.albums.iter().find(|a| a.id == album_id);
+                if let Some(album) = album {
+                    let available_width = (app.window_width - 200.0 - 32.0).max(168.0);
+                    let columns = (available_width / 168.0).floor().max(2.0) as usize;
+                    crate::views::albums::album_detail_view(
+                        album,
+                        &app.album_photos,
+                        columns,
+                        app.editing_album_id == Some(album_id),
+                        &app.edit_album_name,
+                        &app.selected_timeline_photo_ids,
+                        app.hovered_timeline_photo_id,
+                        app.config.theme,
+                    )
+                } else {
+                    crate::views::albums::albums_view(
+                        &app.albums,
+                        app.selected_drive.as_deref(),
+                        app.album_picker_creating,
+                        &app.album_picker_new_name,
+                        app.config.theme,
+                    )
+                }
+            } else {
+                crate::views::albums::albums_view(
+                    &app.albums,
+                    app.selected_drive.as_deref(),
+                    app.album_picker_creating,
+                    &app.album_picker_new_name,
+                    app.config.theme,
+                )
+            }
+        }
         View::PhotoDetail => unreachable!(), // Handled above
+    };
+
+    // Wrap content with album picker overlay if open
+    let content = if app.album_picker_open {
+        let overlay = crate::views::albums::album_picker_overlay(
+            &app.albums,
+            app.album_picker_target_ids.len(),
+            app.album_picker_creating,
+            &app.album_picker_new_name,
+            app.config.theme,
+        );
+        iced::widget::stack![content, overlay].into()
+    } else {
+        content
     };
 
     let main_row = row![sidebar, content,];

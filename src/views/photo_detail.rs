@@ -31,6 +31,7 @@ impl PhotoDetailView {
         // === Top bar: labeled tool buttons ===
         let rotate_btn = Self::tool_btn("Rotate", Message::RotatePhoto, p);
         let info_btn = Self::tool_btn("Info", Message::ToggleMetadataPanel, p);
+        let album_btn = Self::tool_btn("Album", Message::OpenAlbumPicker(vec![photo_id]), p);
         let trash_btn = {
             let danger = p.semantic_danger;
             button(text("Delete").size(11).color(danger))
@@ -57,6 +58,8 @@ impl PhotoDetailView {
                 rotate_btn,
                 Space::with_width(4),
                 info_btn,
+                Space::with_width(4),
+                album_btn,
                 Space::with_width(Length::Fill),
                 trash_btn,
                 Space::with_width(8),
@@ -301,6 +304,49 @@ impl PhotoDetailView {
 
             date_loc_items.push(
                 iced::widget::Column::with_children(people_col)
+                    .spacing(2)
+                    .into(),
+            );
+        }
+
+        // --- Album membership ---
+        if !app.current_photo_albums.is_empty() {
+            let mut album_col: Vec<Element<'static, Message>> = Vec::new();
+            album_col.push(text("ALBUMS").size(9).color(label_color).into());
+
+            let accent = p.accent_primary;
+            let hover_bg = p.bg_hover;
+            let mut album_row: Vec<Element<'static, Message>> = Vec::new();
+            for (album_id, name) in app.current_photo_albums.iter() {
+                let name = name.clone();
+                let aid = *album_id;
+                album_row.push(
+                    button(text(name).size(12).color(accent))
+                        .padding(Padding::from([2, 6]))
+                        .style(move |_t: &iced::Theme, s| button::Style {
+                            background: match s {
+                                button::Status::Hovered => Some(hover_bg.into()),
+                                _ => None,
+                            },
+                            border: iced::Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::OpenAlbum(aid))
+                        .into(),
+                );
+            }
+            album_col.push(
+                iced::widget::Row::with_children(album_row)
+                    .spacing(4)
+                    .wrap()
+                    .into(),
+            );
+
+            date_loc_items.push(
+                iced::widget::Column::with_children(album_col)
                     .spacing(2)
                     .into(),
             );

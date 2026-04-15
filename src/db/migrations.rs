@@ -49,8 +49,46 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 11 {
         migrate_v10_to_v11(conn)?;
     }
+    if current_version < 12 {
+        migrate_v11_to_v12(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v11_to_v12(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS albums (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            cover_photo_id INTEGER,
+            cover_auto_picked BOOLEAN DEFAULT TRUE,
+            photo_count INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS album_photos (
+            id INTEGER PRIMARY KEY,
+            album_id INTEGER NOT NULL,
+            photo_id INTEGER NOT NULL,
+            added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
+            FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+            UNIQUE(album_id, photo_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_album_photos_album ON album_photos(album_id);
+        CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
+
+        INSERT INTO schema_version (version) VALUES (12);
+        "#,
+    )?;
+
+    tracing::info!("Migrated database to schema version 12 (albums)");
     Ok(())
 }
 

@@ -280,13 +280,19 @@ pub fn memory_detail_view(
         .on_press(Message::MemorySlideshowNext)
         .padding(Padding::from([10, 16]));
 
+    let save_album_btn = button(text("Save as Album").size(12).color(p.text_primary))
+        .on_press(Message::SaveMemoryAsAlbum)
+        .padding(Padding::from([8, 14]));
+
     let controls = container(
         row![
             prev_btn,
             Space::with_width(12),
             pause_btn,
             Space::with_width(12),
-            next_btn
+            next_btn,
+            Space::with_width(24),
+            save_album_btn,
         ]
         .align_y(Alignment::Center),
     )

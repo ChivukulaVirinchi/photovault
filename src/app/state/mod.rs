@@ -48,6 +48,8 @@ pub enum View {
     Trash,
     Settings,
     PhotoDetail,
+    Albums,
+    AlbumDetail,
 }
 
 /// Interactive face review deck state.
@@ -388,6 +390,37 @@ pub struct PhotoVault {
 
     /// OCR processing cancel flag
     pub(crate) ocr_cancel_flag: Option<Arc<AtomicBool>>,
+
+    // --- Albums ---
+    /// All albums (loaded from DB, ordered by updated_at DESC)
+    pub(crate) albums: Vec<crate::db::AlbumRecord>,
+
+    /// Currently selected album ID (for detail view)
+    pub(crate) selected_album_id: Option<i64>,
+
+    /// Photos in the currently open album (loaded when entering detail)
+    pub(crate) album_photos: Vec<Photo>,
+
+    /// Whether the album picker overlay is open
+    pub(crate) album_picker_open: bool,
+
+    /// Photo IDs queued for the album picker (the photos being added)
+    pub(crate) album_picker_target_ids: Vec<i64>,
+
+    /// Inline text for creating a new album from the picker
+    pub(crate) album_picker_new_name: String,
+
+    /// Whether the "create new album" input is visible in the picker
+    pub(crate) album_picker_creating: bool,
+
+    /// Album name being edited (rename flow in album detail)
+    pub(crate) edit_album_name: String,
+
+    /// Album ID being renamed (None = not editing)
+    pub(crate) editing_album_id: Option<i64>,
+
+    /// Album names for the currently viewed photo (populated in detail view)
+    pub(crate) current_photo_albums: Vec<(i64, String)>,
 }
 
 impl PhotoVault {
@@ -541,6 +574,17 @@ impl PhotoVault {
             ocr_progress_receiver: None,
             ocr_progress: None,
             ocr_cancel_flag: None,
+            // Albums
+            albums: Vec::new(),
+            selected_album_id: None,
+            album_photos: Vec::new(),
+            album_picker_open: false,
+            album_picker_target_ids: Vec::new(),
+            album_picker_new_name: String::new(),
+            album_picker_creating: false,
+            edit_album_name: String::new(),
+            editing_album_id: None,
+            current_photo_albums: Vec::new(),
         };
 
         // Detect drives on startup
@@ -575,6 +619,8 @@ impl PhotoVault {
             &self.cluster_photos
         } else if self.previous_view == Some(View::Documents) && !self.documents.is_empty() {
             &self.documents
+        } else if self.previous_view == Some(View::AlbumDetail) && !self.album_photos.is_empty() {
+            &self.album_photos
         } else {
             &self.photos
         }
