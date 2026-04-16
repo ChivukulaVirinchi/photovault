@@ -269,9 +269,7 @@ fn fallback_window(
     )?;
 
     let rows = stmt.query_map(
-        params![
-            mds[0], mds[1], mds[2], mds[3], mds[4], mds[5], mds[6], cutoff_str
-        ],
+        params![mds[0], mds[1], mds[2], mds[3], mds[4], mds[5], mds[6], cutoff_str],
         |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
     )?;
 
@@ -351,7 +349,11 @@ fn seasonal_recap(
     Ok(out)
 }
 
-fn year_recap(conn: &Connection, today: NaiveDate, _current_year: i32) -> SqliteResult<Vec<Memory>> {
+fn year_recap(
+    conn: &Connection,
+    today: NaiveDate,
+    _current_year: i32,
+) -> SqliteResult<Vec<Memory>> {
     let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
@@ -385,8 +387,8 @@ fn year_recap(conn: &Connection, today: NaiveDate, _current_year: i32) -> Sqlite
         photo_ids.truncate(YEAR_RECAP_MAX_PHOTOS);
 
         // Use July 1 of that year as a reasonable midpoint for age calculation.
-        let photo_date = NaiveDate::from_ymd_opt(yr, 7, 1)
-            .unwrap_or(NaiveDate::from_ymd_opt(yr, 1, 1).unwrap());
+        let photo_date =
+            NaiveDate::from_ymd_opt(yr, 7, 1).unwrap_or(NaiveDate::from_ymd_opt(yr, 1, 1).unwrap());
         let title = age_label(photo_date, today);
         out.push(Memory {
             id: memory_id(MemoryKind::YearRecap, yr, today),
@@ -440,7 +442,6 @@ fn age_label(photo_date: NaiveDate, today: NaiveDate) -> String {
         }
     }
 }
-
 
 // ---------- Hero selection ----------
 

@@ -422,7 +422,11 @@ fn person_row(hit: &PersonHit, is_highlighted: bool, p: &Palette) -> Element<'st
             .into()
     };
 
-    let bg = if is_highlighted { bg_selected } else { bg_elevated };
+    let bg = if is_highlighted {
+        bg_selected
+    } else {
+        bg_elevated
+    };
     let cluster_id = hit.cluster_id;
     let name = hit.name.clone();
     let count = hit.photo_count;
@@ -502,7 +506,11 @@ fn album_row(hit: &AlbumHit, is_highlighted: bool, p: &Palette) -> Element<'stat
             .into()
     };
 
-    let bg = if is_highlighted { bg_selected } else { bg_elevated };
+    let bg = if is_highlighted {
+        bg_selected
+    } else {
+        bg_elevated
+    };
     let album_id = hit.album_id;
     let name = hit.name.clone();
     let count = hit.photo_count;
@@ -546,22 +554,27 @@ fn place_row(hit: &PlaceHit, is_highlighted: bool, p: &Palette) -> Element<'stat
     let text_tertiary = p.text_tertiary;
     let text_secondary = p.text_secondary;
 
-    let pin: Element<'static, Message> = container(text("\u{1F4CD}").size(18).color(text_secondary))
-        .width(Length::Fixed(40.0))
-        .height(Length::Fixed(40.0))
-        .center_x(Length::Fixed(40.0))
-        .center_y(Length::Fixed(40.0))
-        .style(move |_t| container::Style {
-            background: Some(bg_elevated.into()),
-            border: iced::Border {
-                radius: 20.0.into(),
+    let pin: Element<'static, Message> =
+        container(text("\u{1F4CD}").size(18).color(text_secondary))
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0))
+            .center_x(Length::Fixed(40.0))
+            .center_y(Length::Fixed(40.0))
+            .style(move |_t| container::Style {
+                background: Some(bg_elevated.into()),
+                border: iced::Border {
+                    radius: 20.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })
-        .into();
+            })
+            .into();
 
-    let bg = if is_highlighted { bg_selected } else { bg_elevated };
+    let bg = if is_highlighted {
+        bg_selected
+    } else {
+        bg_elevated
+    };
     let city = hit.city.clone();
     let city_for_click = hit.city.clone();
     let sub = match hit.country.clone() {
@@ -663,10 +676,8 @@ fn thumb_for(
     let p = colors::palette(theme);
     let bg_elevated = p.bg_elevated;
 
-    if let (Some(root), Some(photo)) = (
-        drive_path,
-        photos_full.iter().find(|ph| ph.id == photo_id),
-    ) {
+    if let (Some(root), Some(photo)) = (drive_path, photos_full.iter().find(|ph| ph.id == photo_id))
+    {
         if let Some(ref t) = photo.thumbnail_path {
             let tp = std::path::PathBuf::from(t);
             if tp.exists() {

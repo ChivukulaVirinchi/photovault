@@ -147,7 +147,6 @@ impl<'a> FaceRepo<'a> {
         Ok(people)
     }
 
-
     /// Get all photo IDs that contain faces from a given cluster
     pub fn get_photos_for_cluster(&self, cluster_id: i64) -> SqliteResult<Vec<i64>> {
         let mut stmt = self.conn.prepare(

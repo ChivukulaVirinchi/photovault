@@ -154,11 +154,9 @@ impl TrashView {
                 Space::with_height(12),
                 text("Trash is empty").size(16).color(p.text_secondary),
                 Space::with_height(8),
-                text(
-                    "Deleted photos appear here for 30 days before permanent removal.",
-                )
-                .size(13)
-                .color(p.text_tertiary),
+                text("Deleted photos appear here for 30 days before permanent removal.",)
+                    .size(13)
+                    .color(p.text_tertiary),
             ]
             .align_x(Alignment::Center),
         )
@@ -273,7 +271,6 @@ impl TrashView {
                 )),
         ]
         .align_y(Alignment::Center);
-
 
         let bg_selected = p.bg_selected;
         let bg_elevated = p.bg_elevated;

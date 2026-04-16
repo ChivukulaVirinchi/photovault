@@ -2,7 +2,6 @@
 
 pub mod album_suggestions;
 pub mod burst_detector;
-pub mod insights;
 pub mod document_detector;
 pub mod drive_detector;
 pub mod duplicate_detector;
@@ -10,6 +9,7 @@ pub mod exif_extractor;
 pub mod face_processor;
 pub mod geocoding;
 pub mod image_utils;
+pub mod insights;
 pub mod map_math;
 pub mod memories;
 pub mod ocr_processor;

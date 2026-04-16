@@ -11,12 +11,12 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 #[derive(Debug, Clone)]
 pub struct AlbumSuggestionRecord {
     pub id: i64,
-    pub kind: String,           // "trip" | "event"
+    pub kind: String, // "trip" | "event"
     pub title: String,
     pub photo_ids_json: String, // JSON array of i64
     pub cover_photo_id: Option<i64>,
     pub fingerprint: String,
-    pub status: String,         // "pending" | "accepted" | "dismissed"
+    pub status: String, // "pending" | "accepted" | "dismissed"
     pub seen_count: i64,
     pub created_at: String,
     /// Resolved absolute thumbnail path (set during loading, not from DB)

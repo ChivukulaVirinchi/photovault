@@ -58,7 +58,10 @@ impl PhotoVault {
         for photo in &self.photos[start_idx..end_idx] {
             if photo.thumbnail_path.is_none() {
                 // Only add if not already in queue
-                let already_queued = self.thumbnail_queue.iter().any(|(id, _, _, _)| *id == photo.id);
+                let already_queued = self
+                    .thumbnail_queue
+                    .iter()
+                    .any(|(id, _, _, _)| *id == photo.id);
                 if !already_queued {
                     urgent.push((
                         photo.id,

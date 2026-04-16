@@ -151,7 +151,10 @@ struct CitySpan {
 /// Detect trip suggestions.
 /// A trip is a contiguous span of >= 2 days in a non-home city with >= 8 photos,
 /// where the city appears in < 10% of total photo-weeks and is >= 50 km from home.
-pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>) -> Vec<DetectedSuggestion> {
+pub fn detect_trips(
+    conn: &Connection,
+    home: Option<&(String, String, f64, f64)>,
+) -> Vec<DetectedSuggestion> {
     // Query: all photos with city + date, ordered by city then date
     let rows: Vec<(i64, String, String, String)> = {
         let mut stmt = match conn.prepare(
@@ -196,9 +199,11 @@ pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>
                    GROUP BY location_city"#,
             )
             .unwrap();
-        stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
     };
 
     // City GPS centroids (for distance check)
@@ -240,40 +245,38 @@ pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>
     let mut current_country = String::new();
     let mut current_dates: Vec<(NaiveDate, i64)> = Vec::new();
 
-    let flush_city = |city: &str,
-                      country: &str,
-                      dates: &[(NaiveDate, i64)],
-                      out: &mut Vec<CitySpan>| {
-        if dates.is_empty() {
-            return;
-        }
-        // Split into contiguous spans (gap > 3 days = new span)
-        let mut span_start = dates[0].0;
-        let mut span_end = dates[0].0;
-        let mut span_ids: Vec<i64> = vec![dates[0].1];
-
-        for &(d, id) in &dates[1..] {
-            if (d - span_end).num_days() > 3 {
-                out.push(CitySpan {
-                    city: city.to_string(),
-                    country: country.to_string(),
-                    start: span_start,
-                    end: span_end,
-                    photo_ids: std::mem::take(&mut span_ids),
-                });
-                span_start = d;
+    let flush_city =
+        |city: &str, country: &str, dates: &[(NaiveDate, i64)], out: &mut Vec<CitySpan>| {
+            if dates.is_empty() {
+                return;
             }
-            span_end = d;
-            span_ids.push(id);
-        }
-        out.push(CitySpan {
-            city: city.to_string(),
-            country: country.to_string(),
-            start: span_start,
-            end: span_end,
-            photo_ids: span_ids,
-        });
-    };
+            // Split into contiguous spans (gap > 3 days = new span)
+            let mut span_start = dates[0].0;
+            let mut span_end = dates[0].0;
+            let mut span_ids: Vec<i64> = vec![dates[0].1];
+
+            for &(d, id) in &dates[1..] {
+                if (d - span_end).num_days() > 3 {
+                    out.push(CitySpan {
+                        city: city.to_string(),
+                        country: country.to_string(),
+                        start: span_start,
+                        end: span_end,
+                        photo_ids: std::mem::take(&mut span_ids),
+                    });
+                    span_start = d;
+                }
+                span_end = d;
+                span_ids.push(id);
+            }
+            out.push(CitySpan {
+                city: city.to_string(),
+                country: country.to_string(),
+                start: span_start,
+                end: span_end,
+                photo_ids: span_ids,
+            });
+        };
 
     for (id, city, country, date_str) in &rows {
         let date = match NaiveDate::parse_from_str(&date_str[..10], "%Y-%m-%d") {
@@ -330,24 +333,23 @@ pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>
             continue;
         }
 
-        let title = if span.start.year() == span.end.year()
-            && span.start.month() == span.end.month()
-        {
-            format!(
-                "{}, {} - {} {}",
-                span.city,
-                span.start.format("%b %d"),
-                span.end.format("%d"),
-                span.start.format("%Y"),
-            )
-        } else {
-            format!(
-                "{}, {} - {}",
-                span.city,
-                span.start.format("%b %d, %Y"),
-                span.end.format("%b %d, %Y"),
-            )
-        };
+        let title =
+            if span.start.year() == span.end.year() && span.start.month() == span.end.month() {
+                format!(
+                    "{}, {} - {} {}",
+                    span.city,
+                    span.start.format("%b %d"),
+                    span.end.format("%d"),
+                    span.start.format("%Y"),
+                )
+            } else {
+                format!(
+                    "{}, {} - {}",
+                    span.city,
+                    span.start.format("%b %d, %Y"),
+                    span.end.format("%b %d, %Y"),
+                )
+            };
 
         let fp = compute_fingerprint(&span.photo_ids);
         let cover = pick_cover(conn, &span.photo_ids);
@@ -371,10 +373,7 @@ pub fn detect_trips(conn: &Connection, home: Option<&(String, String, f64, f64)>
 /// Detect event suggestions via a 4-hour sliding window.
 /// An event is a burst of >= 8 photos separated by <= 4 hours from their
 /// neighbours, with a signal check (faces or single-location).
-pub fn detect_events(
-    conn: &Connection,
-    trip_photo_ids: &HashSet<i64>,
-) -> Vec<DetectedSuggestion> {
+pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<DetectedSuggestion> {
     // Query all photos with date_taken, ordered chronologically
     let rows: Vec<(i64, String, Option<String>, Option<i64>)> = {
         let mut stmt = match conn.prepare(
@@ -387,9 +386,11 @@ pub fn detect_events(
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
+        stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
     };
 
     if rows.is_empty() {
@@ -423,12 +424,7 @@ pub fn detect_events(
                 .or_else(|| {
                     NaiveDate::parse_from_str(&dt[..10], "%Y-%m-%d")
                         .ok()
-                        .map(|d| {
-                            d.and_hms_opt(0, 0, 0)
-                                .unwrap()
-                                .and_utc()
-                                .timestamp()
-                        })
+                        .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
                 })?;
             Some(EventPhoto {
                 id,
@@ -475,18 +471,9 @@ pub fn detect_events(
         }
 
         // Gate 3: signal check — 2+ face clusters OR location spans < 3 days
-        let cluster_ids: HashSet<i64> = window
-            .iter()
-            .filter_map(|p| p.cluster_id)
-            .collect();
-        let distinct_days: HashSet<i64> = window
-            .iter()
-            .map(|p| p.ts / 86400)
-            .collect();
-        let location_days: HashSet<String> = window
-            .iter()
-            .filter_map(|p| p.city.clone())
-            .collect();
+        let cluster_ids: HashSet<i64> = window.iter().filter_map(|p| p.cluster_id).collect();
+        let distinct_days: HashSet<i64> = window.iter().map(|p| p.ts / 86400).collect();
+        let location_days: HashSet<String> = window.iter().filter_map(|p| p.city.clone()).collect();
 
         let has_face_signal = cluster_ids.len() >= 2;
         let has_location_signal = !location_days.is_empty() && distinct_days.len() <= 3;
@@ -578,7 +565,13 @@ pub fn detect_suggestions(
         if existing_fps.contains(&s.fingerprint) {
             continue;
         }
-        match repo.insert(&s.kind, &s.title, &s.photo_ids, s.cover_photo_id, &s.fingerprint) {
+        match repo.insert(
+            &s.kind,
+            &s.title,
+            &s.photo_ids,
+            s.cover_photo_id,
+            &s.fingerprint,
+        ) {
             Ok(_id) => {
                 tracing::info!("New {} suggestion: {}", s.kind, s.title);
                 persisted.push(s);

@@ -253,10 +253,7 @@ pub(crate) fn close_popover_at(app: &mut PhotoVault, idx: usize) -> Task<Message
     Task::none()
 }
 
-pub(crate) fn open_cluster_filmstrip(
-    app: &mut PhotoVault,
-    photo_ids: Vec<i64>,
-) -> Task<Message> {
+pub(crate) fn open_cluster_filmstrip(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Message> {
     if photo_ids.is_empty() {
         return Task::none();
     }
@@ -328,12 +325,7 @@ pub(crate) fn photo_map_pan_end(app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }
 
-pub(crate) fn photo_map_zoom_at(
-    app: &mut PhotoVault,
-    x: f32,
-    y: f32,
-    delta: i8,
-) -> Task<Message> {
+pub(crate) fn photo_map_zoom_at(app: &mut PhotoVault, x: f32, y: f32, delta: i8) -> Task<Message> {
     let Some(center) = app.photo_map_center else {
         return Task::none();
     };
@@ -399,7 +391,6 @@ fn prefetch_photo_map_visible(app: &mut PhotoVault) -> Task<Message> {
         Task::batch(tasks)
     }
 }
-
 
 pub(crate) fn set_cache_limit(app: &mut PhotoVault, mb: u32) -> Task<Message> {
     let mb = mb.clamp(50, 10_000);

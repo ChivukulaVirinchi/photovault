@@ -147,14 +147,16 @@ fn toast_card(t: &Toast, theme: AppTheme) -> Element<'static, Message> {
     }
 
     // Left accent bar — shown as a thin vertical strip.
-    let accent_bar = container(Space::new(Length::Fixed(3.0), Length::Fixed(40.0)))
-        .style(move |_| container::Style {
-            background: Some(accent.into()),
-            border: iced::Border {
-                radius: 2.0.into(),
+    let accent_bar =
+        container(Space::new(Length::Fixed(3.0), Length::Fixed(40.0))).style(move |_| {
+            container::Style {
+                background: Some(accent.into()),
+                border: iced::Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
+            }
         });
 
     let mut card_row = row![accent_bar, Space::with_width(10), col,].align_y(Alignment::Center);

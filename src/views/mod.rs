@@ -2,11 +2,11 @@
 
 pub mod albums;
 pub mod bursts;
-pub mod insights;
 pub mod cull;
 pub mod documents;
 pub mod duplicates;
 pub mod face_review;
+pub mod insights;
 pub mod map;
 pub mod memories;
 pub mod people;

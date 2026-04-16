@@ -343,4 +343,3 @@ pub fn skeleton_grid(
         .padding(Padding::from([0, 20]))
         .into()
 }
-

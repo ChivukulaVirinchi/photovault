@@ -110,9 +110,7 @@ pub(crate) fn load_insights(app: &mut PhotoVault) -> Task<Message> {
                         )
                         .ok()
                         .flatten();
-                    let orig_abs = orig
-                        .map(|p| drive_path.join(&p))
-                        .filter(|p| p.exists());
+                    let orig_abs = orig.map(|p| drive_path.join(&p)).filter(|p| p.exists());
                     if let Some(p) = orig_abs {
                         data.hero_thumbnail_path = Some(p.to_string_lossy().to_string());
                     } else {
@@ -139,8 +137,7 @@ pub(crate) fn load_insights(app: &mut PhotoVault) -> Task<Message> {
                             .join("face_crops")
                             .join(format!("{}.jpg", face_id));
                         if crop_path.exists() {
-                            person.face_crop_path =
-                                Some(crop_path.to_string_lossy().to_string());
+                            person.face_crop_path = Some(crop_path.to_string_lossy().to_string());
                         }
                     }
                 }

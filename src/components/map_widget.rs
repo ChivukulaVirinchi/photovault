@@ -78,11 +78,7 @@ pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
         layers = layers.push(offline_banner_layer());
     }
 
-    let base: Element<'static, Message> = container(layers)
-        .width(w)
-        .height(h)
-        .clip(true)
-        .into();
+    let base: Element<'static, Message> = container(layers).width(w).height(h).clip(true).into();
 
     if cfg.interaction == InteractionMode::None {
         return base;
@@ -103,10 +99,7 @@ pub fn map_widget(cfg: MapWidgetConfig<'_>) -> Element<'static, Message> {
             y: f32::NAN,
         })
         .on_release(Message::MapPanEnd)
-        .on_move(|p| Message::MapPan {
-            dx: p.x,
-            dy: p.y,
-        })
+        .on_move(|p| Message::MapPan { dx: p.x, dy: p.y })
         .on_scroll(move |delta| {
             let amount = match delta {
                 mouse::ScrollDelta::Lines { y, .. } => y,
@@ -165,11 +158,7 @@ impl canvas::Program<Message> for TileCanvas {
             let (tx, ty) = tile_top_left(tile, &v);
             // Skip tiles fully outside the frame bounds to prevent
             // canvas overflow into adjacent layout regions.
-            if tx + TILE_PX < 0.0
-                || ty + TILE_PX < 0.0
-                || tx > bounds.width
-                || ty > bounds.height
-            {
+            if tx + TILE_PX < 0.0 || ty + TILE_PX < 0.0 || tx > bounds.width || ty > bounds.height {
                 continue;
             }
             draw_tile(&mut frame, tile, tx, ty, &self.cache, grey);
@@ -277,7 +266,13 @@ impl canvas::Program<Message> for PinCanvas {
                         mouse::ScrollDelta::Lines { y, .. } => y,
                         mouse::ScrollDelta::Pixels { y, .. } => y,
                     };
-                    let step = if amount > 0.0 { 1 } else if amount < 0.0 { -1 } else { 0 };
+                    let step = if amount > 0.0 {
+                        1
+                    } else if amount < 0.0 {
+                        -1
+                    } else {
+                        0
+                    };
                     Some(Message::PhotoMapZoomAt {
                         x: pos.x,
                         y: pos.y,

@@ -19,9 +19,7 @@ pub fn photo_mini_map(app: &PhotoVault, photo: &Photo) -> Option<Element<'static
     let cache = app.tile_cache.as_ref()?;
 
     // Current view state: pannable/zoomable center+zoom tracked in app.
-    let center = app
-        .photo_map_center
-        .unwrap_or(LatLng { lat, lng });
+    let center = app.photo_map_center.unwrap_or(LatLng { lat, lng });
     let zoom = app.photo_map_zoom;
 
     // Always show the photo's actual pin at its real GPS, regardless of

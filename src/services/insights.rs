@@ -75,10 +75,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
 
     // 1. Total photos
     let total_photos: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE{}",
-            yc
-        ),
+        &format!("SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE{}", yc),
         [],
         |row| row.get(0),
     )?;
@@ -232,9 +229,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              GROUP BY m",
             yc
         ))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
-        })?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?;
         for r in rows {
             if let Ok((month, count)) = r {
                 if (1..=12).contains(&month) {

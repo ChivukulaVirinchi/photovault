@@ -60,9 +60,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::MapPinsLoaded(pins) => map::pins_loaded(app, pins),
         Message::MapTileFetched(tile) => map::tile_fetched(app, tile),
         Message::MapTileFetchFailed(tile, err) => map::tile_fetch_failed(app, tile, err),
-        Message::MapPinClicked { photo_ids, anchor } => {
-            map::pin_clicked(app, photo_ids, anchor)
-        }
+        Message::MapPinClicked { photo_ids, anchor } => map::pin_clicked(app, photo_ids, anchor),
         Message::MapClosePopover => map::close_popover(app),
         Message::MapClosePopoverAt(idx) => map::close_popover_at(app, idx),
         Message::MapOpenClusterFilmstrip(ids) => map::open_cluster_filmstrip(app, ids),
@@ -165,9 +163,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         // --- Search / cull ---
         Message::SearchInputChanged(input) => search_cull::search_input_changed(app, input),
         Message::ExecuteSearch => search_cull::execute_search(app),
-        Message::SearchComplete(gen, results) => {
-            search_cull::search_complete(app, gen, results)
-        }
+        Message::SearchComplete(gen, results) => search_cull::search_complete(app, gen, results),
         Message::SearchDebouncedTick(gen) => search_cull::search_debounced_tick(app, gen),
         Message::RecentSearchesLoaded(list) => search_cull::recent_searches_loaded(app, list),
         Message::SearchRecentSelected(query) => search_cull::search_recent_selected(app, query),
@@ -289,7 +285,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::SuggestionsDetected(suggestions) => albums::suggestions_detected(app, suggestions),
         Message::SuggestionsLoaded(suggestions) => albums::suggestions_loaded(app, suggestions),
         Message::BeginAcceptSuggestion(id) => albums::begin_accept_suggestion(app, id),
-        Message::AcceptSuggestionNameChanged(name) => albums::accept_suggestion_name_changed(app, name),
+        Message::AcceptSuggestionNameChanged(name) => {
+            albums::accept_suggestion_name_changed(app, name)
+        }
         Message::ConfirmAcceptSuggestion(id) => albums::confirm_accept_suggestion(app, id),
         Message::CancelAcceptSuggestion => albums::cancel_accept_suggestion(app),
         Message::DismissSuggestion(id) => albums::dismiss_suggestion(app, id),

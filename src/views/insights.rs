@@ -10,9 +10,7 @@
 //! 7. Camera breakdown (horizontal bars)
 
 use chrono::Datelike;
-use iced::widget::{
-    button, column, container, image as iced_image, row, scrollable, text, Space,
-};
+use iced::widget::{button, column, container, image as iced_image, row, scrollable, text, Space};
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
@@ -41,7 +39,10 @@ pub fn insights_view(
                 theme,
             )
         } else {
-            text("No insights data yet.").size(14).color(p.text_secondary).into()
+            text("No insights data yet.")
+                .size(14)
+                .color(p.text_secondary)
+                .into()
         };
         return container(
             column![
@@ -103,9 +104,7 @@ pub fn insights_view(
     // Bottom spacer
     content = content.push(Space::with_height(40));
 
-    scrollable(content)
-        .width(Length::Fill)
-        .into()
+    scrollable(content).width(Length::Fill).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -113,10 +112,7 @@ pub fn insights_view(
 // ---------------------------------------------------------------------------
 
 fn section_header(title: &str, p: &colors::Palette) -> Element<'static, Message> {
-    text(title.to_owned())
-        .size(18)
-        .color(p.text_primary)
-        .into()
+    text(title.to_owned()).size(18).color(p.text_primary).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -232,11 +228,7 @@ fn stat_cards(data: &InsightsData, p: &colors::Palette) -> Element<'static, Mess
         .into()
 }
 
-fn stat_card(
-    value: &str,
-    label: &str,
-    p: &colors::Palette,
-) -> Element<'static, Message> {
+fn stat_card(value: &str, label: &str, p: &colors::Palette) -> Element<'static, Message> {
     let bg = p.bg_elevated;
     let border_color = p.border_subtle;
     let text_primary = p.text_primary;
@@ -343,8 +335,8 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
                 let col = (day_of_year + jan1_weekday) / 7;
                 let gap = col - last_col - 1;
                 if gap > 0 {
-                    month_label_row = month_label_row
-                        .push(Space::with_width(Length::Fixed((gap as f32) * 14.0)));
+                    month_label_row =
+                        month_label_row.push(Space::with_width(Length::Fixed((gap as f32) * 14.0)));
                 }
                 month_label_row = month_label_row.push(
                     container(
@@ -375,21 +367,20 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
     let text_tertiary = p.text_tertiary;
 
     for day_of_week in 0..7usize {
-        let mut week_row = row![
-            container(
-                text(day_labels[day_of_week].to_string())
-                    .size(9)
-                    .color(text_tertiary),
-            )
-            .width(Length::Fixed(28.0))
-            .height(Length::Fixed(14.0))
-        ];
+        let mut week_row = row![container(
+            text(day_labels[day_of_week].to_string())
+                .size(9)
+                .color(text_tertiary),
+        )
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(14.0))];
 
         for week in 0..53usize {
             let day_index = week * 7 + day_of_week;
             // Convert to actual date
             let offset_from_jan1 = day_index as i32 - jan1_weekday as i32;
-            let date_opt = jan1_date.checked_add_signed(chrono::Duration::days(offset_from_jan1 as i64));
+            let date_opt =
+                jan1_date.checked_add_signed(chrono::Duration::days(offset_from_jan1 as i64));
 
             let (count, date_str) = if let Some(date) = date_opt {
                 if date.year() == year {
@@ -405,9 +396,7 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
 
             if count < 0 {
                 // Empty placeholder cell
-                week_row = week_row.push(
-                    Space::new(Length::Fixed(14.0), Length::Fixed(14.0))
-                );
+                week_row = week_row.push(Space::new(Length::Fixed(14.0), Length::Fixed(14.0)));
             } else {
                 let intensity = if count == 0 {
                     0.0f32
@@ -475,15 +464,17 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
     let bg_card = p.bg_elevated;
     let border_card = p.border_subtle;
 
-    let heatmap_container = container(grid.padding(Padding::from([8, 8])))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg_card.into()),
-            border: iced::Border {
-                color: border_card,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
+    let heatmap_container =
+        container(grid.padding(Padding::from([8, 8]))).style(move |_theme: &iced::Theme| {
+            container::Style {
+                background: Some(bg_card.into()),
+                border: iced::Border {
+                    color: border_card,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            }
         });
 
     scrollable(heatmap_container)
@@ -503,7 +494,13 @@ fn monthly_bars(data: &InsightsData, p: &colors::Palette) -> Element<'static, Me
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
 
-    let max_count = data.monthly_counts.iter().copied().max().unwrap_or(1).max(1);
+    let max_count = data
+        .monthly_counts
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let accent = p.accent_primary;
     let bg_elevated = p.bg_elevated;
     let text_secondary = p.text_secondary;
@@ -521,18 +518,16 @@ fn monthly_bars(data: &InsightsData, p: &colors::Palette) -> Element<'static, Me
 
         let bar_color = if count > 0 { accent } else { bg_elevated };
 
-        let bar = container(Space::new(
-            Length::Fixed(bar_width),
-            Length::Fixed(16.0),
-        ))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bar_color.into()),
-            border: iced::Border {
-                radius: 3.0.into(),
+        let bar = container(Space::new(Length::Fixed(bar_width), Length::Fixed(16.0))).style(
+            move |_theme: &iced::Theme| container::Style {
+                background: Some(bar_color.into()),
+                border: iced::Border {
+                    radius: 3.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        });
+        );
 
         let count_label = if count > 0 {
             format_number(count)
@@ -691,13 +686,11 @@ fn top_locations(data: &InsightsData, p: &colors::Palette) -> Element<'static, M
         let city_clone = loc.city.clone();
 
         let loc_row = button(
-            row![
-                column![
-                    text(label).size(14).color(text_primary),
-                    text(count_str).size(11).color(text_secondary),
-                ]
-                .spacing(2),
+            row![column![
+                text(label).size(14).color(text_primary),
+                text(count_str).size(11).color(text_secondary),
             ]
+            .spacing(2),]
             .align_y(Alignment::Center)
             .padding(Padding::from([6, 12])),
         )
@@ -760,24 +753,20 @@ fn camera_breakdown(data: &InsightsData, p: &colors::Palette) -> Element<'static
         let bar_width = (cam.photo_count as f32 / max_count as f32 * 260.0).max(4.0);
 
         let bar_color = accent;
-        let bar = container(Space::new(
-            Length::Fixed(bar_width),
-            Length::Fixed(16.0),
-        ))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bar_color.into()),
-            border: iced::Border {
-                radius: 3.0.into(),
+        let bar = container(Space::new(Length::Fixed(bar_width), Length::Fixed(16.0))).style(
+            move |_theme: &iced::Theme| container::Style {
+                background: Some(bar_color.into()),
+                border: iced::Border {
+                    radius: 3.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        });
+        );
 
         let bar_row = row![
-            container(
-                text(cam.camera.clone()).size(12).color(text_secondary),
-            )
-            .width(Length::Fixed(160.0)),
+            container(text(cam.camera.clone()).size(12).color(text_secondary),)
+                .width(Length::Fixed(160.0)),
             bar,
             Space::with_width(8),
             text(format_number(cam.photo_count))

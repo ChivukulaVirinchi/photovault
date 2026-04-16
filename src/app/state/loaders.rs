@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use iced::Task;
 
-use crate::db::{AlbumRepo, AlbumSuggestionRepo, Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo};
+use crate::db::{
+    AlbumRepo, AlbumSuggestionRepo, Database, DocumentRepo, FaceRepo, PhotoRepo, TrashRepo,
+};
 use crate::services::image_utils::apply_exif_orientation;
 use crate::services::map_math;
 use crate::services::{FaceProcessor, TrashService, TrashStats};
@@ -234,9 +236,8 @@ impl PhotoVault {
                 match Database::open_for_drive(&drive_path) {
                     Ok(db) => {
                         let album_repo = AlbumRepo::new(&db.conn);
-                        let photo_ids = album_repo
-                            .get_album_photo_ids(album_id)
-                            .unwrap_or_default();
+                        let photo_ids =
+                            album_repo.get_album_photo_ids(album_id).unwrap_or_default();
 
                         if photo_ids.is_empty() {
                             return Vec::new();
@@ -252,8 +253,7 @@ impl PhotoVault {
                         for photo in &mut photos {
                             if let Some(ref rel_path) = photo.thumbnail_path {
                                 let abs_path = drive_path.join(rel_path);
-                                photo.thumbnail_path =
-                                    Some(abs_path.to_string_lossy().to_string());
+                                photo.thumbnail_path = Some(abs_path.to_string_lossy().to_string());
                             }
                         }
 

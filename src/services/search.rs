@@ -342,5 +342,4 @@ impl SearchService {
         })?;
         rows.collect()
     }
-
 }

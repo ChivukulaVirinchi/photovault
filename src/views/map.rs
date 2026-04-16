@@ -163,8 +163,7 @@ fn popover_at(
             Space::with_height(8),
             thumbs,
             Space::with_height(8),
-            button(text("Open filmstrip").size(12))
-                .on_press(Message::MapOpenClusterFilmstrip(ids)),
+            button(text("Open filmstrip").size(12)).on_press(Message::MapOpenClusterFilmstrip(ids)),
         ]
         .spacing(0)
         .padding(12)

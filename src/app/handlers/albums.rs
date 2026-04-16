@@ -7,7 +7,10 @@ use crate::db::{AlbumRepo, Database};
 use super::super::messages::Message;
 use super::super::state::{PhotoVault, View};
 
-pub(crate) fn albums_loaded(app: &mut PhotoVault, albums: Vec<crate::db::AlbumRecord>) -> Task<Message> {
+pub(crate) fn albums_loaded(
+    app: &mut PhotoVault,
+    albums: Vec<crate::db::AlbumRecord>,
+) -> Task<Message> {
     app.albums = albums;
     app.albums_loading = false;
     Task::none()
@@ -99,12 +102,19 @@ pub(crate) fn open_album(app: &mut PhotoVault, album_id: i64) -> Task<Message> {
     app.load_album_photos(album_id)
 }
 
-pub(crate) fn album_photos_loaded(app: &mut PhotoVault, photos: Vec<crate::models::Photo>) -> Task<Message> {
+pub(crate) fn album_photos_loaded(
+    app: &mut PhotoVault,
+    photos: Vec<crate::models::Photo>,
+) -> Task<Message> {
     app.album_photos = photos;
     Task::none()
 }
 
-pub(crate) fn add_photos_to_album(app: &mut PhotoVault, album_id: i64, photo_ids: Vec<i64>) -> Task<Message> {
+pub(crate) fn add_photos_to_album(
+    app: &mut PhotoVault,
+    album_id: i64,
+    photo_ids: Vec<i64>,
+) -> Task<Message> {
     if let Some(ref drive_path) = app.selected_drive {
         if let Ok(db) = Database::open_for_drive(drive_path) {
             let repo = AlbumRepo::new(&db.conn);
@@ -133,7 +143,11 @@ pub(crate) fn add_photos_to_album(app: &mut PhotoVault, album_id: i64, photo_ids
     Task::batch(tasks)
 }
 
-pub(crate) fn remove_photos_from_album(app: &mut PhotoVault, album_id: i64, photo_ids: Vec<i64>) -> Task<Message> {
+pub(crate) fn remove_photos_from_album(
+    app: &mut PhotoVault,
+    album_id: i64,
+    photo_ids: Vec<i64>,
+) -> Task<Message> {
     if let Some(ref drive_path) = app.selected_drive {
         if let Ok(db) = Database::open_for_drive(drive_path) {
             let repo = AlbumRepo::new(&db.conn);
@@ -195,7 +209,11 @@ pub(crate) fn album_picker_create_and_add(app: &mut PhotoVault) -> Task<Message>
                     if !photo_ids.is_empty() {
                         let _ = repo.add_photos(album_id, &photo_ids);
                     }
-                    tracing::info!("Created album '{}' and added {} photos", name, photo_ids.len());
+                    tracing::info!(
+                        "Created album '{}' and added {} photos",
+                        name,
+                        photo_ids.len()
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to create album from picker: {}", e);
@@ -294,10 +312,7 @@ pub(crate) fn run_suggestion_detection(app: &mut PhotoVault) -> Task<Message> {
             match Database::open_for_drive(&drive_path) {
                 Ok(db) => {
                     let override_ref = home_override.as_deref();
-                    crate::services::album_suggestions::detect_suggestions(
-                        &db.conn,
-                        override_ref,
-                    );
+                    crate::services::album_suggestions::detect_suggestions(&db.conn, override_ref);
                     // Re-load all pending suggestions to return
                     let repo = crate::db::AlbumSuggestionRepo::new(&db.conn);
                     let mut suggestions = repo.get_pending().unwrap_or_default();
@@ -355,10 +370,7 @@ pub(crate) fn begin_accept_suggestion(app: &mut PhotoVault, id: i64) -> Task<Mes
     Task::none()
 }
 
-pub(crate) fn accept_suggestion_name_changed(
-    app: &mut PhotoVault,
-    name: String,
-) -> Task<Message> {
+pub(crate) fn accept_suggestion_name_changed(app: &mut PhotoVault, name: String) -> Task<Message> {
     app.accepting_suggestion_name = name;
     Task::none()
 }

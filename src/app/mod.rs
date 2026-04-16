@@ -5,9 +5,9 @@ mod messages;
 pub mod state;
 mod views;
 
-pub use messages::{MapPopover, Message};
 #[allow(unused_imports)]
 pub use messages::ScanResult;
+pub use messages::{MapPopover, Message};
 #[allow(unused_imports)]
 pub use state::ScanState;
 pub use state::{PhotoVault, View};
@@ -92,9 +92,9 @@ impl PhotoVault {
         // Keyboard events for all views (shortcuts)
         if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {
-                iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key, modifiers, ..
-                }) => Some(Message::KeyPressed(key, modifiers)),
+                iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                    Some(Message::KeyPressed(key, modifiers))
+                }
                 iced::Event::Window(iced::window::Event::Resized(size)) => {
                     Some(Message::WindowResized {
                         width: size.width,

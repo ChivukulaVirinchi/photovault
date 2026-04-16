@@ -32,10 +32,8 @@ impl<'a> AlbumRepo<'a> {
 
     /// Create a new album with the given name. Returns the new album ID.
     pub fn create(&self, name: &str) -> SqliteResult<i64> {
-        self.conn.execute(
-            "INSERT INTO albums (name) VALUES (?1)",
-            params![name],
-        )?;
+        self.conn
+            .execute("INSERT INTO albums (name) VALUES (?1)", params![name])?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -54,10 +52,8 @@ impl<'a> AlbumRepo<'a> {
             "DELETE FROM album_photos WHERE album_id = ?1",
             params![album_id],
         )?;
-        self.conn.execute(
-            "DELETE FROM albums WHERE id = ?1",
-            params![album_id],
-        )?;
+        self.conn
+            .execute("DELETE FROM albums WHERE id = ?1", params![album_id])?;
         Ok(())
     }
 
@@ -157,9 +153,7 @@ impl<'a> AlbumRepo<'a> {
             "#,
         )?;
 
-        let rows = stmt.query_map(params![photo_id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let rows = stmt.query_map(params![photo_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
         let mut result = Vec::new();
         for r in rows {
@@ -170,8 +164,10 @@ impl<'a> AlbumRepo<'a> {
 
     /// Auto-pick a cover photo for the album (prefers faces, landscape, newest).
     pub fn auto_pick_cover(&self, album_id: i64) -> SqliteResult<()> {
-        let cover_id: Option<i64> = self.conn.query_row(
-            r#"
+        let cover_id: Option<i64> = self
+            .conn
+            .query_row(
+                r#"
             SELECT ap.photo_id FROM album_photos ap
             JOIN photos p ON ap.photo_id = p.id
             LEFT JOIN faces f ON p.id = f.photo_id
@@ -183,9 +179,10 @@ impl<'a> AlbumRepo<'a> {
               p.date_taken DESC
             LIMIT 1
             "#,
-            params![album_id],
-            |row| row.get(0),
-        ).ok();
+                params![album_id],
+                |row| row.get(0),
+            )
+            .ok();
 
         self.conn.execute(
             "UPDATE albums SET cover_photo_id = ?1, cover_auto_picked = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
@@ -207,11 +204,14 @@ impl<'a> AlbumRepo<'a> {
         )?;
 
         // Check if cover is auto-picked
-        let auto_picked: bool = self.conn.query_row(
-            "SELECT cover_auto_picked FROM albums WHERE id = ?1",
-            params![album_id],
-            |row| row.get(0),
-        ).unwrap_or(true);
+        let auto_picked: bool = self
+            .conn
+            .query_row(
+                "SELECT cover_auto_picked FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(true);
 
         if auto_picked {
             self.auto_pick_cover(album_id)?;

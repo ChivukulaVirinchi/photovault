@@ -79,9 +79,7 @@ pub(crate) fn regenerated(app: &mut PhotoVault, cards: Vec<MemoryCard>) -> Task<
                 )
                 .ok()
                 .flatten();
-            let orig_abs = orig
-                .map(|p| drive_path.join(p))
-                .filter(|p| p.exists());
+            let orig_abs = orig.map(|p| drive_path.join(p)).filter(|p| p.exists());
             if let Some(p) = orig_abs {
                 card.hero_thumbnail_path = Some(p.to_string_lossy().to_string());
             } else {
