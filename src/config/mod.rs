@@ -119,8 +119,8 @@ impl AppConfig {
         self.face_detection_confidence = self.face_detection_confidence.clamp(0.1, 0.95);
         self.face_clustering_threshold = self.face_clustering_threshold.clamp(0.1, 0.8);
         self.thumbnail_size = self.thumbnail_size.clamp(100, 1000);
-        self.burst_time_window_seconds = self.burst_time_window_seconds.max(1).min(30);
-        self.trash_auto_delete_days = self.trash_auto_delete_days.max(1).min(365);
+        self.burst_time_window_seconds = self.burst_time_window_seconds.clamp(1, 30);
+        self.trash_auto_delete_days = self.trash_auto_delete_days.clamp(1, 365);
         self.window_width = self.window_width.clamp(400, 7680);
         self.window_height = self.window_height.clamp(300, 4320);
         self.weight_cooccurrence = self.weight_cooccurrence.clamp(0.0, 2.0);

@@ -265,9 +265,9 @@ impl FaceDetector {
         }
 
         // Sort each group by descending anchor count (stride 8 has most anchors)
-        score_tensors.sort_by(|a, b| b.0.cmp(&a.0));
-        bbox_tensors.sort_by(|a, b| b.0.cmp(&a.0));
-        lmk_tensors.sort_by(|a, b| b.0.cmp(&a.0));
+        score_tensors.sort_by_key(|x| std::cmp::Reverse(x.0));
+        bbox_tensors.sort_by_key(|x| std::cmp::Reverse(x.0));
+        lmk_tensors.sort_by_key(|x| std::cmp::Reverse(x.0));
 
         let mut stride_outputs = Vec::new();
 
@@ -383,8 +383,8 @@ impl FaceDetector {
                         let lm_base = idx * 10;
                         let mut lmks = [(0.0f32, 0.0f32); 5];
                         if lm_base + 9 < so.landmarks.len() {
-                            for j in 0..5 {
-                                lmks[j] = (
+                            for (j, lmk) in lmks.iter_mut().enumerate() {
+                                *lmk = (
                                     (cx + so.landmarks[lm_base + j * 2] * stride) * scale_x,
                                     (cy + so.landmarks[lm_base + j * 2 + 1] * stride) * scale_y,
                                 );

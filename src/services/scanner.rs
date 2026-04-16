@@ -295,7 +295,7 @@ fn run_scan(
             batch.clear();
 
             // Send progress
-            if files_processed % 50 == 0 || files_processed <= 5 {
+            if files_processed.is_multiple_of(50) || files_processed <= 5 {
                 let _ = progress_tx.send_blocking(ScanProgress {
                     files_found: total_found,
                     files_processed,
@@ -461,6 +461,6 @@ mod tests {
 
     #[test]
     fn test_min_file_size_filter() {
-        assert!(MIN_FILE_SIZE == 10 * 1024);
+        const _: () = assert!(MIN_FILE_SIZE == 10 * 1024);
     }
 }

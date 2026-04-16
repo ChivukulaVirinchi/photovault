@@ -138,14 +138,14 @@ pub(crate) fn execute_search(app: &mut PhotoVault) -> Task<Message> {
 pub(crate) fn search_complete(
     app: &mut PhotoVault,
     gen: u64,
-    results: Box<UnifiedSearchResults>,
+    results: UnifiedSearchResults,
 ) -> Task<Message> {
     // Discard stale results from older generations
     if gen != app.search_generation {
         return Task::none();
     }
     app.search_loading = false;
-    app.search_results = Some(*results);
+    app.search_results = Some(results);
 
     // Record this search as recent (best-effort, non-blocking)
     if let Some(ref drive_path) = app.selected_drive {

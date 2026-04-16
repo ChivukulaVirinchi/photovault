@@ -66,6 +66,15 @@ struct FaceInsert {
     aligned_face: image::RgbImage,
 }
 
+struct ContextPropagationInput<'a> {
+    drive_path: &'a Path,
+    photo_id: i64,
+    file_path: &'a str,
+    target_ts: i64,
+    target_brightness: f32,
+    brightness_map: &'a HashMap<i64, f32>,
+}
+
 /// Face processing pipeline
 ///
 /// Call `process_photos` to run the full detect -> embed -> cluster pipeline.
@@ -155,7 +164,7 @@ impl FaceProcessor {
         let available_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let num_workers = available_cpus.min(6).max(1);
+        let num_workers = available_cpus.clamp(1, 6);
         let intra_threads = (available_cpus / num_workers).max(1);
 
         tracing::info!(
@@ -466,16 +475,15 @@ impl FaceProcessor {
                 continue; // Only propagate for photos with no detected faces
             }
             if let Some(target_ts) = result.taken_ts {
-                let _ = Self::propagate_identity_from_context(
-                    &face_repo,
-                    &inferred_repo,
+                let params = ContextPropagationInput {
                     drive_path,
-                    result.photo_id,
-                    &result.file_path,
+                    photo_id: result.photo_id,
+                    file_path: &result.file_path,
                     target_ts,
-                    result.brightness,
-                    &brightness_map,
-                );
+                    target_brightness: result.brightness,
+                    brightness_map: &brightness_map,
+                };
+                let _ = Self::propagate_identity_from_context(&face_repo, &inferred_repo, &params);
             }
         }
 
@@ -519,14 +527,9 @@ impl FaceProcessor {
     fn propagate_identity_from_context(
         face_repo: &FaceRepo,
         inferred_repo: &InferredIdentityRepo,
-        drive_path: &Path,
-        photo_id: i64,
-        file_path: &str,
-        target_ts: i64,
-        target_brightness: f32,
-        brightness_map: &HashMap<i64, f32>,
+        params: &ContextPropagationInput<'_>,
     ) -> Result<usize, String> {
-        let folder_like = std::path::Path::new(file_path).parent().map(|p| {
+        let folder_like = std::path::Path::new(params.file_path).parent().map(|p| {
             let s = p.to_string_lossy();
             if s.is_empty() {
                 "%".to_string()
@@ -537,9 +540,9 @@ impl FaceProcessor {
 
         let candidates = face_repo
             .get_contextual_cluster_candidates(
-                photo_id,
+                params.photo_id,
                 folder_like.as_deref(),
-                target_ts,
+                params.target_ts,
                 Self::CONTEXT_WINDOW_SECS,
             )
             .map_err(|e| format!("Failed to query contextual candidates: {}", e))?;
@@ -551,18 +554,25 @@ impl FaceProcessor {
         let mut best_by_cluster: HashMap<i64, (i64, f32)> = HashMap::new();
 
         for (source_photo_id, cluster_id, source_ts, source_file_path) in candidates {
-            let delta = (source_ts - target_ts).abs() as f32;
+            let delta = (source_ts - params.target_ts).abs() as f32;
             let temporal_score = 1.0 - (delta / Self::CONTEXT_WINDOW_SECS as f32).clamp(0.0, 1.0);
             let mut confidence = 0.5 + (temporal_score * 0.4);
 
             // Use precomputed brightness if available, otherwise load from disk
-            let source_brightness = brightness_map.get(&source_photo_id).copied().or_else(|| {
-                Self::load_average_brightness_from_relative(drive_path, &source_file_path)
-            });
+            let source_brightness = params
+                .brightness_map
+                .get(&source_photo_id)
+                .copied()
+                .or_else(|| {
+                    Self::load_average_brightness_from_relative(
+                        params.drive_path,
+                        &source_file_path,
+                    )
+                });
 
             if let Some(source_brightness) = source_brightness {
                 // Smooth falloff instead of hard cutoff (Phase 2 fix included)
-                let diff = (target_brightness - source_brightness).abs();
+                let diff = (params.target_brightness - source_brightness).abs();
                 let brightness_bonus = 0.1 * (1.0 - (diff / 0.3).clamp(0.0, 1.0));
                 confidence += brightness_bonus;
             }
@@ -584,7 +594,7 @@ impl FaceProcessor {
         let mut inserted = 0usize;
         for (cluster_id, (source_photo_id, confidence)) in best_by_cluster {
             if inferred_repo
-                .insert_inferred_identity(photo_id, cluster_id, source_photo_id, confidence)
+                .insert_inferred_identity(params.photo_id, cluster_id, source_photo_id, confidence)
                 .is_ok()
             {
                 inserted += 1;
@@ -723,9 +733,9 @@ impl FaceProcessor {
 
     /// Run incremental clustering in two stages:
     /// 1) Gallery k-NN retrieval + confidence bands:
-    ///      HIGH      -> auto-assign to top cluster
-    ///      AMBIGUOUS -> queue for user review
-    ///      LOW       -> leave for Stage 2
+    ///    HIGH      -> auto-assign to top cluster
+    ///    AMBIGUOUS -> queue for user review
+    ///    LOW       -> leave for Stage 2
     /// 2) Complete-link agglomerative clustering on still-unresolved faces
     fn run_clustering(
         face_repo: &FaceRepo,
@@ -919,13 +929,13 @@ impl FaceProcessor {
     /// galleries with a looser threshold than the first-pass retrieval.
     /// Classify into three bands:
     ///   - HIGH       (mean top-k sim >= 0.60, 0.08 margin over runner-up):
-    ///                auto-assign to best cluster
+    ///     auto-assign to best cluster
     ///   - AMBIGUOUS  (0.45 <= sim < 0.60):
-    ///                enqueue for user review — the review badge will prompt
-    ///                them to resolve without any explicit UI "check now" button
+    ///     enqueue for user review — the review badge will prompt
+    ///     them to resolve without any explicit UI "check now" button
     ///   - LOW        (< 0.45):
-    ///                leave as orphan; a future scan or better gallery may
-    ///                eventually pick it up
+    ///     leave as orphan; a future scan or better gallery may
+    ///     eventually pick it up
     ///
     /// Returns (auto_rescued, queued_for_review).
     fn rescue_orphan_faces(face_repo: &FaceRepo) -> Result<(usize, usize), String> {
@@ -1089,7 +1099,7 @@ impl FaceProcessor {
                 let a = cluster_ids[i];
                 let b = cluster_ids[j];
 
-                if cannot_merge.get(&a).map_or(false, |set| set.contains(&b)) {
+                if cannot_merge.get(&a).is_some_and(|set| set.contains(&b)) {
                     continue;
                 }
 

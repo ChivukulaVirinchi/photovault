@@ -252,16 +252,12 @@ impl SearchService {
             return Ok(UnifiedSearchResults::default());
         }
 
-        let mut results = UnifiedSearchResults::default();
-
-        // 1. People — fuzzy match on cluster name
-        results.people = Self::search_people(conn, query)?;
-
-        // 2. Albums — fuzzy match on album name
-        results.albums = Self::search_albums(conn, query)?;
-
-        // 3. Places — fuzzy match on city or country
-        results.places = Self::search_places(conn, query)?;
+        let mut results = UnifiedSearchResults {
+            people: Self::search_people(conn, query)?,
+            albums: Self::search_albums(conn, query)?,
+            places: Self::search_places(conn, query)?,
+            ..Default::default()
+        };
 
         // 4. Photos — use existing parsed query filter
         let parsed = crate::search::QueryParser::parse(query);

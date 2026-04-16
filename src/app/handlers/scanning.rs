@@ -51,6 +51,22 @@ pub(crate) fn config_string_to_view(s: &str) -> Option<View> {
 
 pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     tracing::info!("NavigateTo: {:?}", view);
+    app.sidebar_highlight_index = Some(match view {
+        View::Timeline => 0,
+        View::Map => 1,
+        View::Memories => 2,
+        View::Albums | View::AlbumDetail => 3,
+        View::Insights => 4,
+        View::Search | View::Cull => 5,
+        View::People | View::ClusterDetail => 6,
+        View::FaceReview => 7,
+        View::Duplicates | View::DuplicateDetail => 8,
+        View::Bursts | View::BurstDetail => 9,
+        View::Trash => 10,
+        View::Documents => 11,
+        View::Settings => 12,
+        _ => app.sidebar_highlight_index.unwrap_or(0),
+    });
     if view == app.current_view {
         return Task::none();
     }
@@ -226,13 +242,13 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 Task::none()
             };
 
-            return Task::batch(vec![
+            Task::batch(vec![
                 pin_task,
                 memories_task,
                 suggestions_task,
                 next,
                 restore,
-            ]);
+            ])
         }
         Err(e) => {
             tracing::error!("Failed to open database: {}", e);

@@ -6,6 +6,9 @@ use crate::ml::FaceEmbedding;
 
 use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding, ReviewItem};
 
+type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
+type UnprocessedPhotoRow = (i64, String, i32, Option<i64>);
+
 impl<'a> FaceRepo<'a> {
     /// Get unclustered faces with photo_id and embeddings.
     pub fn get_unclustered_faces_with_photo_embeddings(
@@ -177,9 +180,7 @@ impl<'a> FaceRepo<'a> {
 
     /// Get all face IDs with bounding boxes and their photo file paths.
     /// Used for regenerating missing face crops.
-    pub fn get_all_faces_with_paths(
-        &self,
-    ) -> SqliteResult<Vec<(i64, String, i32, f32, f32, f32, f32)>> {
+    pub fn get_all_faces_with_paths(&self) -> SqliteResult<Vec<FacePathRow>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT f.id, p.file_path, COALESCE(p.orientation, 1), f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height
@@ -284,9 +285,7 @@ impl<'a> FaceRepo<'a> {
     }
 
     /// Get unprocessed photos with optional timestamp for contextual identity linking.
-    pub fn get_unprocessed_photos_with_context(
-        &self,
-    ) -> SqliteResult<Vec<(i64, String, i32, Option<i64>)>> {
+    pub fn get_unprocessed_photos_with_context(&self) -> SqliteResult<Vec<UnprocessedPhotoRow>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT

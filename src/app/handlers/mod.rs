@@ -163,7 +163,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         // --- Search / cull ---
         Message::SearchInputChanged(input) => search_cull::search_input_changed(app, input),
         Message::ExecuteSearch => search_cull::execute_search(app),
-        Message::SearchComplete(gen, results) => search_cull::search_complete(app, gen, results),
+        Message::SearchComplete(gen, results) => search_cull::search_complete(app, gen, *results),
         Message::SearchDebouncedTick(gen) => search_cull::search_debounced_tick(app, gen),
         Message::RecentSearchesLoaded(list) => search_cull::recent_searches_loaded(app, list),
         Message::SearchRecentSelected(query) => search_cull::search_recent_selected(app, query),

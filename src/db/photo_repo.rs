@@ -215,7 +215,7 @@ impl<'a> PhotoRepo<'a> {
             }
         }
 
-        all.sort_by(|a, b| b.date_taken.cmp(&a.date_taken));
+        all.sort_by_key(|p| std::cmp::Reverse(p.date_taken));
         Ok(all)
     }
 

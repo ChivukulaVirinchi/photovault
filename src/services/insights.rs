@@ -211,10 +211,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         let rows = stmt.query_map(params![heatmap_year.to_string()], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
-        for r in rows {
-            if let Ok((day, count)) = r {
-                heatmap.insert(day, count);
-            }
+        for (day, count) in rows.flatten() {
+            heatmap.insert(day, count);
         }
     }
 
@@ -230,11 +228,9 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
             yc
         ))?;
         let rows = stmt.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?;
-        for r in rows {
-            if let Ok((month, count)) = r {
-                if (1..=12).contains(&month) {
-                    monthly_counts[(month - 1) as usize] = count;
-                }
+        for (month, count) in rows.flatten() {
+            if (1..=12).contains(&month) {
+                monthly_counts[(month - 1) as usize] = count;
             }
         }
     }
@@ -263,10 +259,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                 face_crop_path: None, // resolved later
             })
         })?;
-        for r in rows {
-            if let Ok(stat) = r {
-                top_people.push(stat);
-            }
+        for stat in rows.flatten() {
+            top_people.push(stat);
         }
     }
 
@@ -291,10 +285,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                 photo_count: row.get(2)?,
             })
         })?;
-        for r in rows {
-            if let Ok(stat) = r {
-                top_locations.push(stat);
-            }
+        for stat in rows.flatten() {
+            top_locations.push(stat);
         }
     }
 
@@ -319,10 +311,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                 photo_count: row.get(1)?,
             })
         })?;
-        for r in rows {
-            if let Ok(stat) = r {
-                top_cameras.push(stat);
-            }
+        for stat in rows.flatten() {
+            top_cameras.push(stat);
         }
     }
 
@@ -336,10 +326,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              ORDER BY y DESC",
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, i32>(0))?;
-        for r in rows {
-            if let Ok(y) = r {
-                available_years.push(y);
-            }
+        for y in rows.flatten() {
+            available_years.push(y);
         }
     }
 

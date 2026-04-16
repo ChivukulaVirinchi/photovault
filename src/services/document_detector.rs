@@ -55,7 +55,7 @@ impl DocumentDetector {
         let contrast = Self::contrast_spread(&resized);
 
         // Screenshot-like: precise edges + wide/phone aspect.
-        let looks_like_screen = edge_density > 0.20 && (aspect > 1.45 || aspect < 0.72);
+        let looks_like_screen = edge_density > 0.20 && !(0.72..=1.45).contains(&aspect);
         if looks_like_screen {
             return ContentCategory::Screenshot;
         }

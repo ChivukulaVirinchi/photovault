@@ -329,7 +329,7 @@ pub fn detect_trips(
             .iter()
             .filter(|id| album_photo_set.contains(id))
             .count();
-        if span.photo_ids.len() > 0 && in_album as f64 / span.photo_ids.len() as f64 > 0.60 {
+        if !span.photo_ids.is_empty() && in_album as f64 / span.photo_ids.len() as f64 > 0.60 {
             continue;
         }
 
@@ -442,10 +442,8 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 
     for photo in &parsed {
         if let Some(last) = current_window.last() {
-            if photo.ts - last.ts > four_hours {
-                if !current_window.is_empty() {
-                    windows.push(std::mem::take(&mut current_window));
-                }
+            if photo.ts - last.ts > four_hours && !current_window.is_empty() {
+                windows.push(std::mem::take(&mut current_window));
             }
         }
         current_window.push(photo);
@@ -466,7 +464,7 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 
         // Gate 2: not > 70% in trips
         let in_trip = ids.iter().filter(|id| trip_photo_ids.contains(id)).count();
-        if ids.len() > 0 && in_trip as f64 / ids.len() as f64 > 0.70 {
+        if !ids.is_empty() && in_trip as f64 / ids.len() as f64 > 0.70 {
             continue;
         }
 
@@ -484,7 +482,7 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 
         // Gate 4: not > 60% already in albums
         let in_album = ids.iter().filter(|id| album_photo_set.contains(id)).count();
-        if ids.len() > 0 && in_album as f64 / ids.len() as f64 > 0.60 {
+        if !ids.is_empty() && in_album as f64 / ids.len() as f64 > 0.60 {
             continue;
         }
 

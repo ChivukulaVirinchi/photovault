@@ -133,7 +133,7 @@ impl FaceEmbedder {
         let (name, output) = outputs
             .iter()
             .next()
-            .ok_or_else(|| ort::Error::new(format!("No output tensor from ArcFace model")))?;
+            .ok_or_else(|| ort::Error::new("No output tensor from ArcFace model".to_string()))?;
 
         let (_shape, data) = output.try_extract_tensor::<f32>()?;
         let _ = name;

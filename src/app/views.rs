@@ -122,7 +122,12 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         })
         .into()
     } else {
-        Sidebar::view(&app.current_view, app.config.theme, app.face_review_pending)
+        Sidebar::view(
+            &app.current_view,
+            app.config.theme,
+            app.face_review_pending,
+            app.sidebar_highlight_index,
+        )
     };
 
     let content = match app.current_view {

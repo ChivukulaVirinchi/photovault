@@ -539,7 +539,7 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
 
 // ---------- Ranking ----------
 
-fn rank(memories: &mut Vec<Memory>, current_year: i32) {
+fn rank(memories: &mut [Memory], current_year: i32) {
     for m in memories.iter_mut() {
         let years_ago = (current_year - m.year).max(0);
         let count_factor = ((m.photo_ids.len() as f32) + 1.0).log2();

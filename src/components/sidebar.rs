@@ -20,6 +20,7 @@ impl Sidebar {
         current_view: &View,
         app_theme: AppTheme,
         review_pending: i64,
+        highlighted_index: Option<usize>,
     ) -> Element<'static, Message> {
         let p = colors::palette(app_theme);
 
@@ -59,24 +60,96 @@ impl Sidebar {
         };
 
         let nav_items = column![
-            Self::nav_button("Timeline", View::Timeline, current_view, app_theme),
-            Self::nav_button("Map", View::Map, current_view, app_theme),
-            Self::nav_button("Memories", View::Memories, current_view, app_theme),
-            Self::nav_button("Albums", View::Albums, current_view, app_theme),
-            Self::nav_button("Insights", View::Insights, current_view, app_theme),
-            Self::nav_button("Search", View::Search, current_view, app_theme),
+            Self::nav_button(
+                "Timeline",
+                View::Timeline,
+                current_view,
+                app_theme,
+                highlighted_index == Some(0),
+            ),
+            Self::nav_button(
+                "Map",
+                View::Map,
+                current_view,
+                app_theme,
+                highlighted_index == Some(1),
+            ),
+            Self::nav_button(
+                "Memories",
+                View::Memories,
+                current_view,
+                app_theme,
+                highlighted_index == Some(2),
+            ),
+            Self::nav_button(
+                "Albums",
+                View::Albums,
+                current_view,
+                app_theme,
+                highlighted_index == Some(3),
+            ),
+            Self::nav_button(
+                "Insights",
+                View::Insights,
+                current_view,
+                app_theme,
+                highlighted_index == Some(4),
+            ),
+            Self::nav_button(
+                "Search",
+                View::Search,
+                current_view,
+                app_theme,
+                highlighted_index == Some(5),
+            ),
             Space::with_height(12),
             Self::group_header("People", app_theme),
-            Self::nav_button("All People", View::People, current_view, app_theme),
-            Self::nav_button(&review_label, View::FaceReview, current_view, app_theme),
+            Self::nav_button(
+                "All People",
+                View::People,
+                current_view,
+                app_theme,
+                highlighted_index == Some(6),
+            ),
+            Self::nav_button(
+                &review_label,
+                View::FaceReview,
+                current_view,
+                app_theme,
+                highlighted_index == Some(7),
+            ),
             Space::with_height(12),
             Self::group_header("Cleanup", app_theme),
-            Self::nav_button("Duplicates", View::Duplicates, current_view, app_theme),
-            Self::nav_button("Bursts", View::Bursts, current_view, app_theme),
-            Self::nav_button("Trash", View::Trash, current_view, app_theme),
+            Self::nav_button(
+                "Duplicates",
+                View::Duplicates,
+                current_view,
+                app_theme,
+                highlighted_index == Some(8),
+            ),
+            Self::nav_button(
+                "Bursts",
+                View::Bursts,
+                current_view,
+                app_theme,
+                highlighted_index == Some(9),
+            ),
+            Self::nav_button(
+                "Trash",
+                View::Trash,
+                current_view,
+                app_theme,
+                highlighted_index == Some(10),
+            ),
             Space::with_height(12),
             Self::group_header("Library", app_theme),
-            Self::nav_button("Documents", View::Documents, current_view, app_theme),
+            Self::nav_button(
+                "Documents",
+                View::Documents,
+                current_view,
+                app_theme,
+                highlighted_index == Some(11),
+            ),
         ]
         .spacing(2)
         .padding(Padding::from([0, 8]));
@@ -86,6 +159,7 @@ impl Sidebar {
             View::Settings,
             current_view,
             app_theme,
+            highlighted_index == Some(12),
         ))
         .padding(Padding::from([0, 8]));
 
@@ -129,6 +203,7 @@ impl Sidebar {
         target: View,
         current: &View,
         app_theme: AppTheme,
+        is_highlighted: bool,
     ) -> Element<'static, Message> {
         let p = colors::palette(app_theme);
 
@@ -149,7 +224,7 @@ impl Sidebar {
         let accent_bar = container(Space::new(3, Length::Fill))
             .height(Length::Fill)
             .style(move |_theme: &iced::Theme| container::Style {
-                background: if is_active {
+                background: if is_active || is_highlighted {
                     Some(colors::DARK.accent_primary.into())
                 } else {
                     None
@@ -181,6 +256,7 @@ impl Sidebar {
             .style(move |_theme: &iced::Theme, status| {
                 let background = match status {
                     button::Status::Active if is_active => Some(bg_elevated.into()),
+                    button::Status::Active if is_highlighted => Some(bg_hover.into()),
                     button::Status::Active => None,
                     button::Status::Hovered => Some(bg_hover.into()),
                     button::Status::Pressed => Some(bg_active.into()),

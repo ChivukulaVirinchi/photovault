@@ -345,7 +345,7 @@ impl ThumbnailService {
             Err(_) => return,
         };
 
-        entries.sort_by(|a, b| a.1.last_accessed.cmp(&b.1.last_accessed));
+        entries.sort_by_key(|entry| entry.1.last_accessed);
 
         // Remove oldest entries until under 80% of max
         let target = self.max_cache_bytes * 80 / 100;

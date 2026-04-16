@@ -258,6 +258,30 @@ pub(crate) fn key_pressed(
         return tab_navigate(app, backwards);
     }
 
+    // If a sidebar item is highlighted via Tab navigation, Enter activates it.
+    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter))
+        && app.sidebar_highlight_index.is_some()
+        && sidebar_target_differs_current(app)
+        && matches!(
+            app.current_view,
+            View::Timeline
+                | View::Map
+                | View::Memories
+                | View::Albums
+                | View::Insights
+                | View::Search
+                | View::People
+                | View::FaceReview
+                | View::Duplicates
+                | View::Bursts
+                | View::Trash
+                | View::Documents
+                | View::Settings
+        )
+    {
+        return navigate_to_sidebar_highlight(app);
+    }
+
     // --- Global Cmd/Ctrl shortcuts ---
     let cmd = modifiers.control() || modifiers.macos_command();
     if cmd {
@@ -649,25 +673,22 @@ pub(crate) fn key_pressed(
     }
 
     // --- Global shortcuts (work from any non-detail view) ---
-    match key {
-        keyboard::Key::Character(ref ch) => {
-            let lower = ch.to_lowercase();
-            // '/' or 'f' → focus search (unless in a text-entry context)
-            if (lower == "/" || lower == "f")
-                && !matches!(
-                    app.current_view,
-                    View::PhotoDetail | View::Cull | View::Search
-                )
-                && app.editing_cluster_id.is_none()
-            {
-                return super::handle(app, Message::NavigateTo(View::Search));
-            }
-            // '[' → toggle sidebar
-            if lower == "[" {
-                return super::handle(app, Message::ToggleSidebar);
-            }
+    if let keyboard::Key::Character(ref ch) = key {
+        let lower = ch.to_lowercase();
+        // '/' or 'f' → focus search (unless in a text-entry context)
+        if (lower == "/" || lower == "f")
+            && !matches!(
+                app.current_view,
+                View::PhotoDetail | View::Cull | View::Search
+            )
+            && app.editing_cluster_id.is_none()
+        {
+            return super::handle(app, Message::NavigateTo(View::Search));
         }
-        _ => {}
+        // '[' → toggle sidebar
+        if lower == "[" {
+            return super::handle(app, Message::ToggleSidebar);
+        }
     }
 
     Task::none()
@@ -675,12 +696,19 @@ pub(crate) fn key_pressed(
 
 fn tab_navigate(app: &mut PhotoVault, backwards: bool) -> Task<Message> {
     match app.current_view {
-        View::Timeline => move_timeline_highlight(app, if backwards { -1 } else { 1 }),
-        View::Documents => move_documents_highlight(app, if backwards { -1 } else { 1 }),
-        View::People => move_people_highlight(app, if backwards { -1 } else { 1 }),
-        View::Albums => move_albums_highlight(app, if backwards { -1 } else { 1 }),
-        View::Duplicates => move_duplicates_highlight(app, if backwards { -1 } else { 1 }),
-        View::Bursts => move_bursts_highlight(app, if backwards { -1 } else { 1 }),
+        View::Timeline
+        | View::Map
+        | View::Memories
+        | View::Albums
+        | View::Insights
+        | View::Search
+        | View::People
+        | View::FaceReview
+        | View::Duplicates
+        | View::Bursts
+        | View::Trash
+        | View::Documents
+        | View::Settings => move_sidebar_highlight(app, if backwards { -1 } else { 1 }),
         _ => {
             if backwards {
                 iced::widget::focus_previous()
@@ -688,6 +716,80 @@ fn tab_navigate(app: &mut PhotoVault, backwards: bool) -> Task<Message> {
                 iced::widget::focus_next()
             }
         }
+    }
+}
+
+fn move_sidebar_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = 13_i32;
+
+    let current = app
+        .sidebar_highlight_index
+        .or_else(|| sidebar_index_for_view(&app.current_view))
+        .unwrap_or(0) as i32;
+    let mut next = current + delta;
+    if next < 0 {
+        next = total - 1;
+    } else if next >= total {
+        next = 0;
+    }
+    app.sidebar_highlight_index = Some(next as usize);
+
+    Task::none()
+}
+
+fn sidebar_view_for_index(index: usize) -> Option<View> {
+    Some(match index {
+        0 => View::Timeline,
+        1 => View::Map,
+        2 => View::Memories,
+        3 => View::Albums,
+        4 => View::Insights,
+        5 => View::Search,
+        6 => View::People,
+        7 => View::FaceReview,
+        8 => View::Duplicates,
+        9 => View::Bursts,
+        10 => View::Trash,
+        11 => View::Documents,
+        12 => View::Settings,
+        _ => return None,
+    })
+}
+
+fn sidebar_index_for_view(view: &View) -> Option<usize> {
+    Some(match view {
+        View::Timeline => 0,
+        View::Map => 1,
+        View::Memories => 2,
+        View::Albums | View::AlbumDetail => 3,
+        View::Insights => 4,
+        View::Search | View::Cull => 5,
+        View::People | View::ClusterDetail => 6,
+        View::FaceReview => 7,
+        View::Duplicates | View::DuplicateDetail => 8,
+        View::Bursts | View::BurstDetail => 9,
+        View::Trash => 10,
+        View::Documents => 11,
+        View::Settings => 12,
+        _ => return None,
+    })
+}
+
+fn navigate_to_sidebar_highlight(app: &mut PhotoVault) -> Task<Message> {
+    let target = app.sidebar_highlight_index.and_then(sidebar_view_for_index);
+    if let Some(view) = target {
+        return super::handle(app, Message::NavigateTo(view));
+    }
+    Task::none()
+}
+
+fn sidebar_target_differs_current(app: &PhotoVault) -> bool {
+    let target = app.sidebar_highlight_index;
+    let current = sidebar_index_for_view(&app.current_view);
+    match (target, current) {
+        (Some(t), Some(c)) => t != c,
+        (Some(_), None) => true,
+        _ => false,
     }
 }
 

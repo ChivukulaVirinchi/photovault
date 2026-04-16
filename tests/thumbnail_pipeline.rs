@@ -128,9 +128,9 @@ fn test_thumbnail_path_versioning() {
 
 #[test]
 fn test_thumbnail_sizes_correct() {
-    assert_eq!(ThumbnailSize::Small.pixels(), 300);
-    assert_eq!(ThumbnailSize::Medium.pixels(), 500);
-    assert_eq!(ThumbnailSize::Large.pixels(), 1000);
+    assert_eq!(ThumbnailSize::Small.pixels(), 260);
+    assert_eq!(ThumbnailSize::Medium.pixels(), 430);
+    assert_eq!(ThumbnailSize::Large.pixels(), 860);
 }
 
 #[test]

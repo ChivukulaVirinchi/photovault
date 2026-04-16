@@ -89,7 +89,7 @@ impl FaceReviewState {
     }
 
     pub fn advance(&mut self) {
-        if self.current_index + 1 <= self.queue.len() {
+        if self.current_index < self.queue.len() {
             self.current_index += 1;
         }
     }
@@ -472,6 +472,8 @@ pub struct PhotoVault {
     pub(crate) duplicates_highlight_index: Option<usize>,
     /// Highlighted burst-group index for keyboard tabbing.
     pub(crate) bursts_highlight_index: Option<usize>,
+    /// Highlighted sidebar item index for keyboard tabbing.
+    pub(crate) sidebar_highlight_index: Option<usize>,
 
     // --- Phase C: Destructive action polish ---
     /// Pending destructive confirmation (None = no pending).
@@ -702,6 +704,7 @@ impl PhotoVault {
             albums_highlight_index: None,
             duplicates_highlight_index: None,
             bursts_highlight_index: None,
+            sidebar_highlight_index: None,
             // Phase C: destructive polish
             pending_confirmation: None,
         };
@@ -745,9 +748,10 @@ impl PhotoVault {
     }
 
     pub(crate) fn photo_detail_navigation_list(&self) -> &[Photo] {
-        if self.previous_view == Some(View::MemoryDetail) && !self.memory_photos.is_empty() {
-            &self.memory_photos
-        } else if self.previous_view == Some(View::Map) && !self.memory_photos.is_empty() {
+        if (self.previous_view == Some(View::MemoryDetail)
+            || self.previous_view == Some(View::Map))
+            && !self.memory_photos.is_empty()
+        {
             &self.memory_photos
         } else if self.previous_view == Some(View::ClusterDetail) && !self.cluster_photos.is_empty()
         {

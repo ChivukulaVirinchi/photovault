@@ -35,6 +35,7 @@ fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
 
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path)

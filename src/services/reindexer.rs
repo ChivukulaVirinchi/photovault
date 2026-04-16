@@ -129,7 +129,7 @@ impl Reindexer {
             let mtime_str = fs::metadata(entry.path())
                 .ok()
                 .and_then(|m| m.modified().ok())
-                .map(|t| Self::system_time_to_string(t))
+                .map(Self::system_time_to_string)
                 .unwrap_or_default();
 
             let _ = insert_stmt.execute(params![relative_path, mtime_str]);

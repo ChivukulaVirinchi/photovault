@@ -18,7 +18,7 @@ fn setup_db() -> (tempfile::TempDir, Database) {
 fn sample_photo(path: &str, hash: &str) -> PhotoInsert {
     PhotoInsert {
         relative_path: path.to_string(),
-        file_name: path.split('/').last().unwrap_or(path).to_string(),
+        file_name: path.split('/').next_back().unwrap_or(path).to_string(),
         file_hash: hash.to_string(),
         file_size: 1_000_000,
         file_mtime: Some(1700000000),
