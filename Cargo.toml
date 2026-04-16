@@ -2,7 +2,23 @@
 name = "photovault"
 version = "0.1.0"
 edition = "2021"
-description = "Offline-first photo library manager"
+authors = ["Virinchi Chivukula <virinchi@gurujada.com>"]
+license = "MIT OR Apache-2.0"
+description = "Offline-first desktop photo library manager with face recognition, smart albums, and full-text search."
+repository = "https://github.com/ChivukulaVirinchi/photovault"
+homepage = "https://chivukulavirinchi.github.io/photovault/"
+documentation = "https://chivukulavirinchi.github.io/photovault/"
+readme = "README.md"
+keywords = ["photos", "gallery", "face-recognition", "offline", "desktop"]
+categories = ["multimedia::images", "gui"]
+exclude = [
+    "/docs",
+    "/scripts",
+    "/.github",
+    "/website",
+    "/assets/screenshots",
+    "/.claude",
+]
 
 [dependencies]
 # UI Framework
@@ -90,10 +106,49 @@ opt-level = 2
 opt-level = 3
 
 [profile.release]
-lto = true
+opt-level = 3
+lto = "thin"
 codegen-units = 1
-panic = "abort"
 strip = true
+panic = "abort"
+
+[package.metadata.deb]
+maintainer = "Virinchi Chivukula <virinchi@gurujada.com>"
+copyright = "2026, Virinchi Chivukula"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+PhotoVault is an offline-first desktop photo library manager.
+Indexes photos from local drives, detects faces, finds duplicates,
+suggests albums, and provides full-text search -- all without uploading
+anything to the cloud.
+"""
+depends = "$auto"
+section = "graphics"
+priority = "optional"
+assets = [
+    ["target/release/photovault", "usr/bin/", "755"],
+    ["libs/onnxruntime/libonnxruntime.so*", "usr/lib/photovault/libs/onnxruntime/", "644"],
+    ["models/*.onnx", "usr/lib/photovault/models/", "644"],
+    ["data/geonames.db", "usr/lib/photovault/data/", "644"],
+    ["packaging/photovault.desktop", "usr/share/applications/", "644"],
+    ["packaging/photovault.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["README.md", "usr/share/doc/photovault/README", "644"],
+]
+
+[package.metadata.bundle]
+name = "PhotoVault"
+identifier = "com.chivukulavirinchi.photovault"
+icon = ["packaging/photovault.icns"]
+version = "0.1.0"
+copyright = "2026, Virinchi Chivukula"
+category = "public.app-category.photography"
+short_description = "Offline-first photo library manager"
+long_description = """
+PhotoVault organizes your photos locally, with face recognition,
+smart albums, and full-text search -- without uploading anything.
+"""
+resources = ["libs", "models", "data"]
+osx_minimum_system_version = "10.13"
 
 [dev-dependencies]
 tempfile = "3"

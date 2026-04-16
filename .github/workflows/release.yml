@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
+
+      - name: Download ML models + GeoNames data
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: ./scripts/setup_assets.sh
+
+      - name: Download ML models + GeoNames data (Windows)
+        if: matrix.os == 'windows-latest'
+        run: powershell -ExecutionPolicy Bypass -File scripts/setup_assets.ps1
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact directory
+        shell: bash
+        run: |
+          mkdir -p staging/photovault/scripts
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/photovault.exe staging/photovault/
+          else
+            cp target/${{ matrix.target }}/release/photovault staging/photovault/
+          fi
+          cp -r libs staging/photovault/
+          cp -r models staging/photovault/
+          cp -r data staging/photovault/
+          cp README.md LICENSE LICENSE-MIT LICENSE-APACHE staging/photovault/
+          cp scripts/setup_assets.sh scripts/setup_assets.ps1 staging/photovault/scripts/ 2>/dev/null || true
+
+      - name: Create archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd staging
+          tar -czf ../photovault-${{ matrix.target }}.tar.gz photovault
+
+      - name: Create archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path staging\photovault -DestinationPath photovault-${{ matrix.target }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-${{ matrix.target }}
+          path: photovault-${{ matrix.target }}.*
+
+  appimage:
+    name: Linux AppImage
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-x86_64-unknown-linux-gnu
+      - name: Extract
+        run: tar -xzf photovault-x86_64-unknown-linux-gnu.tar.gz
+      - name: Install AppImage tool
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+      - name: Build AppDir
+        run: |
+          mkdir -p PhotoVault.AppDir/usr/bin
+          mkdir -p PhotoVault.AppDir/usr/share/applications
+          mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
+          cp -r photovault/* PhotoVault.AppDir/usr/bin/
+          cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
+          cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
+          cp packaging/photovault.desktop PhotoVault.AppDir/
+          cp packaging/photovault.png PhotoVault.AppDir/
+          cat > PhotoVault.AppDir/AppRun <<'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          cd "${HERE}/usr/bin"
+          export LD_LIBRARY_PATH="${HERE}/usr/bin/libs/onnxruntime:$LD_LIBRARY_PATH"
+          exec "${HERE}/usr/bin/photovault" "$@"
+          EOF
+          chmod +x PhotoVault.AppDir/AppRun
+      - name: Build AppImage
+        run: ./appimagetool-x86_64.AppImage PhotoVault.AppDir PhotoVault-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-appimage
+          path: PhotoVault-x86_64.AppImage
+
+  deb:
+    name: Linux deb
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-deb
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Build deb
+        run: cargo deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-deb
+          path: target/debian/*.deb
+
+  release:
+    name: Create GitHub Release
+    needs: [build, appimage, deb]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: true
