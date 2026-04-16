@@ -21,6 +21,7 @@ pub fn view_with_clusters(
     processing_error: Option<&str>,
     merge_mode_active: bool,
     merge_selected: &[i64],
+    highlighted_cluster_index: Option<usize>,
     ml_available: bool,
     theme: AppTheme,
 ) -> Element<'static, Message> {
@@ -105,15 +106,16 @@ pub fn view_with_clusters(
         let bar_width = 200.0_f32;
         let filled = (bar_width * pct).clamp(0.0, bar_width);
         let progress_bar = container(
-            container(Space::new(Length::Fixed(filled), Length::Fixed(6.0)))
-                .style(move |_t: &iced::Theme| container::Style {
+            container(Space::new(Length::Fixed(filled), Length::Fixed(6.0))).style(
+                move |_t: &iced::Theme| container::Style {
                     background: Some(bar_fill.into()),
                     border: iced::Border {
                         radius: 3.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
-                }),
+                },
+            ),
         )
         .width(Length::Fixed(bar_width))
         .height(Length::Fixed(6.0))
@@ -321,13 +323,14 @@ pub fn view_with_clusters(
     let mut current_row: Vec<Element<'static, Message>> = Vec::new();
     let columns = 4;
 
-    for cluster in clusters {
+    for (index, cluster) in clusters.iter().enumerate() {
         let is_editing = editing_cluster == Some(cluster.id);
         let is_selected = merge_selected_owned.contains(&cluster.id);
+        let is_highlighted = highlighted_cluster_index == Some(index);
         let card = if merge_mode_active {
-            cards::person_card_merge(cluster, is_selected, theme)
+            cards::person_card_merge(cluster, is_selected, is_highlighted, theme)
         } else {
-            cards::person_card(cluster, is_editing, edit_name, theme)
+            cards::person_card(cluster, is_editing, edit_name, is_highlighted, theme)
         };
         current_row.push(card);
 

@@ -24,6 +24,7 @@ impl DuplicatesView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         overview: &[(i64, u64, Option<i64>)],
+        highlighted_group_index: Option<usize>,
         spinner_phase: u32,
         theme: AppTheme,
     ) -> Element<'static, Message> {
@@ -50,7 +51,17 @@ impl DuplicatesView {
         // Group list
         let group_list: Vec<Element<'static, Message>> = groups
             .iter()
-            .map(|g| Self::group_row(g, drive_path, photos, overview, theme))
+            .enumerate()
+            .map(|(index, g)| {
+                Self::group_row(
+                    g,
+                    highlighted_group_index == Some(index),
+                    drive_path,
+                    photos,
+                    overview,
+                    theme,
+                )
+            })
             .collect();
 
         let bg_primary = p.bg_primary;
@@ -137,6 +148,7 @@ impl DuplicatesView {
     /// Render a single duplicate group row
     fn group_row(
         group: &DuplicateGroupRecord,
+        is_highlighted: bool,
         drive_path: Option<&Path>,
         photos: &[Photo],
         overview: &[(i64, u64, Option<i64>)],
@@ -161,6 +173,7 @@ impl DuplicatesView {
         let bg_hover = p.bg_hover;
         let bg_elevated = p.bg_elevated;
         let border_subtle = p.border_subtle;
+        let focus_border = p.accent_primary;
 
         let header = row![
             text(format!("Group #{}", group.id))
@@ -246,8 +259,12 @@ impl DuplicatesView {
             .style(move |_theme| container::Style {
                 background: Some(bg_elevated.into()),
                 border: iced::Border {
-                    color: border_subtle,
-                    width: 1.0,
+                    color: if is_highlighted {
+                        focus_border
+                    } else {
+                        border_subtle
+                    },
+                    width: if is_highlighted { 2.0 } else { 1.0 },
                     radius: 8.0.into(),
                 },
                 ..Default::default()

@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use iced::keyboard;
+use iced::widget::scrollable;
 use iced::Task;
 
 use crate::models::Photo;
@@ -239,8 +240,7 @@ pub(crate) fn key_pressed(
 
     if app.shortcuts_overlay_open {
         match key {
-            keyboard::Key::Named(keyboard::key::Named::Escape)
-            | keyboard::Key::Character(_) => {
+            keyboard::Key::Named(keyboard::key::Named::Escape) | keyboard::Key::Character(_) => {
                 if matches!(&key, keyboard::Key::Character(ch) if ch.as_str() == "?")
                     || matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
                 {
@@ -250,6 +250,12 @@ pub(crate) fn key_pressed(
             _ => {}
         }
         return Task::none();
+    }
+
+    // --- Tab navigation across card-heavy views ---
+    if let keyboard::Key::Named(keyboard::key::Named::Tab) = key {
+        let backwards = modifiers.shift();
+        return tab_navigate(app, backwards);
     }
 
     // --- Global Cmd/Ctrl shortcuts ---
@@ -449,6 +455,7 @@ pub(crate) fn key_pressed(
             return super::handle(app, Message::CloseBurstDetail);
         }
     } else if app.current_view == View::Documents {
+        let cols = PhotoVault::timeline_columns_for_width(app.window_width) as i32;
         match key {
             keyboard::Key::Named(keyboard::key::Named::Delete)
             | keyboard::Key::Named(keyboard::key::Named::Backspace) => {
@@ -459,6 +466,108 @@ pub(crate) fn key_pressed(
                         .copied()
                         .collect::<Vec<_>>();
                     return super::handle(app, Message::TrashPhotos(ids));
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                return move_documents_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                return move_documents_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_documents_highlight(app, cols);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_documents_highlight(app, -cols);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.documents_highlight_index {
+                    if let Some(photo) = app.documents.get(i) {
+                        return super::handle(app, Message::SelectPhoto(photo.id));
+                    }
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::Space) => {
+                if let Some(i) = app.documents_highlight_index {
+                    if let Some(photo) = app.documents.get(i) {
+                        return super::handle(app, Message::ToggleTimelinePhotoSelection(photo.id));
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else if app.current_view == View::People {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_people_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_people_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.people_highlight_index {
+                    if let Some(cluster) = app.face_clusters.get(i) {
+                        return super::handle(app, Message::SelectCluster(cluster.id));
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else if app.current_view == View::Albums {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_albums_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_albums_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.albums_highlight_index {
+                    if let Some(album) = app.albums.get(i) {
+                        return super::handle(app, Message::OpenAlbum(album.id));
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else if app.current_view == View::Duplicates {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_duplicates_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_duplicates_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.duplicates_highlight_index {
+                    if let Some(group) = app.duplicate_groups.get(i) {
+                        return super::handle(app, Message::OpenDuplicateGroup(group.id));
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else if app.current_view == View::Bursts {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_bursts_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_bursts_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.bursts_highlight_index {
+                    if let Some(group) = app.burst_groups.get(i) {
+                        return super::handle(app, Message::OpenBurstGroup(group.id));
+                    }
                 }
             }
             _ => {}
@@ -494,6 +603,33 @@ pub(crate) fn key_pressed(
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                 return move_timeline_highlight(app, -cols);
             }
+            keyboard::Key::Named(keyboard::key::Named::PageDown) => {
+                return scrollable::scroll_by(
+                    scrollable::Id::new("timeline"),
+                    scrollable::AbsoluteOffset { x: 0.0, y: 720.0 },
+                );
+            }
+            keyboard::Key::Named(keyboard::key::Named::PageUp) => {
+                return scrollable::scroll_by(
+                    scrollable::Id::new("timeline"),
+                    scrollable::AbsoluteOffset { x: 0.0, y: -720.0 },
+                );
+            }
+            keyboard::Key::Named(keyboard::key::Named::Home) => {
+                return scrollable::scroll_to(
+                    scrollable::Id::new("timeline"),
+                    scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+                );
+            }
+            keyboard::Key::Named(keyboard::key::Named::End) => {
+                return scrollable::scroll_to(
+                    scrollable::Id::new("timeline"),
+                    scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: f32::MAX,
+                    },
+                );
+            }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.timeline_highlight_index {
                     if let Some(photo) = app.photos.get(i) {
@@ -504,10 +640,7 @@ pub(crate) fn key_pressed(
             keyboard::Key::Named(keyboard::key::Named::Space) => {
                 if let Some(i) = app.timeline_highlight_index {
                     if let Some(photo) = app.photos.get(i) {
-                        return super::handle(
-                            app,
-                            Message::ToggleTimelinePhotoSelection(photo.id),
-                        );
+                        return super::handle(app, Message::ToggleTimelinePhotoSelection(photo.id));
                     }
                 }
             }
@@ -540,6 +673,79 @@ pub(crate) fn key_pressed(
     Task::none()
 }
 
+fn tab_navigate(app: &mut PhotoVault, backwards: bool) -> Task<Message> {
+    match app.current_view {
+        View::Timeline => move_timeline_highlight(app, if backwards { -1 } else { 1 }),
+        View::Documents => move_documents_highlight(app, if backwards { -1 } else { 1 }),
+        View::People => move_people_highlight(app, if backwards { -1 } else { 1 }),
+        View::Albums => move_albums_highlight(app, if backwards { -1 } else { 1 }),
+        View::Duplicates => move_duplicates_highlight(app, if backwards { -1 } else { 1 }),
+        View::Bursts => move_bursts_highlight(app, if backwards { -1 } else { 1 }),
+        _ => {
+            if backwards {
+                iced::widget::focus_previous()
+            } else {
+                iced::widget::focus_next()
+            }
+        }
+    }
+}
+
+fn move_documents_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.documents.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.documents_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.documents_highlight_index = Some(next as usize);
+    Task::none()
+}
+
+fn move_people_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.face_clusters.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.people_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.people_highlight_index = Some(next as usize);
+    Task::none()
+}
+
+fn move_albums_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.albums.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.albums_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.albums_highlight_index = Some(next as usize);
+    Task::none()
+}
+
+fn move_duplicates_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.duplicate_groups.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.duplicates_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.duplicates_highlight_index = Some(next as usize);
+    Task::none()
+}
+
+fn move_bursts_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.burst_groups.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.bursts_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.bursts_highlight_index = Some(next as usize);
+    Task::none()
+}
+
 /// Move the timeline grid keyboard cursor by `delta` cells, clamped to [0, photos.len() - 1].
 fn move_timeline_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
     let total = app.photos.len();
@@ -549,7 +755,18 @@ fn move_timeline_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
     let current = app.timeline_highlight_index.unwrap_or(0) as i32;
     let next = (current + delta).clamp(0, total as i32 - 1);
     app.timeline_highlight_index = Some(next as usize);
-    Task::none()
+
+    if delta.abs() > 1 {
+        scrollable::scroll_by(
+            scrollable::Id::new("timeline"),
+            scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: if delta > 0 { 196.0 } else { -196.0 },
+            },
+        )
+    } else {
+        Task::none()
+    }
 }
 
 pub(crate) fn rotate_photo(app: &mut PhotoVault) -> Task<Message> {

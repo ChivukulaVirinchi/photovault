@@ -23,6 +23,7 @@ impl BurstsView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         previews: &[(i64, Vec<i64>)],
+        highlighted_group_index: Option<usize>,
         spinner_phase: u32,
         theme: AppTheme,
     ) -> Element<'static, Message> {
@@ -49,7 +50,17 @@ impl BurstsView {
         // Group list
         let group_list: Vec<Element<'static, Message>> = groups
             .iter()
-            .map(|g| Self::group_card(g, drive_path, photos, previews, theme))
+            .enumerate()
+            .map(|(index, g)| {
+                Self::group_card(
+                    g,
+                    highlighted_group_index == Some(index),
+                    drive_path,
+                    photos,
+                    previews,
+                    theme,
+                )
+            })
             .collect();
 
         let bg_primary = p.bg_primary;
@@ -136,6 +147,7 @@ impl BurstsView {
     /// Render a burst group card
     fn group_card(
         group: &BurstGroupRecord,
+        is_highlighted: bool,
         drive_path: Option<&Path>,
         photos: &[Photo],
         previews: &[(i64, Vec<i64>)],
@@ -152,6 +164,7 @@ impl BurstsView {
         let bg_hover = p.bg_hover;
         let bg_elevated = p.bg_elevated;
         let border_subtle = p.border_subtle;
+        let focus_border = p.accent_primary;
 
         // Parse and format time range safely
         let start_display = if group.start_time.len() >= 19 {
@@ -271,8 +284,12 @@ impl BurstsView {
             .style(move |_theme| container::Style {
                 background: Some(bg_elevated.into()),
                 border: iced::Border {
-                    color: border_subtle,
-                    width: 1.0,
+                    color: if is_highlighted {
+                        focus_border
+                    } else {
+                        border_subtle
+                    },
+                    width: if is_highlighted { 2.0 } else { 1.0 },
                     radius: 8.0.into(),
                 },
                 ..Default::default()

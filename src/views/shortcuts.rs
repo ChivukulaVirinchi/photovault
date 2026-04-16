@@ -21,6 +21,7 @@ pub fn shortcuts_for(view: &View) -> Vec<ShortcutGroup> {
             ("?", "Show this help"),
             ("/  or  F", "Jump to Search"),
             ("[", "Toggle sidebar"),
+            ("Tab  /  Shift+Tab", "Move focus across cards"),
             ("Cmd+,", "Open Settings"),
             ("Cmd+1-9", "Jump to sidebar item"),
             ("Cmd+W", "Close current detail view"),
@@ -34,6 +35,8 @@ pub fn shortcuts_for(view: &View) -> Vec<ShortcutGroup> {
             title: "Timeline",
             items: vec![
                 ("\u{2190} \u{2192} \u{2191} \u{2193}", "Move grid cursor"),
+                ("PageUp / PageDown", "Scroll timeline"),
+                ("Home / End", "Jump top / bottom"),
                 ("Enter", "Open highlighted photo"),
                 ("Space", "Toggle selection"),
                 ("Delete / Backspace", "Trash selected"),

@@ -2,9 +2,7 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{
-    button, column, container, row, scrollable, stack, text, text_input, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, stack, text, text_input, Space};
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
@@ -26,6 +24,7 @@ pub fn albums_view(
     suggestions: &[AlbumSuggestionRecord],
     accepting_id: Option<i64>,
     accepting_name: &str,
+    highlighted_album_index: Option<usize>,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
@@ -80,11 +79,7 @@ pub fn albums_view(
             .padding(Padding::from([6, 14]))
             .style(move |_t: &iced::Theme, s| button::Style {
                 background: Some(match s {
-                    button::Status::Hovered => iced::Color {
-                        a: 0.9,
-                        ..accent
-                    }
-                    .into(),
+                    button::Status::Hovered => iced::Color { a: 0.9, ..accent }.into(),
                     _ => accent.into(),
                 }),
                 border: iced::Border {
@@ -111,8 +106,14 @@ pub fn albums_view(
             .on_press(Message::AlbumPickerToggleCreate);
 
         container(
-            row![input, Space::with_width(8), submit_btn, Space::with_width(4), cancel_btn]
-                .align_y(Alignment::Center),
+            row![
+                input,
+                Space::with_width(8),
+                submit_btn,
+                Space::with_width(4),
+                cancel_btn
+            ]
+            .align_y(Alignment::Center),
         )
         .padding(Padding {
             top: 4.0,
@@ -189,8 +190,8 @@ pub fn albums_view(
     let mut current_row: Vec<Element<'static, Message>> = Vec::new();
     let cols = 4;
 
-    for album in albums {
-        current_row.push(album_card(album, p));
+    for (index, album) in albums.iter().enumerate() {
+        current_row.push(album_card(album, highlighted_album_index == Some(index), p));
         if current_row.len() >= cols {
             grid_rows.push(
                 iced::widget::Row::with_children(std::mem::take(&mut current_row))
@@ -216,17 +217,26 @@ pub fn albums_view(
             left: 32.0,
         });
 
-    container(scrollable(column![header, create_input, suggestions_section, grid]))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_t: &iced::Theme| container::Style {
-            background: Some(bg_primary.into()),
-            ..Default::default()
-        })
-        .into()
+    container(scrollable(column![
+        header,
+        create_input,
+        suggestions_section,
+        grid
+    ]))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(move |_t: &iced::Theme| container::Style {
+        background: Some(bg_primary.into()),
+        ..Default::default()
+    })
+    .into()
 }
 
-fn album_card(album: &AlbumRecord, p: &'static colors::Palette) -> Element<'static, Message> {
+fn album_card(
+    album: &AlbumRecord,
+    is_highlighted: bool,
+    p: &'static colors::Palette,
+) -> Element<'static, Message> {
     let card_w: f32 = 180.0;
     let thumb_h: f32 = 140.0;
 
@@ -279,12 +289,15 @@ fn album_card(album: &AlbumRecord, p: &'static colors::Palette) -> Element<'stat
     }
     let subtitle = text(sub_parts.join(" · ")).size(10).color(p.text_tertiary);
 
-    let caption = column![name, subtitle].spacing(2).padding(Padding::from([6, 4]));
+    let caption = column![name, subtitle]
+        .spacing(2)
+        .padding(Padding::from([6, 4]));
 
     let inner = column![cover, caption].spacing(0);
 
     let album_id = album.id;
     let border_color = p.border_subtle;
+    let accent = p.accent_primary;
     let bg = p.bg_elevated;
     let bg_hover = p.bg_hover;
 
@@ -298,8 +311,8 @@ fn album_card(album: &AlbumRecord, p: &'static colors::Palette) -> Element<'stat
                 _ => bg.into(),
             }),
             border: iced::Border {
-                color: border_color,
-                width: 1.0,
+                color: if is_highlighted { accent } else { border_color },
+                width: if is_highlighted { 2.0 } else { 1.0 },
                 radius: 10.0.into(),
             },
             ..Default::default()
@@ -410,7 +423,13 @@ pub fn album_detail_view(
         .padding(Padding::from([6, 12]))
         .style(move |_t: &iced::Theme, status: button::Status| {
             let background = match status {
-                button::Status::Hovered => Some(iced::Color { a: 0.12, ..danger_color }.into()),
+                button::Status::Hovered => Some(
+                    iced::Color {
+                        a: 0.12,
+                        ..danger_color
+                    }
+                    .into(),
+                ),
                 _ => Some(bg_elevated.into()),
             };
             button::Style {
@@ -599,8 +618,7 @@ pub fn album_picker_overlay(
         })
         .on_press(Message::CloseAlbumPicker);
 
-    let header = row![title, Space::with_width(Length::Fill), close_btn]
-        .align_y(Alignment::Center);
+    let header = row![title, Space::with_width(Length::Fill), close_btn].align_y(Alignment::Center);
 
     // "Create new album" row
     let create_section: Element<'static, Message> = if creating {
@@ -615,11 +633,7 @@ pub fn album_picker_overlay(
             .padding(Padding::from([5, 12]))
             .style(move |_t: &iced::Theme, s| button::Style {
                 background: Some(match s {
-                    button::Status::Hovered => iced::Color {
-                        a: 0.9,
-                        ..accent
-                    }
-                    .into(),
+                    button::Status::Hovered => iced::Color { a: 0.9, ..accent }.into(),
                     _ => accent.into(),
                 }),
                 border: iced::Border {
@@ -630,32 +644,25 @@ pub fn album_picker_overlay(
             })
             .on_press(Message::AlbumPickerCreateAndAdd);
 
-        container(
-            row![input, Space::with_width(8), submit]
-                .align_y(Alignment::Center),
-        )
-        .padding(Padding::from([8, 0]))
-        .into()
+        container(row![input, Space::with_width(8), submit].align_y(Alignment::Center))
+            .padding(Padding::from([8, 0]))
+            .into()
     } else {
-        let new_btn = button(
-            text("+ Create new album")
-                .size(13)
-                .color(accent),
-        )
-        .padding(Padding::from([8, 0]))
-        .width(Length::Fill)
-        .style(move |_t: &iced::Theme, s| button::Style {
-            background: match s {
-                button::Status::Hovered => Some(bg_hover.into()),
-                _ => None,
-            },
-            border: iced::Border {
-                radius: 6.0.into(),
+        let new_btn = button(text("+ Create new album").size(13).color(accent))
+            .padding(Padding::from([8, 0]))
+            .width(Length::Fill)
+            .style(move |_t: &iced::Theme, s| button::Style {
+                background: match s {
+                    button::Status::Hovered => Some(bg_hover.into()),
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })
-        .on_press(Message::AlbumPickerToggleCreate);
+            })
+            .on_press(Message::AlbumPickerToggleCreate);
         new_btn.into()
     };
 
@@ -705,7 +712,15 @@ pub fn album_picker_overlay(
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced::Theme, _s| button::Style {
-            background: Some(iced::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.45 }.into()),
+            background: Some(
+                iced::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.45,
+                }
+                .into(),
+            ),
             ..Default::default()
         })
         .on_press(Message::CloseAlbumPicker);
@@ -719,10 +734,7 @@ pub fn album_picker_overlay(
     stack![backdrop, centered_card].into()
 }
 
-fn picker_album_row(
-    album: &AlbumRecord,
-    p: &'static colors::Palette,
-) -> Element<'static, Message> {
+fn picker_album_row(album: &AlbumRecord, p: &'static colors::Palette) -> Element<'static, Message> {
     let album_id = album.id;
     let bg_hover = p.bg_hover;
     let text_primary = p.text_primary;
@@ -766,8 +778,7 @@ fn picker_album_row(
     ]
     .spacing(1);
 
-    let inner = row![thumb, Space::with_width(10), info]
-        .align_y(Alignment::Center);
+    let inner = row![thumb, Space::with_width(10), info].align_y(Alignment::Center);
 
     button(inner)
         .padding(Padding::from([6, 8]))
@@ -920,11 +931,7 @@ fn suggestion_accept_form(
         .padding(Padding::from([4, 8]))
         .style(move |_t: &iced::Theme, s| button::Style {
             background: Some(match s {
-                button::Status::Hovered => iced::Color {
-                    a: 0.9,
-                    ..accent
-                }
-                .into(),
+                button::Status::Hovered => iced::Color { a: 0.9, ..accent }.into(),
                 _ => accent.into(),
             }),
             border: iced::Border {

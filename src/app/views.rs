@@ -129,7 +129,8 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Welcome => WelcomeView::view(&app.drives, app.config.theme),
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
-            let mem_banner = crate::views::memories::memories_banner(&app.memories, app.config.theme);
+            let mem_banner =
+                crate::views::memories::memories_banner(&app.memories, app.config.theme);
             let sug_banner =
                 crate::views::albums::suggestions_banner(&app.album_suggestions, app.config.theme);
             // Combine: show suggestions banner first, then memories banner
@@ -285,6 +286,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.face_processing_error.as_deref(),
             app.merge_mode_active,
             &app.merge_selected_clusters,
+            app.people_highlight_index,
             app.ml_available,
             app.config.theme,
         ),
@@ -318,6 +320,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.face_processing_error.as_deref(),
                     app.merge_mode_active,
                     &app.merge_selected_clusters,
+                    app.people_highlight_index,
                     app.ml_available,
                     app.config.theme,
                 )
@@ -367,6 +370,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 &app.selected_timeline_photo_ids,
                 columns,
                 app.hovered_timeline_photo_id,
+                app.documents_highlight_index,
                 app.hovered_timeline_day_key.as_deref(),
                 app.config.theme,
             );
@@ -428,26 +432,25 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 let doc_album_accent = p.accent_primary;
                 let doc_album_hover = p.bg_hover;
                 let doc_album_bg_btn = p.bg_elevated;
-                let doc_album_btn =
-                    button(text("Add to Album").size(12).color(doc_album_accent))
-                        .padding([6, 12])
-                        .style(move |_theme: &iced::Theme, status| button::Style {
-                            background: Some(match status {
-                                button::Status::Hovered => doc_album_hover.into(),
-                                _ => doc_album_bg_btn.into(),
-                            }),
-                            border: iced::Border {
-                                radius: 6.0.into(),
-                                ..Default::default()
-                            },
+                let doc_album_btn = button(text("Add to Album").size(12).color(doc_album_accent))
+                    .padding([6, 12])
+                    .style(move |_theme: &iced::Theme, status| button::Style {
+                        background: Some(match status {
+                            button::Status::Hovered => doc_album_hover.into(),
+                            _ => doc_album_bg_btn.into(),
+                        }),
+                        border: iced::Border {
+                            radius: 6.0.into(),
                             ..Default::default()
-                        })
-                        .on_press(Message::OpenAlbumPicker(
-                            app.selected_timeline_photo_ids
-                                .iter()
-                                .copied()
-                                .collect::<Vec<_>>(),
-                        ));
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::OpenAlbumPicker(
+                        app.selected_timeline_photo_ids
+                            .iter()
+                            .copied()
+                            .collect::<Vec<_>>(),
+                    ));
 
                 let bar_bg = p.bg_secondary;
                 let bar_border = p.border_subtle;
@@ -528,6 +531,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.selected_drive.as_deref(),
             &app.photos,
             &app.duplicate_overview,
+            app.duplicates_highlight_index,
             app.spinner_phase,
             app.config.theme,
         ),
@@ -548,6 +552,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.selected_drive.as_deref(),
                         &app.photos,
                         &app.duplicate_overview,
+                        app.duplicates_highlight_index,
                         app.spinner_phase,
                         app.config.theme,
                     )
@@ -560,6 +565,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.selected_drive.as_deref(),
                     &app.photos,
                     &app.duplicate_overview,
+                    app.duplicates_highlight_index,
                     app.spinner_phase,
                     app.config.theme,
                 )
@@ -572,6 +578,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.selected_drive.as_deref(),
             &app.photos,
             &app.burst_overview_previews,
+            app.bursts_highlight_index,
             app.spinner_phase,
             app.config.theme,
         ),
@@ -592,6 +599,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.selected_drive.as_deref(),
                     &app.photos,
                     &app.burst_overview_previews,
+                    app.bursts_highlight_index,
                     app.spinner_phase,
                     app.config.theme,
                 )
@@ -612,6 +620,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             &app.album_suggestions,
             app.accepting_suggestion_id,
             &app.accepting_suggestion_name,
+            app.albums_highlight_index,
             app.config.theme,
         ),
         View::AlbumDetail => {
@@ -639,6 +648,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         &app.album_suggestions,
                         app.accepting_suggestion_id,
                         &app.accepting_suggestion_name,
+                        app.albums_highlight_index,
                         app.config.theme,
                     )
                 }
@@ -651,6 +661,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     &app.album_suggestions,
                     app.accepting_suggestion_id,
                     &app.accepting_suggestion_name,
+                    app.albums_highlight_index,
                     app.config.theme,
                 )
             }
@@ -830,8 +841,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
     // Toasts (topmost)
     if !app.toasts.is_empty() {
-        let toast_overlay =
-            crate::components::toast::toast_stack(&app.toasts, app.config.theme);
+        let toast_overlay = crate::components::toast::toast_stack(&app.toasts, app.config.theme);
         iced::widget::stack![base, toast_overlay].into()
     } else {
         base

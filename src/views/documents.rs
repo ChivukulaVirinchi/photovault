@@ -22,6 +22,7 @@ impl DocumentsView {
         selected_photo_ids: &HashSet<i64>,
         columns: usize,
         hovered_photo_id: Option<i64>,
+        highlighted_photo_index: Option<usize>,
         hovered_day_key: Option<&str>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
@@ -95,6 +96,9 @@ impl DocumentsView {
             .width(Length::Fill)
             .into()
         } else {
+            let highlighted_photo_id = highlighted_photo_index
+                .and_then(|i| photos.get(i))
+                .map(|p| p.id);
             let groups = Self::group_by_date(photos);
             let mut items: Vec<Element<'static, Message>> = Vec::new();
 
@@ -120,7 +124,7 @@ impl DocumentsView {
                     columns,
                     Some(selected_photo_ids),
                     hovered_photo_id,
-                    None,
+                    highlighted_photo_id,
                     theme,
                 ));
             }

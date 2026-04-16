@@ -317,7 +317,6 @@ pub struct PhotoVault {
     /// Selected trashed photo IDs for bulk restore
     pub(crate) selected_trash_ids: std::collections::HashSet<i64>,
 
-
     // --- Phase 7 additions ---
     /// Application configuration
     pub(crate) config: AppConfig,
@@ -463,6 +462,16 @@ pub struct PhotoVault {
     /// Currently highlighted photo in the timeline grid (keyboard cursor).
     /// Distinct from selection.
     pub(crate) timeline_highlight_index: Option<usize>,
+    /// Highlighted document photo index for keyboard tabbing.
+    pub(crate) documents_highlight_index: Option<usize>,
+    /// Highlighted person-cluster index for keyboard tabbing.
+    pub(crate) people_highlight_index: Option<usize>,
+    /// Highlighted album index for keyboard tabbing.
+    pub(crate) albums_highlight_index: Option<usize>,
+    /// Highlighted duplicate-group index for keyboard tabbing.
+    pub(crate) duplicates_highlight_index: Option<usize>,
+    /// Highlighted burst-group index for keyboard tabbing.
+    pub(crate) bursts_highlight_index: Option<usize>,
 
     // --- Phase C: Destructive action polish ---
     /// Pending destructive confirmation (None = no pending).
@@ -688,6 +697,11 @@ impl PhotoVault {
             // Phase B: keyboard-first
             shortcuts_overlay_open: false,
             timeline_highlight_index: None,
+            documents_highlight_index: None,
+            people_highlight_index: None,
+            albums_highlight_index: None,
+            duplicates_highlight_index: None,
+            bursts_highlight_index: None,
             // Phase C: destructive polish
             pending_confirmation: None,
         };

@@ -30,6 +30,7 @@ impl PeopleView {
         processing_error: Option<&str>,
         merge_mode_active: bool,
         merge_selected: &[i64],
+        highlighted_cluster_index: Option<usize>,
         ml_available: bool,
         theme: AppTheme,
     ) -> Element<'static, Message> {
@@ -42,6 +43,7 @@ impl PeopleView {
             processing_error,
             merge_mode_active,
             merge_selected,
+            highlighted_cluster_index,
             ml_available,
             theme,
         )

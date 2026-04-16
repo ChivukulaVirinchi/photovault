@@ -12,6 +12,7 @@ use crate::theme::colors;
 pub fn person_card_merge(
     cluster: &FaceClusterRecord,
     is_selected: bool,
+    is_highlighted: bool,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
@@ -104,12 +105,18 @@ pub fn person_card_merge(
     .spacing(4)
     .align_x(Alignment::Center);
 
-    let border_color = if is_selected {
+    let border_color = if is_highlighted {
+        accent_primary
+    } else if is_selected {
         accent_primary
     } else {
         border_subtle
     };
-    let border_width = if is_selected { 2.0 } else { 1.0 };
+    let border_width = if is_highlighted || is_selected {
+        2.0
+    } else {
+        1.0
+    };
 
     button(
         container(card_content)
@@ -146,6 +153,7 @@ pub fn person_card(
     cluster: &FaceClusterRecord,
     is_editing: bool,
     edit_name: &str,
+    is_highlighted: bool,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
@@ -156,6 +164,7 @@ pub fn person_card(
     let bg_elevated = p.bg_elevated;
     let bg_hover = p.bg_hover;
     let border_subtle = p.border_subtle;
+    let accent_primary = p.accent_primary;
 
     let cluster_id = cluster.id;
 
@@ -267,8 +276,12 @@ pub fn person_card(
         button::Style {
             background,
             border: iced::Border {
-                color: border_subtle,
-                width: 1.0,
+                color: if is_highlighted {
+                    accent_primary
+                } else {
+                    border_subtle
+                },
+                width: if is_highlighted { 2.0 } else { 1.0 },
                 radius: 12.0.into(),
             },
             ..Default::default()
