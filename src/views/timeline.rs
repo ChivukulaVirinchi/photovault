@@ -36,6 +36,7 @@ impl TimelineView {
         selected_photo_ids: &HashSet<i64>,
         hovered_photo_id: Option<i64>,
         hovered_day_key: Option<&str>,
+        highlighted_photo_id: Option<i64>,
         banner: Option<Element<'static, Message>>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
@@ -78,6 +79,7 @@ impl TimelineView {
                 columns,
                 Some(selected_photo_ids),
                 hovered_photo_id,
+                highlighted_photo_id,
                 theme,
             ));
         }
@@ -95,6 +97,26 @@ impl TimelineView {
     /// Render empty timeline (backward compat, also used when no photos)
     pub fn view(theme: AppTheme) -> Element<'static, Message> {
         Self::empty_view(theme)
+    }
+
+    /// Skeleton placeholder while photos are loading.
+    pub fn skeleton(columns: usize, theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let bg = p.bg_primary;
+        let content = column![
+            text("Timeline").size(22).color(p.text_primary),
+            Space::with_height(12),
+            crate::components::photo_grid::skeleton_grid(4, columns, 160.0, theme),
+        ]
+        .padding(32);
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg.into()),
+                ..Default::default()
+            })
+            .into()
     }
 
     /// Empty state view

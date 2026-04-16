@@ -25,6 +25,7 @@ pub(crate) fn scrolled(
 
 pub(crate) fn photos_loaded(app: &mut PhotoVault, photos: Vec<Photo>) -> Task<Message> {
     tracing::info!("Loaded {} photos for timeline", photos.len());
+    app.photos_loading = false;
     app.begin_thumbnail_generation_epoch();
     app.photos = photos;
     app.photo_count = app.photos.len() as i64;
@@ -218,7 +219,72 @@ pub(crate) fn next_photo(app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }
 
-pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Message> {
+pub(crate) fn key_pressed(
+    app: &mut PhotoVault,
+    key: keyboard::Key,
+    modifiers: keyboard::Modifiers,
+) -> Task<Message> {
+    // --- Highest priority: modal overlays swallow keys ---
+    if app.pending_confirmation.is_some() {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                return super::handle(app, Message::CancelPending);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                return super::handle(app, Message::ConfirmPending);
+            }
+            _ => return Task::none(),
+        }
+    }
+
+    if app.shortcuts_overlay_open {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::Escape)
+            | keyboard::Key::Character(_) => {
+                if matches!(&key, keyboard::Key::Character(ch) if ch.as_str() == "?")
+                    || matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                {
+                    return super::handle(app, Message::ToggleShortcutsOverlay);
+                }
+            }
+            _ => {}
+        }
+        return Task::none();
+    }
+
+    // --- Global Cmd/Ctrl shortcuts ---
+    let cmd = modifiers.control() || modifiers.macos_command();
+    if cmd {
+        if let keyboard::Key::Character(ref ch) = key {
+            let lower = ch.to_lowercase();
+            if ch == "," {
+                return super::handle(app, Message::NavigateTo(View::Settings));
+            }
+            if lower == "z" {
+                return super::handle(app, Message::UndoLastAction);
+            }
+            if lower == "w" {
+                return super::shortcuts::close_current_detail(app);
+            }
+            if let Ok(n) = ch.parse::<usize>() {
+                if (1..=9).contains(&n) {
+                    return super::shortcuts::navigate_by_index(app, n - 1);
+                }
+            }
+        }
+    }
+
+    // --- '?' opens shortcuts overlay (when not in a text-edit context) ---
+    if let keyboard::Key::Character(ref ch) = key {
+        if ch == "?"
+            && app.editing_cluster_id.is_none()
+            && app.editing_album_id.is_none()
+            && !matches!(app.current_view, View::Search)
+        {
+            return super::handle(app, Message::ToggleShortcutsOverlay);
+        }
+    }
+
     // --- View-specific shortcuts ---
     if app.current_view == View::PhotoDetail {
         match key {
@@ -398,6 +464,7 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
             _ => {}
         }
     } else if app.current_view == View::Timeline {
+        let cols = PhotoVault::timeline_columns_for_width(app.window_width) as i32;
         match key {
             keyboard::Key::Named(keyboard::key::Named::Delete)
             | keyboard::Key::Named(keyboard::key::Named::Backspace) => {
@@ -413,6 +480,35 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !app.selected_timeline_photo_ids.is_empty() {
                     return super::handle(app, Message::ClearTimelinePhotoSelection);
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                return move_timeline_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                return move_timeline_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return move_timeline_highlight(app, cols);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return move_timeline_highlight(app, -cols);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.timeline_highlight_index {
+                    if let Some(photo) = app.photos.get(i) {
+                        return super::handle(app, Message::SelectPhoto(photo.id));
+                    }
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::Space) => {
+                if let Some(i) = app.timeline_highlight_index {
+                    if let Some(photo) = app.photos.get(i) {
+                        return super::handle(
+                            app,
+                            Message::ToggleTimelinePhotoSelection(photo.id),
+                        );
+                    }
                 }
             }
             _ => {}
@@ -441,6 +537,18 @@ pub(crate) fn key_pressed(app: &mut PhotoVault, key: keyboard::Key) -> Task<Mess
         _ => {}
     }
 
+    Task::none()
+}
+
+/// Move the timeline grid keyboard cursor by `delta` cells, clamped to [0, photos.len() - 1].
+fn move_timeline_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
+    let total = app.photos.len();
+    if total == 0 {
+        return Task::none();
+    }
+    let current = app.timeline_highlight_index.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, total as i32 - 1);
+    app.timeline_highlight_index = Some(next as usize);
     Task::none()
 }
 

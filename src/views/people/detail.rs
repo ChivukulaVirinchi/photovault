@@ -145,7 +145,7 @@ pub fn view_cluster_detail(
         .padding(32)
         .into()
     } else {
-        photo_grid_simple(photos, 160.0, columns, None, None, theme)
+        photo_grid_simple(photos, 160.0, columns, None, None, None, theme)
     };
 
     let hide_btn = button(text("Hide from Memories").size(12).color(text_secondary))

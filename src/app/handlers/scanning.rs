@@ -11,6 +11,44 @@ use crate::services::{DriveInfo, ScanProgress};
 use super::super::messages::{Message, ScanResult};
 use super::super::state::{PhotoVault, ScanState, View};
 
+/// Map a View to a stable config string (only top-level views are persisted).
+fn view_to_config_string(v: &View) -> Option<&'static str> {
+    Some(match v {
+        View::Timeline => "timeline",
+        View::Map => "map",
+        View::Memories => "memories",
+        View::Albums => "albums",
+        View::Insights => "insights",
+        View::Search => "search",
+        View::People => "people",
+        View::Documents => "documents",
+        View::Duplicates => "duplicates",
+        View::Bursts => "bursts",
+        View::Trash => "trash",
+        View::Settings => "settings",
+        // Detail / transient views: don't persist.
+        _ => return None,
+    })
+}
+
+pub(crate) fn config_string_to_view(s: &str) -> Option<View> {
+    Some(match s {
+        "timeline" => View::Timeline,
+        "map" => View::Map,
+        "memories" => View::Memories,
+        "albums" => View::Albums,
+        "insights" => View::Insights,
+        "search" => View::Search,
+        "people" => View::People,
+        "documents" => View::Documents,
+        "duplicates" => View::Duplicates,
+        "bursts" => View::Bursts,
+        "trash" => View::Trash,
+        "settings" => View::Settings,
+        _ => return None,
+    })
+}
+
 pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     tracing::info!("NavigateTo: {:?}", view);
     if view == app.current_view {
@@ -18,6 +56,16 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
     }
     if view != View::Timeline {
         app.begin_thumbnail_generation_epoch();
+    }
+    // Persist the new view for next launch (only top-level views).
+    if let Some(key) = view_to_config_string(&view) {
+        let want = Some(key.to_string());
+        if app.config.last_view != want {
+            app.config.last_view = want;
+            if let Err(e) = app.config.save() {
+                tracing::debug!("Failed to persist last_view: {}", e);
+            }
+        }
     }
     // If navigating to Timeline, always reload photos from DB
     // (photos may have new thumbnails, or user may have re-scanned)
@@ -83,7 +131,13 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
             if db.needs_schema().unwrap_or(true) {
                 if let Err(e) = create_schema(&db.conn) {
                     tracing::error!("Failed to create schema: {}", e);
-                    return Task::none();
+                    return super::handle(
+                        app,
+                        Message::ToastShow(crate::components::toast::Toast::error(
+                            "Couldn't initialize database",
+                            format!("{}", e),
+                        )),
+                    );
                 }
             }
 
@@ -94,7 +148,13 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
 
             if let Err(e) = migrations::run_migrations(&db.conn) {
                 tracing::error!("Failed to run migrations: {}", e);
-                return Task::none();
+                return super::handle(
+                    app,
+                    Message::ToastShow(crate::components::toast::Toast::error(
+                        "Couldn't migrate database",
+                        format!("{}", e),
+                    )),
+                );
             }
 
             // Quick integrity check on open
@@ -149,14 +209,42 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 // Existing library: auto-sync incremental changes first.
                 super::handle(app, Message::CheckForChanges)
             };
-            return Task::batch(vec![pin_task, memories_task, suggestions_task, next]);
+
+            // Restore last-viewed view (if persisted & not Timeline which is default).
+            let restore = if let Some(saved) = app
+                .config
+                .last_view
+                .as_deref()
+                .and_then(config_string_to_view)
+            {
+                if saved != View::Timeline && saved != app.current_view {
+                    super::handle(app, Message::NavigateTo(saved))
+                } else {
+                    Task::none()
+                }
+            } else {
+                Task::none()
+            };
+
+            return Task::batch(vec![
+                pin_task,
+                memories_task,
+                suggestions_task,
+                next,
+                restore,
+            ]);
         }
         Err(e) => {
             tracing::error!("Failed to open database: {}", e);
+            super::handle(
+                app,
+                Message::ToastShow(crate::components::toast::Toast::error(
+                    "Couldn't open library",
+                    format!("{}", e),
+                )),
+            )
         }
     }
-
-    Task::none()
 }
 
 pub(crate) fn browse_for_folder(_app: &mut PhotoVault) -> Task<Message> {

@@ -23,12 +23,13 @@ impl BurstsView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         previews: &[(i64, Vec<i64>)],
+        spinner_phase: u32,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
 
         if is_loading {
-            return Self::loading_view(theme);
+            return Self::loading_view(spinner_phase, theme);
         }
 
         if groups.is_empty() {
@@ -73,14 +74,18 @@ impl BurstsView {
             .into()
     }
 
-    fn loading_view(theme: AppTheme) -> Element<'static, Message> {
+    fn loading_view(spinner_phase: u32, theme: AppTheme) -> Element<'static, Message> {
         let p = colors::palette(theme);
         let bg_primary = p.bg_primary;
 
         let content = column![
             text("Burst Photos").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("Detecting bursts...").size(16).color(p.text_secondary),
+            crate::components::spinner::spinner_with_label(
+                spinner_phase,
+                "Detecting bursts",
+                theme,
+            ),
             Space::with_height(8),
             text("Grouping photos taken within 3 seconds and scoring quality.")
                 .size(14)

@@ -20,6 +20,7 @@ pub fn photo_grid_simple(
     columns: usize,
     selected_photo_ids: Option<&HashSet<i64>>,
     hovered_photo_id: Option<i64>,
+    highlighted_photo_id: Option<i64>,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let mut rows: Vec<Element<'static, Message>> = Vec::new();
@@ -31,6 +32,7 @@ pub fn photo_grid_simple(
             thumbnail_size,
             selected_photo_ids,
             hovered_photo_id,
+            highlighted_photo_id,
             theme,
         );
         current_row.push(card);
@@ -60,6 +62,7 @@ fn photo_card(
     size: f32,
     selected_photo_ids: Option<&HashSet<i64>>,
     hovered_photo_id: Option<i64>,
+    highlighted_photo_id: Option<i64>,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
@@ -72,6 +75,7 @@ fn photo_card(
         .map(|ids| !ids.is_empty())
         .unwrap_or(false);
     let is_hovered = hovered_photo_id == Some(photo_id);
+    let is_highlighted = highlighted_photo_id == Some(photo_id);
 
     let bg_elevated = p.bg_elevated;
     let content: Element<'static, Message> = if let Some(ref thumb_path) = photo.thumbnail_path {
@@ -108,6 +112,7 @@ fn photo_card(
         .padding(0)
         .style(move |_theme: &iced::Theme, status| {
             let (border_color, border_width) = match status {
+                _ if is_highlighted => (accent_primary, 3.0),
                 button::Status::Hovered => (accent_primary, 2.0),
                 _ if is_selected => (accent_primary, 2.0),
                 _ => (iced::Color::TRANSPARENT, 0.0),
@@ -299,3 +304,43 @@ pub fn day_header(
         .on_exit(Message::TimelineDayHover(None))
         .into()
 }
+
+/// Render a grid of placeholder boxes for skeleton-screen loading states.
+pub fn skeleton_grid(
+    rows_count: usize,
+    cols: usize,
+    cell_size: f32,
+    theme: AppTheme,
+) -> Element<'static, Message> {
+    let p = colors::palette(theme);
+    let bg = p.bg_elevated;
+    let border = p.border_subtle;
+    let mut rows_vec: Vec<Element<'static, Message>> = Vec::new();
+    for _ in 0..rows_count {
+        let mut cells: Vec<Element<'static, Message>> = Vec::new();
+        for _ in 0..cols {
+            cells.push(
+                container(Space::new(
+                    Length::Fixed(cell_size),
+                    Length::Fixed(cell_size),
+                ))
+                .style(move |_t| container::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        color: border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into(),
+            );
+        }
+        rows_vec.push(Row::with_children(cells).spacing(8).into());
+    }
+    Column::with_children(rows_vec)
+        .spacing(8)
+        .padding(Padding::from([0, 20]))
+        .into()
+}
+

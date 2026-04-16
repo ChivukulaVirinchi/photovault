@@ -9,6 +9,7 @@ use super::super::state::{PhotoVault, View};
 
 pub(crate) fn albums_loaded(app: &mut PhotoVault, albums: Vec<crate::db::AlbumRecord>) -> Task<Message> {
     app.albums = albums;
+    app.albums_loading = false;
     Task::none()
 }
 
@@ -89,18 +90,6 @@ pub(crate) fn delete_album(app: &mut PhotoVault, album_id: i64) -> Task<Message>
         app.current_view = View::Albums;
     }
 
-    app.load_albums()
-}
-
-pub(crate) fn set_album_cover(app: &mut PhotoVault, album_id: i64, photo_id: i64) -> Task<Message> {
-    if let Some(ref drive_path) = app.selected_drive {
-        if let Ok(db) = Database::open_for_drive(drive_path) {
-            let repo = AlbumRepo::new(&db.conn);
-            if let Err(e) = repo.set_cover(album_id, photo_id) {
-                tracing::error!("Failed to set album cover: {}", e);
-            }
-        }
-    }
     app.load_albums()
 }
 

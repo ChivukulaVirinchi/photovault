@@ -120,6 +120,7 @@ impl DocumentsView {
                     columns,
                     Some(selected_photo_ids),
                     hovered_photo_id,
+                    None,
                     theme,
                 ));
             }

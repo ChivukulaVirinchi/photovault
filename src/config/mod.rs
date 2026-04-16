@@ -40,6 +40,11 @@ pub struct AppConfig {
     /// When set, the suggestion engine skips auto-detection of the home city.
     #[serde(default)]
     pub home_city_override: Option<String>,
+
+    /// Last-viewed top-level view; restored on app launch.
+    /// Stored as a string for forward compatibility across View enum changes.
+    #[serde(default)]
+    pub last_view: Option<String>,
 }
 
 fn default_weight_cooccurrence() -> f32 {
@@ -78,6 +83,7 @@ impl Default for AppConfig {
             weight_temporal: default_weight_temporal(),
             memories_enabled: default_memories_enabled(),
             home_city_override: None,
+            last_view: None,
         }
     }
 }

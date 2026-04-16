@@ -422,7 +422,9 @@ pub fn album_detail_view(
                 ..Default::default()
             }
         })
-        .on_press(Message::DeleteAlbum(album_id));
+        .on_press(Message::RequestConfirmation(
+            crate::app::state::PendingConfirmation::DeleteAlbum(album_id),
+        ));
 
     // Photo grid
     let grid: Element<'static, Message> = if photos.is_empty() {
@@ -445,7 +447,7 @@ pub fn album_detail_view(
         } else {
             Some(selected_photo_ids)
         };
-        photo_grid_simple(photos, 160.0, columns, sel, hovered_photo_id, theme)
+        photo_grid_simple(photos, 160.0, columns, sel, hovered_photo_id, None, theme)
     };
 
     // Selection action bar

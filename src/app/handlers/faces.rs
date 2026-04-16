@@ -102,14 +102,14 @@ pub(crate) fn face_processing_complete(
     app.face_processing_progress = None;
     app.face_cancel_flag = None;
 
-    match result {
-        Ok(result) => {
+    let toast_task = match &result {
+        Ok(r) => {
             app.face_processing_error = None;
             tracing::info!(
                 "Face processing complete: {} photos, {} faces, {} clusters",
-                result.photos_processed,
-                result.faces_detected,
-                result.clusters_created
+                r.photos_processed,
+                r.faces_detected,
+                r.clusters_created
             );
 
             // Refresh the review queue badge now that new items may be queued.
@@ -120,15 +120,30 @@ pub(crate) fn face_processing_complete(
                     }
                 }
             }
+
+            super::handle(
+                app,
+                Message::ToastShow(crate::components::toast::Toast::success(format!(
+                    "Found {} faces across {} photos",
+                    r.faces_detected, r.photos_processed
+                ))),
+            )
         }
         Err(e) => {
             app.face_processing_error = Some(e.clone());
             tracing::error!("Face processing failed: {}", e);
+            super::handle(
+                app,
+                Message::ToastShow(crate::components::toast::Toast::error(
+                    "Face processing failed",
+                    e.clone(),
+                )),
+            )
         }
-    }
+    };
 
     // Reload clusters
-    app.load_face_clusters()
+    Task::batch([app.load_face_clusters(), toast_task])
 }
 
 pub(crate) fn face_clusters_loaded(
@@ -140,6 +155,7 @@ pub(crate) fn face_clusters_loaded(
         clusters.len(),
         app.face_clusters.len()
     );
+    app.face_clusters_loading = false;
     for cluster in &clusters {
         if cluster.photo_count > 0
             && !app.cluster_photos.is_empty()

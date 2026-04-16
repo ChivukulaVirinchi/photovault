@@ -7,6 +7,7 @@
 use rusqlite::{params, Connection, Result as SqliteResult};
 
 /// A persisted album suggestion.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AlbumSuggestionRecord {
     pub id: i64,

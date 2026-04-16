@@ -21,10 +21,9 @@ impl SearchView {
         results: Option<&UnifiedSearchResults>,
         recent: &[RecentSearch],
         is_loading: bool,
-        _is_focused: bool,
-        highlighted_index: Option<usize>,
         drive_path: Option<&Path>,
         photos: &[Photo],
+        spinner_phase: u32,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -32,12 +31,12 @@ impl SearchView {
         let text_primary = p.text_primary;
 
         let body: Element<'static, Message> = if is_loading {
-            loading_state(p)
+            loading_state(spinner_phase, theme)
         } else if let Some(res) = results {
             if is_empty_results(res) {
                 no_results(query, p)
             } else {
-                results_panel(res, highlighted_index, drive_path, photos, theme)
+                results_panel(res, None, drive_path, photos, theme)
             }
         } else if query.is_empty() && !recent.is_empty() {
             recent_searches_panel(recent, p)
@@ -133,12 +132,15 @@ fn search_bar(query: &str, p: &Palette) -> Element<'static, Message> {
     row(items).align_y(Alignment::Center).into()
 }
 
-fn loading_state(p: &Palette) -> Element<'static, Message> {
-    let text_secondary = p.text_secondary;
-    container(text("Searching\u{2026}").size(14).color(text_secondary))
-        .width(Length::Fill)
-        .padding(24)
-        .into()
+fn loading_state(phase: u32, theme: AppTheme) -> Element<'static, Message> {
+    container(crate::components::spinner::spinner_with_label(
+        phase,
+        "Searching",
+        theme,
+    ))
+    .width(Length::Fill)
+    .padding(24)
+    .into()
 }
 
 fn no_results(query: &str, p: &Palette) -> Element<'static, Message> {

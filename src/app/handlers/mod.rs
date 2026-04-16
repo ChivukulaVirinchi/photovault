@@ -7,6 +7,7 @@ use super::state::PhotoVault;
 
 mod albums;
 mod bursts;
+mod confirm;
 mod documents;
 mod duplicates;
 mod face_review;
@@ -17,8 +18,10 @@ mod memories;
 mod scanning;
 mod search_cull;
 mod settings;
+mod shortcuts;
 mod thumbnails;
 mod timeline;
+mod toasts;
 mod trash;
 
 pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
@@ -87,7 +90,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::ClosePhotoDetail => timeline::close_photo_detail(app),
         Message::PreviousPhoto => timeline::previous_photo(app),
         Message::NextPhoto => timeline::next_photo(app),
-        Message::KeyPressed(key) => timeline::key_pressed(app, key),
+        Message::KeyPressed(key, mods) => timeline::key_pressed(app, key, mods),
         Message::RotatePhoto => timeline::rotate_photo(app),
         Message::ToggleMetadataPanel => timeline::toggle_metadata_panel(app),
         Message::DisplayImageReady(bytes_opt, w, h) => {
@@ -170,14 +173,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::SearchRecentSelected(query) => search_cull::search_recent_selected(app, query),
         Message::SearchRecentRemove(query) => search_cull::search_recent_remove(app, query),
         Message::SearchClearRecent => search_cull::search_clear_recent(app),
-        Message::SearchInputFocused => search_cull::search_input_focused(app),
-        Message::SearchInputBlurred => search_cull::search_input_blurred(app),
         Message::SearchOpenPerson(cid) => search_cull::search_open_person(app, cid),
         Message::SearchOpenAlbum(aid) => search_cull::search_open_album(app, aid),
         Message::SearchOpenPlace(city) => search_cull::search_open_place(app, city),
-        Message::SearchHighlightNext => search_cull::search_highlight_next(app),
-        Message::SearchHighlightPrev => search_cull::search_highlight_prev(app),
-        Message::SearchActivateHighlighted => search_cull::search_activate_highlighted(app),
         Message::EnterCullMode(photo_ids) => search_cull::enter_cull_mode(app, photo_ids),
         Message::EnterCullFromSearch => search_cull::enter_cull_from_search(app),
         Message::ExitCullMode => search_cull::exit_cull_mode(app),
@@ -195,11 +193,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::RestorePhoto(photo_id) => trash::restore_photo(app, photo_id),
         Message::RestoreSelected => trash::restore_selected(app),
         Message::ToggleTrashSelection(photo_id) => trash::toggle_trash_selection(app, photo_id),
-        Message::PermanentlyDeletePhoto(photo_id) => trash::permanently_delete_photo(app, photo_id),
         Message::ConfirmPermanentlyDeletePhoto(photo_id) => {
             trash::confirm_permanently_delete_photo(app, photo_id)
         }
-        Message::EmptyTrash => trash::empty_trash(app),
         Message::ConfirmEmptyTrash => trash::confirm_empty_trash(app),
 
         // --- Documents ---
@@ -270,12 +266,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         // --- Albums ---
         Message::CreateAlbum(name) => albums::create_album(app, name),
         Message::AlbumsLoaded(list) => albums::albums_loaded(app, list),
-        Message::RenameAlbum(id, name) => albums::rename_album(app, id, name),
         Message::DeleteAlbum(id) => albums::delete_album(app, id),
-        Message::SetAlbumCover(aid, pid) => albums::set_album_cover(app, aid, pid),
         Message::OpenAlbum(id) => albums::open_album(app, id),
         Message::AlbumPhotosLoaded(photos) => albums::album_photos_loaded(app, photos),
-        Message::AddPhotosToAlbum(aid, pids) => albums::add_photos_to_album(app, aid, pids),
         Message::RemovePhotosFromAlbum(aid, pids) => {
             albums::remove_photos_from_album(app, aid, pids)
         }
@@ -307,5 +300,21 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::InsightsLoaded(data) => insights::loaded(app, data),
         Message::InsightsJumpToDate(date) => insights::jump_to_date(app, date),
         Message::InsightsSearchCity(city) => insights::search_city(app, city),
+
+        // --- Phase A: Toasts + spinner ---
+        Message::ToastShow(t) => toasts::show(app, t),
+        Message::ToastDismiss(id) => toasts::dismiss(app, id),
+        Message::ToastTick => toasts::tick(app),
+        Message::SpinnerTick => toasts::spinner_tick(app),
+        Message::RestorePhotos(ids) => trash::restore_photos(app, ids),
+
+        // --- Phase B: Keyboard shortcuts ---
+        Message::ToggleShortcutsOverlay => shortcuts::toggle_overlay(app),
+        Message::UndoLastAction => shortcuts::undo_last_action(app),
+
+        // --- Phase C: Confirmations ---
+        Message::RequestConfirmation(c) => confirm::request(app, c),
+        Message::ConfirmPending => confirm::confirm(app),
+        Message::CancelPending => confirm::cancel(app),
     }
 }

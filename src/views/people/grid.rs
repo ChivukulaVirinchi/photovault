@@ -404,22 +404,52 @@ fn empty_view_with_button(
     let text_secondary = p.text_secondary;
     let text_tertiary = p.text_tertiary;
     let bg_primary = p.bg_primary;
+    let bg_primary_for_bg = bg_primary;
+    let accent_primary = p.accent_primary;
+    let accent_hover = p.accent_hover;
 
-    let content = column![
-        title,
-        Space::with_height(8),
-        status_bar,
-        Space::with_height(32),
-        text("Faces will appear here after processing.")
-            .size(14)
-            .color(text_secondary),
-        Space::with_height(8),
-        text("Click \"Detect Faces\" to start scanning your photos for faces.")
-            .size(14)
-            .color(text_tertiary),
-    ]
-    .align_x(Alignment::Start)
-    .padding(32);
+    let action_btn = iced::widget::button(
+        iced::widget::text("Detect faces")
+            .size(13)
+            .color(bg_primary_for_bg),
+    )
+    .padding(Padding::from([8, 16]))
+    .style(move |_t, status| iced::widget::button::Style {
+        background: Some(match status {
+            iced::widget::button::Status::Hovered => accent_hover.into(),
+            _ => accent_primary.into(),
+        }),
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .on_press(Message::ProcessFaces);
+
+    let empty_card = container(
+        column![
+            text("\u{1F464}").size(36).color(text_tertiary),
+            Space::with_height(12),
+            text("No people detected yet")
+                .size(16)
+                .color(text_secondary),
+            Space::with_height(8),
+            text("Run face processing to find people in your photos.")
+                .size(13)
+                .color(text_tertiary),
+            Space::with_height(16),
+            action_btn,
+        ]
+        .align_x(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding(Padding::from([64, 32]))
+    .center_x(Length::Fill);
+
+    let content = column![title, Space::with_height(8), status_bar, empty_card,]
+        .align_x(Alignment::Start)
+        .padding(32);
 
     container(content)
         .width(Length::Fill)

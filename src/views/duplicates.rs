@@ -24,12 +24,13 @@ impl DuplicatesView {
         drive_path: Option<&Path>,
         photos: &[Photo],
         overview: &[(i64, u64, Option<i64>)],
+        spinner_phase: u32,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
 
         if is_loading {
-            return Self::loading_view(theme);
+            return Self::loading_view(spinner_phase, theme);
         }
 
         if groups.is_empty() {
@@ -74,16 +75,18 @@ impl DuplicatesView {
             .into()
     }
 
-    fn loading_view(theme: AppTheme) -> Element<'static, Message> {
+    fn loading_view(spinner_phase: u32, theme: AppTheme) -> Element<'static, Message> {
         let p = colors::palette(theme);
         let bg_primary = p.bg_primary;
 
         let content = column![
             text("Duplicates").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("Detecting duplicates...")
-                .size(16)
-                .color(p.text_secondary),
+            crate::components::spinner::spinner_with_label(
+                spinner_phase,
+                "Detecting duplicates",
+                theme,
+            ),
             Space::with_height(8),
             text("Analyzing file hashes and building groups.")
                 .size(14)

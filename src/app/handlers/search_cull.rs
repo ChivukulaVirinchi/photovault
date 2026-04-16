@@ -146,7 +146,6 @@ pub(crate) fn search_complete(
     }
     app.search_loading = false;
     app.search_results = Some(*results);
-    app.search_highlighted_index = None;
 
     // Record this search as recent (best-effort, non-blocking)
     if let Some(ref drive_path) = app.selected_drive {
@@ -208,19 +207,6 @@ pub(crate) fn search_clear_recent(app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }
 
-pub(crate) fn search_input_focused(app: &mut PhotoVault) -> Task<Message> {
-    app.search_input_focused = true;
-    if app.recent_searches.is_empty() {
-        return load_recent_searches(app);
-    }
-    Task::none()
-}
-
-pub(crate) fn search_input_blurred(app: &mut PhotoVault) -> Task<Message> {
-    app.search_input_focused = false;
-    Task::none()
-}
-
 pub(crate) fn load_recent_searches(app: &mut PhotoVault) -> Task<Message> {
     let Some(ref drive_path) = app.selected_drive else {
         return Task::none();
@@ -257,72 +243,6 @@ pub(crate) fn search_open_place(app: &mut PhotoVault, city: String) -> Task<Mess
     app.search_query = city;
     app.search_generation = app.search_generation.wrapping_add(1);
     execute_search(app)
-}
-
-pub(crate) fn search_highlight_next(app: &mut PhotoVault) -> Task<Message> {
-    let total = total_results(app);
-    if total == 0 {
-        return Task::none();
-    }
-    let next = match app.search_highlighted_index {
-        None => 0,
-        Some(i) => (i + 1) % total,
-    };
-    app.search_highlighted_index = Some(next);
-    Task::none()
-}
-
-pub(crate) fn search_highlight_prev(app: &mut PhotoVault) -> Task<Message> {
-    let total = total_results(app);
-    if total == 0 {
-        return Task::none();
-    }
-    let prev = match app.search_highlighted_index {
-        None => total - 1,
-        Some(0) => total - 1,
-        Some(i) => i - 1,
-    };
-    app.search_highlighted_index = Some(prev);
-    Task::none()
-}
-
-pub(crate) fn search_activate_highlighted(app: &mut PhotoVault) -> Task<Message> {
-    let Some(idx) = app.search_highlighted_index else {
-        return execute_search(app); // No highlight → submit search
-    };
-    let Some(ref results) = app.search_results else {
-        return Task::none();
-    };
-
-    // Resolve which entity the index points to
-    let mut cursor = idx;
-    if cursor < results.people.len() {
-        let cid = results.people[cursor].cluster_id;
-        return super::handle(app, Message::SearchOpenPerson(cid));
-    }
-    cursor -= results.people.len();
-    if cursor < results.albums.len() {
-        let aid = results.albums[cursor].album_id;
-        return super::handle(app, Message::SearchOpenAlbum(aid));
-    }
-    cursor -= results.albums.len();
-    if cursor < results.places.len() {
-        let city = results.places[cursor].city.clone();
-        return super::handle(app, Message::SearchOpenPlace(city));
-    }
-    cursor -= results.places.len();
-    if cursor < results.photos.len() {
-        let pid = results.photos[cursor].photo_id;
-        return super::handle(app, Message::SelectPhoto(pid));
-    }
-    Task::none()
-}
-
-fn total_results(app: &PhotoVault) -> usize {
-    app.search_results
-        .as_ref()
-        .map(|r| r.people.len() + r.albums.len() + r.places.len() + r.photos.len().min(20))
-        .unwrap_or(0)
 }
 
 pub(crate) fn enter_cull_from_search(app: &mut PhotoVault) -> Task<Message> {

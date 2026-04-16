@@ -16,12 +16,13 @@ const WGPU_MAX_DIM: u32 = 8192;
 
 impl PhotoVault {
     /// Load photos from database
-    pub(crate) fn load_photos(&self) -> Task<Message> {
+    pub(crate) fn load_photos(&mut self) -> Task<Message> {
         let Some(ref drive_path) = self.selected_drive else {
             return Task::none();
         };
 
         let drive_path = drive_path.clone();
+        self.photos_loading = true;
 
         Task::perform(
             async move {
@@ -58,12 +59,13 @@ impl PhotoVault {
     }
 
     /// Load face clusters from the database
-    pub(crate) fn load_face_clusters(&self) -> Task<Message> {
+    pub(crate) fn load_face_clusters(&mut self) -> Task<Message> {
         let Some(ref drive_path) = self.selected_drive else {
             return Task::none();
         };
 
         let drive_path = drive_path.clone();
+        self.face_clusters_loading = true;
 
         Task::perform(
             async move {
@@ -182,11 +184,12 @@ impl PhotoVault {
     }
 
     /// Load all albums from the database.
-    pub(crate) fn load_albums(&self) -> Task<Message> {
+    pub(crate) fn load_albums(&mut self) -> Task<Message> {
         let Some(ref drive_path) = self.selected_drive else {
             return Task::none();
         };
         let drive_path = drive_path.clone();
+        self.albums_loading = true;
 
         Task::perform(
             async move {

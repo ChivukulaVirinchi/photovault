@@ -22,8 +22,6 @@ impl TrashView {
         stats: &TrashStats,
         selected: &HashSet<i64>,
         drive_path: Option<&Path>,
-        confirm_empty_trash: bool,
-        confirm_delete_photo_id: Option<i64>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -60,13 +58,7 @@ impl TrashView {
         let item_list: Vec<Element<'static, Message>> = items
             .iter()
             .map(|item| {
-                Self::trash_item(
-                    item,
-                    selected.contains(&item.photo_id),
-                    drive_path,
-                    confirm_delete_photo_id,
-                    theme,
-                )
+                Self::trash_item(item, selected.contains(&item.photo_id), drive_path, theme)
             })
             .collect();
 
@@ -114,22 +106,14 @@ impl TrashView {
                         ..Default::default()
                     }
                 })
-                .on_press(if confirm_empty_trash {
-                    Message::ConfirmEmptyTrash
-                } else {
-                    Message::EmptyTrash
-                }),
+                .on_press(Message::RequestConfirmation(
+                    crate::app::state::PendingConfirmation::EmptyTrash,
+                )),
         ]
         .align_y(Alignment::Center);
 
-        let confirm_text: Element<'static, Message> = if confirm_empty_trash {
-            text("Click Empty Trash again to confirm permanent deletion")
-                .size(12)
-                .color(semantic_danger)
-                .into()
-        } else {
-            Space::with_height(Length::Shrink).into()
-        };
+        let _ = semantic_danger;
+        let confirm_text: Element<'static, Message> = Space::with_height(Length::Shrink).into();
 
         let bg_primary = p.bg_primary;
         let content = column![
@@ -164,16 +148,29 @@ impl TrashView {
         let p = colors::palette(theme);
         let bg_primary = p.bg_primary;
 
+        let empty_card = container(
+            column![
+                text("\u{1F5D1}").size(36).color(p.text_tertiary),
+                Space::with_height(12),
+                text("Trash is empty").size(16).color(p.text_secondary),
+                Space::with_height(8),
+                text(
+                    "Deleted photos appear here for 30 days before permanent removal.",
+                )
+                .size(13)
+                .color(p.text_tertiary),
+            ]
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(Padding::from([80, 32]))
+        .center_x(Length::Fill);
+
         let content = column![
             text("Trash").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("Trash is empty").size(16).color(p.text_secondary),
-            Space::with_height(8),
-            text("Deleted photos will appear here")
-                .size(14)
-                .color(p.text_tertiary),
+            empty_card,
         ]
-        .align_x(Alignment::Start)
         .padding(32);
 
         container(content)
@@ -190,7 +187,6 @@ impl TrashView {
         item: &TrashedPhotoRecord,
         is_selected: bool,
         drive_path: Option<&Path>,
-        confirm_delete_photo_id: Option<i64>,
         theme: AppTheme,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
@@ -270,23 +266,14 @@ impl TrashView {
                 .padding(Padding::from([6, 12]))
                 .on_press(Message::RestorePhoto(photo_id)),
             Space::with_width(8),
-            button(
-                text(if confirm_delete_photo_id == Some(photo_id) {
-                    "Confirm Delete"
-                } else {
-                    "Delete"
-                })
-                .size(12)
-                .color(semantic_danger)
-            )
-            .padding(Padding::from([6, 12]))
-            .on_press(if confirm_delete_photo_id == Some(photo_id) {
-                Message::ConfirmPermanentlyDeletePhoto(photo_id)
-            } else {
-                Message::PermanentlyDeletePhoto(photo_id)
-            }),
+            button(text("Delete").size(12).color(semantic_danger))
+                .padding(Padding::from([6, 12]))
+                .on_press(Message::RequestConfirmation(
+                    crate::app::state::PendingConfirmation::PermanentlyDeletePhoto(photo_id),
+                )),
         ]
         .align_y(Alignment::Center);
+
 
         let bg_selected = p.bg_selected;
         let bg_elevated = p.bg_elevated;

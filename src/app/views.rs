@@ -140,18 +140,29 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 (None, None) => None,
             };
             if app.photos.is_empty() {
-                TimelineView::view(app.config.theme)
+                if app.photos_loading {
+                    let available_width = (app.window_width - 200.0 - 32.0).max(168.0);
+                    let columns = (available_width / 168.0).floor().max(2.0) as usize;
+                    TimelineView::skeleton(columns, app.config.theme)
+                } else {
+                    TimelineView::view(app.config.theme)
+                }
             } else {
                 // Calculate responsive column count:
                 // Sidebar is ~200px, padding 32px total, each thumb is 160+8px gap
                 let available_width = (app.window_width - 200.0 - 32.0).max(168.0);
                 let columns = (available_width / 168.0).floor().max(2.0) as usize;
+                let highlighted_photo_id = app
+                    .timeline_highlight_index
+                    .and_then(|i| app.photos.get(i))
+                    .map(|p| p.id);
                 let timeline = TimelineView::view_with_photos(
                     &app.photos,
                     columns,
                     &app.selected_timeline_photo_ids,
                     app.hovered_timeline_photo_id,
                     app.hovered_timeline_day_key.as_deref(),
+                    highlighted_photo_id,
                     banner,
                     app.config.theme,
                 );
@@ -341,10 +352,9 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.search_results.as_ref(),
             &app.recent_searches,
             app.search_loading,
-            app.search_input_focused,
-            app.search_highlighted_index,
             app.selected_drive.as_deref(),
             &app.photos,
+            app.spinner_phase,
             app.config.theme,
         ),
         View::Documents => {
@@ -485,10 +495,9 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.search_results.as_ref(),
                     &app.recent_searches,
                     app.search_loading,
-                    app.search_input_focused,
-                    app.search_highlighted_index,
                     app.selected_drive.as_deref(),
                     &app.photos,
+                    app.spinner_phase,
                     app.config.theme,
                 )
             }
@@ -498,8 +507,6 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             &app.trash_stats,
             &app.selected_trash_ids,
             app.selected_drive.as_deref(),
-            app.confirm_empty_trash,
-            app.confirm_delete_photo_id,
             app.config.theme,
         ),
         View::Settings => SettingsView::view(
@@ -521,6 +528,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.selected_drive.as_deref(),
             &app.photos,
             &app.duplicate_overview,
+            app.spinner_phase,
             app.config.theme,
         ),
         View::DuplicateDetail => {
@@ -540,6 +548,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.selected_drive.as_deref(),
                         &app.photos,
                         &app.duplicate_overview,
+                        app.spinner_phase,
                         app.config.theme,
                     )
                 }
@@ -551,6 +560,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.selected_drive.as_deref(),
                     &app.photos,
                     &app.duplicate_overview,
+                    app.spinner_phase,
                     app.config.theme,
                 )
             }
@@ -562,6 +572,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.selected_drive.as_deref(),
             &app.photos,
             &app.burst_overview_previews,
+            app.spinner_phase,
             app.config.theme,
         ),
         View::BurstDetail => {
@@ -581,6 +592,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.selected_drive.as_deref(),
                     &app.photos,
                     &app.burst_overview_previews,
+                    app.spinner_phase,
                     app.config.theme,
                 )
             }
@@ -589,6 +601,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.insights_data.as_ref(),
             app.insights_selected_year,
             app.insights_loading,
+            app.spinner_phase,
             app.config.theme,
         ),
         View::Albums => crate::views::albums::albums_view(
@@ -667,9 +680,13 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         || app.duplicate_detection_running
         || app.burst_detection_running
         || app.geocoding_progress.is_some()
-        || app.document_analysis_active;
+        || app.document_analysis_active
+        || app.suggestion_detection_running
+        || app.insights_loading
+        || app.search_loading
+        || app.photos_loading;
 
-    if has_status {
+    let base: Element<'_, Message> = if has_status {
         let mut status_parts: Vec<String> = Vec::new();
 
         if let Some(ref state) = app.scan_state {
@@ -735,6 +752,22 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             }
         }
 
+        if app.suggestion_detection_running {
+            status_parts.push("Detecting album suggestions...".to_string());
+        }
+
+        if app.insights_loading {
+            status_parts.push("Computing insights...".to_string());
+        }
+
+        if app.search_loading {
+            status_parts.push("Searching...".to_string());
+        }
+
+        if app.photos_loading {
+            status_parts.push("Loading photos...".to_string());
+        }
+
         let status_text = status_parts.join("  |  ");
 
         let p = colors::palette(app.config.theme);
@@ -776,5 +809,31 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 ..Default::default()
             })
             .into()
+    };
+
+    // Layer overlays above the main layout.
+    // Confirmation dialog (blocks everything behind it)
+    let base = if let Some(ref pending) = app.pending_confirmation {
+        let overlay = crate::components::confirm::overlay(pending, app.config.theme);
+        iced::widget::stack![base, overlay].into()
+    } else {
+        base
+    };
+
+    // Shortcuts overlay (`?` key)
+    let base = if app.shortcuts_overlay_open {
+        let overlay = crate::views::shortcuts::overlay(&app.current_view, app.config.theme);
+        iced::widget::stack![base, overlay].into()
+    } else {
+        base
+    };
+
+    // Toasts (topmost)
+    if !app.toasts.is_empty() {
+        let toast_overlay =
+            crate::components::toast::toast_stack(&app.toasts, app.config.theme);
+        iced::widget::stack![base, toast_overlay].into()
+    } else {
+        base
     }
 }

@@ -94,8 +94,8 @@ pub enum Message {
     /// Continue background thumbnail scheduling in small chunks.
     ContinueThumbnailScheduling(u64),
 
-    /// Keyboard event
-    KeyPressed(keyboard::Key),
+    /// Keyboard event (key + modifiers)
+    KeyPressed(keyboard::Key, keyboard::Modifiers),
 
     /// No-op message (used as callback when we don't need the result)
     NoOp,
@@ -206,21 +206,12 @@ pub enum Message {
     SearchRecentRemove(String),
     /// User clicked "Clear all" on the recent searches list.
     SearchClearRecent,
-    /// Search input gained focus.
-    SearchInputFocused,
-    /// Search input lost focus.
-    SearchInputBlurred,
     /// User clicked a person hit in results.
     SearchOpenPerson(i64),
     /// User clicked an album hit in results.
     SearchOpenAlbum(i64),
     /// User clicked a place hit — re-run search filtered to that city.
     SearchOpenPlace(String),
-    /// Keyboard arrow up/down for navigating results.
-    SearchHighlightPrev,
-    SearchHighlightNext,
-    /// Activate the currently highlighted result (Enter key).
-    SearchActivateHighlighted,
     EnterCullMode(Vec<i64>),
     EnterCullFromSearch,
     ExitCullMode,
@@ -237,9 +228,7 @@ pub enum Message {
     RestorePhoto(i64),
     RestoreSelected,
     ToggleTrashSelection(i64),
-    PermanentlyDeletePhoto(i64),
     ConfirmPermanentlyDeletePhoto(i64),
-    EmptyTrash,
     ConfirmEmptyTrash,
 
     // --- Documents ---
@@ -400,20 +389,14 @@ pub enum Message {
     // --- Albums ---
     /// Create a new album with the given name
     CreateAlbum(String),
-    /// Rename an existing album
-    RenameAlbum(i64, String),
     /// Delete an album (photos are NOT trashed)
     DeleteAlbum(i64),
-    /// Set the cover photo for an album
-    SetAlbumCover(i64, i64),
     /// Navigate into an album's detail view
     OpenAlbum(i64),
     /// Album list loaded from DB
     AlbumsLoaded(Vec<crate::db::AlbumRecord>),
     /// Album photos loaded for the detail view
     AlbumPhotosLoaded(Vec<Photo>),
-    /// Add photos to an existing album
-    AddPhotosToAlbum(i64, Vec<i64>),
     /// Remove photos from an album
     RemovePhotosFromAlbum(i64, Vec<i64>),
     /// Open the album picker overlay for these photo IDs
@@ -468,6 +451,32 @@ pub enum Message {
     InsightsJumpToDate(String),
     /// Search for a city from the top-locations list
     InsightsSearchCity(String),
+
+    // --- Phase A: Production polish ---
+    /// Show a toast notification.
+    ToastShow(crate::components::toast::Toast),
+    /// Dismiss a toast by id.
+    ToastDismiss(u64),
+    /// Periodic toast expiration check.
+    ToastTick,
+    /// Advance spinner animation phase by one frame.
+    SpinnerTick,
+    /// Restore photos after a trash undo.
+    RestorePhotos(Vec<i64>),
+
+    // --- Phase B: Keyboard-first ---
+    /// Toggle the `?` keyboard shortcuts overlay.
+    ToggleShortcutsOverlay,
+    /// Context-aware undo for current view.
+    UndoLastAction,
+
+    // --- Phase C: Destructive action polish ---
+    /// Request confirmation for a destructive action.
+    RequestConfirmation(crate::app::state::PendingConfirmation),
+    /// Confirm the currently-pending action.
+    ConfirmPending,
+    /// Cancel the currently-pending action.
+    CancelPending,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

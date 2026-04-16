@@ -3,6 +3,7 @@
 use rusqlite::{params, Connection, Result as SqliteResult};
 
 /// Album record for list views (cover + summary info)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AlbumRecord {
     pub id: i64,
@@ -85,15 +86,6 @@ impl<'a> AlbumRepo<'a> {
             )?;
         }
         self.update_album_stats(album_id)?;
-        Ok(())
-    }
-
-    /// Manually set the cover photo for an album.
-    pub fn set_cover(&self, album_id: i64, photo_id: i64) -> SqliteResult<()> {
-        self.conn.execute(
-            "UPDATE albums SET cover_photo_id = ?1, cover_auto_picked = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![photo_id, album_id],
-        )?;
         Ok(())
     }
 

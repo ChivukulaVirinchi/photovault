@@ -265,13 +265,6 @@ pub struct PhotoVault {
     /// Recent searches loaded from DB (shown when input is empty).
     pub(crate) recent_searches: Vec<crate::db::RecentSearch>,
 
-    /// Whether the search input currently has focus (controls recent dropdown).
-    pub(crate) search_input_focused: bool,
-
-    /// Currently highlighted result index for keyboard navigation.
-    /// Counts across all sections (people first, then albums, places, photos).
-    pub(crate) search_highlighted_index: Option<usize>,
-
     /// Quick cull session state
     pub(crate) cull_state: Option<crate::views::CullState>,
 
@@ -324,11 +317,6 @@ pub struct PhotoVault {
     /// Selected trashed photo IDs for bulk restore
     pub(crate) selected_trash_ids: std::collections::HashSet<i64>,
 
-    /// Pending confirmation for empty trash action
-    pub(crate) confirm_empty_trash: bool,
-
-    /// Pending per-photo permanent deletion confirmation
-    pub(crate) confirm_delete_photo_id: Option<i64>,
 
     // --- Phase 7 additions ---
     /// Application configuration
@@ -454,6 +442,71 @@ pub struct PhotoVault {
 
     /// Whether insights computation is in progress
     pub(crate) insights_loading: bool,
+
+    // --- Phase A: Production polish ---
+    /// Toast notification stack (bottom-right overlay).
+    pub(crate) toasts: Vec<crate::components::toast::Toast>,
+    /// Monotonic toast ID generator.
+    pub(crate) toast_next_id: u64,
+    /// Spinner animation phase, ticked while any loading flag is true.
+    pub(crate) spinner_phase: u32,
+    /// Whether photos are currently being loaded (for skeleton screens).
+    pub(crate) photos_loading: bool,
+    /// Whether albums are currently being loaded.
+    pub(crate) albums_loading: bool,
+    /// Whether face clusters are currently being loaded.
+    pub(crate) face_clusters_loading: bool,
+
+    // --- Phase B: Keyboard-first ---
+    /// Whether the `?` keyboard shortcuts overlay is open.
+    pub(crate) shortcuts_overlay_open: bool,
+    /// Currently highlighted photo in the timeline grid (keyboard cursor).
+    /// Distinct from selection.
+    pub(crate) timeline_highlight_index: Option<usize>,
+
+    // --- Phase C: Destructive action polish ---
+    /// Pending destructive confirmation (None = no pending).
+    pub(crate) pending_confirmation: Option<PendingConfirmation>,
+}
+
+/// A pending destructive action awaiting user confirmation.
+#[derive(Debug, Clone)]
+pub enum PendingConfirmation {
+    DeleteAlbum(i64),
+    EmptyTrash,
+    PermanentlyDeletePhoto(i64),
+}
+
+impl PendingConfirmation {
+    pub fn title(&self) -> &'static str {
+        match self {
+            PendingConfirmation::DeleteAlbum(_) => "Delete this album?",
+            PendingConfirmation::EmptyTrash => "Empty trash?",
+            PendingConfirmation::PermanentlyDeletePhoto(_) => "Permanently delete photo?",
+        }
+    }
+
+    pub fn body(&self) -> &'static str {
+        match self {
+            PendingConfirmation::DeleteAlbum(_) => {
+                "Photos will not be deleted, only the album itself."
+            }
+            PendingConfirmation::EmptyTrash => {
+                "All photos in trash will be permanently deleted from disk."
+            }
+            PendingConfirmation::PermanentlyDeletePhoto(_) => {
+                "This photo will be permanently removed from disk. Cannot be undone."
+            }
+        }
+    }
+
+    pub fn action_label(&self) -> &'static str {
+        match self {
+            PendingConfirmation::DeleteAlbum(_) => "Delete album",
+            PendingConfirmation::EmptyTrash => "Empty trash",
+            PendingConfirmation::PermanentlyDeletePhoto(_) => "Delete forever",
+        }
+    }
 }
 
 impl PhotoVault {
@@ -564,8 +617,6 @@ impl PhotoVault {
             search_loading: false,
             search_generation: 0,
             recent_searches: Vec::new(),
-            search_input_focused: false,
-            search_highlighted_index: None,
             cull_state: None,
             face_review_state: None,
             face_review_pending: 0,
@@ -582,8 +633,6 @@ impl PhotoVault {
             trash_items: Vec::new(),
             trash_stats: TrashStats::default(),
             selected_trash_ids: std::collections::HashSet::new(),
-            confirm_empty_trash: false,
-            confirm_delete_photo_id: None,
             // Phase 7
             config,
             pending_index_changes: None,
@@ -629,6 +678,18 @@ impl PhotoVault {
             insights_data: None,
             insights_selected_year: None,
             insights_loading: false,
+            // Phase A: production polish
+            toasts: Vec::new(),
+            toast_next_id: 0,
+            spinner_phase: 0,
+            photos_loading: false,
+            albums_loading: false,
+            face_clusters_loading: false,
+            // Phase B: keyboard-first
+            shortcuts_overlay_open: false,
+            timeline_highlight_index: None,
+            // Phase C: destructive polish
+            pending_confirmation: None,
         };
 
         // Detect drives on startup
@@ -651,6 +712,22 @@ impl PhotoVault {
     pub(crate) fn timeline_columns_for_width(width: f32) -> usize {
         let available_width = (width - 200.0 - 32.0).max(168.0);
         (available_width / 168.0).floor().max(2.0) as usize
+    }
+
+    /// True when any user-visible background loading is in progress.
+    /// Drives the spinner animation tick.
+    pub(crate) fn is_anything_loading(&self) -> bool {
+        self.search_loading
+            || self.face_processing_active
+            || self.duplicate_detection_running
+            || self.burst_detection_running
+            || self.document_analysis_active
+            || self.suggestion_detection_running
+            || self.insights_loading
+            || self.scan_state.is_some()
+            || self.photos_loading
+            || self.albums_loading
+            || self.face_clusters_loading
     }
 
     pub(crate) fn photo_detail_navigation_list(&self) -> &[Photo] {

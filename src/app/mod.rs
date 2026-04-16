@@ -53,6 +53,22 @@ impl PhotoVault {
             );
         }
 
+        // Spinner animation — tick at ~8 fps while anything is loading.
+        if self.is_anything_loading() {
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(120))
+                    .map(|_| Message::SpinnerTick),
+            );
+        }
+
+        // Toast auto-dismiss check — half-second resolution is plenty.
+        if !self.toasts.is_empty() {
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(500))
+                    .map(|_| Message::ToastTick),
+            );
+        }
+
         // Memory day-rollover tick: cheap NaiveDate compare every 60s.
         if self.selected_drive.is_some() && self.memories_enabled {
             subs.push(
@@ -76,9 +92,9 @@ impl PhotoVault {
         // Keyboard events for all views (shortcuts)
         if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {
-                iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                    Some(Message::KeyPressed(key))
-                }
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) => Some(Message::KeyPressed(key, modifiers)),
                 iced::Event::Window(iced::window::Event::Resized(size)) => {
                     Some(Message::WindowResized {
                         width: size.width,

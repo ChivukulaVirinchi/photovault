@@ -28,21 +28,26 @@ pub fn insights_view(
     data: Option<&InsightsData>,
     selected_year: Option<i32>,
     loading: bool,
+    spinner_phase: u32,
     theme: AppTheme,
 ) -> Element<'static, Message> {
     let p = colors::palette(theme);
 
     if loading || data.is_none() {
-        let label = if loading {
-            "Computing insights..."
+        let status: Element<'static, Message> = if loading {
+            crate::components::spinner::spinner_with_label(
+                spinner_phase,
+                "Computing insights",
+                theme,
+            )
         } else {
-            "No insights data yet."
+            text("No insights data yet.").size(14).color(p.text_secondary).into()
         };
         return container(
             column![
                 text("Insights").size(24).color(p.text_primary),
                 Space::with_height(20),
-                text(label).size(14).color(p.text_secondary),
+                status,
             ]
             .spacing(8)
             .padding(Padding::from([24, 24])),

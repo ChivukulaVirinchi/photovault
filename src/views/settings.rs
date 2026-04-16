@@ -53,6 +53,10 @@ impl SettingsView {
             Self::map_cache_setting(config.theme, map_cache_size_mb, map_cache_limit_mb,),
             Space::with_height(32),
             Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
+            Space::with_height(32),
+            Self::section_header(config.theme, "Keyboard Shortcuts"),
+            Space::with_height(8),
+            crate::views::shortcuts::reference_list(config.theme),
         ]
         .padding(32)
         .spacing(8);

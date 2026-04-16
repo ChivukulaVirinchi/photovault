@@ -14,6 +14,7 @@ pub mod photo_detail;
 pub mod photo_detail_map;
 pub mod search;
 pub mod settings;
+pub mod shortcuts;
 pub mod timeline;
 pub mod trash;
 pub mod welcome;
