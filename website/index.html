@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PhotoVault - Your photos, organized. On your machine.</title>
+  <meta name="description" content="An offline-first desktop photo library manager. Face recognition, smart albums, full-text search -- without uploading anything." />
+
+  <meta property="og:title" content="PhotoVault - Your photos, organized" />
+  <meta property="og:description" content="Offline-first photo library manager for desktop." />
+  <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
+  <meta property="og:url" content="https://chivukulavirinchi.github.io/photovault/" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'pv-bg': '#111215',
+            'pv-bg-elev': '#1D2026',
+            'pv-text': '#ECEBE7',
+            'pv-text-soft': '#9FA5B0',
+            'pv-accent': '#D49E3C',
+            'pv-accent-bright': '#E6B352',
+          },
+          fontFamily: {
+            sans: ['Manrope', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="photovault.png" />
+</head>
+<body class="bg-pv-bg text-pv-text font-sans antialiased">
+  <nav class="fixed top-0 inset-x-0 z-50 bg-pv-bg/80 backdrop-blur-md border-b border-white/5">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-pv-accent font-bold text-xl">&#9679;</span>
+        <span class="font-semibold tracking-tight">PhotoVault</span>
+      </div>
+      <div class="hidden md:flex gap-8 text-sm text-pv-text-soft">
+        <a href="#features" class="hover:text-pv-text transition">Features</a>
+        <a href="#why" class="hover:text-pv-text transition">Why offline</a>
+        <a href="#download" class="hover:text-pv-text transition">Download</a>
+        <a href="https://chivukulavirinchi.github.io/photovault/" class="hover:text-pv-text transition">Docs</a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault" class="hover:text-pv-text transition">GitHub</a>
+      </div>
+      <a href="#download" class="bg-pv-accent text-pv-bg px-4 py-2 rounded-md text-sm font-medium hover:bg-pv-accent-bright transition">Download</a>
+    </div>
+  </nav>
+
+  <section class="pt-32 pb-24 px-6">
+    <div class="max-w-5xl mx-auto text-center">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pv-accent/10 text-pv-accent text-xs font-medium mb-8 border border-pv-accent/20">
+        <span class="w-1.5 h-1.5 rounded-full bg-pv-accent"></span>
+        Open source - Offline-first - Free forever
+      </div>
+      <h1 class="text-5xl md:text-7xl font-bold tracking-tight leading-[1.05] mb-6">
+        Your photos, organized.<br>
+        <span class="text-pv-accent">On your machine.</span>
+      </h1>
+      <p class="text-lg md:text-xl text-pv-text-soft max-w-2xl mx-auto mb-10 leading-relaxed">
+        A desktop photo library manager that works with photos on your local drives.
+        Face recognition, smart albums, full-text search -- without uploading anything.
+      </p>
+      <div class="flex flex-wrap items-center justify-center gap-4">
+        <a href="#download" class="bg-pv-accent text-pv-bg px-6 py-3 rounded-lg font-medium hover:bg-pv-accent-bright transition shadow-lg shadow-pv-accent/20">Download for free</a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault" class="border border-white/10 text-pv-text px-6 py-3 rounded-lg font-medium hover:bg-white/5 transition">View on GitHub</a>
+      </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto mt-20">
+      <div class="relative rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-pv-accent/5">
+        <img src="hero-screenshot.png" alt="PhotoVault Timeline view" class="w-full" />
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="py-24 px-6 bg-pv-bg-elev/30">
+    <div class="max-w-6xl mx-auto">
+      <h2 class="text-4xl font-bold text-center mb-4">Everything you need.<br>Nothing you did not ask for.</h2>
+      <p class="text-pv-text-soft text-center mb-16 max-w-2xl mx-auto">Modern photo library features with an offline-first foundation.</p>
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Face recognition</h3><p class="text-sm text-pv-text-soft">On-device detection and clustering.</p></div>
+        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Smart albums</h3><p class="text-sm text-pv-text-soft">Trip/event suggestions from metadata.</p></div>
+        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Unified search</h3><p class="text-sm text-pv-text-soft">People, albums, places, and photos.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why" class="py-24 px-6">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-4xl font-bold mb-12 text-center">Why offline-first?</h2>
+      <div class="space-y-10 text-pv-text-soft">
+        <p><strong class="text-pv-text">Privacy by default.</strong> Your photos and metadata stay on your device.</p>
+        <p><strong class="text-pv-text">No lock-in.</strong> Database lives with your library, portable across machines.</p>
+        <p><strong class="text-pv-text">No account required.</strong> Install, index, and use immediately.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="py-24 px-6">
+    <div class="max-w-4xl mx-auto text-center">
+      <h2 class="text-4xl font-bold mb-4">Get PhotoVault</h2>
+      <p class="text-pv-text-soft mb-12">Free and open source.</p>
+      <div class="grid md:grid-cols-3 gap-6">
+        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left"><h3 class="text-xl font-semibold mb-2">macOS</h3><p class="text-sm text-pv-text-soft">Download latest release</p></a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left"><h3 class="text-xl font-semibold mb-2">Windows</h3><p class="text-sm text-pv-text-soft">Download latest release</p></a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left"><h3 class="text-xl font-semibold mb-2">Linux</h3><p class="text-sm text-pv-text-soft">Download latest release</p></a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="py-12 px-6 border-t border-white/5">
+    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-6">
+      <div class="text-sm text-pv-text-soft">&copy; 2026 PhotoVault. MIT OR Apache-2.0.</div>
+      <div class="flex gap-6 text-sm text-pv-text-soft">
+        <a href="https://github.com/ChivukulaVirinchi/photovault" class="hover:text-pv-text transition">GitHub</a>
+        <a href="https://chivukulavirinchi.github.io/photovault/" class="hover:text-pv-text transition">Docs</a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/PRIVACY.md" class="hover:text-pv-text transition">Privacy</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
