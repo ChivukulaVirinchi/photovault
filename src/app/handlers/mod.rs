@@ -161,14 +161,23 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
 
         // --- Search / cull ---
         Message::SearchInputChanged(input) => search_cull::search_input_changed(app, input),
-        Message::SearchSuggestionSelected(value) => {
-            search_cull::search_suggestion_selected(app, value)
-        }
         Message::ExecuteSearch => search_cull::execute_search(app),
-        Message::SearchComplete(groups, ids) => search_cull::search_complete(app, groups, ids),
-        Message::SearchSuggestionsLoaded(suggestions) => {
-            search_cull::search_suggestions_loaded(app, suggestions)
+        Message::SearchComplete(gen, results) => {
+            search_cull::search_complete(app, gen, results)
         }
+        Message::SearchDebouncedTick(gen) => search_cull::search_debounced_tick(app, gen),
+        Message::RecentSearchesLoaded(list) => search_cull::recent_searches_loaded(app, list),
+        Message::SearchRecentSelected(query) => search_cull::search_recent_selected(app, query),
+        Message::SearchRecentRemove(query) => search_cull::search_recent_remove(app, query),
+        Message::SearchClearRecent => search_cull::search_clear_recent(app),
+        Message::SearchInputFocused => search_cull::search_input_focused(app),
+        Message::SearchInputBlurred => search_cull::search_input_blurred(app),
+        Message::SearchOpenPerson(cid) => search_cull::search_open_person(app, cid),
+        Message::SearchOpenAlbum(aid) => search_cull::search_open_album(app, aid),
+        Message::SearchOpenPlace(city) => search_cull::search_open_place(app, city),
+        Message::SearchHighlightNext => search_cull::search_highlight_next(app),
+        Message::SearchHighlightPrev => search_cull::search_highlight_prev(app),
+        Message::SearchActivateHighlighted => search_cull::search_activate_highlighted(app),
         Message::EnterCullMode(photo_ids) => search_cull::enter_cull_mode(app, photo_ids),
         Message::EnterCullFromSearch => search_cull::enter_cull_from_search(app),
         Message::ExitCullMode => search_cull::exit_cull_mode(app),

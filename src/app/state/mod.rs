@@ -248,20 +248,29 @@ pub struct PhotoVault {
     pub(crate) burst_overview_previews: Vec<(i64, Vec<i64>)>,
 
     // --- Phase 6 additions ---
-    /// Current search input text
+    /// Current text in the search input.
     pub(crate) search_query: String,
 
-    /// Search suggestion chips
-    pub(crate) search_suggestions: Vec<String>,
+    /// Live unified results (None = haven't searched yet, empty = no matches).
+    pub(crate) search_results: Option<crate::services::UnifiedSearchResults>,
 
-    /// Grouped search results
-    pub(crate) search_results: Option<Vec<crate::services::SearchResultGroup>>,
-
-    /// Flat list of photo IDs from latest search results (for cull mode)
-    pub(crate) search_result_photo_ids: Vec<i64>,
-
-    /// Search loading state
+    /// True while a search is in flight.
     pub(crate) search_loading: bool,
+
+    /// Generation counter for debounce. Each input change bumps this.
+    /// A pending debounced search compares its generation to this value;
+    /// if it doesn't match, the input changed and we skip the search.
+    pub(crate) search_generation: u64,
+
+    /// Recent searches loaded from DB (shown when input is empty).
+    pub(crate) recent_searches: Vec<crate::db::RecentSearch>,
+
+    /// Whether the search input currently has focus (controls recent dropdown).
+    pub(crate) search_input_focused: bool,
+
+    /// Currently highlighted result index for keyboard navigation.
+    /// Counts across all sections (people first, then albums, places, photos).
+    pub(crate) search_highlighted_index: Option<usize>,
 
     /// Quick cull session state
     pub(crate) cull_state: Option<crate::views::CullState>,
@@ -551,10 +560,12 @@ impl PhotoVault {
             burst_overview_previews: Vec::new(),
             // Phase 6
             search_query: String::new(),
-            search_suggestions: Vec::new(),
             search_results: None,
-            search_result_photo_ids: Vec::new(),
             search_loading: false,
+            search_generation: 0,
+            recent_searches: Vec::new(),
+            search_input_focused: false,
+            search_highlighted_index: None,
             cull_state: None,
             face_review_state: None,
             face_review_pending: 0,

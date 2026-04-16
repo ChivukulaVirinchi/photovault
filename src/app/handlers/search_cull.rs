@@ -3,7 +3,7 @@
 use iced::Task;
 
 use crate::db::Database;
-use crate::services::SearchService;
+use crate::services::{SearchService, UnifiedSearchResults};
 use crate::views::CullState;
 
 use super::super::messages::Message;
@@ -11,84 +11,330 @@ use super::super::state::{PhotoVault, View};
 
 pub(crate) fn search_input_changed(app: &mut PhotoVault, input: String) -> Task<Message> {
     app.search_query = input.clone();
+    app.search_generation = app.search_generation.wrapping_add(1);
+    let gen = app.search_generation;
 
-    if let Some(ref drive_path) = app.selected_drive {
-        let drive_path = drive_path.clone();
-        return Task::perform(
-            async move {
-                if input.trim().is_empty() {
-                    return Vec::new();
-                }
-                match Database::open_for_drive(&drive_path) {
-                    Ok(db) => SearchService::get_suggestions(&db.conn, &input).unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                }
-            },
-            Message::SearchSuggestionsLoaded,
-        );
+    if input.trim().is_empty() {
+        // Clear results, show recent searches instead
+        app.search_results = None;
+        app.search_loading = false;
+        return Task::none();
     }
 
-    Task::none()
+    // Schedule debounced search
+    Task::perform(
+        async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            gen
+        },
+        Message::SearchDebouncedTick,
+    )
 }
 
-pub(crate) fn search_suggestion_selected(app: &mut PhotoVault, value: String) -> Task<Message> {
-    app.search_query = value;
-    super::handle(app, Message::ExecuteSearch)
-}
-
-pub(crate) fn search_suggestions_loaded(
-    app: &mut PhotoVault,
-    suggestions: Vec<String>,
-) -> Task<Message> {
-    app.search_suggestions = suggestions;
-    Task::none()
+pub(crate) fn search_debounced_tick(app: &mut PhotoVault, gen: u64) -> Task<Message> {
+    // If input changed since this debounce was scheduled, skip
+    if gen != app.search_generation {
+        return Task::none();
+    }
+    if app.search_query.trim().is_empty() {
+        return Task::none();
+    }
+    execute_search(app)
 }
 
 pub(crate) fn execute_search(app: &mut PhotoVault) -> Task<Message> {
     let Some(ref drive_path) = app.selected_drive else {
         return Task::none();
     };
-
     let query_text = app.search_query.clone();
     let drive_path = drive_path.clone();
+
+    if query_text.trim().is_empty() {
+        return Task::none();
+    }
+
+    // Bump generation so any in-flight debounced search with the prior
+    // generation is discarded on return.
+    app.search_generation = app.search_generation.wrapping_add(1);
+    let gen = app.search_generation;
+
     app.search_loading = true;
 
     Task::perform(
         async move {
-            match Database::open_for_drive(&drive_path) {
-                Ok(db) => {
-                    let parsed = crate::search::QueryParser::parse(&query_text);
-                    let rows = SearchService::search(&db.conn, &parsed).unwrap_or_default();
-                    let ids = rows.iter().map(|r| r.photo_id).collect::<Vec<_>>();
-                    let groups = SearchService::group_by_date(rows);
-                    (groups, ids)
+            let result = tokio::task::spawn_blocking(move || {
+                let db = Database::open_for_drive(&drive_path)
+                    .map_err(|e| format!("DB open: {}", e))?;
+                let mut results = SearchService::search_unified(&db.conn, &query_text)
+                    .map_err(|e| format!("Search: {}", e))?;
+
+                // Resolve face thumbnails for people hits
+                for person in &mut results.people {
+                    let face_id: Option<i64> = db
+                        .conn
+                        .query_row(
+                            "SELECT id FROM faces WHERE cluster_id = ?1 ORDER BY confidence DESC LIMIT 1",
+                            rusqlite::params![person.cluster_id],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    if let Some(fid) = face_id {
+                        let crop = drive_path
+                            .join(".photovault")
+                            .join("face_crops")
+                            .join(format!("{}.jpg", fid));
+                        if crop.exists() {
+                            person.face_thumbnail_path =
+                                Some(crop.to_string_lossy().to_string());
+                        }
+                    }
                 }
-                Err(_) => (Vec::new(), Vec::new()),
+
+                // Resolve album cover thumbnails
+                let photo_repo = crate::db::PhotoRepo::new(&db.conn);
+                for album in &mut results.albums {
+                    let cover_id: Option<i64> = db
+                        .conn
+                        .query_row(
+                            "SELECT cover_photo_id FROM albums WHERE id = ?1",
+                            rusqlite::params![album.album_id],
+                            |row| row.get(0),
+                        )
+                        .ok()
+                        .flatten();
+                    if let Some(cid) = cover_id {
+                        if let Ok(Some(p)) = photo_repo.get_by_id(cid) {
+                            if let Some(tp) = p.thumbnail_path {
+                                let abs = drive_path.join(&tp);
+                                if abs.exists() {
+                                    album.cover_thumbnail_path =
+                                        Some(abs.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok::<_, String>(results)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(r)) => (gen, Box::new(r)),
+                Ok(Err(e)) => {
+                    tracing::warn!("unified search failed: {}", e);
+                    (gen, Box::new(UnifiedSearchResults::default()))
+                }
+                Err(e) => {
+                    tracing::warn!("unified search task panicked: {}", e);
+                    (gen, Box::new(UnifiedSearchResults::default()))
+                }
             }
         },
-        |(groups, ids)| Message::SearchComplete(groups, ids),
+        |(gen, results)| Message::SearchComplete(gen, results),
     )
 }
 
 pub(crate) fn search_complete(
     app: &mut PhotoVault,
-    groups: Vec<crate::services::SearchResultGroup>,
-    ids: Vec<i64>,
+    gen: u64,
+    results: Box<UnifiedSearchResults>,
 ) -> Task<Message> {
+    // Discard stale results from older generations
+    if gen != app.search_generation {
+        return Task::none();
+    }
     app.search_loading = false;
-    app.search_results = Some(groups);
-    app.search_result_photo_ids = ids;
+    app.search_results = Some(*results);
+    app.search_highlighted_index = None;
+
+    // Record this search as recent (best-effort, non-blocking)
+    if let Some(ref drive_path) = app.selected_drive {
+        let drive_path = drive_path.clone();
+        let query = app.search_query.clone();
+        return Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(db) = Database::open_for_drive(&drive_path) {
+                        let repo = crate::db::RecentSearchRepo::new(&db.conn);
+                        let _ = repo.record(&query);
+                        repo.get_recent(10).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .await
+                .unwrap_or_default()
+            },
+            Message::RecentSearchesLoaded,
+        );
+    }
     Task::none()
 }
 
-pub(crate) fn enter_cull_from_search(app: &mut PhotoVault) -> Task<Message> {
-    if app.search_result_photo_ids.is_empty() {
+pub(crate) fn recent_searches_loaded(
+    app: &mut PhotoVault,
+    list: Vec<crate::db::RecentSearch>,
+) -> Task<Message> {
+    app.recent_searches = list;
+    Task::none()
+}
+
+pub(crate) fn search_recent_selected(app: &mut PhotoVault, query: String) -> Task<Message> {
+    app.search_query = query;
+    app.search_generation = app.search_generation.wrapping_add(1);
+    execute_search(app)
+}
+
+pub(crate) fn search_recent_remove(app: &mut PhotoVault, query: String) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    if let Ok(db) = Database::open_for_drive(drive_path) {
+        let _ = crate::db::RecentSearchRepo::new(&db.conn).remove(&query);
+    }
+    app.recent_searches.retain(|r| r.query != query);
+    Task::none()
+}
+
+pub(crate) fn search_clear_recent(app: &mut PhotoVault) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    if let Ok(db) = Database::open_for_drive(drive_path) {
+        let _ = crate::db::RecentSearchRepo::new(&db.conn).clear();
+    }
+    app.recent_searches.clear();
+    Task::none()
+}
+
+pub(crate) fn search_input_focused(app: &mut PhotoVault) -> Task<Message> {
+    app.search_input_focused = true;
+    if app.recent_searches.is_empty() {
+        return load_recent_searches(app);
+    }
+    Task::none()
+}
+
+pub(crate) fn search_input_blurred(app: &mut PhotoVault) -> Task<Message> {
+    app.search_input_focused = false;
+    Task::none()
+}
+
+pub(crate) fn load_recent_searches(app: &mut PhotoVault) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    let drive_path = drive_path.clone();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                if let Ok(db) = Database::open_for_drive(&drive_path) {
+                    crate::db::RecentSearchRepo::new(&db.conn)
+                        .get_recent(10)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            })
+            .await
+            .unwrap_or_default()
+        },
+        Message::RecentSearchesLoaded,
+    )
+}
+
+pub(crate) fn search_open_person(app: &mut PhotoVault, cluster_id: i64) -> Task<Message> {
+    super::handle(app, Message::SelectCluster(cluster_id))
+}
+
+pub(crate) fn search_open_album(app: &mut PhotoVault, album_id: i64) -> Task<Message> {
+    super::handle(app, Message::OpenAlbum(album_id))
+}
+
+pub(crate) fn search_open_place(app: &mut PhotoVault, city: String) -> Task<Message> {
+    // Re-run search scoped to that city
+    app.search_query = city;
+    app.search_generation = app.search_generation.wrapping_add(1);
+    execute_search(app)
+}
+
+pub(crate) fn search_highlight_next(app: &mut PhotoVault) -> Task<Message> {
+    let total = total_results(app);
+    if total == 0 {
         return Task::none();
     }
-    super::handle(
-        app,
-        Message::EnterCullMode(app.search_result_photo_ids.clone()),
-    )
+    let next = match app.search_highlighted_index {
+        None => 0,
+        Some(i) => (i + 1) % total,
+    };
+    app.search_highlighted_index = Some(next);
+    Task::none()
+}
+
+pub(crate) fn search_highlight_prev(app: &mut PhotoVault) -> Task<Message> {
+    let total = total_results(app);
+    if total == 0 {
+        return Task::none();
+    }
+    let prev = match app.search_highlighted_index {
+        None => total - 1,
+        Some(0) => total - 1,
+        Some(i) => i - 1,
+    };
+    app.search_highlighted_index = Some(prev);
+    Task::none()
+}
+
+pub(crate) fn search_activate_highlighted(app: &mut PhotoVault) -> Task<Message> {
+    let Some(idx) = app.search_highlighted_index else {
+        return execute_search(app); // No highlight → submit search
+    };
+    let Some(ref results) = app.search_results else {
+        return Task::none();
+    };
+
+    // Resolve which entity the index points to
+    let mut cursor = idx;
+    if cursor < results.people.len() {
+        let cid = results.people[cursor].cluster_id;
+        return super::handle(app, Message::SearchOpenPerson(cid));
+    }
+    cursor -= results.people.len();
+    if cursor < results.albums.len() {
+        let aid = results.albums[cursor].album_id;
+        return super::handle(app, Message::SearchOpenAlbum(aid));
+    }
+    cursor -= results.albums.len();
+    if cursor < results.places.len() {
+        let city = results.places[cursor].city.clone();
+        return super::handle(app, Message::SearchOpenPlace(city));
+    }
+    cursor -= results.places.len();
+    if cursor < results.photos.len() {
+        let pid = results.photos[cursor].photo_id;
+        return super::handle(app, Message::SelectPhoto(pid));
+    }
+    Task::none()
+}
+
+fn total_results(app: &PhotoVault) -> usize {
+    app.search_results
+        .as_ref()
+        .map(|r| r.people.len() + r.albums.len() + r.places.len() + r.photos.len().min(20))
+        .unwrap_or(0)
+}
+
+pub(crate) fn enter_cull_from_search(app: &mut PhotoVault) -> Task<Message> {
+    let ids: Vec<i64> = app
+        .search_results
+        .as_ref()
+        .map(|r| r.photo_ids.clone())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Task::none();
+    }
+    super::handle(app, Message::EnterCullMode(ids))
 }
 
 pub(crate) fn enter_cull_mode(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Message> {

@@ -338,9 +338,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         }
         View::Search => SearchView::view(
             &app.search_query,
-            &app.search_suggestions,
             app.search_results.as_ref(),
+            &app.recent_searches,
             app.search_loading,
+            app.search_input_focused,
+            app.search_highlighted_index,
             app.selected_drive.as_deref(),
             &app.photos,
             app.config.theme,
@@ -480,9 +482,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             } else {
                 SearchView::view(
                     &app.search_query,
-                    &app.search_suggestions,
                     app.search_results.as_ref(),
+                    &app.recent_searches,
                     app.search_loading,
+                    app.search_input_focused,
+                    app.search_highlighted_index,
                     app.selected_drive.as_deref(),
                     &app.photos,
                     app.config.theme,

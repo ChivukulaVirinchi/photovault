@@ -191,10 +191,36 @@ pub enum Message {
 
     // --- Phase 6: Search, Cull, Trash ---
     SearchInputChanged(String),
-    SearchSuggestionSelected(String),
     ExecuteSearch,
-    SearchComplete(Vec<crate::services::SearchResultGroup>, Vec<i64>),
-    SearchSuggestionsLoaded(Vec<String>),
+    /// Search completed. `u64` is the generation counter; `Box` avoids a
+    /// large inline payload.
+    SearchComplete(u64, Box<crate::services::UnifiedSearchResults>),
+    /// Debounced search trigger — fires 200ms after the last input change.
+    /// Carries generation; ignored if generation doesn't match current.
+    SearchDebouncedTick(u64),
+    /// Recent searches loaded from DB.
+    RecentSearchesLoaded(Vec<crate::db::RecentSearch>),
+    /// User clicked a recent search chip.
+    SearchRecentSelected(String),
+    /// User clicked the X next to a recent search.
+    SearchRecentRemove(String),
+    /// User clicked "Clear all" on the recent searches list.
+    SearchClearRecent,
+    /// Search input gained focus.
+    SearchInputFocused,
+    /// Search input lost focus.
+    SearchInputBlurred,
+    /// User clicked a person hit in results.
+    SearchOpenPerson(i64),
+    /// User clicked an album hit in results.
+    SearchOpenAlbum(i64),
+    /// User clicked a place hit — re-run search filtered to that city.
+    SearchOpenPlace(String),
+    /// Keyboard arrow up/down for navigating results.
+    SearchHighlightPrev,
+    SearchHighlightNext,
+    /// Activate the currently highlighted result (Enter key).
+    SearchActivateHighlighted,
     EnterCullMode(Vec<i64>),
     EnterCullFromSearch,
     ExitCullMode,

@@ -30,7 +30,9 @@ pub use memories::MemoryCard;
 pub use ocr_processor::{OcrProcessor, OcrProgress};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;
-pub use search::{SearchResultGroup, SearchService};
+pub use search::{
+    AlbumHit, PersonHit, PlaceHit, SearchResult, SearchService, UnifiedSearchResults,
+};
 pub use thumbnail::{ThumbnailService, ThumbnailSize};
 pub use tile_cache::TileCache;
 pub use trash::{TrashService, TrashStats};

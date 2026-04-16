@@ -55,8 +55,32 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 13 {
         migrate_v12_to_v13(conn)?;
     }
+    if current_version < 14 {
+        migrate_v13_to_v14(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v13_to_v14(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS recent_searches (
+            id INTEGER PRIMARY KEY,
+            query TEXT NOT NULL,
+            last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
+            use_count INTEGER DEFAULT 1,
+            UNIQUE(query)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_recent_searches_used
+            ON recent_searches(last_used DESC);
+
+        INSERT INTO schema_version (version) VALUES (14);
+        "#,
+    )?;
+    tracing::info!("Migrated database to schema version 14 (recent searches)");
     Ok(())
 }
 

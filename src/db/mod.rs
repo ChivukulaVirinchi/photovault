@@ -14,6 +14,7 @@ pub mod geonames;
 pub mod inferred_identity_repo;
 pub mod migrations;
 pub mod photo_repo;
+pub mod recent_search_repo;
 pub mod schema;
 pub mod trash_repo;
 
@@ -26,5 +27,6 @@ pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, Dupli
 pub use face_repo::{FaceClusterRecord, FaceRepo, ReviewItem};
 pub use inferred_identity_repo::InferredIdentityRepo;
 pub use photo_repo::PhotoRepo;
+pub use recent_search_repo::{RecentSearch, RecentSearchRepo};
 pub use schema::create_schema;
 pub use trash_repo::{TrashRepo, TrashedPhotoRecord};

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (13);
+INSERT INTO schema_version (version) VALUES (14);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -349,6 +349,19 @@ CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
 END;
 
 -- ============================================================
+-- RECENT SEARCHES
+-- Per-library search history (last N queries)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS recent_searches (
+    id INTEGER PRIMARY KEY,
+    query TEXT NOT NULL,
+    last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
+    use_count INTEGER DEFAULT 1,
+    UNIQUE(query)
+);
+
+-- ============================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 
@@ -392,6 +405,9 @@ CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
 -- Album suggestions
 CREATE INDEX IF NOT EXISTS idx_album_suggestions_status ON album_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_album_suggestions_fingerprint ON album_suggestions(fingerprint);
+
+-- Recent searches
+CREATE INDEX IF NOT EXISTS idx_recent_searches_used ON recent_searches(last_used DESC);
 "#;
 
 #[cfg(test)]
