@@ -170,8 +170,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Download ML models + GeoNames data
         run: powershell -ExecutionPolicy Bypass -File scripts/setup_assets.ps1
-      - name: Install WiX toolset
-        run: choco install wixtoolset --version=3.11.2 -y
+      - name: Ensure WiX toolset is available
+        shell: pwsh
+        run: |
+          $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
+          $light = Get-Command light.exe -ErrorAction SilentlyContinue
+          if (-not $candle -or -not $light) {
+            choco install wixtoolset -y --no-progress
+          }
+
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            throw "WiX candle.exe was not found after installation"
+          }
+          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
+            throw "WiX light.exe was not found after installation"
+          }
       - name: Install cargo-wix
         run: cargo install cargo-wix --locked
       - name: Build MSI
