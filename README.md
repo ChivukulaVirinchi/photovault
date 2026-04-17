@@ -11,11 +11,11 @@
       <img src="https://img.shields.io/github/v/release/ChivukulaVirinchi/photovault?label=Download&style=for-the-badge" alt="Download">
     </a>
     <a href="LICENSE">
-      <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=for-the-badge" alt="License">
+      <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge" alt="License">
     </a>
   </p>
 
-  <img src="assets/screenshots/hero.png" alt="PhotoVault screenshot" width="800">
+  <img src="website/hero-screenshot.png" alt="PhotoVault screenshot" width="800">
 </div>
 
 ---
@@ -47,12 +47,12 @@ Your photos are personal. PhotoVault keeps them that way.
 - **Fedora/RHEL**: `.rpm` package available on the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
 
 ### Windows
-- Download the **portable .zip** or **.msi installer** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- Download the **.msi installer** (recommended) or **portable .zip** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
 - Windows SmartScreen may warn -- click "More info" -> "Run anyway"
   (No code-signing certificate yet)
 
 ### macOS
-- Download the **.dmg** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- Download the macOS package from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
 - macOS Gatekeeper may warn -- right-click -> "Open" -> "Open anyway"
   (No Apple Developer ID yet)
 
@@ -68,6 +68,18 @@ cargo build --release
 
 See `docs/BUILD.md` for full setup including Windows-on-UNC workflow.
 
+### Packaging helpers
+
+For local packaging smoke tests:
+
+```bash
+./scripts/release_local.sh ubuntu
+./scripts/release_local.sh linux-appimage
+```
+
+Windows/macOS installers should be built on their native platforms. The official
+release flow is CI-driven from Git tags (`v*`) via `.github/workflows/release.yml`.
+
 ## Documentation
 
 - [Build Guide](docs/BUILD.md)
@@ -81,11 +93,7 @@ dev setup, testing, and pull request guidelines.
 
 ## License
 
-Dual-licensed under either:
-- [MIT License](LICENSE-MIT)
-- [Apache License 2.0](LICENSE-APACHE)
-
-at your option.
+[Apache License 2.0](LICENSE)
 
 ## Built with
 

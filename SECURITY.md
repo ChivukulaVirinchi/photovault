@@ -3,9 +3,10 @@
 ## Reporting a vulnerability
 
 If you discover a security vulnerability in PhotoVault, please report
-it privately by emailing virinchi@gurujada.com.
+it by opening a GitHub issue at
+https://github.com/ChivukulaVirinchi/photovault/issues.
 
-Please do **not** open a public issue for security vulnerabilities.
+Note: GitHub issues are public.
 
 We aim to respond within 7 days and provide a fix within 30 days for
 critical issues.
