@@ -1,56 +1,146 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="PhotoVault"
-           Manufacturer="Virinchi Chivukula"
-           Version="0.1.0"
-           UpgradeCode="4A77AF0F-EF2D-4A25-9DAA-FA5C4F3BEA11">
+<?xml version="1.0" encoding="windows-1252"?>
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
 
-    <MediaTemplate EmbedCab="yes" />
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="*"
+      Name="PhotoVault"
+      UpgradeCode="4A77AF0F-EF2D-4A25-9DAA-FA5C4F3BEA11"
+      Manufacturer="Virinchi Chivukula"
+      Language="1033"
+      Codepage="1252"
+      Version="$(var.Version)">
 
-    <StandardDirectory Id="ProgramFilesFolder">
-      <Directory Id="INSTALLFOLDER" Name="PhotoVault" />
-    </StandardDirectory>
+    <Package
+        Id="*"
+        Keywords="Installer"
+        Description="Offline-first desktop photo library manager"
+        Manufacturer="Virinchi Chivukula"
+        InstallerVersion="450"
+        Languages="1033"
+        Compressed="yes"
+        InstallScope="perMachine"
+        SummaryCodepage="1252" />
 
-    <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ProgramMenuDir" Name="PhotoVault" />
-    </StandardDirectory>
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Setup will now exit." />
 
-    <Feature Id="MainFeature" Title="PhotoVault" Level="1">
-      <ComponentGroupRef Id="AppFiles" />
+    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes" DiskPrompt="CD-ROM #1" />
+    <Property Id="DiskPrompt" Value="PhotoVault Installation" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/ChivukulaVirinchi/photovault/issues" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ChivukulaVirinchi/photovault" />
+
+    <Icon Id="ProductICO" SourceFile="packaging\photovault.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductICO" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="$(var.PlatformProgramFilesFolder)">
+        <Directory Id="INSTALLFOLDER" Name="PhotoVault">
+          <Directory Id="LIBS_FOLDER" Name="libs">
+            <Directory Id="ONNXRUNTIME_FOLDER" Name="onnxruntime" />
+          </Directory>
+          <Directory Id="MODELS_FOLDER" Name="models" />
+          <Directory Id="DATA_FOLDER" Name="data" />
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="PhotoVault" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExe" Guid="*">
+        <File
+            Id="PhotoVaultExe"
+            Name="photovault.exe"
+            Source="$(var.CargoTargetBinDir)\photovault.exe"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ONNXRUNTIME_FOLDER">
+      <Component Id="OnnxRuntimeDll" Guid="*">
+        <File
+            Id="OnnxRuntimeDllFile"
+            Name="onnxruntime.dll"
+            Source="libs\onnxruntime\onnxruntime.dll"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="MODELS_FOLDER">
+      <Component Id="ModelScrfd" Guid="*">
+        <File
+            Id="ModelScrfdFile"
+            Name="scrfd_10g_bnkps.onnx"
+            Source="models\scrfd_10g_bnkps.onnx"
+            KeyPath="yes" />
+      </Component>
+      <Component Id="ModelGlintr" Guid="*">
+        <File
+            Id="ModelGlintrFile"
+            Name="glintr100.onnx"
+            Source="models\glintr100.onnx"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DATA_FOLDER">
+      <Component Id="GeoNamesDb" Guid="*">
+        <File
+            Id="GeoNamesDbFile"
+            Name="geonames.db"
+            Source="data\geonames.db"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuDir">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut
+            Id="ApplicationStartMenuShortcut"
+            Name="PhotoVault"
+            Description="Offline-first photo library manager"
+            Target="[INSTALLFOLDER]photovault.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\PhotoVault"
+            Name="installed"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature
+        Id="MainFeature"
+        Title="PhotoVault"
+        Description="Core PhotoVault application files"
+        Level="1"
+        ConfigurableDirectory="INSTALLFOLDER"
+        AllowAdvertise="no"
+        Display="expand"
+        Absent="disallow">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="OnnxRuntimeDll" />
+      <ComponentRef Id="ModelScrfd" />
+      <ComponentRef Id="ModelGlintr" />
+      <ComponentRef Id="GeoNamesDb" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
-    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
-      <Component Id="MainExe" Guid="*">
-        <File Source="target\release\photovault.exe" KeyPath="yes" />
-      </Component>
-      <Component Id="ModelsDir" Guid="*">
-        <CreateFolder />
-        <RemoveFolder Id="RemoveModelsDir" On="uninstall" />
-      </Component>
-      <Component Id="LibsDir" Guid="*">
-        <CreateFolder />
-        <RemoveFolder Id="RemoveLibsDir" On="uninstall" />
-      </Component>
-      <Component Id="DataDir" Guid="*">
-        <CreateFolder />
-        <RemoveFolder Id="RemoveDataDir" On="uninstall" />
-      </Component>
-    </ComponentGroup>
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
-    <Component Id="StartMenuShortcut" Directory="ProgramMenuDir" Guid="*">
-      <Shortcut Id="ApplicationStartMenuShortcut"
-                Name="PhotoVault"
-                Description="Offline-first photo library manager"
-                Target="[INSTALLFOLDER]photovault.exe"
-                WorkingDirectory="INSTALLFOLDER" />
-      <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
-      <RegistryValue Root="HKCU"
-                     Key="Software\PhotoVault"
-                     Name="installed"
-                     Type="integer"
-                     Value="1"
-                     KeyPath="yes" />
-    </Component>
-  </Package>
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+    </UI>
+  </Product>
 </Wix>

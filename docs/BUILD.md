@@ -113,6 +113,43 @@ chmod +x PhotoVault-x86_64.AppImage
 ./PhotoVault-x86_64.AppImage
 ```
 
+## Windows packaging (MSI + ZIP)
+
+MSI packaging should run on native Windows with MSVC + WiX installed.
+
+### Prerequisites
+
+- WiX Toolset v3 (for `candle.exe` and `light.exe`)
+- `cargo-wix`:
+
+```powershell
+cargo install cargo-wix --locked
+```
+
+### Build portable ZIP payload (CI does this automatically)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_assets.ps1
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
+### Build MSI installer
+
+From repository root:
+
+```powershell
+cargo wix --target x86_64-pc-windows-msvc --output target\wix\PhotoVault-Setup-x64.msi
+```
+
+Output:
+- `target\wix\PhotoVault-Setup-x64.msi`
+
+The installer layout mirrors the portable runtime layout:
+- `photovault.exe`
+- `libs\onnxruntime\onnxruntime.dll`
+- `models\*.onnx`
+- `data\geonames.db`
+
 ## Troubleshooting
 
 - Missing ONNX runtime/model files: rerun setup script and confirm `libs/`, `models/`, `data/` exist.

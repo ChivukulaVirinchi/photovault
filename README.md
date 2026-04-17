@@ -51,8 +51,8 @@ Your photos are personal. PhotoVault keeps them that way.
 - Tagged releases also run Linux package smoke tests in CI (`.deb` and AppImage startup checks).
 
 ### Windows
-- Download the **portable .zip** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
-- `.msi` installer support is planned in a future release workflow update.
+- **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi)
+- **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip)
 - Windows SmartScreen may warn -- click "More info" -> "Run anyway"
   (No code-signing certificate yet)
 
