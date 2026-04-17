@@ -21,6 +21,7 @@ mod settings;
 mod shortcuts;
 mod thumbnails;
 mod timeline;
+mod timeline_helpers;
 mod toasts;
 mod trash;
 
@@ -32,6 +33,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::BrowseForFolder => scanning::browse_for_folder(app),
         Message::FolderSelected(path) => scanning::folder_selected(app, path),
         Message::DrivesDetected(drives) => scanning::drives_detected(app, drives),
+        Message::BackToWelcome => scanning::back_to_welcome(app),
         Message::StartScan => scanning::start_scan(app),
         Message::PollScanChannels => scanning::poll_scan_channels(app),
         Message::CancelScan => scanning::cancel_scan(app),
@@ -93,6 +95,9 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::ToggleMetadataPanel => timeline::toggle_metadata_panel(app),
         Message::DisplayImageReady(bytes_opt, w, h) => {
             timeline::display_image_ready(app, bytes_opt, w, h)
+        }
+        Message::PhotoLocationResolved { photo_id, location } => {
+            timeline::photo_location_resolved(app, photo_id, location)
         }
 
         // --- Thumbnails ---
@@ -234,6 +239,8 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::ThumbnailsRegenerated { cleared } => {
             settings::thumbnails_regenerated(app, cleared)
         }
+        Message::RefreshPhotoDates => settings::refresh_photo_dates(app),
+        Message::PhotoDatesRefreshed(result) => settings::photo_dates_refreshed(app, result),
         Message::ToggleSidebar => settings::toggle_sidebar(app),
         Message::TimelineScrolled(offset) => timeline::scrolled(app, offset),
         Message::NoOp => settings::no_op(app),
@@ -282,7 +289,10 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
 
         // --- Album Suggestions ---
         Message::RunSuggestionDetection => albums::run_suggestion_detection(app),
-        Message::SuggestionsDetected(suggestions) => albums::suggestions_detected(app, suggestions),
+        Message::SuggestionsDetectedWithDiagnostics {
+            suggestions,
+            diagnostics,
+        } => albums::suggestions_detected_with_diagnostics(app, suggestions, diagnostics),
         Message::SuggestionsLoaded(suggestions) => albums::suggestions_loaded(app, suggestions),
         Message::BeginAcceptSuggestion(id) => albums::begin_accept_suggestion(app, id),
         Message::AcceptSuggestionNameChanged(name) => {
@@ -295,9 +305,15 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
 
         // --- Insights Dashboard ---
         Message::InsightsSelectYear(year) => insights::select_year(app, year),
+        Message::InvalidateInsights => insights::invalidate(app),
         Message::InsightsLoaded(data) => insights::loaded(app, data),
         Message::InsightsJumpToDate(date) => insights::jump_to_date(app, date),
+        Message::InsightsOpenMonth { year, month } => insights::open_month(app, year, month),
         Message::InsightsSearchCity(city) => insights::search_city(app, city),
+
+        Message::OpenMemoryPhotoInTimeline(photo_id) => {
+            memories::open_memory_photo_in_timeline(app, photo_id)
+        }
 
         // --- Phase A: Toasts + spinner ---
         Message::ToastShow(t) => toasts::show(app, t),

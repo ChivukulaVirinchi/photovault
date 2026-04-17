@@ -8,6 +8,7 @@ pub mod scan_progress;
 pub mod sidebar;
 pub mod spinner;
 pub mod toast;
+pub mod tooltip;
 
 pub use drive_picker::DrivePicker;
 pub use scan_progress::ScanProgressView;

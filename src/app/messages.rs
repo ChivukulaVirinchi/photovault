@@ -39,6 +39,15 @@ pub enum Message {
     /// Drives detected
     DrivesDetected(Vec<DriveInfo>),
 
+    /// Return to the drive/folder picker screen.
+    BackToWelcome,
+
+    /// Async resolved place name for currently viewed photo.
+    PhotoLocationResolved {
+        photo_id: i64,
+        location: Option<String>,
+    },
+
     /// Start scanning the selected drive
     StartScan,
 
@@ -276,6 +285,11 @@ pub enum Message {
         cleared: usize,
     },
 
+    /// Re-read EXIF/filename/mtime metadata and refresh photo dates in DB.
+    RefreshPhotoDates,
+    /// Background photo-date refresh completed.
+    PhotoDatesRefreshed(Result<usize, String>),
+
     /// Cancel face processing
     CancelFaceProcessing,
 
@@ -425,8 +439,11 @@ pub enum Message {
     // --- Album Suggestions ---
     /// Trigger background detection of trip/event suggestions
     RunSuggestionDetection,
-    /// Detection pipeline finished (newly detected suggestions returned)
-    SuggestionsDetected(Vec<crate::db::AlbumSuggestionRecord>),
+    /// Detection pipeline finished with diagnostics.
+    SuggestionsDetectedWithDiagnostics {
+        suggestions: Vec<crate::db::AlbumSuggestionRecord>,
+        diagnostics: crate::services::album_suggestions::SuggestionDiagnostics,
+    },
     /// Pending suggestions loaded from DB
     SuggestionsLoaded(Vec<crate::db::AlbumSuggestionRecord>),
     /// Begin the accept flow: show inline name editor
@@ -445,12 +462,22 @@ pub enum Message {
     // --- Insights Dashboard ---
     /// User selected a year (or None = All Time) in the insights view
     InsightsSelectYear(Option<i32>),
+    /// Invalidate Insights cache/state after metadata-changing actions.
+    InvalidateInsights,
     /// Insights data computation completed
     InsightsLoaded(Box<crate::services::insights::InsightsData>),
     /// Jump to a date in search from the heatmap
     InsightsJumpToDate(String),
+    /// Open photo viewer scoped to a selected month.
+    InsightsOpenMonth {
+        year: i32,
+        month: u32,
+    },
     /// Search for a city from the top-locations list
     InsightsSearchCity(String),
+
+    /// Open current memory photo in timeline-scoped detail view.
+    OpenMemoryPhotoInTimeline(i64),
 
     // --- Phase A: Production polish ---
     /// Show a toast notification.

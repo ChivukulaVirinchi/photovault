@@ -142,8 +142,9 @@ pub(crate) fn face_processing_complete(
         }
     };
 
+    let invalidate = super::handle(app, Message::InvalidateInsights);
     // Reload clusters
-    Task::batch([app.load_face_clusters(), toast_task])
+    Task::batch([app.load_face_clusters(), toast_task, invalidate])
 }
 
 pub(crate) fn face_clusters_loaded(
@@ -238,7 +239,11 @@ pub(crate) fn start_edit_cluster_name(app: &mut PhotoVault, cluster_id: i64) -> 
 
     app.editing_cluster_id = Some(cluster_id);
     app.edit_cluster_name = current_name;
-    Task::none()
+    let input_id = iced::widget::text_input::Id::new(format!("cluster-edit-{}", cluster_id));
+    Task::batch([
+        iced::widget::text_input::focus(input_id.clone()),
+        iced::widget::text_input::move_cursor_to_end(input_id),
+    ])
 }
 
 pub(crate) fn edit_cluster_name(
@@ -449,7 +454,8 @@ pub(crate) fn face_data_reset_complete(
             app.face_processing_progress = None;
             app.face_progress_receiver = None;
             app.face_cancel_flag = None;
-            super::handle(app, Message::ProcessFaces)
+            let invalidate = super::handle(app, Message::InvalidateInsights);
+            Task::batch([super::handle(app, Message::ProcessFaces), invalidate])
         }
         Err(e) => {
             app.face_processing_active = false;

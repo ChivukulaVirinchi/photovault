@@ -69,9 +69,21 @@ fn year_clause(year: Option<i32>) -> String {
     }
 }
 
+fn normalized_datetime_sql(column: &str) -> String {
+    format!(
+        "CASE WHEN instr({0}, 'T') > 0 THEN replace(substr({0}, 1, 19), 'T', ' ') ELSE substr({0}, 1, 19) END",
+        column
+    )
+}
+
 /// Compute all insights data. Designed to run inside `spawn_blocking`.
 pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsData> {
-    let yc = year_clause(year);
+    let _legacy = year_clause(year);
+    let dt = normalized_datetime_sql("date_taken");
+    let yc = match year {
+        Some(y) => format!(" AND strftime('%Y', {}) = '{}'", dt, y),
+        None => String::new(),
+    };
 
     // 1. Total photos
     let total_photos: i64 = conn.query_row(
@@ -84,8 +96,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     let date_range_start: Option<String> = conn
         .query_row(
             &format!(
-                "SELECT MIN(date_taken) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
-                yc
+                "SELECT MIN({}) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
+                dt, yc
             ),
             [],
             |row| row.get(0),
@@ -95,8 +107,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     let date_range_end: Option<String> = conn
         .query_row(
             &format!(
-                "SELECT MAX(date_taken) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
-                yc
+                "SELECT MAX({}) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
+                dt, yc
             ),
             [],
             |row| row.get(0),
@@ -113,7 +125,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              JOIN photos p ON p.id = f.photo_id
              WHERE fc.name IS NOT NULL
                AND p.is_trashed = FALSE{}",
-            yc.replace("date_taken", "p.date_taken")
+            yc.replace(&dt, &normalized_datetime_sql("p.date_taken"))
         ),
         [],
         |row| row.get(0),
@@ -127,7 +139,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              JOIN album_photos ap ON ap.album_id = a.id
              JOIN photos p ON p.id = ap.photo_id
              WHERE p.is_trashed = FALSE{}",
-            yc.replace("date_taken", "p.date_taken")
+            yc.replace(&dt, &normalized_datetime_sql("p.date_taken"))
         ),
         [],
         |row| row.get(0),
@@ -171,8 +183,8 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                  GROUP BY p.id
                  ORDER BY (COUNT(f.id) > 0) DESC,
                           (COALESCE(p.width, 0) > COALESCE(p.height, 0)) DESC,
-                          p.date_taken DESC
-                 LIMIT 1",
+                           CASE WHEN instr(p.date_taken, 'T') > 0 THEN replace(substr(p.date_taken, 1, 19), 'T', ' ') ELSE substr(p.date_taken, 1, 19) END DESC
+                  LIMIT 1",
                 yc
             ),
             [],
@@ -186,7 +198,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         y
     } else {
         conn.query_row(
-            "SELECT CAST(strftime('%Y', MAX(date_taken)) AS INTEGER)
+            "SELECT CAST(strftime('%Y', MAX(CASE WHEN instr(date_taken, 'T') > 0 THEN replace(substr(date_taken, 1, 19), 'T', ' ') ELSE substr(date_taken, 1, 19) END)) AS INTEGER)
              FROM photos
              WHERE is_trashed = FALSE AND date_taken IS NOT NULL",
             [],
@@ -201,12 +213,12 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     let mut heatmap = HashMap::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT DATE(date_taken) AS d, COUNT(*) AS c
+            "SELECT DATE(CASE WHEN instr(date_taken, 'T') > 0 THEN replace(substr(date_taken, 1, 19), 'T', ' ') ELSE substr(date_taken, 1, 19) END) AS d, COUNT(*) AS c
              FROM photos
              WHERE is_trashed = FALSE
                AND date_taken IS NOT NULL
-               AND strftime('%Y', date_taken) = ?1
-             GROUP BY d",
+                AND strftime('%Y', CASE WHEN instr(date_taken, 'T') > 0 THEN replace(substr(date_taken, 1, 19), 'T', ' ') ELSE substr(date_taken, 1, 19) END) = ?1
+              GROUP BY d",
         )?;
         let rows = stmt.query_map(params![heatmap_year.to_string()], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -220,7 +232,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     let mut monthly_counts = [0i64; 12];
     {
         let mut stmt = conn.prepare(&format!(
-            "SELECT CAST(strftime('%m', date_taken) AS INTEGER) AS m, COUNT(*) AS c
+            "SELECT CAST(strftime('%m', CASE WHEN instr(date_taken, 'T') > 0 THEN replace(substr(date_taken, 1, 19), 'T', ' ') ELSE substr(date_taken, 1, 19) END) AS INTEGER) AS m, COUNT(*) AS c
              FROM photos
              WHERE is_trashed = FALSE
                AND date_taken IS NOT NULL{}
@@ -248,7 +260,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              GROUP BY fc.id
              ORDER BY cnt DESC
              LIMIT 5",
-            yc.replace("date_taken", "p.date_taken")
+            yc.replace(&dt, &normalized_datetime_sql("p.date_taken"))
         ))?;
         let rows = stmt.query_map([], |row| {
             Ok(PersonStat {
@@ -320,7 +332,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     let mut available_years = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT CAST(strftime('%Y', date_taken) AS INTEGER) AS y
+            "SELECT DISTINCT CAST(strftime('%Y', CASE WHEN instr(date_taken, 'T') > 0 THEN replace(substr(date_taken, 1, 19), 'T', ' ') ELSE substr(date_taken, 1, 19) END) AS INTEGER) AS y
              FROM photos
              WHERE is_trashed = FALSE AND date_taken IS NOT NULL
              ORDER BY y DESC",

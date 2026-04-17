@@ -6,6 +6,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::db::RecentSearch;
 use crate::models::Photo;
@@ -91,23 +92,21 @@ fn search_bar(query: &str, p: &Palette) -> Element<'static, Message> {
 
     if !query.is_empty() {
         items.push(Space::with_width(8).into());
-        items.push(
-            button(text("\u{00D7}").size(16).color(text_tertiary))
-                .padding(Padding::from([10, 14]))
-                .style(move |_t, status| button::Style {
-                    background: Some(match status {
-                        button::Status::Hovered => bg_hover.into(),
-                        _ => iced::Background::Color(iced::Color::TRANSPARENT),
-                    }),
-                    border: iced::Border {
-                        radius: 8.0.into(),
-                        ..Default::default()
-                    },
+        let clear_btn = button(text("\u{00D7}").size(16).color(text_tertiary))
+            .padding(Padding::from([10, 14]))
+            .style(move |_t, status| button::Style {
+                background: Some(match status {
+                    button::Status::Hovered => bg_hover.into(),
+                    _ => iced::Background::Color(iced::Color::TRANSPARENT),
+                }),
+                border: iced::Border {
+                    radius: 8.0.into(),
                     ..Default::default()
-                })
-                .on_press(Message::SearchInputChanged(String::new()))
-                .into(),
-        );
+                },
+                ..Default::default()
+            })
+            .on_press(Message::SearchInputChanged(String::new()));
+        items.push(with_tooltip(clear_btn.into(), "Clear query"));
     }
 
     items.push(Space::with_width(8).into());
@@ -217,20 +216,24 @@ fn recent_searches_panel(recent: &[RecentSearch], p: &Palette) -> Element<'stati
         row![
             text("Recent searches").size(12).color(text_secondary),
             Space::with_width(Length::Fill),
-            button(text("Clear all").size(11).color(text_tertiary))
-                .padding(Padding::from([4, 8]))
-                .style(move |_t, status| button::Style {
-                    background: Some(match status {
-                        button::Status::Hovered => bg_hover.into(),
-                        _ => iced::Background::Color(iced::Color::TRANSPARENT),
-                    }),
-                    border: iced::Border {
-                        radius: 4.0.into(),
+            with_tooltip(
+                button(text("Clear all").size(11).color(text_tertiary))
+                    .padding(Padding::from([4, 8]))
+                    .style(move |_t, status| button::Style {
+                        background: Some(match status {
+                            button::Status::Hovered => bg_hover.into(),
+                            _ => iced::Background::Color(iced::Color::TRANSPARENT),
+                        }),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
                         ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .on_press(Message::SearchClearRecent),
+                    })
+                    .on_press(Message::SearchClearRecent)
+                    .into(),
+                "Clear recent searches",
+            ),
         ]
         .align_y(Alignment::Center)
         .into(),
@@ -642,24 +645,28 @@ fn photos_section(
         column![
             grid,
             Space::with_height(10),
-            button(
-                text(format!("Show all {} photos", total))
-                    .size(12)
-                    .color(text_secondary),
-            )
-            .padding(Padding::from([6, 14]))
-            .style(move |_t, status| button::Style {
-                background: Some(match status {
-                    button::Status::Hovered => bg_hover.into(),
-                    _ => bg_elevated.into(),
-                }),
-                border: iced::Border {
-                    radius: 6.0.into(),
+            with_tooltip(
+                button(
+                    text(format!("Show all {} photos", total))
+                        .size(12)
+                        .color(text_secondary),
+                )
+                .padding(Padding::from([6, 14]))
+                .style(move |_t, status| button::Style {
+                    background: Some(match status {
+                        button::Status::Hovered => bg_hover.into(),
+                        _ => bg_elevated.into(),
+                    }),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::EnterCullFromSearch),
+                })
+                .on_press(Message::EnterCullFromSearch)
+                .into(),
+                "Open quick cull for all matching photos",
+            ),
         ]
         .into()
     } else {
@@ -747,20 +754,24 @@ fn cull_bar(total: usize, p: &Palette) -> Element<'static, Message> {
             .size(12)
             .color(text_secondary),
         Space::with_width(Length::Fill),
-        button(text("Quick Cull").size(13).color(bg_primary))
-            .padding(Padding::from([8, 14]))
-            .style(move |_theme, status| button::Style {
-                background: Some(match status {
-                    button::Status::Hovered => accent_primary.into(),
-                    _ => accent_muted.into(),
-                }),
-                border: iced::Border {
-                    radius: 6.0.into(),
+        with_tooltip(
+            button(text("Quick Cull").size(13).color(bg_primary))
+                .padding(Padding::from([8, 14]))
+                .style(move |_theme, status| button::Style {
+                    background: Some(match status {
+                        button::Status::Hovered => accent_primary.into(),
+                        _ => accent_muted.into(),
+                    }),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::EnterCullFromSearch),
+                })
+                .on_press(Message::EnterCullFromSearch)
+                .into(),
+            "Review matching photos quickly",
+        ),
     ]
     .align_y(Alignment::Center)
     .into()

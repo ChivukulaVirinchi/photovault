@@ -276,17 +276,10 @@ impl PhotoVault {
 
         self.photo_rotation = 0;
 
-        // --- Progressive loading: show thumbnail immediately for instant feedback ---
+        // Keep this synchronous path lightweight. Image decode happens on
+        // background tasks below to avoid UI hitching when opening from
+        // Insights day/month drill-ins.
         self.current_display_image = None;
-        if let Some(ref thumb_path) = photo.thumbnail_path {
-            let tp = PathBuf::from(thumb_path);
-            if tp.exists() {
-                if let Ok(img) = image::open(&tp) {
-                    let img = apply_exif_orientation(img, photo.orientation);
-                    self.current_display_image = Some(img);
-                }
-            }
-        }
 
         // Reset mini-map state to this photo's GPS (if present).
         if let (Some(lat), Some(lng)) = (photo.gps_latitude, photo.gps_longitude) {
@@ -324,17 +317,7 @@ impl PhotoVault {
 
         // Resolve display location: prefer stored city/country, fall back to
         // an on-the-fly geocode lookup from the GeoNames DB.
-        self.current_photo_location = photo.location_string().or_else(|| {
-            let lat = photo.gps_latitude?;
-            let lng = photo.gps_longitude?;
-            let geonames_path = crate::db::geonames::geonames_db_path();
-            if !geonames_path.exists() {
-                return None;
-            }
-            let geo = crate::services::GeocodingService::new(&geonames_path).ok()?;
-            let result = geo.reverse_geocode(lat, lng)?;
-            Some(format!("{}, {}", result.city, result.country))
-        });
+        self.current_photo_location = photo.location_string();
 
         // Always prefer original image for full-quality photo detail viewing.
         // Fall back to thumbnail only when the original is unavailable.
@@ -358,8 +341,67 @@ impl PhotoVault {
 
         if let Some(path) = image_path {
             let orientation = photo.orientation;
+            let photo_id = photo.id;
+            let coords = (photo.gps_latitude, photo.gps_longitude);
 
             let mut tasks: Vec<Task<Message>> = Vec::new();
+
+            // Fast placeholder decode from thumbnail, then full-resolution swap.
+            if let Some(ref thumb_path) = photo.thumbnail_path {
+                let thumb = PathBuf::from(thumb_path);
+                if thumb.exists() {
+                    let orientation = photo.orientation;
+                    tasks.push(Task::perform(
+                        async move {
+                            let result = tokio::task::spawn_blocking(move || {
+                                let img = image::open(&thumb).ok()?;
+                                let img = apply_exif_orientation(img, orientation);
+                                let rgba = img.to_rgba8();
+                                let (w, h) = (rgba.width(), rgba.height());
+                                Some((rgba.into_raw(), w, h))
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            match result {
+                                Some((bytes, w, h)) => {
+                                    Message::DisplayImageReady(Some(bytes), w, h)
+                                }
+                                None => Message::DisplayImageReady(None, 0, 0),
+                            }
+                        },
+                        |m| m,
+                    ));
+                }
+            }
+
+            // Async reverse-geocode only when DB location is missing.
+            if self.current_photo_location.is_none() {
+                if let (Some(lat), Some(lng)) = coords {
+                    tasks.push(Task::perform(
+                        async move {
+                            let resolved = tokio::task::spawn_blocking(move || {
+                                let geonames_path = crate::db::geonames::geonames_db_path();
+                                if !geonames_path.exists() {
+                                    return None;
+                                }
+                                let geo =
+                                    crate::services::GeocodingService::new(&geonames_path).ok()?;
+                                let r = geo.reverse_geocode(lat, lng)?;
+                                Some(format!("{}, {}", r.city, r.country))
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            Message::PhotoLocationResolved {
+                                photo_id,
+                                location: resolved,
+                            }
+                        },
+                        |m| m,
+                    ));
+                }
+            }
 
             // Pre-fetch the mini-map tile. Dispatch MapTileFetched on
             // completion so iced re-renders and the mini-map picks up

@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, scrollable, text, Column, Spa
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::db::TrashedPhotoRecord;
 use crate::services::trash::TrashStats;
@@ -67,48 +68,56 @@ impl TrashView {
         let text_tertiary = p.text_tertiary;
         let semantic_danger = p.semantic_danger;
         let actions = row![
-            button(
-                text(if has_selection {
-                    format!("Restore Selected ({})", selected.len())
-                } else {
-                    "Restore Selected".to_string()
-                })
-                .size(14)
-                .color(if has_selection {
-                    text_primary
-                } else {
-                    text_tertiary
-                })
-            )
-            .padding(Padding::from([10, 18]))
-            .on_press(Message::RestoreSelected),
-            Space::with_width(Length::Fill),
-            button(text("Empty Trash").size(14).color(semantic_danger))
+            with_tooltip(
+                button(
+                    text(if has_selection {
+                        format!("Restore Selected ({})", selected.len())
+                    } else {
+                        "Restore Selected".to_string()
+                    })
+                    .size(14)
+                    .color(if has_selection {
+                        text_primary
+                    } else {
+                        text_tertiary
+                    })
+                )
                 .padding(Padding::from([10, 18]))
-                .style(move |_theme, status| {
-                    let background = match status {
-                        button::Status::Hovered => Some(
-                            iced::Color {
-                                a: 0.15,
-                                ..semantic_danger
-                            }
-                            .into(),
-                        ),
-                        _ => None,
-                    };
-                    button::Style {
-                        background,
-                        border: iced::Border {
-                            color: semantic_danger,
-                            width: 1.0,
-                            radius: 8.0.into(),
-                        },
-                        ..Default::default()
-                    }
-                })
-                .on_press(Message::RequestConfirmation(
-                    crate::app::state::PendingConfirmation::EmptyTrash,
-                )),
+                .on_press(Message::RestoreSelected)
+                .into(),
+                "Restore selected photos",
+            ),
+            Space::with_width(Length::Fill),
+            with_tooltip(
+                button(text("Empty Trash").size(14).color(semantic_danger))
+                    .padding(Padding::from([10, 18]))
+                    .style(move |_theme, status| {
+                        let background = match status {
+                            button::Status::Hovered => Some(
+                                iced::Color {
+                                    a: 0.15,
+                                    ..semantic_danger
+                                }
+                                .into(),
+                            ),
+                            _ => None,
+                        };
+                        button::Style {
+                            background,
+                            border: iced::Border {
+                                color: semantic_danger,
+                                width: 1.0,
+                                radius: 8.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .on_press(Message::RequestConfirmation(
+                        crate::app::state::PendingConfirmation::EmptyTrash,
+                    ))
+                    .into(),
+                "Permanently delete all trashed photos",
+            ),
         ]
         .align_y(Alignment::Center);
 
@@ -264,11 +273,15 @@ impl TrashView {
                 .padding(Padding::from([6, 12]))
                 .on_press(Message::RestorePhoto(photo_id)),
             Space::with_width(8),
-            button(text("Delete").size(12).color(semantic_danger))
-                .padding(Padding::from([6, 12]))
-                .on_press(Message::RequestConfirmation(
-                    crate::app::state::PendingConfirmation::PermanentlyDeletePhoto(photo_id),
-                )),
+            with_tooltip(
+                button(text("Delete").size(12).color(semantic_danger))
+                    .padding(Padding::from([6, 12]))
+                    .on_press(Message::RequestConfirmation(
+                        crate::app::state::PendingConfirmation::PermanentlyDeletePhoto(photo_id),
+                    ))
+                    .into(),
+                "Delete permanently",
+            ),
         ]
         .align_y(Alignment::Center);
 

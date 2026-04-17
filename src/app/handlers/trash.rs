@@ -92,7 +92,8 @@ pub(crate) fn trash_photos(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Me
         }
     }
     let reload = app.load_photos();
-    Task::batch([task, reload, toast_task])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, toast_task, invalidate])
 }
 
 pub(crate) fn restore_photos(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Message> {
@@ -112,7 +113,8 @@ pub(crate) fn restore_photos(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<
         |_| Message::LoadTrash,
     );
     let reload = app.load_photos();
-    Task::batch([task, reload])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, invalidate])
 }
 
 pub(crate) fn restore_photo(app: &mut PhotoVault, photo_id: i64) -> Task<Message> {
@@ -129,7 +131,8 @@ pub(crate) fn restore_photo(app: &mut PhotoVault, photo_id: i64) -> Task<Message
         |_| Message::LoadTrash,
     );
     let reload = app.load_photos();
-    Task::batch([task, reload])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, invalidate])
 }
 
 pub(crate) fn restore_selected(app: &mut PhotoVault) -> Task<Message> {
@@ -150,7 +153,8 @@ pub(crate) fn restore_selected(app: &mut PhotoVault) -> Task<Message> {
         |_| Message::LoadTrash,
     );
     let reload = app.load_photos();
-    Task::batch([task, reload])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, invalidate])
 }
 
 pub(crate) fn toggle_trash_selection(app: &mut PhotoVault, photo_id: i64) -> Task<Message> {
@@ -177,7 +181,8 @@ pub(crate) fn confirm_permanently_delete_photo(
         |_| Message::LoadTrash,
     );
     let reload = app.load_photos();
-    Task::batch([task, reload])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, invalidate])
 }
 
 pub(crate) fn confirm_empty_trash(app: &mut PhotoVault) -> Task<Message> {
@@ -194,5 +199,6 @@ pub(crate) fn confirm_empty_trash(app: &mut PhotoVault) -> Task<Message> {
         |_| Message::LoadTrash,
     );
     let reload = app.load_photos();
-    Task::batch([task, reload])
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([task, reload, invalidate])
 }

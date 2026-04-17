@@ -75,4 +75,4 @@ By participating, you agree to its terms.
 ## License
 
 By contributing, you agree your contributions are licensed under
-MIT OR Apache-2.0 (same as the project).
+Apache-2.0 (same as the project).

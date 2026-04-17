@@ -53,4 +53,3 @@ Three things, by design:
 ## Reporting a privacy concern
 
 Open an issue at https://github.com/ChivukulaVirinchi/photovault/issues
-or email virinchi@gurujada.com.

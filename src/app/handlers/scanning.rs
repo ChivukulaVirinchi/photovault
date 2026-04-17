@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use iced::Task;
 
 use crate::db::{create_schema, migrations, AlbumSuggestionRepo, Database, PhotoRepo};
-use crate::services::{DriveInfo, ScanProgress};
+use crate::services::{DriveDetector, DriveInfo, ScanProgress};
 
 use super::super::messages::{Message, ScanResult};
 use super::super::state::{PhotoVault, ScanState, View};
@@ -123,7 +123,17 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
         return app.load_albums();
     } else if view == View::Insights {
         app.current_view = view;
-        return super::insights::load_insights(app);
+        if let Some(cached) = app.insights_cache.get(&app.insights_selected_year).cloned() {
+            app.insights_data = Some(cached);
+            app.insights_loading = false;
+            return Task::none();
+        }
+        let geocode_task = if app.geocoding_progress.is_none() {
+            super::handle(app, Message::RunGeocoding)
+        } else {
+            Task::none()
+        };
+        return Task::batch([super::insights::load_insights(app), geocode_task]);
     } else if view == View::Search {
         app.current_view = view;
         if app.recent_searches.is_empty() {
@@ -140,6 +150,7 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
 pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message> {
     tracing::info!("Selected drive: {:?}", path);
     app.begin_thumbnail_generation_epoch();
+    app.invalidate_insights_cache();
 
     match Database::open_for_drive(&path) {
         Ok(db) => {
@@ -217,6 +228,7 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
 
             // Load existing suggestions
             let suggestions_task = app.load_suggestions();
+            let detect_suggestions_task = super::handle(app, Message::RunSuggestionDetection);
 
             // If library is empty, start scanning
             let next = if app.photo_count == 0 {
@@ -246,6 +258,7 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 pin_task,
                 memories_task,
                 suggestions_task,
+                detect_suggestions_task,
                 next,
                 restore,
             ])
@@ -282,6 +295,30 @@ pub(crate) fn folder_selected(app: &mut PhotoVault, path: Option<PathBuf>) -> Ta
         return super::handle(app, Message::SelectDrive(path));
     }
     Task::none()
+}
+
+pub(crate) fn back_to_welcome(app: &mut PhotoVault) -> Task<Message> {
+    app.current_view = View::Welcome;
+    app.selected_drive = None;
+    app.database = None;
+    app.photos.clear();
+    app.albums.clear();
+    app.face_clusters.clear();
+    app.documents.clear();
+    app.memories.clear();
+    app.album_suggestions.clear();
+    app.selected_photo_index = None;
+    app.previous_view = None;
+    app.selected_cluster_id = None;
+    app.selected_album_id = None;
+    app.selected_duplicate_group = None;
+    app.selected_burst_group = None;
+    app.selected_memory_id = None;
+    app.memory_photos.clear();
+    app.insights_scope_photos.clear();
+    app.shortcuts_overlay_open = false;
+    app.pending_confirmation = None;
+    Task::perform(async { DriveDetector::detect() }, Message::DrivesDetected)
 }
 
 pub(crate) fn drives_detected(app: &mut PhotoVault, drives: Vec<DriveInfo>) -> Task<Message> {
@@ -395,6 +432,7 @@ pub(crate) fn cancel_scan(app: &mut PhotoVault) -> Task<Message> {
 pub(crate) fn scan_finished(app: &mut PhotoVault, result: ScanResult) -> Task<Message> {
     tracing::info!("Scan finished: {} photos indexed", result.photo_count);
     app.photo_count = result.photo_count;
+    app.invalidate_insights_cache();
 
     // Update the final progress in scan state so UI shows completion
     if let Some(ref mut state) = app.scan_state {

@@ -66,7 +66,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.config.theme,
                     );
                     if app.album_picker_open {
-                        let overlay = crate::views::albums::album_picker_overlay(
+                        let overlay = crate::views::albums_picker::album_picker_overlay(
                             &app.albums,
                             app.album_picker_target_ids.len(),
                             app.album_picker_creating,
@@ -95,24 +95,26 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         let bg = p.bg_secondary;
         let tc = p.text_secondary;
         let hover_bg = p.bg_hover;
-        container(
-            iced::widget::button(
-                text("\u{00BB}").size(16).color(tc), // » double right arrow
-            )
-            .padding(iced::Padding::from([8, 8]))
-            .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
-                background: match s {
-                    iced::widget::button::Status::Hovered => Some(hover_bg.into()),
-                    _ => None,
-                },
-                border: iced::Border {
-                    radius: 4.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::ToggleSidebar),
+        let expand_btn = iced::widget::button(
+            text("\u{00BB}").size(16).color(tc), // » double right arrow
         )
+        .padding(iced::Padding::from([8, 8]))
+        .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
+            background: match s {
+                iced::widget::button::Status::Hovered => Some(hover_bg.into()),
+                _ => None,
+            },
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::ToggleSidebar);
+        container(crate::components::tooltip::with_tooltip(
+            expand_btn.into(),
+            "Expand sidebar",
+        ))
         .width(Length::Fixed(36.0))
         .height(Length::Fill)
         .padding(iced::Padding::from([16, 4]))
@@ -136,8 +138,10 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         View::Timeline => {
             let mem_banner =
                 crate::views::memories::memories_banner(&app.memories, app.config.theme);
-            let sug_banner =
-                crate::views::albums::suggestions_banner(&app.album_suggestions, app.config.theme);
+            let sug_banner = crate::views::albums_banner::suggestions_banner(
+                &app.album_suggestions,
+                app.config.theme,
+            );
             // Combine: show suggestions banner first, then memories banner
             let banner: Option<Element<'_, Message>> = match (sug_banner, mem_banner) {
                 (Some(s), Some(m)) => Some(column![s, m].into()),
@@ -336,7 +340,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             let state = app.face_review_state.as_ref().unwrap_or(&empty_state);
             FaceReviewView::view(state, app.selected_drive.as_deref(), app.config.theme)
         }
-        View::Memories => crate::views::memories::memories_view(&app.memories, app.config.theme),
+        View::Memories => crate::views::memories::memories_view(
+            &app.memories,
+            app.memory_highlight_index,
+            app.config.theme,
+        ),
         View::MemoryDetail => {
             let card = app
                 .selected_memory_id
@@ -352,7 +360,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.memory_slideshow_paused,
                     app.config.theme,
                 ),
-                None => crate::views::memories::memories_view(&app.memories, app.config.theme),
+                None => crate::views::memories::memories_view(
+                    &app.memories,
+                    app.memory_highlight_index,
+                    app.config.theme,
+                ),
             }
         }
         View::Search => SearchView::view(
@@ -626,6 +638,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.accepting_suggestion_id,
             &app.accepting_suggestion_name,
             app.albums_highlight_index,
+            app.suggestion_diagnostics.as_ref(),
             app.config.theme,
         ),
         View::AlbumDetail => {
@@ -654,6 +667,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                         app.accepting_suggestion_id,
                         &app.accepting_suggestion_name,
                         app.albums_highlight_index,
+                        app.suggestion_diagnostics.as_ref(),
                         app.config.theme,
                     )
                 }
@@ -667,6 +681,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     app.accepting_suggestion_id,
                     &app.accepting_suggestion_name,
                     app.albums_highlight_index,
+                    app.suggestion_diagnostics.as_ref(),
                     app.config.theme,
                 )
             }
@@ -676,7 +691,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
     // Wrap content with album picker overlay if open
     let content = if app.album_picker_open {
-        let overlay = crate::views::albums::album_picker_overlay(
+        let overlay = crate::views::albums_picker::album_picker_overlay(
             &app.albums,
             app.album_picker_target_ids.len(),
             app.album_picker_creating,
@@ -690,119 +705,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
     let main_row = row![sidebar, content,];
 
-    // Build status bar if any background operations are active
-    let has_status = app.scan_state.is_some()
-        || app.face_processing_active
-        || app.duplicate_detection_running
-        || app.burst_detection_running
-        || app.geocoding_progress.is_some()
-        || app.document_analysis_active
-        || app.suggestion_detection_running
-        || app.insights_loading
-        || app.search_loading
-        || app.photos_loading;
+    let has_status = super::view_status::has_status(app);
 
     let base: Element<'_, Message> = if has_status {
-        let mut status_parts: Vec<String> = Vec::new();
-
-        if let Some(ref state) = app.scan_state {
-            let p = &state.progress;
-            if p.is_complete {
-                status_parts.push(format!("Scan complete: {} files", p.files_processed));
-            } else {
-                status_parts.push(format!(
-                    "Scanning: {}/{} files",
-                    p.files_processed, p.files_found
-                ));
-            }
-        }
-
-        if app.face_processing_active {
-            if let Some(ref prog) = app.face_processing_progress {
-                let eta = if prog.processed > 0 && prog.total > 0 && prog.elapsed_secs > 0.5 {
-                    let frac = prog.processed as f64 / prog.total as f64;
-                    if frac < 1.0 {
-                        let rem = prog.elapsed_secs / frac * (1.0 - frac);
-                        if rem > 60.0 {
-                            format!(" ~{}m", (rem / 60.0).ceil() as u32)
-                        } else {
-                            format!(" ~{}s", rem.ceil() as u32)
-                        }
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
-                status_parts.push(format!(
-                    "Faces: {}/{} ({} found){}",
-                    prog.processed, prog.total, prog.faces_found, eta
-                ));
-            } else {
-                status_parts.push("Faces: initializing...".to_string());
-            }
-        }
-
-        if app.duplicate_detection_running {
-            status_parts.push("Detecting duplicates...".to_string());
-        }
-
-        if app.burst_detection_running {
-            status_parts.push("Detecting bursts...".to_string());
-        }
-
-        if let Some((processed, total)) = app.geocoding_progress {
-            if total > 0 {
-                status_parts.push(format!("Geocoding: {}/{}", processed, total));
-            }
-        }
-
-        if app.document_analysis_active {
-            if let Some(ref prog) = app.ocr_progress {
-                status_parts.push(format!(
-                    "Documents: {}/{} analyzed ({} docs)",
-                    prog.processed, prog.total, prog.documents_found
-                ));
-            } else {
-                status_parts.push("Documents: analyzing...".to_string());
-            }
-        }
-
-        if app.suggestion_detection_running {
-            status_parts.push("Detecting album suggestions...".to_string());
-        }
-
-        if app.insights_loading {
-            status_parts.push("Computing insights...".to_string());
-        }
-
-        if app.search_loading {
-            status_parts.push("Searching...".to_string());
-        }
-
-        if app.photos_loading {
-            status_parts.push("Loading photos...".to_string());
-        }
-
-        let status_text = status_parts.join("  |  ");
-
+        let status_bar = super::view_status::status_bar(app);
         let p = colors::palette(app.config.theme);
-        let status_bg = p.bg_secondary;
-        let status_border = p.border_subtle;
-        let status_text_color = p.text_secondary;
-
-        let status_bar = container(text(status_text).size(11).color(status_text_color))
-            .width(Length::Fill)
-            .padding([4, 16])
-            .style(move |_theme: &iced::Theme| container::Style {
-                background: Some(status_bg.into()),
-                border: iced::Border {
-                    color: status_border,
-                    width: 1.0,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            });
 
         let layout = column![main_row, status_bar];
         let bg = p.bg_primary;

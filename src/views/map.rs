@@ -5,6 +5,7 @@ use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{MapPopover, Message, PhotoVault};
 use crate::components::map_widget::{map_widget, InteractionMode, MapWidgetConfig};
+use crate::components::tooltip::with_tooltip;
 use crate::services::map_math;
 use crate::theme::colors;
 
@@ -36,6 +37,13 @@ pub fn map_view(app: &PhotoVault) -> Element<'static, Message> {
         recent_fetch_failure: app.map_recent_fetch_failure,
     });
 
+    let reset_btn = with_tooltip(
+        button(text("Reset view").size(12))
+            .on_press(Message::MapResetView)
+            .into(),
+        "Reset map center and zoom",
+    );
+
     let header = container(
         row![
             text("Map").size(22).color(p.text_primary),
@@ -44,7 +52,7 @@ pub fn map_view(app: &PhotoVault) -> Element<'static, Message> {
                 .size(12)
                 .color(p.text_secondary),
             Space::with_width(Length::Fill),
-            button(text("Reset view").size(12)).on_press(Message::MapResetView),
+            reset_btn,
         ]
         .align_y(Alignment::Center)
         .spacing(8),
@@ -56,30 +64,37 @@ pub fn map_view(app: &PhotoVault) -> Element<'static, Message> {
         left: 24.0,
     });
 
-    let zoom_controls = container(
-        column![
-            button(text("+").size(20)).on_press(Message::MapZoomAt {
+    let zoom_in_btn = with_tooltip(
+        button(text("+").size(20))
+            .on_press(Message::MapZoomAt {
                 x: viewport_w / 2.0,
                 y: viewport_h / 2.0,
                 delta: 1,
-            }),
-            Space::with_height(4),
-            button(text("-").size(20)).on_press(Message::MapZoomAt {
+            })
+            .into(),
+        "Zoom in (+)",
+    );
+    let zoom_out_btn = with_tooltip(
+        button(text("-").size(20))
+            .on_press(Message::MapZoomAt {
                 x: viewport_w / 2.0,
                 y: viewport_h / 2.0,
                 delta: -1,
-            }),
-        ]
-        .spacing(4),
-    )
-    .padding(Padding {
-        top: 16.0,
-        right: 16.0,
-        bottom: 0.0,
-        left: 0.0,
-    })
-    .align_right(Length::Fill)
-    .align_top(Length::Fill);
+            })
+            .into(),
+        "Zoom out (-)",
+    );
+
+    let zoom_controls =
+        container(column![zoom_in_btn, Space::with_height(4), zoom_out_btn,].spacing(4))
+            .padding(Padding {
+                top: 16.0,
+                right: 16.0,
+                bottom: 0.0,
+                left: 0.0,
+            })
+            .align_right(Length::Fill)
+            .align_top(Length::Fill);
 
     // Build popover overlays: each popover's anchor (LatLng) is
     // re-projected to the current viewport every render, so cards
@@ -146,6 +161,19 @@ fn popover_at(
         cluster_grid_preview(app, &pop.photo_ids)
     };
 
+    let close_btn = with_tooltip(
+        button(text("x").size(14))
+            .on_press(Message::MapClosePopoverAt(idx))
+            .into(),
+        "Close popover (Esc)",
+    );
+    let filmstrip_btn = with_tooltip(
+        button(text("Open filmstrip").size(12))
+            .on_press(Message::MapOpenClusterFilmstrip(ids))
+            .into(),
+        "Open photos from this pin cluster",
+    );
+
     let box_el = container(
         column![
             row![
@@ -157,13 +185,13 @@ fn popover_at(
                 .size(14)
                 .color(p.text_primary),
                 Space::with_width(Length::Fill),
-                button(text("x").size(14)).on_press(Message::MapClosePopoverAt(idx)),
+                close_btn,
             ]
             .align_y(Alignment::Center),
             Space::with_height(8),
             thumbs,
             Space::with_height(8),
-            button(text("Open filmstrip").size(12)).on_press(Message::MapOpenClusterFilmstrip(ids)),
+            filmstrip_btn,
         ]
         .spacing(0)
         .padding(12)

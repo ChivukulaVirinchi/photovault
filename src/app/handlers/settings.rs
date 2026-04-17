@@ -4,6 +4,7 @@ use iced::Task;
 
 use crate::config::{AppTheme, DateFormat};
 use crate::db::Database;
+use crate::services::exif_extractor::ExifExtractor;
 use crate::services::{ApplyResult, GeocodingService, IndexChanges, Reindexer};
 
 use super::super::messages::Message;
@@ -154,6 +155,7 @@ pub(crate) fn changes_applied(app: &mut PhotoVault, result: ApplyResult) -> Task
     tracing::info!("Applied index changes: {:?}", result);
     app.pending_index_changes = None;
     app.current_view = View::Timeline;
+    app.invalidate_insights_cache();
 
     let mut tasks = vec![app.load_photos()];
     if result.new_files > 0 {
@@ -276,7 +278,8 @@ pub(crate) fn geocoding_progress(
 
 pub(crate) fn geocoding_complete(app: &mut PhotoVault) -> Task<Message> {
     app.geocoding_progress = None;
-    app.load_photos()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_photos(), invalidate])
 }
 
 pub(crate) fn regenerate_rotated_data(app: &mut PhotoVault) -> Task<Message> {
@@ -465,6 +468,96 @@ pub(crate) fn thumbnails_regenerated(app: &mut PhotoVault, cleared: usize) -> Ta
         }
     }
     Task::batch(tasks)
+}
+
+pub(crate) fn refresh_photo_dates(app: &mut PhotoVault) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    let drive_path = drive_path.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let db = Database::open_for_drive(&drive_path)
+                    .map_err(|e| format!("open DB failed: {}", e))?;
+
+                let mut stmt = db
+                    .conn
+                    .prepare("SELECT id, file_path FROM photos WHERE is_trashed = FALSE")
+                    .map_err(|e| format!("query prepare failed: {}", e))?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| format!("query failed: {}", e))?;
+
+                let mut updates = Vec::new();
+                for row in rows.flatten() {
+                    let (id, rel_path) = row;
+                    let abs_path = drive_path.join(&rel_path);
+                    if !abs_path.exists() {
+                        continue;
+                    }
+                    let meta = ExifExtractor::extract(&abs_path);
+                    let dt = meta.date_taken.map(|d| d.to_rfc3339());
+                    updates.push((id, dt, meta.date_taken_source));
+                }
+
+                let tx = db
+                    .conn
+                    .unchecked_transaction()
+                    .map_err(|e| format!("tx start failed: {}", e))?;
+                let mut changed = 0usize;
+                for (id, date_taken, source) in updates {
+                    let n = tx
+                        .execute(
+                            "UPDATE photos
+                             SET date_taken = ?1,
+                                 date_taken_source = ?2,
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = ?3",
+                            rusqlite::params![date_taken, source, id],
+                        )
+                        .map_err(|e| format!("update failed: {}", e))?;
+                    changed += n;
+                }
+                tx.commit()
+                    .map_err(|e| format!("tx commit failed: {}", e))?;
+
+                Ok(changed)
+            })
+            .await
+            .map_err(|e| format!("date refresh task panicked: {}", e))?
+        },
+        Message::PhotoDatesRefreshed,
+    )
+}
+
+pub(crate) fn photo_dates_refreshed(
+    app: &mut PhotoVault,
+    result: Result<usize, String>,
+) -> Task<Message> {
+    match result {
+        Ok(changed) => {
+            let toast = super::handle(
+                app,
+                Message::ToastShow(crate::components::toast::Toast::success(format!(
+                    "Refreshed dates for {} photos",
+                    changed
+                ))),
+            );
+            let invalidate = super::handle(app, Message::InvalidateInsights);
+            Task::batch([app.load_photos(), toast, invalidate])
+        }
+        Err(e) => super::handle(
+            app,
+            Message::ToastShow(crate::components::toast::Toast::error(
+                "Failed to refresh photo dates",
+                e,
+            )),
+        ),
+    }
 }
 
 pub(crate) fn set_home_city(app: &mut PhotoVault, city: String) -> Task<Message> {

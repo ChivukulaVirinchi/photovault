@@ -2,8 +2,8 @@
 name = "photovault"
 version = "0.1.0"
 edition = "2021"
-authors = ["Virinchi Chivukula <virinchi@gurujada.com>"]
-license = "MIT OR Apache-2.0"
+authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "PhotoVault contributors"]
+license = "Apache-2.0"
 description = "Offline-first desktop photo library manager with face recognition, smart albums, and full-text search."
 repository = "https://github.com/ChivukulaVirinchi/photovault"
 homepage = "https://chivukulavirinchi.github.io/photovault/"
@@ -113,7 +113,7 @@ strip = true
 panic = "abort"
 
 [package.metadata.deb]
-maintainer = "Virinchi Chivukula <virinchi@gurujada.com>"
+maintainer = "Virinchi Chivukula, Chekka Umesh Kumar"
 copyright = "2026, Virinchi Chivukula"
 license-file = ["LICENSE", "0"]
 extended-description = """\

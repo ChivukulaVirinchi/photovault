@@ -16,6 +16,8 @@ pub struct ImageMetadata {
     // Date information
     pub date_taken: Option<DateTime<Utc>>,
     pub date_taken_source: Option<String>, // "exif", "filename", "mtime"
+    /// True when EXIF date tags exist, even if parsing fails.
+    pub had_exif_date_field: bool,
 
     // GPS information
     pub gps_latitude: Option<f64>,
@@ -54,16 +56,16 @@ impl ExifExtractor {
             metadata = exif_data;
         }
 
-        // If no date from EXIF, try filename
-        if metadata.date_taken.is_none() {
+        // If no date from EXIF and EXIF date tags are absent, try filename.
+        if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
             if let Some(date) = Self::parse_date_from_filename(path) {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("filename".to_string());
             }
         }
 
-        // If still no date, use file mtime
-        if metadata.date_taken.is_none() {
+        // If still no date and EXIF date tags are absent, use file mtime.
+        if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
             if let Some(date) = Self::get_file_mtime(path) {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("mtime".to_string());
@@ -91,12 +93,14 @@ impl ExifExtractor {
 
         // Date taken
         if let Some(field) = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY) {
+            metadata.had_exif_date_field = true;
             let date_str: String = field.display_value().to_string();
             if let Some(date) = Self::parse_exif_date(&date_str) {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("exif".to_string());
             }
         } else if let Some(field) = exif.get_field(Tag::DateTime, In::PRIMARY) {
+            metadata.had_exif_date_field = true;
             let date_str: String = field.display_value().to_string();
             if let Some(date) = Self::parse_exif_date(&date_str) {
                 metadata.date_taken = Some(date);
@@ -271,12 +275,43 @@ impl ExifExtractor {
 
     /// Parse EXIF date format: "2019:03:15 14:30:22"
     fn parse_exif_date(date_str: &str) -> Option<DateTime<Utc>> {
-        // Remove quotes if present
-        let clean = date_str.trim_matches('"');
+        let mut clean = date_str.trim().trim_matches('"').replace('\0', "");
+        clean = clean.trim().to_string();
 
-        // Parse "YYYY:MM:DD HH:MM:SS" format
-        let parsed = NaiveDateTime::parse_from_str(clean, "%Y:%m:%d %H:%M:%S").ok()?;
-        Some(Utc.from_utc_datetime(&parsed))
+        // Common EXIF forms seen in the wild.
+        let formats = [
+            "%Y:%m:%d %H:%M:%S",
+            "%Y:%m:%d %H:%M:%S%.f",
+            "%Y:%m:%d %H:%M:%S%:z",
+            "%Y:%m:%d %H:%M:%S%.f%:z",
+        ];
+
+        for fmt in formats {
+            if fmt.contains("%:z") {
+                if let Ok(dt) = chrono::DateTime::parse_from_str(&clean, fmt) {
+                    return Some(dt.with_timezone(&Utc));
+                }
+            } else if let Ok(parsed) = NaiveDateTime::parse_from_str(&clean, fmt) {
+                return Some(Utc.from_utc_datetime(&parsed));
+            }
+        }
+
+        // Some cameras use '-' instead of ':' in the date segment.
+        if clean.len() >= 10 {
+            let mut normalized = clean.clone();
+            let bytes = normalized.as_bytes().to_vec();
+            if bytes.get(4) == Some(&b'-') && bytes.get(7) == Some(&b'-') {
+                normalized.replace_range(4..5, ":");
+                normalized.replace_range(7..8, ":");
+                for fmt in ["%Y:%m:%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%.f"] {
+                    if let Ok(parsed) = NaiveDateTime::parse_from_str(&normalized, fmt) {
+                        return Some(Utc.from_utc_datetime(&parsed));
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Parse date from filename patterns

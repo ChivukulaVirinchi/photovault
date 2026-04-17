@@ -119,7 +119,9 @@ pub(crate) fn open_memory(app: &mut PhotoVault, id: String) -> Task<Message> {
         .unwrap_or_default();
 
     app.previous_view = Some(app.current_view.clone());
+    let highlight = app.memories.iter().position(|m| m.id == id);
     app.selected_memory_id = Some(id);
+    app.memory_highlight_index = highlight;
     app.memory_photos = photos;
     app.memory_slideshow_index = 0;
     app.memory_slideshow_paused = false;
@@ -164,6 +166,23 @@ fn advance(app: &mut PhotoVault, delta: i32) {
 pub(crate) fn close_memory_detail(app: &mut PhotoVault) -> Task<Message> {
     app.selected_memory_id = None;
     app.current_view = app.previous_view.take().unwrap_or(View::Timeline);
+    Task::none()
+}
+
+pub(crate) fn open_memory_photo_in_timeline(app: &mut PhotoVault, photo_id: i64) -> Task<Message> {
+    let timeline_idx = app.photos.iter().position(|p| p.id == photo_id);
+    let memory_idx = app.memory_photos.iter().position(|p| p.id == photo_id);
+
+    if let Some(idx) = timeline_idx {
+        app.previous_view = Some(View::MemoryDetail);
+        app.selected_photo_index = Some(idx);
+        app.current_view = View::PhotoDetail;
+        if let Some(mem_idx) = memory_idx {
+            app.memory_slideshow_index = mem_idx;
+        }
+        return app.load_photo_detail_for_index(idx);
+    }
+
     Task::none()
 }
 

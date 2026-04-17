@@ -81,11 +81,20 @@ pub(crate) fn execute_search(app: &mut PhotoVault) -> Task<Message> {
                     if let Some(fid) = face_id {
                         let crop = drive_path
                             .join(".photovault")
-                            .join("face_crops")
+                            .join("faces")
                             .join(format!("{}.jpg", fid));
                         if crop.exists() {
                             person.face_thumbnail_path =
                                 Some(crop.to_string_lossy().to_string());
+                        } else {
+                            let legacy = drive_path
+                                .join(".photovault")
+                                .join("face_crops")
+                                .join(format!("{}.jpg", fid));
+                            if legacy.exists() {
+                                person.face_thumbnail_path =
+                                    Some(legacy.to_string_lossy().to_string());
+                            }
                         }
                     }
                 }

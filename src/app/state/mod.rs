@@ -1,6 +1,6 @@
 //! Application state types and helpers
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -422,6 +422,8 @@ pub struct PhotoVault {
     // --- Album Suggestions ---
     /// Pending album suggestions (loaded from DB)
     pub(crate) album_suggestions: Vec<crate::db::AlbumSuggestionRecord>,
+    pub(crate) suggestion_diagnostics:
+        Option<crate::services::album_suggestions::SuggestionDiagnostics>,
 
     /// Whether suggestion detection is running in the background
     pub(crate) suggestion_detection_running: bool,
@@ -441,6 +443,12 @@ pub struct PhotoVault {
 
     /// Whether insights computation is in progress
     pub(crate) insights_loading: bool,
+
+    /// Cached insights payloads by selected year filter.
+    pub(crate) insights_cache: HashMap<Option<i32>, crate::services::insights::InsightsData>,
+
+    /// Scoped photo set opened from Insights (day/month drill-in).
+    pub(crate) insights_scope_photos: Vec<Photo>,
 
     // --- Phase A: Production polish ---
     /// Toast notification stack (bottom-right overlay).
@@ -462,6 +470,8 @@ pub struct PhotoVault {
     /// Currently highlighted photo in the timeline grid (keyboard cursor).
     /// Distinct from selection.
     pub(crate) timeline_highlight_index: Option<usize>,
+    /// Highlighted memory-card index for keyboard tabbing.
+    pub(crate) memory_highlight_index: Option<usize>,
     /// Highlighted document photo index for keyboard tabbing.
     pub(crate) documents_highlight_index: Option<usize>,
     /// Highlighted person-cluster index for keyboard tabbing.
@@ -682,6 +692,7 @@ impl PhotoVault {
             current_photo_albums: Vec::new(),
             // Album Suggestions
             album_suggestions: Vec::new(),
+            suggestion_diagnostics: None,
             suggestion_detection_running: false,
             accepting_suggestion_id: None,
             accepting_suggestion_name: String::new(),
@@ -689,6 +700,8 @@ impl PhotoVault {
             insights_data: None,
             insights_selected_year: None,
             insights_loading: false,
+            insights_cache: HashMap::new(),
+            insights_scope_photos: Vec::new(),
             // Phase A: production polish
             toasts: Vec::new(),
             toast_next_id: 0,
@@ -699,6 +712,7 @@ impl PhotoVault {
             // Phase B: keyboard-first
             shortcuts_overlay_open: false,
             timeline_highlight_index: None,
+            memory_highlight_index: None,
             documents_highlight_index: None,
             people_highlight_index: None,
             albums_highlight_index: None,
@@ -748,8 +762,7 @@ impl PhotoVault {
     }
 
     pub(crate) fn photo_detail_navigation_list(&self) -> &[Photo] {
-        if (self.previous_view == Some(View::MemoryDetail)
-            || self.previous_view == Some(View::Map))
+        if (self.previous_view == Some(View::MemoryDetail) || self.previous_view == Some(View::Map))
             && !self.memory_photos.is_empty()
         {
             &self.memory_photos
@@ -760,8 +773,17 @@ impl PhotoVault {
             &self.documents
         } else if self.previous_view == Some(View::AlbumDetail) && !self.album_photos.is_empty() {
             &self.album_photos
+        } else if self.previous_view == Some(View::Insights)
+            && !self.insights_scope_photos.is_empty()
+        {
+            &self.insights_scope_photos
         } else {
             &self.photos
         }
+    }
+
+    pub(crate) fn invalidate_insights_cache(&mut self) {
+        self.insights_cache.clear();
+        self.insights_data = None;
     }
 }

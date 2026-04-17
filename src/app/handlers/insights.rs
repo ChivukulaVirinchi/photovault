@@ -8,24 +8,84 @@ use crate::services::insights;
 use super::super::messages::Message;
 use super::super::state::{PhotoVault, View};
 
+pub(crate) fn invalidate(app: &mut PhotoVault) -> Task<Message> {
+    app.invalidate_insights_cache();
+    Task::none()
+}
+
 /// User selected a year (or All Time) in the insights view.
 pub(crate) fn select_year(app: &mut PhotoVault, year: Option<i32>) -> Task<Message> {
     app.insights_selected_year = year;
+    if let Some(cached) = app.insights_cache.get(&year).cloned() {
+        app.insights_data = Some(cached);
+        app.insights_loading = false;
+        return Task::none();
+    }
     load_insights(app)
 }
 
 /// Insights data finished loading.
 pub(crate) fn loaded(app: &mut PhotoVault, data: Box<insights::InsightsData>) -> Task<Message> {
     app.insights_loading = false;
-    app.insights_data = Some(*data);
+    let data = *data;
+    app.insights_cache
+        .insert(app.insights_selected_year, data.clone());
+    app.insights_data = Some(data);
     Task::none()
 }
 
 /// Jump to search view with a date query (from heatmap click).
 pub(crate) fn jump_to_date(app: &mut PhotoVault, date: String) -> Task<Message> {
-    app.search_query = date;
-    app.current_view = View::Search;
-    super::handle(app, Message::ExecuteSearch)
+    let mut scoped: Vec<crate::models::Photo> = app
+        .photos
+        .iter()
+        .filter(|p| {
+            p.date_taken
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .as_deref()
+                == Some(date.as_str())
+        })
+        .cloned()
+        .collect();
+
+    if scoped.is_empty() {
+        app.search_query = date;
+        app.current_view = View::Search;
+        return super::handle(app, Message::ExecuteSearch);
+    }
+
+    scoped.sort_by_key(|p| p.date_taken);
+    let first_id = scoped[0].id;
+    app.insights_scope_photos = scoped;
+    app.previous_view = Some(View::Insights);
+    super::handle(app, Message::SelectPhoto(first_id))
+}
+
+pub(crate) fn open_month(app: &mut PhotoVault, year: i32, month: u32) -> Task<Message> {
+    if !(1..=12).contains(&month) {
+        return Task::none();
+    }
+
+    let mut scoped: Vec<crate::models::Photo> = app
+        .photos
+        .iter()
+        .filter(|p| {
+            p.date_taken
+                .map(|d| d.year() == year && d.month() == month)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    if scoped.is_empty() {
+        return Task::none();
+    }
+
+    scoped.sort_by_key(|p| p.date_taken);
+    let first_id = scoped[0].id;
+    app.insights_scope_photos = scoped;
+    app.previous_view = Some(View::Insights);
+    super::handle(app, Message::SelectPhoto(first_id))
 }
 
 /// Jump to search view with a city query (from top-locations click).
@@ -40,6 +100,12 @@ pub(crate) fn load_insights(app: &mut PhotoVault) -> Task<Message> {
     let Some(ref drive_path) = app.selected_drive else {
         return Task::none();
     };
+
+    if let Some(cached) = app.insights_cache.get(&app.insights_selected_year).cloned() {
+        app.insights_data = Some(cached);
+        app.insights_loading = false;
+        return Task::none();
+    }
 
     app.insights_loading = true;
     let drive_path = drive_path.clone();
@@ -129,15 +195,24 @@ pub(crate) fn load_insights(app: &mut PhotoVault) -> Task<Message> {
                 }
 
                 // Resolve face crop paths for top people.
-                // Face crops live at .photovault/face_crops/{face_id}.jpg
+                // Face crops live at .photovault/faces/{face_id}.jpg.
                 for person in &mut data.top_people {
                     if let Some(face_id) = person.face_id {
                         let crop_path = drive_path
                             .join(".photovault")
-                            .join("face_crops")
+                            .join("faces")
                             .join(format!("{}.jpg", face_id));
                         if crop_path.exists() {
                             person.face_crop_path = Some(crop_path.to_string_lossy().to_string());
+                        } else {
+                            // Backward-compat for older paths.
+                            let legacy = drive_path
+                                .join(".photovault")
+                                .join("face_crops")
+                                .join(format!("{}.jpg", face_id));
+                            if legacy.exists() {
+                                person.face_crop_path = Some(legacy.to_string_lossy().to_string());
+                            }
                         }
                     }
                 }
