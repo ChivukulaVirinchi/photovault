@@ -101,9 +101,13 @@ jobs:
       - name: Build AppDir
         run: |
           mkdir -p PhotoVault.AppDir/usr/bin
+          mkdir -p PhotoVault.AppDir/usr/lib/photovault
           mkdir -p PhotoVault.AppDir/usr/share/applications
           mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
-          cp -r photovault/* PhotoVault.AppDir/usr/bin/
+          cp photovault/photovault PhotoVault.AppDir/usr/bin/
+          cp -r photovault/libs PhotoVault.AppDir/usr/lib/photovault/
+          cp -r photovault/models PhotoVault.AppDir/usr/lib/photovault/
+          cp -r photovault/data PhotoVault.AppDir/usr/lib/photovault/
           cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
           cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
           cp packaging/photovault.desktop PhotoVault.AppDir/
@@ -111,8 +115,9 @@ jobs:
           cat > PhotoVault.AppDir/AppRun <<'EOF'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
+          export PHOTOVAULT_ASSET_DIR="${HERE}/usr/lib/photovault"
           cd "${HERE}/usr/bin"
-          export LD_LIBRARY_PATH="${HERE}/usr/bin/libs/onnxruntime:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib/photovault/libs/onnxruntime:$LD_LIBRARY_PATH"
           exec "${HERE}/usr/bin/photovault" "$@"
           EOF
           chmod +x PhotoVault.AppDir/AppRun
@@ -135,17 +140,132 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
+      - name: Download ML models + GeoNames data
+        shell: bash
+        run: ./scripts/setup_assets.sh
       - name: Build deb
         run: cargo deb
+      - name: Normalize DEB artifact name
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(ls target/debian/*.deb | grep -v dbgsym | head -n 1)
+          cp "$deb_file" "target/debian/PhotoVault-ubuntu-amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
           name: photovault-deb
-          path: target/debian/*.deb
+          path: |
+            target/debian/PhotoVault-ubuntu-amd64.deb
+            target/debian/*.deb
+
+  smoke-deb:
+    name: Smoke test .deb installer
+    needs: deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-deb
+          path: artifacts/deb
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
+      - name: Verify .deb contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          test -n "$deb_file"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/bin/photovault"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/models/"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/data/geonames.db"
+      - name: Install .deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          sudo dpkg -i "$deb_file"
+          sudo apt-get -f install -y
+      - name: Launch smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          xvfb-run -a env RUST_LOG=photovault=info timeout 20s photovault
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "photovault exited with unexpected code $code"
+            exit $code
+          fi
+
+  smoke-appimage:
+    name: Smoke test AppImage
+    needs: appimage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-appimage
+          path: artifacts/appimage
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
+      - name: Verify AppImage layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          test -n "$appimage"
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract >/dev/null
+          test -f squashfs-root/usr/bin/photovault
+          test -d squashfs-root/usr/lib/photovault/models
+          test -f squashfs-root/usr/lib/photovault/data/geonames.db
+      - name: Launch smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          chmod +x "$appimage"
+          set +e
+          xvfb-run -a env RUST_LOG=photovault=info APPIMAGE_EXTRACT_AND_RUN=1 timeout 20s "$appimage"
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "AppImage exited with unexpected code $code"
+            exit $code
+          fi
+
+  checksums:
+    name: Linux checksums
+    needs: [appimage, deb, smoke-appimage, smoke-deb]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          appimage=$(find . -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          deb=$(find . -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          : > SHA256SUMS
+          sha256sum "$appimage" >> SHA256SUMS
+          sha256sum "$deb" >> SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-checksums
+          path: artifacts/SHA256SUMS
 
   release:
     name: Create GitHub Release
-    needs: [build, appimage, deb]
+    needs: [build, appimage, deb, smoke-appimage, smoke-deb, checksums]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

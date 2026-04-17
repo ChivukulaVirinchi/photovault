@@ -42,11 +42,13 @@ Your photos are personal. PhotoVault keeps them that way.
 ## Install
 
 ### Linux
-- **AppImage** (universal): [Download](https://github.com/ChivukulaVirinchi/photovault/releases/latest) -> `chmod +x` -> run
-- **Debian/Ubuntu**: `.deb` package available on the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- **Debian/Ubuntu installer**: [Download .deb](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb)
+- **AppImage (other distros)**: [Download AppImage](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage) -> `chmod +x` -> run
 
 ### Linux notes
 - `.rpm` is not produced by the current CI workflow yet.
+- Linux release artifacts include `SHA256SUMS` for integrity verification.
+- Tagged releases also run Linux package smoke tests in CI (`.deb` and AppImage startup checks).
 
 ### Windows
 - Download the **portable .zip** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)

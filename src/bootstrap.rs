@@ -13,7 +13,37 @@ pub fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+fn candidate_asset_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
+        let p = PathBuf::from(from_env);
+        roots.push(p);
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // Portable/AppImage layout
+            roots.push(exe_dir.to_path_buf());
+            // Debian install layout: /usr/bin/photovault -> /usr/lib/photovault
+            roots.push(exe_dir.join("..").join("lib").join("photovault"));
+        }
+    }
+
+    roots.push(project_root());
+    roots.push(PathBuf::from("/usr/lib/photovault"));
+
+    roots
+}
+
 pub fn model_dir() -> PathBuf {
+    for root in candidate_asset_roots() {
+        let candidate = root.join("models");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
     project_root().join("models")
 }
 

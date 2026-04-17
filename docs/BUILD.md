@@ -73,6 +73,46 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+## Linux packaging (Ubuntu + AppImage)
+
+### Ubuntu / Debian `.deb`
+
+Local build:
+
+```bash
+cargo install cargo-deb --locked
+cargo deb
+```
+
+Output:
+- `target/debian/*.deb`
+
+Install test:
+
+```bash
+sudo dpkg -i target/debian/*.deb
+photovault
+```
+
+Uninstall test:
+
+```bash
+sudo apt remove photovault
+```
+
+### Linux AppImage
+
+AppImage is built in CI from release tags (`v*`) via `.github/workflows/release.yml`.
+Current output name:
+- `PhotoVault-x86_64.AppImage`
+
+Run:
+
+```bash
+chmod +x PhotoVault-x86_64.AppImage
+./PhotoVault-x86_64.AppImage
+```
+
 ## Troubleshooting
 
 - Missing ONNX runtime/model files: rerun setup script and confirm `libs/`, `models/`, `data/` exist.
