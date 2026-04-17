@@ -10,12 +10,30 @@ use rusqlite::Connection;
 /// Resolve GeoNames DB path.
 /// Searches: next to executable, then CWD, then project root.
 pub fn geonames_db_path() -> PathBuf {
+    if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
+        let p = PathBuf::from(from_env).join("data").join("geonames.db");
+        if p.exists() {
+            return p;
+        }
+    }
+
     // 1. Next to executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let p = dir.join("data").join("geonames.db");
             if p.exists() {
                 return p;
+            }
+
+            // Debian install layout: /usr/bin/photovault -> /usr/lib/photovault/data/geonames.db
+            let deb = dir
+                .join("..")
+                .join("lib")
+                .join("photovault")
+                .join("data")
+                .join("geonames.db");
+            if deb.exists() {
+                return deb;
             }
         }
     }

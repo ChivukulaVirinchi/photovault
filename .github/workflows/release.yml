@@ -101,9 +101,13 @@ jobs:
       - name: Build AppDir
         run: |
           mkdir -p PhotoVault.AppDir/usr/bin
+          mkdir -p PhotoVault.AppDir/usr/lib/photovault
           mkdir -p PhotoVault.AppDir/usr/share/applications
           mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
-          cp -r photovault/* PhotoVault.AppDir/usr/bin/
+          cp photovault/photovault PhotoVault.AppDir/usr/bin/
+          cp -r photovault/libs PhotoVault.AppDir/usr/lib/photovault/
+          cp -r photovault/models PhotoVault.AppDir/usr/lib/photovault/
+          cp -r photovault/data PhotoVault.AppDir/usr/lib/photovault/
           cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
           cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
           cp packaging/photovault.desktop PhotoVault.AppDir/
@@ -111,8 +115,9 @@ jobs:
           cat > PhotoVault.AppDir/AppRun <<'EOF'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
+          export PHOTOVAULT_ASSET_DIR="${HERE}/usr/lib/photovault"
           cd "${HERE}/usr/bin"
-          export LD_LIBRARY_PATH="${HERE}/usr/bin/libs/onnxruntime:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib/photovault/libs/onnxruntime:$LD_LIBRARY_PATH"
           exec "${HERE}/usr/bin/photovault" "$@"
           EOF
           chmod +x PhotoVault.AppDir/AppRun
@@ -135,17 +140,267 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
+      - name: Download ML models + GeoNames data
+        shell: bash
+        run: ./scripts/setup_assets.sh
       - name: Build deb
         run: cargo deb
+      - name: Normalize DEB artifact name
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(ls target/debian/*.deb | grep -v dbgsym | head -n 1)
+          cp "$deb_file" "target/debian/PhotoVault-ubuntu-amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
           name: photovault-deb
-          path: target/debian/*.deb
+          path: |
+            target/debian/PhotoVault-ubuntu-amd64.deb
+            target/debian/*.deb
+
+  msi:
+    name: Windows MSI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Download ML models + GeoNames data
+        run: powershell -ExecutionPolicy Bypass -File scripts/setup_assets.ps1
+      - name: Install WiX toolset
+        run: choco install wixtoolset --version=3.11.2 -y
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --locked
+      - name: Build MSI
+        run: cargo wix --target x86_64-pc-windows-msvc --output target\wix\PhotoVault-Setup-x64.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-msi
+          path: target/wix/PhotoVault-Setup-x64.msi
+
+  smoke-deb:
+    name: Smoke test .deb installer
+    needs: deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-deb
+          path: artifacts/deb
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
+      - name: Verify .deb contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          test -n "$deb_file"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/bin/photovault"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/models/"
+          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/data/geonames.db"
+      - name: Install .deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          sudo dpkg -i "$deb_file"
+          sudo apt-get -f install -y
+      - name: Launch smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          xvfb-run -a env RUST_LOG=photovault=info timeout 20s photovault
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "photovault exited with unexpected code $code"
+            exit $code
+          fi
+
+  smoke-appimage:
+    name: Smoke test AppImage
+    needs: appimage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-appimage
+          path: artifacts/appimage
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
+      - name: Verify AppImage layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          test -n "$appimage"
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract >/dev/null
+          test -f squashfs-root/usr/bin/photovault
+          test -d squashfs-root/usr/lib/photovault/models
+          test -f squashfs-root/usr/lib/photovault/data/geonames.db
+      - name: Launch smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          chmod +x "$appimage"
+          set +e
+          xvfb-run -a env RUST_LOG=photovault=info APPIMAGE_EXTRACT_AND_RUN=1 timeout 20s "$appimage"
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "AppImage exited with unexpected code $code"
+            exit $code
+          fi
+
+  smoke-msi:
+    name: Smoke test MSI installer
+    needs: msi
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-msi
+          path: artifacts/msi
+      - name: Verify MSI exists
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
+          if (-not $msi) {
+            throw "PhotoVault-Setup-x64.msi not found"
+          }
+      - name: Install MSI silently
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
+          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart" -PassThru -Wait
+          if ($p.ExitCode -ne 0) {
+            throw "MSI install failed with exit code $($p.ExitCode)"
+          }
+      - name: Verify installed payload
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:ProgramFiles "PhotoVault"
+          $required = @(
+            (Join-Path $installDir "photovault.exe"),
+            (Join-Path $installDir "libs\onnxruntime\onnxruntime.dll"),
+            (Join-Path $installDir "models\scrfd_10g_bnkps.onnx"),
+            (Join-Path $installDir "models\glintr100.onnx"),
+            (Join-Path $installDir "data\geonames.db")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing installed file: $path"
+            }
+          }
+      - name: Verify Start Menu shortcut and uninstall entry
+        shell: pwsh
+        run: |
+          $shortcutCandidates = @(
+            (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk"),
+            (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk")
+          )
+          $shortcutFound = $false
+          foreach ($candidate in $shortcutCandidates) {
+            if (Test-Path $candidate) {
+              $shortcutFound = $true
+              break
+            }
+          }
+          if (-not $shortcutFound) {
+            throw "Missing Start Menu shortcut for PhotoVault"
+          }
+
+          $uninstallRoots = @(
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+          $found = $false
+          foreach ($root in $uninstallRoots) {
+            if (-not (Test-Path $root)) { continue }
+            $match = Get-ChildItem $root |
+              ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
+              Where-Object { $_.DisplayName -eq "PhotoVault" } |
+              Select-Object -First 1
+            if ($match) {
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) {
+            throw "Uninstall registry entry for PhotoVault not found"
+          }
+      - name: Launch smoke test
+        shell: pwsh
+        run: |
+          $exe = Join-Path (Join-Path $env:ProgramFiles "PhotoVault") "photovault.exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 20
+          if ($proc.HasExited) {
+            if ($proc.ExitCode -ne 0) {
+              throw "Installed app exited unexpectedly with code $($proc.ExitCode)"
+            }
+          } else {
+            Stop-Process -Id $proc.Id -Force
+          }
+      - name: Uninstall MSI silently
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
+          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart" -PassThru -Wait
+          if ($p.ExitCode -ne 0) {
+            throw "MSI uninstall failed with exit code $($p.ExitCode)"
+          }
+      - name: Verify install directory cleanup
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:ProgramFiles "PhotoVault"
+          if (Test-Path $installDir) {
+            $remaining = Get-ChildItem -Path $installDir -Force -ErrorAction SilentlyContinue
+            if ($remaining.Count -gt 0) {
+              throw "Install directory still has files after uninstall: $installDir"
+            }
+          }
+
+  checksums:
+    name: Release checksums
+    needs: [build, appimage, deb, msi, smoke-appimage, smoke-deb, smoke-msi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          appimage=$(find . -name "PhotoVault-x86_64.AppImage" | head -n 1)
+          deb=$(find . -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
+          msi=$(find . -name "PhotoVault-Setup-x64.msi" | head -n 1)
+          win_zip=$(find . -name "photovault-x86_64-pc-windows-msvc.zip" | head -n 1)
+          : > SHA256SUMS
+          sha256sum "$appimage" >> SHA256SUMS
+          sha256sum "$deb" >> SHA256SUMS
+          sha256sum "$msi" >> SHA256SUMS
+          sha256sum "$win_zip" >> SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-checksums
+          path: artifacts/SHA256SUMS
 
   release:
     name: Create GitHub Release
-    needs: [build, appimage, deb]
+    needs: [build, appimage, deb, msi, smoke-appimage, smoke-deb, smoke-msi, checksums]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

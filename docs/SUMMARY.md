@@ -22,6 +22,7 @@
 # For Contributors
 
 - [Build from Source](BUILD.md)
+- [Linux Release Guide](RELEASE_LINUX.md)
 - [Architecture Overview](architecture/overview.md)
 - [Database](architecture/database.md)
 - [State Machine](architecture/state.md)
