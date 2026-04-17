@@ -10,13 +10,15 @@
 //! 7. Camera breakdown (horizontal bars)
 
 use chrono::Datelike;
-use iced::widget::{button, column, container, image as iced_image, row, scrollable, text, Space};
-use iced::{Alignment, ContentFit, Element, Length, Padding};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::services::insights::InsightsData;
 use crate::theme::colors;
+use crate::views::insights_sections as sections;
 
 // ---------------------------------------------------------------------------
 // Main dashboard view
@@ -76,35 +78,44 @@ pub fn insights_view(
     }
 
     // 4. Activity heatmap
-    content = content.push(section_header("Activity", p));
+    content = content.push(section_header("Your photo rhythm", p));
     content = content.push(activity_heatmap(data, p));
 
     // 5. Monthly bars
-    content = content.push(section_header("Monthly Breakdown", p));
+    content = content.push(section_header("Moments by month", p));
     content = content.push(monthly_bars(data, p));
 
     // 6. Top people
     if !data.top_people.is_empty() {
-        content = content.push(section_header("Top People", p));
-        content = content.push(top_people(data, p));
+        content = content.push(section_header("Most photographed people", p));
+        content = content.push(sections::top_people(data, p));
     }
 
     // 7. Top locations
     if !data.top_locations.is_empty() {
-        content = content.push(section_header("Top Locations", p));
-        content = content.push(top_locations(data, p));
+        content = content.push(section_header("Places that shaped your story", p));
+        content = content.push(sections::top_locations(data, p));
     }
 
-    // 8. Camera breakdown (only if >1 camera)
-    if data.top_cameras.len() > 1 {
-        content = content.push(section_header("Cameras", p));
-        content = content.push(camera_breakdown(data, p));
+    // 8. Camera breakdown (show when at least one camera is present)
+    if !data.top_cameras.is_empty() {
+        content = content.push(section_header("Cameras behind these memories", p));
+        content = content.push(sections::camera_breakdown(data, p));
     }
+
+    content = content.push(
+        text("A quick look at the moments and people you photographed most.")
+            .size(12)
+            .color(p.text_tertiary),
+    );
 
     // Bottom spacer
     content = content.push(Space::with_height(40));
 
-    scrollable(content).width(Length::Fill).into()
+    scrollable(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -202,21 +213,21 @@ fn year_pill(
 
 fn stat_cards(data: &InsightsData, p: &colors::Palette) -> Element<'static, Message> {
     let date_range = match (&data.date_range_start, &data.date_range_end) {
-        (Some(start), Some(end)) => {
-            let s = start.get(..10).unwrap_or(start);
-            let e = end.get(..10).unwrap_or(end);
-            format!("{} - {}", s, e)
-        }
+        (Some(start), Some(end)) => format!(
+            "{} to {}",
+            friendly_date_long(start).unwrap_or_else(|| "--".to_string()),
+            friendly_date_long(end).unwrap_or_else(|| "--".to_string())
+        ),
         _ => "--".to_string(),
     };
 
     let cards = row![
-        stat_card(&format_number(data.total_photos), "Photos", p),
-        stat_card(&format_number(data.people_count), "People", p),
-        stat_card(&format_number(data.album_count), "Albums", p),
-        stat_card(&format_number(data.country_count), "Countries", p),
-        stat_card(&format_number(data.city_count), "Cities", p),
-        stat_card(&date_range, "Date Range", p),
+        stat_card(&format_number(data.total_photos), "Memories captured", p),
+        stat_card(&format_number(data.people_count), "People you kept", p),
+        stat_card(&format_number(data.album_count), "Albums created", p),
+        stat_card(&format_number(data.country_count), "Countries visited", p),
+        stat_card(&format_number(data.city_count), "Cities explored", p),
+        timeline_stat_card(&date_range, "Your timeline", p),
     ]
     .spacing(12);
 
@@ -256,6 +267,40 @@ fn stat_card(value: &str, label: &str, p: &colors::Palette) -> Element<'static, 
     .into()
 }
 
+fn timeline_stat_card(value: &str, label: &str, p: &colors::Palette) -> Element<'static, Message> {
+    let bg = p.bg_elevated;
+    let border_color = p.border_subtle;
+    let text_primary = p.text_primary;
+    let text_secondary = p.text_secondary;
+
+    container(
+        column![
+            text(value.to_owned())
+                .size(18)
+                .wrapping(iced::widget::text::Wrapping::None)
+                .width(Length::Fill)
+                .color(text_primary),
+            Space::with_height(4),
+            text(label.to_owned()).size(11).color(text_secondary),
+        ]
+        .align_x(Alignment::Center)
+        .width(Length::Fill),
+    )
+    .padding(Padding::from([16, 20]))
+    .width(Length::Fixed(340.0))
+    .height(Length::Fixed(95.0))
+    .style(move |_theme: &iced::Theme| container::Style {
+        background: Some(bg.into()),
+        border: iced::Border {
+            color: border_color,
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// Format a number with comma separators for readability.
 fn format_number(n: i64) -> String {
     if n < 1000 {
@@ -281,9 +326,11 @@ fn hero_banner(data: &InsightsData, p: &colors::Palette) -> Element<'static, Mes
     let border_color = p.border_subtle;
 
     if let Some(ref path) = data.hero_thumbnail_path {
+        let handle = iced::widget::image::Handle::from_path(path.clone());
         container(
-            iced_image(path.clone())
-                .content_fit(ContentFit::Cover)
+            iced::widget::image::viewer(handle)
+                .min_scale(1.0)
+                .max_scale(1.0)
                 .width(Length::Fill)
                 .height(Length::Fixed(280.0)),
         )
@@ -341,10 +388,11 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
                 month_label_row = month_label_row.push(
                     container(
                         text(month_names[(m - 1) as usize])
+                            .wrapping(iced::widget::text::Wrapping::None)
                             .size(9)
                             .color(p.text_tertiary),
                     )
-                    .width(Length::Fixed(14.0)),
+                    .width(Length::Fixed(18.0)),
                 );
                 last_col = col;
             }
@@ -363,7 +411,6 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
     let mut grid_rows: Vec<Element<'static, Message>> = Vec::new();
 
     let accent = p.accent_primary;
-    let bg_elevated = p.bg_elevated;
     let text_tertiary = p.text_tertiary;
 
     for day_of_week in 0..7usize {
@@ -401,13 +448,13 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
                 let intensity = if count == 0 {
                     0.0f32
                 } else {
-                    // Map count -> 0.15 .. 1.0
+                    // Map count -> 0.30 .. 1.0 for clearer differentiation.
                     let frac = (count as f32) / (max_count as f32);
-                    0.15 + frac * 0.85
+                    0.30 + frac * 0.70
                 };
 
                 let cell_color = if count == 0 {
-                    bg_elevated
+                    p.bg_hover
                 } else {
                     iced::Color {
                         r: accent.r,
@@ -417,7 +464,7 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
                     }
                 };
 
-                let cell = container(Space::new(Length::Fixed(12.0), Length::Fixed(12.0)))
+                let cell = container(Space::new(Length::Fixed(11.0), Length::Fixed(11.0)))
                     .width(Length::Fixed(14.0))
                     .height(Length::Fixed(14.0))
                     .center_x(Length::Fixed(14.0))
@@ -432,19 +479,34 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
                     });
 
                 if let Some(ds) = date_str {
+                    let tooltip_label = if count > 0 {
+                        format!(
+                            "{} · {} {}",
+                            friendly_date_short(&ds).unwrap_or(ds.clone()),
+                            count,
+                            if count == 1 { "Photo" } else { "Photos" }
+                        )
+                    } else {
+                        format!(
+                            "{} · 0 Photos",
+                            friendly_date_short(&ds).unwrap_or(ds.clone())
+                        )
+                    };
                     if count > 0 {
                         let ds_clone = ds.clone();
-                        week_row = week_row.push(
+                        week_row = week_row.push(with_tooltip(
                             button(cell)
                                 .padding(0)
                                 .style(move |_theme: &iced::Theme, _status| button::Style {
                                     background: None,
                                     ..Default::default()
                                 })
-                                .on_press(Message::InsightsJumpToDate(ds_clone)),
-                        );
+                                .on_press(Message::InsightsJumpToDate(ds_clone))
+                                .into(),
+                            tooltip_label,
+                        ));
                     } else {
-                        week_row = week_row.push(cell);
+                        week_row = week_row.push(with_tooltip(cell.into(), tooltip_label));
                     }
                 } else {
                     week_row = week_row.push(cell);
@@ -452,7 +514,7 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
             }
         }
 
-        grid_rows.push(week_row.spacing(0).into());
+        grid_rows.push(week_row.spacing(1.0).into());
     }
 
     let mut grid = column![].spacing(0);
@@ -465,7 +527,7 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
     let border_card = p.border_subtle;
 
     let heatmap_container =
-        container(grid.padding(Padding::from([8, 8]))).style(move |_theme: &iced::Theme| {
+        container(grid.padding(Padding::from([9, 9]))).style(move |_theme: &iced::Theme| {
             container::Style {
                 background: Some(bg_card.into()),
                 border: iced::Border {
@@ -483,6 +545,61 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
         ))
         .width(Length::Fill)
         .into()
+}
+
+fn friendly_date_short(input: &str) -> Option<String> {
+    let raw = input.get(..10).unwrap_or(input);
+    let d = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let month = match d.month() {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => return None,
+    };
+    Some(format!("{} {}", month, ordinal(d.day())))
+}
+
+fn friendly_date_long(input: &str) -> Option<String> {
+    let raw = input.get(..10).unwrap_or(input);
+    let d = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let month = match d.month() {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => return None,
+    };
+    Some(format!("{} {} {}", ordinal(d.day()), month, d.year()))
+}
+
+fn ordinal(day: u32) -> String {
+    let suffix = match day % 100 {
+        11..=13 => "th",
+        _ => match day % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        },
+    };
+    format!("{}{}", day, suffix)
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +623,7 @@ fn monthly_bars(data: &InsightsData, p: &colors::Palette) -> Element<'static, Me
     let text_secondary = p.text_secondary;
     let text_tertiary = p.text_tertiary;
     let border_card = p.border_subtle;
+    let row_hover = p.bg_hover;
 
     let mut bars = column![].spacing(6);
 
@@ -549,7 +667,30 @@ fn monthly_bars(data: &InsightsData, p: &colors::Palette) -> Element<'static, Me
         .align_y(Alignment::Center)
         .spacing(4);
 
-        bars = bars.push(bar_row);
+        if count > 0 {
+            bars = bars.push(
+                button(bar_row)
+                    .padding(0)
+                    .width(Length::Fill)
+                    .style(move |_theme: &iced::Theme, status| button::Style {
+                        background: match status {
+                            button::Status::Hovered => Some(row_hover.into()),
+                            _ => None,
+                        },
+                        border: iced::Border {
+                            radius: 6.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::InsightsOpenMonth {
+                        year: data.heatmap_year,
+                        month: (i + 1) as u32,
+                    }),
+            );
+        } else {
+            bars = bars.push(bar_row);
+        }
     }
 
     container(bars.padding(Padding::from([12, 16])))
@@ -569,225 +710,16 @@ fn monthly_bars(data: &InsightsData, p: &colors::Palette) -> Element<'static, Me
 // 6. Top people — face crop + name + count
 // ---------------------------------------------------------------------------
 
-fn top_people(data: &InsightsData, p: &colors::Palette) -> Element<'static, Message> {
-    let bg_elevated = p.bg_elevated;
-    let border_card = p.border_subtle;
-    let text_primary = p.text_primary;
-    let text_secondary = p.text_secondary;
-    let bg_hover = p.bg_hover;
-
-    let mut people_col = column![].spacing(8);
-
-    for person in &data.top_people {
-        let face: Element<'static, Message> = if let Some(ref path) = person.face_crop_path {
-            container(
-                iced_image(path.clone())
-                    .content_fit(ContentFit::Cover)
-                    .width(Length::Fixed(48.0))
-                    .height(Length::Fixed(48.0)),
-            )
-            .width(Length::Fixed(48.0))
-            .height(Length::Fixed(48.0))
-            .clip(true)
-            .style(move |_theme: &iced::Theme| container::Style {
-                border: iced::Border {
-                    radius: 24.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
-        } else {
-            container(Space::new(48, 48))
-                .width(Length::Fixed(48.0))
-                .height(Length::Fixed(48.0))
-                .style(move |_theme: &iced::Theme| container::Style {
-                    background: Some(bg_hover.into()),
-                    border: iced::Border {
-                        radius: 24.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .into()
-        };
-
-        let name = person.name.clone();
-        let count_str = format!("{} photos", person.photo_count);
-        let cluster_id = person.cluster_id;
-
-        let person_row = button(
-            row![
-                face,
-                Space::with_width(12),
-                column![
-                    text(name).size(14).color(text_primary),
-                    text(count_str).size(11).color(text_secondary),
-                ]
-                .spacing(2),
-            ]
-            .align_y(Alignment::Center)
-            .padding(Padding::from([4, 8])),
-        )
-        .padding(0)
-        .width(Length::Fill)
-        .style(move |_theme: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => bg_hover,
-                _ => iced::Color::TRANSPARENT,
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        })
-        .on_press(Message::SelectCluster(cluster_id));
-
-        people_col = people_col.push(person_row);
-    }
-
-    container(people_col.padding(Padding::from([12, 12])))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg_elevated.into()),
-            border: iced::Border {
-                color: border_card,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
-}
+// moved to views/insights_sections.rs
 
 // ---------------------------------------------------------------------------
 // 7. Top locations — clickable rows
 // ---------------------------------------------------------------------------
 
-fn top_locations(data: &InsightsData, p: &colors::Palette) -> Element<'static, Message> {
-    let bg_elevated = p.bg_elevated;
-    let border_card = p.border_subtle;
-    let text_primary = p.text_primary;
-    let text_secondary = p.text_secondary;
-    let bg_hover = p.bg_hover;
-
-    let mut loc_col = column![].spacing(6);
-
-    for loc in &data.top_locations {
-        let label = if loc.country.is_empty() {
-            loc.city.clone()
-        } else {
-            format!("{}, {}", loc.city, loc.country)
-        };
-        let count_str = format!("{} photos", loc.photo_count);
-        let city_clone = loc.city.clone();
-
-        let loc_row = button(
-            row![column![
-                text(label).size(14).color(text_primary),
-                text(count_str).size(11).color(text_secondary),
-            ]
-            .spacing(2),]
-            .align_y(Alignment::Center)
-            .padding(Padding::from([6, 12])),
-        )
-        .padding(0)
-        .width(Length::Fill)
-        .style(move |_theme: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => bg_hover,
-                _ => iced::Color::TRANSPARENT,
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        })
-        .on_press(Message::InsightsSearchCity(city_clone));
-
-        loc_col = loc_col.push(loc_row);
-    }
-
-    container(loc_col.padding(Padding::from([12, 12])))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg_elevated.into()),
-            border: iced::Border {
-                color: border_card,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
-}
+// moved to views/insights_sections.rs
 
 // ---------------------------------------------------------------------------
 // 8. Camera breakdown — horizontal bars
 // ---------------------------------------------------------------------------
 
-fn camera_breakdown(data: &InsightsData, p: &colors::Palette) -> Element<'static, Message> {
-    let max_count = data
-        .top_cameras
-        .iter()
-        .map(|c| c.photo_count)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-
-    let accent = p.accent_primary;
-    let bg_elevated = p.bg_elevated;
-    let text_secondary = p.text_secondary;
-    let text_tertiary = p.text_tertiary;
-    let border_card = p.border_subtle;
-
-    let mut bars = column![].spacing(6);
-
-    for cam in &data.top_cameras {
-        let bar_width = (cam.photo_count as f32 / max_count as f32 * 260.0).max(4.0);
-
-        let bar_color = accent;
-        let bar = container(Space::new(Length::Fixed(bar_width), Length::Fixed(16.0))).style(
-            move |_theme: &iced::Theme| container::Style {
-                background: Some(bar_color.into()),
-                border: iced::Border {
-                    radius: 3.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        );
-
-        let bar_row = row![
-            container(text(cam.camera.clone()).size(12).color(text_secondary),)
-                .width(Length::Fixed(160.0)),
-            bar,
-            Space::with_width(8),
-            text(format_number(cam.photo_count))
-                .size(11)
-                .color(text_tertiary),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(4);
-
-        bars = bars.push(bar_row);
-    }
-
-    container(bars.padding(Padding::from([12, 16])))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg_elevated.into()),
-            border: iced::Border {
-                color: border_card,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
-}
+// moved to views/insights_sections.rs

@@ -10,6 +10,7 @@ use crate::models::Photo;
 
 use super::super::messages::Message;
 use super::super::state::{PhotoVault, View};
+use super::timeline_helpers;
 
 pub(crate) fn scrolled(
     app: &mut PhotoVault,
@@ -252,17 +253,10 @@ pub(crate) fn key_pressed(
         return Task::none();
     }
 
-    // --- Tab navigation across card-heavy views ---
+    // --- Tab navigation across the whole app ---
     if let keyboard::Key::Named(keyboard::key::Named::Tab) = key {
         let backwards = modifiers.shift();
-        return tab_navigate(app, backwards);
-    }
-
-    // If a sidebar item is highlighted via Tab navigation, Enter activates it.
-    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter))
-        && app.sidebar_highlight_index.is_some()
-        && sidebar_target_differs_current(app)
-        && matches!(
+        if matches!(
             app.current_view,
             View::Timeline
                 | View::Map
@@ -277,9 +271,21 @@ pub(crate) fn key_pressed(
                 | View::Trash
                 | View::Documents
                 | View::Settings
-        )
+        ) {
+            return timeline_helpers::move_sidebar_highlight(app, if backwards { -1 } else { 1 });
+        }
+        return if backwards {
+            iced::widget::focus_previous()
+        } else {
+            iced::widget::focus_next()
+        };
+    }
+
+    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter))
+        && app.sidebar_highlight_index.is_some()
+        && timeline_helpers::sidebar_target_differs_current(app)
     {
-        return navigate_to_sidebar_highlight(app);
+        return timeline_helpers::navigate_to_sidebar_highlight(app);
     }
 
     // --- Global Cmd/Ctrl shortcuts ---
@@ -306,11 +312,7 @@ pub(crate) fn key_pressed(
 
     // --- '?' opens shortcuts overlay (when not in a text-edit context) ---
     if let keyboard::Key::Character(ref ch) = key {
-        if ch == "?"
-            && app.editing_cluster_id.is_none()
-            && app.editing_album_id.is_none()
-            && !matches!(app.current_view, View::Search)
-        {
+        if ch == "?" && app.editing_cluster_id.is_none() && app.editing_album_id.is_none() {
             return super::handle(app, Message::ToggleShortcutsOverlay);
         }
     }
@@ -493,16 +495,16 @@ pub(crate) fn key_pressed(
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                return move_documents_highlight(app, 1);
+                return timeline_helpers::move_documents_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                return move_documents_highlight(app, -1);
+                return timeline_helpers::move_documents_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_documents_highlight(app, cols);
+                return timeline_helpers::move_documents_highlight(app, cols);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_documents_highlight(app, -cols);
+                return timeline_helpers::move_documents_highlight(app, -cols);
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.documents_highlight_index {
@@ -524,11 +526,11 @@ pub(crate) fn key_pressed(
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight)
             | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_people_highlight(app, 1);
+                return timeline_helpers::move_people_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
             | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_people_highlight(app, -1);
+                return timeline_helpers::move_people_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.people_highlight_index {
@@ -539,15 +541,34 @@ pub(crate) fn key_pressed(
             }
             _ => {}
         }
+    } else if app.current_view == View::Memories {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                return timeline_helpers::move_memory_highlight(app, 1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                return timeline_helpers::move_memory_highlight(app, -1);
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(i) = app.memory_highlight_index {
+                    if let Some(card) = app.memories.get(i) {
+                        return super::handle(app, Message::OpenMemory(card.id.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
     } else if app.current_view == View::Albums {
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight)
             | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_albums_highlight(app, 1);
+                return timeline_helpers::move_albums_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
             | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_albums_highlight(app, -1);
+                return timeline_helpers::move_albums_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.albums_highlight_index {
@@ -562,11 +583,11 @@ pub(crate) fn key_pressed(
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight)
             | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_duplicates_highlight(app, 1);
+                return timeline_helpers::move_duplicates_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
             | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_duplicates_highlight(app, -1);
+                return timeline_helpers::move_duplicates_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.duplicates_highlight_index {
@@ -581,11 +602,11 @@ pub(crate) fn key_pressed(
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight)
             | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_bursts_highlight(app, 1);
+                return timeline_helpers::move_bursts_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
             | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_bursts_highlight(app, -1);
+                return timeline_helpers::move_bursts_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(i) = app.bursts_highlight_index {
@@ -616,16 +637,16 @@ pub(crate) fn key_pressed(
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                return move_timeline_highlight(app, 1);
+                return timeline_helpers::move_timeline_highlight(app, 1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                return move_timeline_highlight(app, -1);
+                return timeline_helpers::move_timeline_highlight(app, -1);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                return move_timeline_highlight(app, cols);
+                return timeline_helpers::move_timeline_highlight(app, cols);
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                return move_timeline_highlight(app, -cols);
+                return timeline_helpers::move_timeline_highlight(app, -cols);
             }
             keyboard::Key::Named(keyboard::key::Named::PageDown) => {
                 return scrollable::scroll_by(
@@ -694,196 +715,12 @@ pub(crate) fn key_pressed(
     Task::none()
 }
 
-fn tab_navigate(app: &mut PhotoVault, backwards: bool) -> Task<Message> {
-    match app.current_view {
-        View::Timeline
-        | View::Map
-        | View::Memories
-        | View::Albums
-        | View::Insights
-        | View::Search
-        | View::People
-        | View::FaceReview
-        | View::Duplicates
-        | View::Bursts
-        | View::Trash
-        | View::Documents
-        | View::Settings => move_sidebar_highlight(app, if backwards { -1 } else { 1 }),
-        _ => {
-            if backwards {
-                iced::widget::focus_previous()
-            } else {
-                iced::widget::focus_next()
-            }
-        }
-    }
-}
-
-fn move_sidebar_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = 13_i32;
-
-    let current = app
-        .sidebar_highlight_index
-        .or_else(|| sidebar_index_for_view(&app.current_view))
-        .unwrap_or(0) as i32;
-    let mut next = current + delta;
-    if next < 0 {
-        next = total - 1;
-    } else if next >= total {
-        next = 0;
-    }
-    app.sidebar_highlight_index = Some(next as usize);
-
-    Task::none()
-}
-
-fn sidebar_view_for_index(index: usize) -> Option<View> {
-    Some(match index {
-        0 => View::Timeline,
-        1 => View::Map,
-        2 => View::Memories,
-        3 => View::Albums,
-        4 => View::Insights,
-        5 => View::Search,
-        6 => View::People,
-        7 => View::FaceReview,
-        8 => View::Duplicates,
-        9 => View::Bursts,
-        10 => View::Trash,
-        11 => View::Documents,
-        12 => View::Settings,
-        _ => return None,
-    })
-}
-
-fn sidebar_index_for_view(view: &View) -> Option<usize> {
-    Some(match view {
-        View::Timeline => 0,
-        View::Map => 1,
-        View::Memories => 2,
-        View::Albums | View::AlbumDetail => 3,
-        View::Insights => 4,
-        View::Search | View::Cull => 5,
-        View::People | View::ClusterDetail => 6,
-        View::FaceReview => 7,
-        View::Duplicates | View::DuplicateDetail => 8,
-        View::Bursts | View::BurstDetail => 9,
-        View::Trash => 10,
-        View::Documents => 11,
-        View::Settings => 12,
-        _ => return None,
-    })
-}
-
-fn navigate_to_sidebar_highlight(app: &mut PhotoVault) -> Task<Message> {
-    let target = app.sidebar_highlight_index.and_then(sidebar_view_for_index);
-    if let Some(view) = target {
-        return super::handle(app, Message::NavigateTo(view));
-    }
-    Task::none()
-}
-
-fn sidebar_target_differs_current(app: &PhotoVault) -> bool {
-    let target = app.sidebar_highlight_index;
-    let current = sidebar_index_for_view(&app.current_view);
-    match (target, current) {
-        (Some(t), Some(c)) => t != c,
-        (Some(_), None) => true,
-        _ => false,
-    }
-}
-
-fn move_documents_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.documents.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.documents_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.documents_highlight_index = Some(next as usize);
-    Task::none()
-}
-
-fn move_people_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.face_clusters.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.people_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.people_highlight_index = Some(next as usize);
-    Task::none()
-}
-
-fn move_albums_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.albums.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.albums_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.albums_highlight_index = Some(next as usize);
-    Task::none()
-}
-
-fn move_duplicates_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.duplicate_groups.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.duplicates_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.duplicates_highlight_index = Some(next as usize);
-    Task::none()
-}
-
-fn move_bursts_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.burst_groups.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.bursts_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.bursts_highlight_index = Some(next as usize);
-    Task::none()
-}
-
-/// Move the timeline grid keyboard cursor by `delta` cells, clamped to [0, photos.len() - 1].
-fn move_timeline_highlight(app: &mut PhotoVault, delta: i32) -> Task<Message> {
-    let total = app.photos.len();
-    if total == 0 {
-        return Task::none();
-    }
-    let current = app.timeline_highlight_index.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, total as i32 - 1);
-    app.timeline_highlight_index = Some(next as usize);
-
-    if delta.abs() > 1 {
-        scrollable::scroll_by(
-            scrollable::Id::new("timeline"),
-            scrollable::AbsoluteOffset {
-                x: 0.0,
-                y: if delta > 0 { 196.0 } else { -196.0 },
-            },
-        )
-    } else {
-        Task::none()
-    }
-}
-
 pub(crate) fn rotate_photo(app: &mut PhotoVault) -> Task<Message> {
-    app.photo_rotation = (app.photo_rotation + 90) % 360;
-
-    // Rotate the in-memory display image (~1ms for 1000px thumbnail)
-    if let Some(ref img) = app.current_display_image {
-        app.current_display_image = Some(img.rotate90());
-    }
-    Task::none()
+    timeline_helpers::rotate_photo(app)
 }
 
 pub(crate) fn toggle_metadata_panel(app: &mut PhotoVault) -> Task<Message> {
-    app.show_metadata_panel = !app.show_metadata_panel;
-    Task::none()
+    timeline_helpers::toggle_metadata_panel(app)
 }
 
 pub(crate) fn display_image_ready(
@@ -892,12 +729,13 @@ pub(crate) fn display_image_ready(
     w: u32,
     h: u32,
 ) -> Task<Message> {
-    if let Some(bytes) = bytes_opt {
-        if w > 0 && h > 0 {
-            if let Some(rgba) = image::RgbaImage::from_raw(w, h, bytes) {
-                app.current_display_image = Some(image::DynamicImage::ImageRgba8(rgba));
-            }
-        }
-    }
-    Task::none()
+    timeline_helpers::display_image_ready(app, bytes_opt, w, h)
+}
+
+pub(crate) fn photo_location_resolved(
+    app: &mut PhotoVault,
+    photo_id: i64,
+    location: Option<String>,
+) -> Task<Message> {
+    timeline_helpers::photo_location_resolved(app, photo_id, location)
 }

@@ -3,6 +3,7 @@
 mod handlers;
 mod messages;
 pub mod state;
+mod view_status;
 mod views;
 
 #[allow(unused_imports)]
@@ -89,7 +90,7 @@ impl PhotoVault {
             );
         }
 
-        // Keyboard events for all views (shortcuts)
+        // Keyboard events for all views (shortcuts/focus nav)
         if self.selected_drive.is_some() {
             subs.push(event::listen_with(|event, _status, _id| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {

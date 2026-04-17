@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{Message, PhotoVault};
+use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::models::Photo;
 use crate::theme::colors;
@@ -29,12 +30,22 @@ impl PhotoDetailView {
         let photo_id = photo.id;
 
         // === Top bar: labeled tool buttons ===
-        let rotate_btn = Self::tool_btn("Rotate", Message::RotatePhoto, p);
-        let info_btn = Self::tool_btn("Info", Message::ToggleMetadataPanel, p);
-        let album_btn = Self::tool_btn("Album", Message::OpenAlbumPicker(vec![photo_id]), p);
+        let rotate_btn = Self::tool_btn("Rotate", Message::RotatePhoto, "Rotate 90° (R)", p);
+        let info_btn = Self::tool_btn(
+            "Info",
+            Message::ToggleMetadataPanel,
+            "Toggle metadata (I)",
+            p,
+        );
+        let album_btn = Self::tool_btn(
+            "Album",
+            Message::OpenAlbumPicker(vec![photo_id]),
+            "Add to album",
+            p,
+        );
         let trash_btn = {
             let danger = p.semantic_danger;
-            button(text("Delete").size(11).color(danger))
+            let btn = button(text("Delete").size(11).color(danger))
                 .padding(Padding::from([5, 12]))
                 .style(move |_t: &iced::Theme, s| button::Style {
                     background: match s {
@@ -47,10 +58,11 @@ impl PhotoDetailView {
                     },
                     ..Default::default()
                 })
-                .on_press(Message::TrashPhotos(vec![photo_id]))
+                .on_press(Message::TrashPhotos(vec![photo_id]));
+            with_tooltip(btn.into(), "Delete photo")
         };
 
-        let close_btn = Self::tool_btn("Close", Message::ClosePhotoDetail, p);
+        let close_btn = Self::tool_btn("Close", Message::ClosePhotoDetail, "Close (Esc)", p);
 
         let top_bg = p.bg_primary;
         let top_bar = container(
@@ -75,8 +87,20 @@ impl PhotoDetailView {
         });
 
         // === Navigation arrows ===
-        let prev_btn = Self::nav_arrow("\u{2039}", Message::PreviousPhoto, has_prev, p);
-        let next_btn = Self::nav_arrow("\u{203A}", Message::NextPhoto, has_next, p);
+        let prev_btn = Self::nav_arrow(
+            "\u{2039}",
+            Message::PreviousPhoto,
+            "Previous photo (←)",
+            has_prev,
+            p,
+        );
+        let next_btn = Self::nav_arrow(
+            "\u{203A}",
+            Message::NextPhoto,
+            "Next photo (→)",
+            has_next,
+            p,
+        );
 
         // === Image area — viewer widget with scroll-to-zoom + drag-to-pan ===
         let image_widget: Element<'static, Message> = if let Some(handle) = image_handle {
@@ -127,6 +151,7 @@ impl PhotoDetailView {
     fn nav_arrow(
         symbol: &str,
         msg: Message,
+        tooltip_label: &str,
         enabled: bool,
         p: &'static colors::Palette,
     ) -> Element<'static, Message> {
@@ -156,7 +181,7 @@ impl PhotoDetailView {
             });
 
         if enabled {
-            btn.on_press(msg).into()
+            with_tooltip(btn.on_press(msg).into(), tooltip_label)
         } else {
             btn.into()
         }
@@ -165,12 +190,13 @@ impl PhotoDetailView {
     fn tool_btn(
         icon: &str,
         msg: Message,
+        tooltip_label: &str,
         p: &'static colors::Palette,
     ) -> Element<'static, Message> {
         let icon = icon.to_owned();
         let tc = p.text_secondary;
         let hover = p.bg_hover;
-        button(text(icon).size(15).color(tc))
+        let btn = button(text(icon).size(15).color(tc))
             .padding(Padding::from([5, 8]))
             .style(move |_t: &iced::Theme, s| button::Style {
                 background: match s {
@@ -183,8 +209,8 @@ impl PhotoDetailView {
                 },
                 ..Default::default()
             })
-            .on_press(msg)
-            .into()
+            .on_press(msg);
+        with_tooltip(btn.into(), tooltip_label)
     }
 
     /// Structured metadata panel with grouped info
@@ -219,11 +245,7 @@ impl PhotoDetailView {
         // falling back to raw coordinates only as a last resort.
         let location_text = app.current_photo_location.clone().or_else(|| {
             if photo.has_location() {
-                Some(format!(
-                    "{:.4}, {:.4}",
-                    photo.gps_latitude.unwrap_or(0.0),
-                    photo.gps_longitude.unwrap_or(0.0)
-                ))
+                Some("Resolving location...".to_string())
             } else {
                 None
             }

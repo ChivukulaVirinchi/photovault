@@ -425,13 +425,22 @@ fn month_name(m: u32) -> &'static str {
 /// Human-readable age string from a photo date to today.
 /// Uses months when < 24 months; years otherwise.
 fn age_label(photo_date: NaiveDate, today: NaiveDate) -> String {
-    let months = (today.year() - photo_date.year()) * 12
+    if photo_date >= today {
+        return "Recent".to_string();
+    }
+
+    let mut months = (today.year() - photo_date.year()) * 12
         + (today.month() as i32 - photo_date.month() as i32);
+    if today.day() < photo_date.day() {
+        months -= 1;
+    }
+    let months = months.max(0);
+
     if months < 12 {
-        if months == 1 {
-            "1 month ago".to_string()
-        } else {
-            format!("{} months ago", months)
+        match months {
+            0 => "Recent".to_string(),
+            1 => "1 month ago".to_string(),
+            _ => format!("{} months ago", months),
         }
     } else {
         let years = months / 12;

@@ -50,7 +50,8 @@ pub(crate) fn create_album(app: &mut PhotoVault, name: String) -> Task<Message> 
     // Clear the inline create state
     app.album_picker_creating = false;
     app.album_picker_new_name.clear();
-    app.load_albums()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_albums(), invalidate])
 }
 
 pub(crate) fn rename_album(app: &mut PhotoVault, album_id: i64, name: String) -> Task<Message> {
@@ -93,7 +94,8 @@ pub(crate) fn delete_album(app: &mut PhotoVault, album_id: i64) -> Task<Message>
         app.current_view = View::Albums;
     }
 
-    app.load_albums()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_albums(), invalidate])
 }
 
 pub(crate) fn open_album(app: &mut PhotoVault, album_id: i64) -> Task<Message> {
@@ -140,6 +142,7 @@ pub(crate) fn add_photos_to_album(
     if app.selected_album_id == Some(album_id) {
         tasks.push(app.load_album_photos(album_id));
     }
+    tasks.push(super::handle(app, Message::InvalidateInsights));
     Task::batch(tasks)
 }
 
@@ -163,6 +166,7 @@ pub(crate) fn remove_photos_from_album(
     if app.selected_album_id == Some(album_id) {
         tasks.push(app.load_album_photos(album_id));
     }
+    tasks.push(super::handle(app, Message::InvalidateInsights));
     Task::batch(tasks)
 }
 
@@ -172,7 +176,8 @@ pub(crate) fn open_album_picker(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Ta
     app.album_picker_new_name.clear();
     app.album_picker_creating = false;
     // Ensure album list is fresh
-    app.load_albums()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_albums(), invalidate])
 }
 
 pub(crate) fn close_album_picker(app: &mut PhotoVault) -> Task<Message> {
@@ -191,7 +196,15 @@ pub(crate) fn album_picker_name_changed(app: &mut PhotoVault, name: String) -> T
 pub(crate) fn album_picker_toggle_create(app: &mut PhotoVault) -> Task<Message> {
     app.album_picker_creating = !app.album_picker_creating;
     app.album_picker_new_name.clear();
-    Task::none()
+    if app.album_picker_creating {
+        let id = iced::widget::text_input::Id::new("album-picker-new");
+        Task::batch([
+            iced::widget::text_input::focus(id.clone()),
+            iced::widget::text_input::move_cursor_to_end(id),
+        ])
+    } else {
+        Task::none()
+    }
 }
 
 pub(crate) fn album_picker_create_and_add(app: &mut PhotoVault) -> Task<Message> {
@@ -227,7 +240,8 @@ pub(crate) fn album_picker_create_and_add(app: &mut PhotoVault) -> Task<Message>
     app.album_picker_new_name.clear();
     app.album_picker_creating = false;
     app.selected_timeline_photo_ids.clear();
-    app.load_albums()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_albums(), invalidate])
 }
 
 pub(crate) fn album_picker_select(app: &mut PhotoVault, album_id: i64) -> Task<Message> {
@@ -244,7 +258,11 @@ pub(crate) fn start_edit_album_name(app: &mut PhotoVault, album_id: i64) -> Task
         .unwrap_or_default();
     app.editing_album_id = Some(album_id);
     app.edit_album_name = current_name;
-    Task::none()
+    let id = iced::widget::text_input::Id::new(format!("album-edit-{}", album_id));
+    Task::batch([
+        iced::widget::text_input::focus(id.clone()),
+        iced::widget::text_input::move_cursor_to_end(id),
+    ])
 }
 
 pub(crate) fn edit_album_name(app: &mut PhotoVault, name: String) -> Task<Message> {
@@ -289,7 +307,8 @@ pub(crate) fn back_to_albums(app: &mut PhotoVault) -> Task<Message> {
     app.selected_album_id = None;
     app.album_photos.clear();
     app.current_view = View::Albums;
-    app.load_albums()
+    let invalidate = super::handle(app, Message::InvalidateInsights);
+    Task::batch([app.load_albums(), invalidate])
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +331,21 @@ pub(crate) fn run_suggestion_detection(app: &mut PhotoVault) -> Task<Message> {
             match Database::open_for_drive(&drive_path) {
                 Ok(db) => {
                     let override_ref = home_override.as_deref();
-                    crate::services::album_suggestions::detect_suggestions(&db.conn, override_ref);
+                    let (_new, diag) =
+                        crate::services::album_suggestions::detect_suggestions_with_diagnostics(
+                            &db.conn,
+                            override_ref,
+                        );
+                    tracing::info!(
+                        "suggestions model fit: dated_photos={}, city_photos={}, home_city={:?}, trip_passed={}, event_passed={}, persisted_new={}, skipped_fp={}",
+                        diag.total_photos_with_date,
+                        diag.photos_with_city,
+                        diag.home_city,
+                        diag.trip_candidates_passed,
+                        diag.event_candidates_passed,
+                        diag.persisted_new,
+                        diag.skipped_existing_fingerprint
+                    );
                     // Re-load all pending suggestions to return
                     let repo = crate::db::AlbumSuggestionRepo::new(&db.conn);
                     let mut suggestions = repo.get_pending().unwrap_or_default();
@@ -329,25 +362,22 @@ pub(crate) fn run_suggestion_detection(app: &mut PhotoVault) -> Task<Message> {
                         }
                     }
 
-                    suggestions
+                    (suggestions, diag)
                 }
                 Err(e) => {
                     tracing::error!("Failed to open DB for suggestion detection: {}", e);
-                    Vec::new()
+                    (
+                        Vec::new(),
+                        crate::services::album_suggestions::SuggestionDiagnostics::default(),
+                    )
                 }
             }
         },
-        Message::SuggestionsDetected,
+        |(suggestions, diag)| Message::SuggestionsDetectedWithDiagnostics {
+            suggestions,
+            diagnostics: diag,
+        },
     )
-}
-
-pub(crate) fn suggestions_detected(
-    app: &mut PhotoVault,
-    suggestions: Vec<crate::db::AlbumSuggestionRecord>,
-) -> Task<Message> {
-    app.suggestion_detection_running = false;
-    app.album_suggestions = suggestions;
-    Task::none()
 }
 
 pub(crate) fn suggestions_loaded(
@@ -355,6 +385,17 @@ pub(crate) fn suggestions_loaded(
     suggestions: Vec<crate::db::AlbumSuggestionRecord>,
 ) -> Task<Message> {
     app.album_suggestions = suggestions;
+    Task::none()
+}
+
+pub(crate) fn suggestions_detected_with_diagnostics(
+    app: &mut PhotoVault,
+    suggestions: Vec<crate::db::AlbumSuggestionRecord>,
+    diagnostics: crate::services::album_suggestions::SuggestionDiagnostics,
+) -> Task<Message> {
+    app.suggestion_detection_running = false;
+    app.album_suggestions = suggestions;
+    app.suggestion_diagnostics = Some(diagnostics);
     Task::none()
 }
 
@@ -367,7 +408,11 @@ pub(crate) fn begin_accept_suggestion(app: &mut PhotoVault, id: i64) -> Task<Mes
         .unwrap_or_default();
     app.accepting_suggestion_id = Some(id);
     app.accepting_suggestion_name = name;
-    Task::none()
+    let input_id = iced::widget::text_input::Id::new(format!("suggestion-name-{}", id));
+    Task::batch([
+        iced::widget::text_input::focus(input_id.clone()),
+        iced::widget::text_input::move_cursor_to_end(input_id),
+    ])
 }
 
 pub(crate) fn accept_suggestion_name_changed(app: &mut PhotoVault, name: String) -> Task<Message> {

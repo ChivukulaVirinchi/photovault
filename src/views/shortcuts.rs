@@ -21,7 +21,7 @@ pub fn shortcuts_for(view: &View) -> Vec<ShortcutGroup> {
             ("?", "Show this help"),
             ("/  or  F", "Jump to Search"),
             ("[", "Toggle sidebar"),
-            ("Tab  /  Shift+Tab", "Move focus across cards"),
+            ("Tab  /  Shift+Tab", "Move focus across controls"),
             ("Cmd+,", "Open Settings"),
             ("Cmd+1-9", "Jump to sidebar item"),
             ("Cmd+W", "Close current detail view"),
@@ -37,7 +37,7 @@ pub fn shortcuts_for(view: &View) -> Vec<ShortcutGroup> {
                 ("\u{2190} \u{2192} \u{2191} \u{2193}", "Move grid cursor"),
                 ("PageUp / PageDown", "Scroll timeline"),
                 ("Home / End", "Jump top / bottom"),
-                ("Enter", "Open highlighted photo"),
+                ("Enter", "Activate focused control"),
                 ("Space", "Toggle selection"),
                 ("Delete / Backspace", "Trash selected"),
             ],
@@ -122,7 +122,7 @@ pub fn overlay(view: &View, theme: AppTheme) -> Element<'static, Message> {
         }
         col = col.push(
             text(group.title.to_string())
-                .size(13)
+                .size(15)
                 .color(p.text_secondary),
         );
         col = col.push(Space::with_height(6));
@@ -205,7 +205,7 @@ pub fn reference_list(theme: AppTheme) -> Element<'static, Message> {
     if let Some(global) = shortcuts_for(&View::Timeline).into_iter().next() {
         col = col.push(
             text(global.title.to_string())
-                .size(13)
+                .size(15)
                 .color(p.text_secondary),
         );
         col = col.push(Space::with_height(6));
@@ -229,7 +229,7 @@ pub fn reference_list(theme: AppTheme) -> Element<'static, Message> {
             if g.items.is_empty() {
                 continue;
             }
-            col = col.push(text(g.title.to_string()).size(13).color(p.text_secondary));
+            col = col.push(text(g.title.to_string()).size(15).color(p.text_secondary));
             col = col.push(Space::with_height(6));
             for (keys, desc) in g.items {
                 col = col.push(

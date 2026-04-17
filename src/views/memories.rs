@@ -95,7 +95,11 @@ fn banner_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Messa
 }
 
 /// Dedicated "Memories" sidebar view — all active memory cards as wide rows.
-pub fn memories_view(cards: &[MemoryCard], theme: AppTheme) -> Element<'static, Message> {
+pub fn memories_view(
+    cards: &[MemoryCard],
+    highlighted_index: Option<usize>,
+    theme: AppTheme,
+) -> Element<'static, Message> {
     let p = colors::palette(theme);
 
     let header = container(text("Memories").size(28).color(p.text_primary)).padding(Padding {
@@ -132,8 +136,8 @@ pub fn memories_view(cards: &[MemoryCard], theme: AppTheme) -> Element<'static, 
         bottom: 32.0,
         left: 32.0,
     });
-    for card in cards {
-        list = list.push(wide_card(card, &p));
+    for (idx, card) in cards.iter().enumerate() {
+        list = list.push(wide_card(card, highlighted_index == Some(idx), &p));
     }
 
     container(scrollable(column![header, list]))
@@ -142,7 +146,11 @@ pub fn memories_view(cards: &[MemoryCard], theme: AppTheme) -> Element<'static, 
         .into()
 }
 
-fn wide_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Message> {
+fn wide_card(
+    card: &MemoryCard,
+    is_highlighted: bool,
+    p: &colors::Palette,
+) -> Element<'static, Message> {
     let hero_w: f32 = 280.0;
     let hero_h: f32 = 160.0;
 
@@ -175,6 +183,7 @@ fn wide_card(card: &MemoryCard, p: &colors::Palette) -> Element<'static, Message
         .on_press(Message::OpenMemory(id_clone))
         .style(move |_t: &iced::Theme, s| button::Style {
             background: Some(match s {
+                _ if is_highlighted => bg_hover.into(),
                 button::Status::Hovered => bg_hover.into(),
                 _ => bg.into(),
             }),
@@ -205,6 +214,16 @@ pub fn memory_detail_view(
         .on_press(Message::CloseMemoryDetail)
         .padding(Padding::from([8, 14]));
 
+    let open_timeline_btn: Element<'static, Message> = if total > 0 {
+        let photo_id = photos[current_index.min(total - 1)].id;
+        button(text("Open in Timeline").size(12).color(p.text_secondary))
+            .on_press(Message::OpenMemoryPhotoInTimeline(photo_id))
+            .padding(Padding::from([6, 12]))
+            .into()
+    } else {
+        Space::with_width(Length::Shrink).into()
+    };
+
     let counter_text = if total == 0 {
         "0 / 0".to_string()
     } else {
@@ -219,6 +238,8 @@ pub fn memory_detail_view(
             Space::with_height(2),
             text(counter_text).size(12).color(p.text_secondary),
         ],
+        Space::with_width(Length::Fill),
+        open_timeline_btn,
     ]
     .align_y(Alignment::Center)
     .padding(Padding::from([16, 24]));
@@ -249,8 +270,10 @@ pub fn memory_detail_view(
 
     let hero: Element<'static, Message> = match abs_path {
         Some(path) => container(
-            iced_image(path)
-                .content_fit(ContentFit::Contain)
+            iced::widget::image::viewer(iced::widget::image::Handle::from_path(path))
+                .min_scale(1.0)
+                .max_scale(10.0)
+                .scale_step(0.15)
                 .width(Length::Fill)
                 .height(Length::Fill),
         )

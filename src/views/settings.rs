@@ -4,6 +4,7 @@ use iced::widget::{button, column, container, row, slider, text, text_input, tog
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::tooltip::with_tooltip;
 use crate::config::{AppConfig, AppTheme, DateFormat};
 use crate::theme::colors;
 
@@ -164,21 +165,25 @@ impl SettingsView {
                     .size(12)
                     .color(text_primary),
                 Space::with_width(Length::Fill),
-                button(text("Clear cache").size(12).color(text_primary_btn))
-                    .padding(Padding::from([6, 10]))
-                    .style(move |_theme, status| button::Style {
-                        background: Some(match status {
-                            button::Status::Hovered => bg_hover.into(),
-                            _ => bg_elevated.into(),
-                        }),
-                        border: iced::Border {
-                            color: border_subtle,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    })
-                    .on_press(Message::ClearMapCache),
+                with_tooltip(
+                    button(text("Clear cache").size(12).color(text_primary_btn))
+                        .padding(Padding::from([6, 10]))
+                        .style(move |_theme, status| button::Style {
+                            background: Some(match status {
+                                button::Status::Hovered => bg_hover.into(),
+                                _ => bg_elevated.into(),
+                            }),
+                            border: iced::Border {
+                                color: border_subtle,
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::ClearMapCache)
+                        .into(),
+                    "Clear all cached map tiles",
+                ),
             ]
             .align_y(Alignment::Center),
             Space::with_height(8),
@@ -377,6 +382,8 @@ impl SettingsView {
                     Message::RegenerateThumbnails
                 ),
                 Space::with_width(16),
+                Self::action_button(theme, "Refresh Photo Dates", Message::RefreshPhotoDates,),
+                Space::with_width(16),
                 geocode_button,
                 Space::with_width(16),
                 rotated_button,
@@ -396,25 +403,28 @@ impl SettingsView {
         let bg_hover = p.bg_hover;
         let border_subtle = p.border_subtle;
 
-        button(text(label.to_string()).size(14).color(text_primary))
-            .padding(Padding::from([10, 18]))
-            .style(move |_theme, status| {
-                let background = match status {
-                    button::Status::Hovered => Some(bg_hover.into()),
-                    _ => Some(bg_elevated.into()),
-                };
-                button::Style {
-                    background,
-                    border: iced::Border {
-                        color: border_subtle,
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(on_press)
-            .into()
+        with_tooltip(
+            button(text(label.to_string()).size(14).color(text_primary))
+                .padding(Padding::from([10, 18]))
+                .style(move |_theme, status| {
+                    let background = match status {
+                        button::Status::Hovered => Some(bg_hover.into()),
+                        _ => Some(bg_elevated.into()),
+                    };
+                    button::Style {
+                        background,
+                        border: iced::Border {
+                            color: border_subtle,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .on_press(on_press)
+                .into(),
+            label.to_string(),
+        )
     }
 
     fn setting_row(

@@ -21,6 +21,29 @@ pub struct DetectedSuggestion {
     pub fingerprint: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct SuggestionDiagnostics {
+    pub total_photos_with_date: i64,
+    pub photos_with_city: i64,
+    pub home_city: Option<String>,
+    pub trip_rows: usize,
+    pub trip_gate_duration_rejected: usize,
+    pub trip_gate_photo_count_rejected: usize,
+    pub trip_gate_rarity_rejected: usize,
+    pub trip_gate_home_distance_rejected: usize,
+    pub trip_gate_album_overlap_rejected: usize,
+    pub trip_candidates_passed: usize,
+    pub event_windows: usize,
+    pub event_gate_photo_count_rejected: usize,
+    pub event_gate_trip_overlap_rejected: usize,
+    pub event_gate_signal_rejected: usize,
+    pub event_gate_album_overlap_rejected: usize,
+    pub event_candidates_passed: usize,
+    pub persisted_new: usize,
+    pub skipped_existing_fingerprint: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -418,14 +441,22 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
     let parsed: Vec<EventPhoto> = rows
         .into_iter()
         .filter_map(|(id, dt, city, cluster)| {
-            let ts = chrono::NaiveDateTime::parse_from_str(&dt, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|ndt| ndt.and_utc().timestamp())
-                .or_else(|| {
-                    NaiveDate::parse_from_str(&dt[..10], "%Y-%m-%d")
-                        .ok()
-                        .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
-                })?;
+            let normalized = if dt.contains('T') {
+                dt.replace('T', " ")
+            } else {
+                dt.clone()
+            };
+            let ts = chrono::NaiveDateTime::parse_from_str(
+                &normalized[..normalized.len().min(19)],
+                "%Y-%m-%d %H:%M:%S",
+            )
+            .ok()
+            .map(|ndt| ndt.and_utc().timestamp())
+            .or_else(|| {
+                NaiveDate::parse_from_str(&normalized[..10], "%Y-%m-%d")
+                    .ok()
+                    .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
+            })?;
             Some(EventPhoto {
                 id,
                 ts,
@@ -531,10 +562,35 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 /// Run the full suggestion detection pipeline: trips then events.
 /// Newly detected suggestions that don't match existing fingerprints are
 /// persisted to the database.
+#[allow(dead_code)]
 pub fn detect_suggestions(
     conn: &Connection,
     home_city_override: Option<&str>,
 ) -> Vec<DetectedSuggestion> {
+    detect_suggestions_with_diagnostics(conn, home_city_override).0
+}
+
+pub fn detect_suggestions_with_diagnostics(
+    conn: &Connection,
+    home_city_override: Option<&str>,
+) -> (Vec<DetectedSuggestion>, SuggestionDiagnostics) {
+    let mut diag = SuggestionDiagnostics::default();
+
+    diag.total_photos_with_date = conn
+        .query_row(
+            "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    diag.photos_with_city = conn
+        .query_row(
+            "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND location_city IS NOT NULL AND location_city != ''",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
     let repo = AlbumSuggestionRepo::new(conn);
     let existing_fps: HashSet<String> = repo
         .get_all_fingerprints()
@@ -542,8 +598,116 @@ pub fn detect_suggestions(
         .into_iter()
         .collect();
 
+    if diag.total_photos_with_date < 20 {
+        tracing::info!(
+            "suggestions: insufficient dated photos ({})",
+            diag.total_photos_with_date
+        );
+        return (Vec::new(), diag);
+    }
+
     let home = detect_home_city(conn, home_city_override);
+    diag.home_city = home.as_ref().map(|h| h.0.clone());
     let trips = detect_trips(conn, home.as_ref());
+    diag.trip_candidates_passed = trips.len();
+
+    // Coarse gate diagnostics for trips.
+    {
+        let mut stmt = conn
+            .prepare(
+                r#"SELECT p.id, p.location_city, p.date_taken
+                   FROM photos p
+                   WHERE p.location_city IS NOT NULL
+                     AND p.date_taken IS NOT NULL
+                     AND p.is_trashed = FALSE
+                   ORDER BY p.location_city, p.date_taken"#,
+            )
+            .ok();
+        if let Some(ref mut stmt) = stmt {
+            let rows: Vec<(i64, String, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default();
+            diag.trip_rows = rows.len();
+
+            let total_weeks: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT strftime('%Y-%W', date_taken)) FROM photos WHERE date_taken IS NOT NULL AND is_trashed = FALSE",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(1)
+                .max(1);
+            let city_weeks: HashMap<String, i64> = {
+                let mut stmt = conn
+                    .prepare(
+                        r#"SELECT location_city, COUNT(DISTINCT strftime('%Y-%W', date_taken))
+                           FROM photos
+                           WHERE location_city IS NOT NULL AND date_taken IS NOT NULL AND is_trashed = FALSE
+                           GROUP BY location_city"#,
+                    )
+                    .unwrap();
+                stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default()
+            };
+
+            let mut spans: Vec<(String, NaiveDate, NaiveDate, usize)> = Vec::new();
+            let mut city = String::new();
+            let mut dates: Vec<NaiveDate> = Vec::new();
+            let mut flush = |city: &str, dates: &mut Vec<NaiveDate>| {
+                if city.is_empty() || dates.is_empty() {
+                    dates.clear();
+                    return;
+                }
+                dates.sort();
+                let mut start = dates[0];
+                let mut end = dates[0];
+                let mut count = 1usize;
+                for d in dates.iter().skip(1).copied() {
+                    if (d - end).num_days() > 3 {
+                        spans.push((city.to_string(), start, end, count));
+                        start = d;
+                        count = 0;
+                    }
+                    end = d;
+                    count += 1;
+                }
+                spans.push((city.to_string(), start, end, count));
+                dates.clear();
+            };
+            for (_, c, ds) in rows {
+                let Ok(d) = NaiveDate::parse_from_str(&ds[..10], "%Y-%m-%d") else {
+                    continue;
+                };
+                if c != city {
+                    flush(&city, &mut dates);
+                    city = c;
+                }
+                dates.push(d);
+            }
+            flush(&city, &mut dates);
+
+            for (city, start, end, count) in spans {
+                let duration_days = (end - start).num_days() + 1;
+                if duration_days < 2 {
+                    diag.trip_gate_duration_rejected += 1;
+                    continue;
+                }
+                if count < 8 {
+                    diag.trip_gate_photo_count_rejected += 1;
+                    continue;
+                }
+                let cw = city_weeks.get(&city).copied().unwrap_or(0);
+                if cw as f64 / total_weeks as f64 >= 0.10 {
+                    diag.trip_gate_rarity_rejected += 1;
+                    continue;
+                }
+            }
+        }
+    }
 
     // Collect all trip photo IDs for the event filter gate
     let trip_photo_ids: HashSet<i64> = trips
@@ -552,6 +716,7 @@ pub fn detect_suggestions(
         .collect();
 
     let events = detect_events(conn, &trip_photo_ids);
+    diag.event_candidates_passed = events.len();
 
     let mut all: Vec<DetectedSuggestion> = Vec::new();
     all.extend(trips);
@@ -561,6 +726,7 @@ pub fn detect_suggestions(
     let mut persisted = Vec::new();
     for s in all {
         if existing_fps.contains(&s.fingerprint) {
+            diag.skipped_existing_fingerprint += 1;
             continue;
         }
         match repo.insert(
@@ -573,6 +739,7 @@ pub fn detect_suggestions(
             Ok(_id) => {
                 tracing::info!("New {} suggestion: {}", s.kind, s.title);
                 persisted.push(s);
+                diag.persisted_new += 1;
             }
             Err(e) => {
                 tracing::warn!("Failed to insert suggestion: {}", e);
@@ -583,5 +750,16 @@ pub fn detect_suggestions(
     // Cleanup old non-pending records (> 180 days)
     let _ = repo.cleanup_old(180);
 
-    persisted
+    tracing::info!(
+        "suggestions diagnostics: dated={}, with_city={}, home_city={:?}, trip_passed={}, event_passed={}, persisted={}, skipped_fp={}",
+        diag.total_photos_with_date,
+        diag.photos_with_city,
+        diag.home_city,
+        diag.trip_candidates_passed,
+        diag.event_candidates_passed,
+        diag.persisted_new,
+        diag.skipped_existing_fingerprint
+    );
+
+    (persisted, diag)
 }

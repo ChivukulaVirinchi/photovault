@@ -1,12 +1,15 @@
 //! Application views
 
 pub mod albums;
+pub mod albums_banner;
+pub mod albums_picker;
 pub mod bursts;
 pub mod cull;
 pub mod documents;
 pub mod duplicates;
 pub mod face_review;
 pub mod insights;
+pub mod insights_sections;
 pub mod map;
 pub mod memories;
 pub mod people;

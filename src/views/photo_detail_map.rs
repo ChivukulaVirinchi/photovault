@@ -44,7 +44,7 @@ pub fn photo_mini_map(app: &PhotoVault, photo: &Photo) -> Option<Element<'static
         .current_photo_location
         .clone()
         .or_else(|| photo.location_string())
-        .unwrap_or_else(|| format!("{:.4}, {:.4}", lat, lng));
+        .unwrap_or_else(|| "Resolving location...".to_string());
 
     let border = p.border_subtle;
     let bg = p.bg_elevated;

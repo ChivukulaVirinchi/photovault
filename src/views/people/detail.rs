@@ -103,6 +103,7 @@ pub fn view_cluster_detail(
     let name_element: Element<'static, Message> = if editing {
         let edit_name_owned = edit_name.to_string();
         row![text_input("Enter name...", &edit_name_owned)
+            .id(text_input::Id::new(format!("cluster-edit-{}", cluster_id)))
             .on_input(move |s| Message::EditClusterName(cluster_id, s))
             .on_submit(Message::SaveClusterName(cluster_id))
             .size(22)

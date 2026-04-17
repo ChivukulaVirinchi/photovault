@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Element, Length, Padding};
 
 use crate::app::{Message, View};
+use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::theme::colors;
 
@@ -42,6 +43,8 @@ impl Sidebar {
             ..Default::default()
         })
         .on_press(Message::ToggleSidebar);
+
+        let collapse_btn = with_tooltip(collapse_btn.into(), "Collapse sidebar");
 
         let brand = container(
             row![
@@ -163,11 +166,31 @@ impl Sidebar {
         ))
         .padding(Padding::from([0, 8]));
 
+        let change_library = {
+            let tc = p.text_tertiary;
+            let hover = p.bg_hover;
+            button(text("Change Library").size(12).color(tc))
+                .padding(Padding::from([6, 10]))
+                .style(move |_theme: &iced::Theme, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered => Some(hover.into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::BackToWelcome)
+        };
+
         let content = column![
             brand,
             nav_items,
             Space::with_height(Length::Fill),
             settings,
+            container(change_library).padding(Padding::from([8, 14])),
             Space::with_height(16),
         ];
 
