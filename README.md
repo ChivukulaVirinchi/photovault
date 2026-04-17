@@ -44,15 +44,18 @@ Your photos are personal. PhotoVault keeps them that way.
 ### Linux
 - **AppImage** (universal): [Download](https://github.com/ChivukulaVirinchi/photovault/releases/latest) -> `chmod +x` -> run
 - **Debian/Ubuntu**: `.deb` package available on the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
-- **Fedora/RHEL**: `.rpm` package available on the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+
+### Linux notes
+- `.rpm` is not produced by the current CI workflow yet.
 
 ### Windows
-- Download the **.msi installer** (recommended) or **portable .zip** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- Download the **portable .zip** from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- `.msi` installer support is planned in a future release workflow update.
 - Windows SmartScreen may warn -- click "More info" -> "Run anyway"
   (No code-signing certificate yet)
 
 ### macOS
-- Download the macOS package from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- Download the macOS archive from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
 - macOS Gatekeeper may warn -- right-click -> "Open" -> "Open anyway"
   (No Apple Developer ID yet)
 
