@@ -1,11 +1,11 @@
-name: Build docs
+name: Deploy website
 
 on:
   push:
     branches: [master, main]
     paths:
-      - 'docs/**'
-      - 'book.toml'
+      - 'website/**'
+      - '.github/workflows/docs.yml'
 
 permissions:
   contents: read
@@ -18,16 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - name: Install mdBook
-        run: |
-          mkdir -p ~/bin
-          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
-          echo "$HOME/bin" >> $GITHUB_PATH
-      - name: Build book
-        run: mdbook build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: book
+          path: website
 
   deploy:
     needs: build

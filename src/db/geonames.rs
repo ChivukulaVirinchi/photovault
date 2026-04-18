@@ -10,6 +10,13 @@ use rusqlite::Connection;
 /// Resolve GeoNames DB path.
 /// Searches: next to executable, then CWD, then project root.
 pub fn geonames_db_path() -> PathBuf {
+    let installed = crate::bootstrap::default_asset_install_dir()
+        .join("data")
+        .join("geonames.db");
+    if installed.exists() {
+        return installed;
+    }
+
     if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
         let p = PathBuf::from(from_env).join("data").join("geonames.db");
         if p.exists() {

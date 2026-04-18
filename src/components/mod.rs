@@ -1,5 +1,6 @@
 //! Reusable UI components
 
+pub mod asset_prompt;
 pub mod confirm;
 pub mod drive_picker;
 pub mod map_widget;

@@ -1,4 +1,6 @@
 /target
+/target-win
+/artifacts/
 
 # ONNX Runtime shared library (~22MB, downloaded separately)
 /libs/

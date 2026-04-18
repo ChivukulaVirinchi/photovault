@@ -14,14 +14,58 @@ use crate::views::{
 use super::messages::Message;
 use super::state::{PhotoVault, View};
 
+fn apply_global_overlays<'a>(
+    base: Element<'a, Message>,
+    app: &'a PhotoVault,
+) -> Element<'a, Message> {
+    let base = if app.show_asset_install_prompt && app.asset_health.missing_any() {
+        let overlay = crate::components::asset_prompt::overlay(
+            &app.asset_health,
+            app.asset_install_in_progress,
+            app.asset_install_error.as_deref(),
+            app.config.theme,
+        );
+        iced::widget::stack![base, overlay].into()
+    } else {
+        base
+    };
+
+    let base = if let Some(ref pending) = app.pending_confirmation {
+        let overlay = crate::components::confirm::overlay(pending, app.config.theme);
+        iced::widget::stack![base, overlay].into()
+    } else {
+        base
+    };
+
+    let base = if app.shortcuts_overlay_open {
+        let overlay = crate::views::shortcuts::overlay(&app.current_view, app.config.theme);
+        iced::widget::stack![base, overlay].into()
+    } else {
+        base
+    };
+
+    if !app.toasts.is_empty() {
+        let toast_overlay = crate::components::toast::toast_stack(&app.toasts, app.config.theme);
+        iced::widget::stack![base, toast_overlay].into()
+    } else {
+        base
+    }
+}
+
 /// Render the application
 pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
     // Show scanning progress if scanning
     if app.current_view == View::Scanning {
         if let Some(ref state) = app.scan_state {
-            return ScanProgressView::view(&state.progress, app.config.theme);
+            return apply_global_overlays(
+                ScanProgressView::view(&state.progress, app.config.theme),
+                app,
+            );
         } else {
-            return ScanProgressView::view(&ScanProgress::default(), app.config.theme);
+            return apply_global_overlays(
+                ScanProgressView::view(&ScanProgress::default(), app.config.theme),
+                app,
+            );
         }
     }
 
@@ -73,19 +117,22 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                             &app.album_picker_new_name,
                             app.config.theme,
                         );
-                        return iced::widget::stack![detail, overlay].into();
+                        return apply_global_overlays(
+                            iced::widget::stack![detail, overlay].into(),
+                            app,
+                        );
                     }
-                    return detail;
+                    return apply_global_overlays(detail, app);
                 }
             }
         }
         // Fallback: shouldn't happen, but return to timeline
-        return TimelineView::view(app.config.theme);
+        return apply_global_overlays(TimelineView::view(app.config.theme), app);
     }
 
     // If no drive selected, show welcome screen
     if app.selected_drive.is_none() {
-        return WelcomeView::view(&app.drives, app.config.theme);
+        return apply_global_overlays(WelcomeView::view(&app.drives, app.config.theme), app);
     }
 
     // Main layout: sidebar (collapsible) + content
@@ -734,28 +781,5 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             .into()
     };
 
-    // Layer overlays above the main layout.
-    // Confirmation dialog (blocks everything behind it)
-    let base = if let Some(ref pending) = app.pending_confirmation {
-        let overlay = crate::components::confirm::overlay(pending, app.config.theme);
-        iced::widget::stack![base, overlay].into()
-    } else {
-        base
-    };
-
-    // Shortcuts overlay (`?` key)
-    let base = if app.shortcuts_overlay_open {
-        let overlay = crate::views::shortcuts::overlay(&app.current_view, app.config.theme);
-        iced::widget::stack![base, overlay].into()
-    } else {
-        base
-    };
-
-    // Toasts (topmost)
-    if !app.toasts.is_empty() {
-        let toast_overlay = crate::components::toast::toast_stack(&app.toasts, app.config.theme);
-        iced::widget::stack![base, toast_overlay].into()
-    } else {
-        base
-    }
+    apply_global_overlays(base, app)
 }

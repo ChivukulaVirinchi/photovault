@@ -504,6 +504,14 @@ pub enum Message {
     ConfirmPending,
     /// Cancel the currently-pending action.
     CancelPending,
+
+    // --- Asset pack installer ---
+    /// Trigger one-click installation of optional assets.
+    InstallAssetPack,
+    /// Async installer completion callback.
+    AssetPackInstalled(Result<String, String>),
+    /// Dismiss startup installer prompt for this run.
+    DismissAssetInstallPrompt,
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

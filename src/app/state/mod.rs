@@ -339,6 +339,18 @@ pub struct PhotoVault {
     /// Whether ML models are available (checked once at startup)
     pub(crate) ml_available: bool,
 
+    /// Optional asset-pack health status (runtime/model/geonames)
+    pub(crate) asset_health: crate::bootstrap::AssetHealth,
+
+    /// Whether startup asset install prompt should be shown for this run.
+    pub(crate) show_asset_install_prompt: bool,
+
+    /// True while one-click asset installation is in progress.
+    pub(crate) asset_install_in_progress: bool,
+
+    /// Latest asset installer error (shown in startup prompt).
+    pub(crate) asset_install_error: Option<String>,
+
     /// People detected in the currently viewed photo: (cluster_id, display_name).
     pub(crate) current_photo_people: Vec<(i64, String)>,
 
@@ -573,6 +585,7 @@ impl PhotoVault {
     /// Create new application instance
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load();
+        let asset_health = crate::bootstrap::asset_health();
         let app = Self {
             current_view: View::Welcome,
             drives: Vec::new(),
@@ -662,7 +675,11 @@ impl PhotoVault {
             rotated_data_regen_active: false,
             // Phase 8: Production readiness
             face_cancel_flag: None,
-            ml_available: crate::bootstrap::has_face_models(),
+            ml_available: !asset_health.missing_face_models && !asset_health.missing_onnx_runtime,
+            asset_health: asset_health.clone(),
+            show_asset_install_prompt: asset_health.missing_any(),
+            asset_install_in_progress: false,
+            asset_install_error: None,
             current_photo_people: Vec::new(),
             current_photo_face_count: 0,
             current_photo_location: None,

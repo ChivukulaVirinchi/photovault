@@ -2,6 +2,8 @@
 //!
 //! A desktop application for organizing and browsing photos from external drives.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 mod bootstrap;
 mod components;
@@ -77,7 +79,7 @@ fn main() -> iced::Result {
         );
     }
 
-    if !std::path::Path::new("libs/onnxruntime").exists() {
+    if !crate::bootstrap::onnx_runtime_exists() {
         tracing::warn!(
             "ONNX Runtime missing under libs/onnxruntime. Run {}",
             crate::bootstrap::SETUP_ASSETS_HINT

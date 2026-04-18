@@ -21,9 +21,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
-          - target: x86_64-apple-darwin
-            os: macos-13
-            archive: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -39,15 +36,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
 
-      - name: Download ML models + GeoNames data
-        if: matrix.os != 'windows-latest'
-        shell: bash
-        run: ./scripts/setup_assets.sh
-
-      - name: Download ML models + GeoNames data (Windows)
-        if: matrix.os == 'windows-latest'
-        run: powershell -ExecutionPolicy Bypass -File scripts/setup_assets.ps1
-
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -60,9 +48,6 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/photovault staging/photovault/
           fi
-          cp -r libs staging/photovault/
-          cp -r models staging/photovault/
-          cp -r data staging/photovault/
           cp README.md LICENSE staging/photovault/
           cp scripts/setup_assets.sh scripts/setup_assets.ps1 staging/photovault/scripts/ 2>/dev/null || true
 
@@ -105,9 +90,6 @@ jobs:
           mkdir -p PhotoVault.AppDir/usr/share/applications
           mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
           cp photovault/photovault PhotoVault.AppDir/usr/bin/
-          cp -r photovault/libs PhotoVault.AppDir/usr/lib/photovault/
-          cp -r photovault/models PhotoVault.AppDir/usr/lib/photovault/
-          cp -r photovault/data PhotoVault.AppDir/usr/lib/photovault/
           cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
           cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
           cp packaging/photovault.desktop PhotoVault.AppDir/
@@ -115,12 +97,13 @@ jobs:
           cat > PhotoVault.AppDir/AppRun <<'EOF'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
-          export PHOTOVAULT_ASSET_DIR="${HERE}/usr/lib/photovault"
           cd "${HERE}/usr/bin"
-          export LD_LIBRARY_PATH="${HERE}/usr/lib/photovault/libs/onnxruntime:$LD_LIBRARY_PATH"
           exec "${HERE}/usr/bin/photovault" "$@"
           EOF
           chmod +x PhotoVault.AppDir/AppRun
+      - name: Ensure app icon path for AppImage metadata
+        run: |
+          cp packaging/photovault.png PhotoVault.AppDir/PhotoVault.png
       - name: Build AppImage
         run: ./appimagetool-x86_64.AppImage PhotoVault.AppDir PhotoVault-x86_64.AppImage
       - uses: actions/upload-artifact@v4
@@ -141,9 +124,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
-      - name: Download ML models + GeoNames data
-        shell: bash
-        run: ./scripts/setup_assets.sh
       - name: Build deb
         run: cargo deb
       - name: Normalize DEB artifact name
@@ -168,8 +148,6 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
-      - name: Download ML models + GeoNames data
-        run: powershell -ExecutionPolicy Bypass -File scripts/setup_assets.ps1
       - name: Ensure WiX toolset is available
         shell: pwsh
         run: |
@@ -194,9 +172,59 @@ jobs:
           name: photovault-msi
           path: target/wix/PhotoVault-Setup-x64.msi
 
+  assets-pack:
+    name: Build optional assets pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config zip unzip
+      - name: Download ML models + GeoNames data + Linux ORT
+        shell: bash
+        run: ./scripts/setup_assets.sh
+      - name: Download Windows ORT DLL
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          curl -fL --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 20 \
+            -o "$tmpdir/ort-win.zip" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip"
+          unzip -q "$tmpdir/ort-win.zip" -d "$tmpdir"
+          dll=$(find "$tmpdir" -type f -name onnxruntime.dll | head -n 1)
+          test -n "$dll"
+          mkdir -p assets-pack/libs/onnxruntime
+          cp "$dll" assets-pack/libs/onnxruntime/onnxruntime.dll
+          rm -rf "$tmpdir"
+      - name: Stage shared asset files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets-pack/libs/onnxruntime
+          mkdir -p assets-pack/models
+          mkdir -p assets-pack/data
+          cp libs/onnxruntime/libonnxruntime.so* assets-pack/libs/onnxruntime/
+          cp models/scrfd_10g_bnkps.onnx assets-pack/models/
+          cp models/glintr100.onnx assets-pack/models/
+          cp data/geonames.db assets-pack/data/
+      - name: Build asset pack archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd assets-pack
+          zip -r ../PhotoVault-Assets.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photovault-assets
+          path: PhotoVault-Assets.zip
+
   smoke-deb:
     name: Smoke test .deb installer
-    needs: deb
+    needs: [deb, assets-pack]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -214,8 +242,6 @@ jobs:
           deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
           test -n "$deb_file"
           dpkg-deb -c "$deb_file" | grep -q "./usr/bin/photovault"
-          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/models/"
-          dpkg-deb -c "$deb_file" | grep -q "./usr/lib/photovault/data/geonames.db"
       - name: Install .deb
         shell: bash
         run: |
@@ -223,6 +249,24 @@ jobs:
           deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
           sudo dpkg -i "$deb_file"
           sudo apt-get -f install -y
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-assets
+          path: artifacts/assets
+      - name: Install optional assets pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/share/photovault/assets"
+          unzip -q artifacts/assets/PhotoVault-Assets.zip -d "$HOME/.local/share/photovault/assets"
+      - name: Verify optional assets extracted
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$HOME/.local/share/photovault/assets/models/scrfd_10g_bnkps.onnx"
+          test -f "$HOME/.local/share/photovault/assets/models/glintr100.onnx"
+          test -f "$HOME/.local/share/photovault/assets/data/geonames.db"
+          test -f "$HOME/.local/share/photovault/assets/libs/onnxruntime/libonnxruntime.so" || ls "$HOME/.local/share/photovault/assets/libs/onnxruntime"/libonnxruntime.so* >/dev/null
       - name: Launch smoke test
         shell: bash
         run: |
@@ -238,7 +282,7 @@ jobs:
 
   smoke-appimage:
     name: Smoke test AppImage
-    needs: appimage
+    needs: [appimage, assets-pack]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -258,8 +302,24 @@ jobs:
           chmod +x "$appimage"
           "$appimage" --appimage-extract >/dev/null
           test -f squashfs-root/usr/bin/photovault
-          test -d squashfs-root/usr/lib/photovault/models
-          test -f squashfs-root/usr/lib/photovault/data/geonames.db
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-assets
+          path: artifacts/assets
+      - name: Install optional assets pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/share/photovault/assets"
+          unzip -q artifacts/assets/PhotoVault-Assets.zip -d "$HOME/.local/share/photovault/assets"
+      - name: Verify optional assets extracted
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$HOME/.local/share/photovault/assets/models/scrfd_10g_bnkps.onnx"
+          test -f "$HOME/.local/share/photovault/assets/models/glintr100.onnx"
+          test -f "$HOME/.local/share/photovault/assets/data/geonames.db"
+          test -f "$HOME/.local/share/photovault/assets/libs/onnxruntime/libonnxruntime.so" || ls "$HOME/.local/share/photovault/assets/libs/onnxruntime"/libonnxruntime.so* >/dev/null
       - name: Launch smoke test
         shell: bash
         run: |
@@ -277,7 +337,7 @@ jobs:
 
   smoke-msi:
     name: Smoke test MSI installer
-    needs: msi
+    needs: [msi, assets-pack]
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -291,6 +351,16 @@ jobs:
           if (-not $msi) {
             throw "PhotoVault-Setup-x64.msi not found"
           }
+      - uses: actions/download-artifact@v4
+        with:
+          name: photovault-assets
+          path: artifacts/assets
+      - name: Install optional assets pack
+        shell: pwsh
+        run: |
+          $assetDir = Join-Path $env:APPDATA "photovault\assets"
+          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          Expand-Archive -Path "artifacts/assets/PhotoVault-Assets.zip" -DestinationPath $assetDir -Force
       - name: Install MSI silently
         shell: pwsh
         run: |
@@ -304,15 +374,26 @@ jobs:
         run: |
           $installDir = Join-Path $env:ProgramFiles "PhotoVault"
           $required = @(
-            (Join-Path $installDir "photovault.exe"),
-            (Join-Path $installDir "libs\onnxruntime\onnxruntime.dll"),
-            (Join-Path $installDir "models\scrfd_10g_bnkps.onnx"),
-            (Join-Path $installDir "models\glintr100.onnx"),
-            (Join-Path $installDir "data\geonames.db")
+            (Join-Path $installDir "photovault.exe")
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) {
               throw "Missing installed file: $path"
+            }
+          }
+      - name: Verify optional assets extracted
+        shell: pwsh
+        run: |
+          $assetRoot = Join-Path $env:APPDATA "photovault\assets"
+          $required = @(
+            (Join-Path $assetRoot "models\scrfd_10g_bnkps.onnx"),
+            (Join-Path $assetRoot "models\glintr100.onnx"),
+            (Join-Path $assetRoot "data\geonames.db"),
+            (Join-Path $assetRoot "libs\onnxruntime\onnxruntime.dll")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing optional asset file: $path"
             }
           }
       - name: Verify Start Menu shortcut and uninstall entry
@@ -383,10 +464,17 @@ jobs:
               throw "Install directory still has files after uninstall: $installDir"
             }
           }
+      - name: Verify optional assets persist after uninstall
+        shell: pwsh
+        run: |
+          $assetRoot = Join-Path $env:APPDATA "photovault\assets"
+          if (-not (Test-Path $assetRoot)) {
+            throw "Optional assets unexpectedly missing after app uninstall"
+          }
 
   checksums:
     name: Release checksums
-    needs: [build, appimage, deb, msi, smoke-appimage, smoke-deb, smoke-msi]
+    needs: [build, appimage, deb, msi, assets-pack, smoke-appimage, smoke-deb, smoke-msi]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -401,11 +489,19 @@ jobs:
           deb=$(find . -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
           msi=$(find . -name "PhotoVault-Setup-x64.msi" | head -n 1)
           win_zip=$(find . -name "photovault-x86_64-pc-windows-msvc.zip" | head -n 1)
+          assets=$(find . -name "PhotoVault-Assets.zip" | head -n 1)
           : > SHA256SUMS
           sha256sum "$appimage" >> SHA256SUMS
           sha256sum "$deb" >> SHA256SUMS
           sha256sum "$msi" >> SHA256SUMS
           sha256sum "$win_zip" >> SHA256SUMS
+          sha256sum "$assets" >> SHA256SUMS
+      - name: Verify SHA256SUMS has expected entries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          test "$(wc -l < SHA256SUMS)" -eq 5
       - uses: actions/upload-artifact@v4
         with:
           name: photovault-checksums
@@ -413,7 +509,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, appimage, deb, msi, smoke-appimage, smoke-deb, smoke-msi, checksums]
+    needs: [build, appimage, deb, msi, assets-pack, smoke-appimage, smoke-deb, smoke-msi, checksums]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

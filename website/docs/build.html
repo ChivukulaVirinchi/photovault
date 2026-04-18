@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotoVault Docs - Build</title>
+  <link rel="stylesheet" href="./site.css" />
+</head>
+<body>
+  <header class="doc-top">
+    <a href="../index.html" class="doc-brand">PhotoVault</a>
+    <nav><a href="./getting-started.html">Docs home</a></nav>
+  </header>
+  <main class="doc-layout">
+    <aside class="doc-sidebar">
+      <a href="./getting-started.html">Getting started</a>
+      <a href="./installation.html">Installation + assets</a>
+      <a class="active" href="./build.html">Build from source</a>
+      <a href="./architecture.html">Architecture</a>
+      <a href="./troubleshooting.html">Troubleshooting</a>
+      <a href="./releases.html">Release process</a>
+    </aside>
+    <article class="doc-content">
+      <h1>Build from Source</h1>
+      <pre><code>git clone https://github.com/ChivukulaVirinchi/photovault.git
+cd photovault
+cargo build --release
+</code></pre>
+      <h2>Optional assets for local ML/geocoding</h2>
+      <pre><code>./scripts/setup_assets.sh
+</code></pre>
+      <p>Windows PowerShell:</p>
+      <pre><code>powershell -ExecutionPolicy Bypass -File scripts\setup_assets.ps1
+</code></pre>
+    </article>
+  </main>
+</body>
+</html>

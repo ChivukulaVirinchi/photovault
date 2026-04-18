@@ -6,6 +6,7 @@ use super::messages::Message;
 use super::state::PhotoVault;
 
 mod albums;
+mod assets;
 mod bursts;
 mod confirm;
 mod documents;
@@ -330,5 +331,10 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::RequestConfirmation(c) => confirm::request(app, c),
         Message::ConfirmPending => confirm::confirm(app),
         Message::CancelPending => confirm::cancel(app),
+
+        // --- Asset installer ---
+        Message::InstallAssetPack => assets::install_asset_pack(app),
+        Message::AssetPackInstalled(result) => assets::asset_pack_installed(app, result),
+        Message::DismissAssetInstallPrompt => assets::dismiss_asset_install_prompt(app),
     }
 }

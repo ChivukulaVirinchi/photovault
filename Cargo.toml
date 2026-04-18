@@ -30,6 +30,7 @@ rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -127,9 +128,6 @@ section = "graphics"
 priority = "optional"
 assets = [
     ["target/release/photovault", "usr/bin/", "755"],
-    ["libs/onnxruntime/libonnxruntime.so*", "usr/lib/photovault/libs/onnxruntime/", "644"],
-    ["models/*.onnx", "usr/lib/photovault/models/", "644"],
-    ["data/geonames.db", "usr/lib/photovault/data/", "644"],
     ["packaging/photovault.desktop", "usr/share/applications/", "644"],
     ["packaging/photovault.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
     ["README.md", "usr/share/doc/photovault/README", "644"],
@@ -147,7 +145,7 @@ long_description = """
 PhotoVault organizes your photos locally, with face recognition,
 smart albums, and full-text search -- without uploading anything.
 """
-resources = ["libs", "models", "data"]
+resources = []
 osx_minimum_system_version = "10.13"
 
 [dev-dependencies]

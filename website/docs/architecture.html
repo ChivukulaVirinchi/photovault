@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotoVault Docs - Architecture</title>
+  <link rel="stylesheet" href="./site.css" />
+</head>
+<body>
+  <header class="doc-top">
+    <a href="../index.html" class="doc-brand">PhotoVault</a>
+    <nav><a href="./getting-started.html">Docs home</a></nav>
+  </header>
+  <main class="doc-layout">
+    <aside class="doc-sidebar">
+      <a href="./getting-started.html">Getting started</a>
+      <a href="./installation.html">Installation + assets</a>
+      <a href="./build.html">Build from source</a>
+      <a class="active" href="./architecture.html">Architecture</a>
+      <a href="./troubleshooting.html">Troubleshooting</a>
+      <a href="./releases.html">Release process</a>
+    </aside>
+    <article class="doc-content">
+      <h1>Architecture Overview</h1>
+      <ul>
+        <li><strong>UI:</strong> Rust + iced state machine.</li>
+        <li><strong>Storage:</strong> SQLite via rusqlite.</li>
+        <li><strong>ML:</strong> ONNX Runtime with optional asset pack.</li>
+        <li><strong>Search/Cleanup:</strong> local indexing, duplicates, bursts, culling workflow.</li>
+      </ul>
+      <p>The app is designed to stay useful even when optional ML/geodata assets are not installed.</p>
+    </article>
+  </main>
+</body>
+</html>

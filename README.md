@@ -36,7 +36,7 @@ Your photos are personal. PhotoVault keeps them that way.
 
 - No cloud upload. Photos stay on your drive.
 - No account required. No telemetry. No analytics.
-- Works without internet (after initial install).
+- Works without internet after optional assets are installed.
 - Database lives on the indexed drive -- fully portable.
 
 ## Install
@@ -44,6 +44,7 @@ Your photos are personal. PhotoVault keeps them that way.
 ### Linux
 - **Debian/Ubuntu installer**: [Download .deb](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb)
 - **AppImage (other distros)**: [Download AppImage](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage) -> `chmod +x` -> run
+- **Optional assets pack**: [Download PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
 
 ### Linux notes
 - `.rpm` is not produced by the current CI workflow yet.
@@ -53,11 +54,13 @@ Your photos are personal. PhotoVault keeps them that way.
 ### Windows
 - **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi)
 - **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip)
+- **Optional assets pack**: [Download PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
 - Windows SmartScreen may warn -- click "More info" -> "Run anyway"
   (No code-signing certificate yet)
 
 ### macOS
 - Download the macOS archive from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
+- Optional assets pack (for face recognition + geocoding): [PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
 - macOS Gatekeeper may warn -- right-click -> "Open" -> "Open anyway"
   (No Apple Developer ID yet)
 
@@ -66,9 +69,14 @@ Your photos are personal. PhotoVault keeps them that way.
 ```bash
 git clone https://github.com/ChivukulaVirinchi/photovault.git
 cd photovault
-./scripts/setup_assets.sh
 cargo build --release
 ./target/release/photovault
+```
+
+Optional (preinstall assets manually):
+
+```bash
+./scripts/setup_assets.sh
 ```
 
 See `docs/BUILD.md` for full setup including Windows-on-UNC workflow.
@@ -80,7 +88,18 @@ For local packaging smoke tests:
 ```bash
 ./scripts/release_local.sh ubuntu
 ./scripts/release_local.sh linux-appimage
+./scripts/release_local.sh assets-pack
+./scripts/release_local.sh verify
 ```
+
+Windows end-to-end local verification and release orchestration:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release_local.ps1 -Mode full
+powershell -ExecutionPolicy Bypass -File scripts\release_publish.ps1 -Version v0.1.0-rc3 -RunLocalChecks -Wait
+```
+
+`release_publish.ps1` intentionally stops at a **draft** GitHub release (manual publish remains your decision).
 
 Windows/macOS installers should be built on their native platforms. The official
 release flow is CI-driven from Git tags (`v*`) via `.github/workflows/release.yml`.

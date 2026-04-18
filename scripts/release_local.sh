@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 TARGET="${1:-}"
 
 if [[ -z "$TARGET" ]]; then
-  echo "Usage: scripts/release_local.sh <windows|macos|ubuntu|linux-appimage>"
+  echo "Usage: scripts/release_local.sh <windows|macos|ubuntu|linux-appimage|assets-pack|verify>"
   exit 1
 fi
 
@@ -32,22 +32,14 @@ case "$TARGET" in
       echo "wget is required to fetch appimagetool"
       exit 1
     fi
-    ./scripts/setup_assets.sh
     cargo build --release --target x86_64-unknown-linux-gnu
     rm -rf staging-local PhotoVault.AppDir appimagetool-x86_64.AppImage
     mkdir -p staging-local/photovault
     cp target/x86_64-unknown-linux-gnu/release/photovault staging-local/photovault/
-    cp -r libs staging-local/photovault/
-    cp -r models staging-local/photovault/
-    cp -r data staging-local/photovault/
     mkdir -p PhotoVault.AppDir/usr/bin
-    mkdir -p PhotoVault.AppDir/usr/lib/photovault
     mkdir -p PhotoVault.AppDir/usr/share/applications
     mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
     cp staging-local/photovault/photovault PhotoVault.AppDir/usr/bin/
-    cp -r staging-local/photovault/libs PhotoVault.AppDir/usr/lib/photovault/
-    cp -r staging-local/photovault/models PhotoVault.AppDir/usr/lib/photovault/
-    cp -r staging-local/photovault/data PhotoVault.AppDir/usr/lib/photovault/
     cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
     cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
     cp packaging/photovault.desktop PhotoVault.AppDir/
@@ -55,9 +47,7 @@ case "$TARGET" in
     cat > PhotoVault.AppDir/AppRun <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
-export PHOTOVAULT_ASSET_DIR="${HERE}/usr/lib/photovault"
 cd "${HERE}/usr/bin"
-export LD_LIBRARY_PATH="${HERE}/usr/lib/photovault/libs/onnxruntime:$LD_LIBRARY_PATH"
 exec "${HERE}/usr/bin/photovault" "$@"
 EOF
     chmod +x PhotoVault.AppDir/AppRun
@@ -65,6 +55,20 @@ EOF
     chmod +x appimagetool-x86_64.AppImage
     ./appimagetool-x86_64.AppImage PhotoVault.AppDir PhotoVault-x86_64.AppImage
     echo "Built AppImage: PhotoVault-x86_64.AppImage"
+    ;;
+  assets-pack)
+    ./scripts/setup_assets.sh
+    rm -rf assets-pack-local PhotoVault-Assets-local.zip
+    mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
+    cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ || true
+    cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
+    cp models/glintr100.onnx assets-pack-local/models/
+    cp data/geonames.db assets-pack-local/data/
+    (cd assets-pack-local && zip -r ../PhotoVault-Assets-local.zip .)
+    echo "Built optional asset pack: PhotoVault-Assets-local.zip"
+    ;;
+  verify)
+    ./scripts/verify_installers_local.sh
     ;;
   *)
     echo "Unknown target: $TARGET"

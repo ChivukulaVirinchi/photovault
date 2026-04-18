@@ -40,13 +40,7 @@
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="$(var.PlatformProgramFilesFolder)">
-        <Directory Id="INSTALLFOLDER" Name="PhotoVault">
-          <Directory Id="LIBS_FOLDER" Name="libs">
-            <Directory Id="ONNXRUNTIME_FOLDER" Name="onnxruntime" />
-          </Directory>
-          <Directory Id="MODELS_FOLDER" Name="models" />
-          <Directory Id="DATA_FOLDER" Name="data" />
-        </Directory>
+        <Directory Id="INSTALLFOLDER" Name="PhotoVault" />
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
@@ -60,43 +54,6 @@
             Id="PhotoVaultExe"
             Name="photovault.exe"
             Source="$(var.CargoTargetBinDir)\photovault.exe"
-            KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
-    <DirectoryRef Id="ONNXRUNTIME_FOLDER">
-      <Component Id="OnnxRuntimeDll" Guid="*">
-        <File
-            Id="OnnxRuntimeDllFile"
-            Name="onnxruntime.dll"
-            Source="libs\onnxruntime\onnxruntime.dll"
-            KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
-    <DirectoryRef Id="MODELS_FOLDER">
-      <Component Id="ModelScrfd" Guid="*">
-        <File
-            Id="ModelScrfdFile"
-            Name="scrfd_10g_bnkps.onnx"
-            Source="models\scrfd_10g_bnkps.onnx"
-            KeyPath="yes" />
-      </Component>
-      <Component Id="ModelGlintr" Guid="*">
-        <File
-            Id="ModelGlintrFile"
-            Name="glintr100.onnx"
-            Source="models\glintr100.onnx"
-            KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
-    <DirectoryRef Id="DATA_FOLDER">
-      <Component Id="GeoNamesDb" Guid="*">
-        <File
-            Id="GeoNamesDbFile"
-            Name="geonames.db"
-            Source="data\geonames.db"
             KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -130,17 +87,19 @@
         Display="expand"
         Absent="disallow">
       <ComponentRef Id="MainExe" />
-      <ComponentRef Id="OnnxRuntimeDll" />
-      <ComponentRef Id="ModelScrfd" />
-      <ComponentRef Id="ModelGlintr" />
-      <ComponentRef Id="GeoNamesDb" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
+    <WixVariable Id="WixUIBannerBmp" Value="packaging\wix-banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="packaging\wix-dialog.bmp" />
+    <WixVariable Id="WixUILicenseRtf" Value="packaging\wix-license.rtf" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
     <UI>
-      <UIRef Id="WixUI_Minimal" />
+      <UIRef Id="WixUI_InstallDir" />
+      <UIRef Id="WixUI_ErrorProgressText" />
     </UI>
   </Product>
 </Wix>

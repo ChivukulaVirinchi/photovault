@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotoVault Docs - Releases</title>
+  <link rel="stylesheet" href="./site.css" />
+</head>
+<body>
+  <header class="doc-top">
+    <a href="../index.html" class="doc-brand">PhotoVault</a>
+    <nav><a href="./getting-started.html">Docs home</a></nav>
+  </header>
+  <main class="doc-layout">
+    <aside class="doc-sidebar">
+      <a href="./getting-started.html">Getting started</a>
+      <a href="./installation.html">Installation + assets</a>
+      <a href="./build.html">Build from source</a>
+      <a href="./architecture.html">Architecture</a>
+      <a href="./troubleshooting.html">Troubleshooting</a>
+      <a class="active" href="./releases.html">Release process</a>
+    </aside>
+    <article class="doc-content">
+      <h1>Release Process</h1>
+      <ol>
+        <li>Run local verification scripts first.</li>
+        <li>Push code when local checks are green.</li>
+        <li>Create release tag <code>v*</code> to trigger packaging workflows.</li>
+        <li>Verify smoke-test jobs and draft release assets.</li>
+        <li>Publish release.</li>
+      </ol>
+      <p>Expected release assets now include core installers plus <code>PhotoVault-Assets.zip</code>.</p>
+    </article>
+  </main>
+</body>
+</html>

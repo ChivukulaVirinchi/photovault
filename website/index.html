@@ -1,150 +1,427 @@
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en" data-theme="auto">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PhotoVault - Your photos, organized. On your machine.</title>
-  <meta name="description" content="An offline-first desktop photo library manager. Face recognition, smart albums, full-text search -- without uploading anything." />
-
-  <meta property="og:title" content="PhotoVault - Your photos, organized" />
-  <meta property="og:description" content="Offline-first photo library manager for desktop." />
-  <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotoVault - Offline-first photo library manager</title>
+  <meta name="description" content="PhotoVault is an offline-first desktop photo library manager with local indexing, face recognition, map exploration, and smart cleanup." />
+  <meta property="og:title" content="PhotoVault" />
+  <meta property="og:description" content="Your photos, organized. On your machine." />
+  <meta property="og:image" content="./og.png" />
   <meta property="og:url" content="https://chivukulavirinchi.github.io/photovault/" />
   <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/png" href="./photovault.png" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            'pv-bg': '#111215',
-            'pv-bg-elev': '#1D2026',
-            'pv-text': '#ECEBE7',
-            'pv-text-soft': '#9FA5B0',
-            'pv-accent': '#D49E3C',
-            'pv-accent-bright': '#E6B352',
-          },
-          fontFamily: {
-            sans: ['Manrope', 'system-ui', 'sans-serif'],
-          },
-        },
-      },
-    };
-  </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/png" href="photovault.png" />
+    :root {
+      --bg: #f5f4ef;
+      --bg-elev: #ffffff;
+      --text: #1a1a17;
+      --text-muted: #5f625e;
+      --accent: #0a7c74;
+      --accent-2: #c67332;
+      --line: #ddd9cf;
+      --hero-overlay: rgba(255, 255, 255, 0.68);
+      --shadow: 0 22px 60px rgba(25, 28, 29, 0.12);
+    }
+
+    html[data-theme="dark"] {
+      --bg: #111615;
+      --bg-elev: #18201f;
+      --text: #f2f5ef;
+      --text-muted: #a4aea2;
+      --accent: #66dfd2;
+      --accent-2: #f1a970;
+      --line: #2a3534;
+      --hero-overlay: rgba(17, 22, 21, 0.7);
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Outfit", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 20% 5%, rgba(10,124,116,0.2), transparent 45%),
+                  radial-gradient(circle at 85% 8%, rgba(198,115,50,0.18), transparent 52%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    .container { width: min(1140px, calc(100% - 2.4rem)); margin: 0 auto; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(12px);
+      background: color-mix(in oklab, var(--bg), transparent 15%);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 72px;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 0 5px color-mix(in oklab, var(--accent), transparent 84%);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 1.2rem;
+      font-size: 0.94rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      padding: 0.58rem 1.1rem;
+      transition: all 0.18s ease;
+      cursor: pointer;
+      font-family: inherit;
+      background: none;
+      color: inherit;
+    }
+
+    .btn-primary {
+      background: linear-gradient(110deg, var(--accent), color-mix(in oklab, var(--accent), white 9%));
+      color: white;
+      box-shadow: 0 8px 18px color-mix(in oklab, var(--accent), transparent 66%);
+    }
+    .btn-primary:hover { transform: translateY(-1px); }
+
+    .btn-ghost { border-color: var(--line); color: var(--text-muted); }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+
+    .hero {
+      padding: 4.2rem 0 2.2rem;
+      display: grid;
+      gap: 1.6rem;
+      grid-template-columns: 1.05fr 1fr;
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0.33rem 0.72rem;
+      font-size: 0.78rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 0.95rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: "DM Serif Display", Georgia, serif;
+      font-size: clamp(2.2rem, 4.9vw, 4.5rem);
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+    }
+
+    .lead {
+      margin-top: 1rem;
+      margin-bottom: 1.4rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      font-size: clamp(1rem, 1.6vw, 1.13rem);
+      max-width: 44ch;
+    }
+
+    .hero-card {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      min-height: 320px;
+    }
+
+    .hero-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .hero-card-overlay {
+      position: absolute;
+      inset: auto 0 0 0;
+      padding: 1rem 1.1rem;
+      background: linear-gradient(180deg, transparent, var(--hero-overlay));
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 1rem;
+    }
+
+    .section { padding: 2.1rem 0; }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      align-items: stretch;
+    }
+
+    .panel {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 1.2rem;
+      box-shadow: 0 8px 20px color-mix(in oklab, var(--bg), black 8%);
+    }
+
+    .panel h2,
+    .panel h3 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .muted { color: var(--text-muted); }
+
+    .kpis {
+      margin-top: 0.9rem;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.7rem;
+    }
+    .kpi b { display: block; font-size: 1.15rem; }
+    .kpi span { color: var(--text-muted); font-size: 0.82rem; }
+
+    .download-grid {
+      margin-top: 1rem;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .download-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 0.95rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.32rem;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+      background: color-mix(in oklab, var(--bg-elev), var(--accent) 2%);
+    }
+
+    .download-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .download-card strong { font-size: 0.98rem; }
+    .download-card small { color: var(--text-muted); }
+
+    .docs-nav {
+      margin-top: 0.9rem;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.58rem;
+    }
+
+    .docs-link {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.6rem 0.72rem;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      background: color-mix(in oklab, var(--bg-elev), var(--text) 1%);
+    }
+
+    .docs-link:hover { color: var(--text); border-color: var(--accent); }
+
+    .footer {
+      border-top: 1px solid var(--line);
+      margin-top: 2rem;
+      padding: 1rem 0 2rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      font-size: 0.85rem;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 980px) {
+      .hero, .split { grid-template-columns: 1fr; }
+      .download-grid, .docs-nav, .kpis { grid-template-columns: 1fr; }
+      .nav-links { display: none; }
+    }
+  </style>
 </head>
-<body class="bg-pv-bg text-pv-text font-sans antialiased">
-  <nav class="fixed top-0 inset-x-0 z-50 bg-pv-bg/80 backdrop-blur-md border-b border-white/5">
-    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <span class="text-pv-accent font-bold text-xl">&#9679;</span>
-        <span class="font-semibold tracking-tight">PhotoVault</span>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="./">
+        <span class="brand-dot"></span>
+        <span>PhotoVault</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#downloads">Downloads</a>
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/ChivukulaVirinchi/photovault">GitHub</a>
+      </nav>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <button class="btn btn-ghost" id="theme-toggle" type="button" aria-label="Toggle theme">Theme</button>
+        <a class="btn btn-primary" href="#downloads">Get PhotoVault</a>
       </div>
-      <div class="hidden md:flex gap-8 text-sm text-pv-text-soft">
-        <a href="#features" class="hover:text-pv-text transition">Features</a>
-        <a href="#why" class="hover:text-pv-text transition">Why offline</a>
-        <a href="#download" class="hover:text-pv-text transition">Download</a>
-        <a href="https://chivukulavirinchi.github.io/photovault/docs/" class="hover:text-pv-text transition">Docs</a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault" class="hover:text-pv-text transition">GitHub</a>
-      </div>
-      <a href="#download" class="bg-pv-accent text-pv-bg px-4 py-2 rounded-md text-sm font-medium hover:bg-pv-accent-bright transition">Download</a>
     </div>
-  </nav>
+  </header>
 
-  <section class="pt-32 pb-24 px-6">
-    <div class="max-w-5xl mx-auto text-center">
-      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pv-accent/10 text-pv-accent text-xs font-medium mb-8 border border-pv-accent/20">
-        <span class="w-1.5 h-1.5 rounded-full bg-pv-accent"></span>
-        Open source - Offline-first - Free forever
+  <main class="container">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Offline first • Local AI • Open source</div>
+        <h1>Your photos, organized.<br/>On your machine.</h1>
+        <p class="lead">
+          PhotoVault indexes local drives, groups people with on-device face recognition,
+          helps clean duplicates, and keeps your photo life private by default.
+        </p>
+        <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
+          <a class="btn btn-primary" href="#downloads">Download</a>
+          <a class="btn btn-ghost" href="#docs">Read docs</a>
+        </div>
       </div>
-      <h1 class="text-5xl md:text-7xl font-bold tracking-tight leading-[1.05] mb-6">
-        Your photos, organized.<br>
-        <span class="text-pv-accent">On your machine.</span>
-      </h1>
-      <p class="text-lg md:text-xl text-pv-text-soft max-w-2xl mx-auto mb-10 leading-relaxed">
-        A desktop photo library manager that works with photos on your local drives.
-        Face recognition, smart albums, full-text search -- without uploading anything.
-      </p>
-      <div class="flex flex-wrap items-center justify-center gap-4">
-        <a href="#download" class="bg-pv-accent text-pv-bg px-6 py-3 rounded-lg font-medium hover:bg-pv-accent-bright transition shadow-lg shadow-pv-accent/20">Download for free</a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault" class="border border-white/10 text-pv-text px-6 py-3 rounded-lg font-medium hover:bg-white/5 transition">View on GitHub</a>
-      </div>
-    </div>
+      <article class="hero-card" aria-label="PhotoVault timeline preview">
+        <img src="./hero-screenshot.png" alt="PhotoVault timeline screenshot" />
+        <div class="hero-card-overlay">
+          <div>
+            <strong>Desktop-first workflow</strong><br/>
+            <small class="muted">No account, no cloud lock-in.</small>
+          </div>
+          <small class="muted">v0.1.0</small>
+        </div>
+      </article>
+    </section>
 
-    <div class="max-w-6xl mx-auto mt-20">
-      <div class="relative rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-pv-accent/5">
-        <img src="hero-screenshot.png" alt="PhotoVault Timeline view" class="w-full" />
-      </div>
-    </div>
-  </section>
+    <section class="section split" id="downloads">
+      <article class="panel">
+        <h2>Downloads</h2>
+        <p class="muted">Install core app first, then optional asset pack for face recognition + geocoding.</p>
+        <div class="download-grid">
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi">
+            <strong>Windows MSI</strong>
+            <small>Recommended installer</small>
+          </a>
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip">
+            <strong>Windows ZIP</strong>
+            <small>Portable fallback</small>
+          </a>
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb">
+            <strong>Ubuntu / Debian .deb</strong>
+            <small>System installer</small>
+          </a>
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage">
+            <strong>Linux AppImage</strong>
+            <small>Portable app</small>
+          </a>
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip">
+            <strong>Optional asset pack</strong>
+            <small>ONNX runtime + models + geonames DB</small>
+          </a>
+          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
+            <strong>All release assets</strong>
+            <small>macOS archives and checksums</small>
+          </a>
+        </div>
+      </article>
 
-  <section id="features" class="py-24 px-6 bg-pv-bg-elev/30">
-    <div class="max-w-6xl mx-auto">
-      <h2 class="text-4xl font-bold text-center mb-4">Everything you need.<br>Nothing you did not ask for.</h2>
-      <p class="text-pv-text-soft text-center mb-16 max-w-2xl mx-auto">Modern photo library features with an offline-first foundation.</p>
-      <div class="grid md:grid-cols-3 gap-6">
-        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Face recognition</h3><p class="text-sm text-pv-text-soft">On-device detection and clustering.</p></div>
-        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Smart albums</h3><p class="text-sm text-pv-text-soft">Trip/event suggestions from metadata.</p></div>
-        <div class="bg-pv-bg-elev p-8 rounded-xl border border-white/5"><h3 class="text-lg font-semibold mb-2">Unified search</h3><p class="text-sm text-pv-text-soft">People, albums, places, and photos.</p></div>
-      </div>
-    </div>
-  </section>
+      <article class="panel" id="docs">
+        <h3>Documentation</h3>
+        <p class="muted">Unified docs with practical guides for users and contributors.</p>
+        <div class="docs-nav">
+          <a class="docs-link" href="./docs/getting-started.html">Getting started</a>
+          <a class="docs-link" href="./docs/installation.html">Installers + assets</a>
+          <a class="docs-link" href="./docs/build.html">Build from source</a>
+          <a class="docs-link" href="./docs/architecture.html">Architecture</a>
+          <a class="docs-link" href="./docs/troubleshooting.html">Troubleshooting</a>
+          <a class="docs-link" href="./docs/releases.html">Release process</a>
+        </div>
+        <div class="kpis">
+          <div class="kpi"><b>100%</b><span>offline-first</span></div>
+          <div class="kpi"><b>0</b><span>mandatory cloud APIs</span></div>
+          <div class="kpi"><b>1-click</b><span>optional asset install</span></div>
+        </div>
+      </article>
+    </section>
+  </main>
 
-  <section id="why" class="py-24 px-6">
-    <div class="max-w-4xl mx-auto">
-      <h2 class="text-4xl font-bold mb-12 text-center">Why offline-first?</h2>
-      <div class="space-y-10 text-pv-text-soft">
-        <p><strong class="text-pv-text">Privacy by default.</strong> Your photos and metadata stay on your device.</p>
-        <p><strong class="text-pv-text">No lock-in.</strong> Database lives with your library, portable across machines.</p>
-        <p><strong class="text-pv-text">No account required.</strong> Install, index, and use immediately.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="download" class="py-24 px-6">
-    <div class="max-w-4xl mx-auto text-center">
-      <h2 class="text-4xl font-bold mb-4">Get PhotoVault</h2>
-      <p class="text-pv-text-soft mb-12">Free and open source.</p>
-      <div class="grid md:grid-cols-2 gap-6">
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left hover:border-pv-accent/40 transition">
-          <h3 class="text-xl font-semibold mb-2">Ubuntu / Debian</h3>
-          <p class="text-sm text-pv-text-soft">Download .deb installer (recommended)</p>
-        </a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left hover:border-pv-accent/40 transition">
-          <h3 class="text-xl font-semibold mb-2">macOS</h3>
-          <p class="text-sm text-pv-text-soft">Intel + Apple Silicon archives on latest release</p>
-        </a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left hover:border-pv-accent/40 transition">
-          <h3 class="text-xl font-semibold mb-2">Windows</h3>
-          <p class="text-sm text-pv-text-soft">MSI installer (recommended)</p>
-        </a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage" class="bg-pv-bg-elev p-8 rounded-xl border border-white/10 text-left hover:border-pv-accent/40 transition">
-          <h3 class="text-xl font-semibold mb-2">Linux AppImage</h3>
-          <p class="text-sm text-pv-text-soft">Portable app for Fedora/Arch/openSUSE and other distros</p>
-        </a>
-      </div>
-      <div class="mt-8">
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip" class="text-pv-text-soft hover:text-pv-text transition text-sm font-medium">Need portable Windows ZIP instead?</a>
-      </div>
-      <div class="mt-3">
-        <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest" class="text-pv-accent hover:text-pv-accent-bright transition text-sm font-medium">See all release assets</a>
-      </div>
-    </div>
-  </section>
-
-  <footer class="py-12 px-6 border-t border-white/5">
-    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-6">
-      <div class="text-sm text-pv-text-soft">&copy; 2026 PhotoVault. Apache-2.0.</div>
-      <div class="flex gap-6 text-sm text-pv-text-soft">
-        <a href="https://github.com/ChivukulaVirinchi/photovault" class="hover:text-pv-text transition">GitHub</a>
-        <a href="https://chivukulavirinchi.github.io/photovault/docs/" class="hover:text-pv-text transition">Docs</a>
-        <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/PRIVACY.md" class="hover:text-pv-text transition">Privacy</a>
-      </div>
-    </div>
+  <footer class="container footer">
+    <span>PhotoVault • Apache-2.0 • Offline-first photo management</span>
+    <span>
+      <a href="https://github.com/ChivukulaVirinchi/photovault">GitHub</a>
+      •
+      <a href="./docs/getting-started.html">Docs</a>
+      •
+      <a href="https://github.com/ChivukulaVirinchi/photovault/issues">Support</a>
+    </span>
   </footer>
+
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const key = "photovault-theme";
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const saved = localStorage.getItem(key);
+      if (saved === "dark" || saved === "light") {
+        root.setAttribute("data-theme", saved);
+      } else {
+        root.setAttribute("data-theme", prefersDark ? "dark" : "light");
+      }
+
+      const btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        const current = root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+        const next = current === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        localStorage.setItem(key, next);
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -65,6 +65,27 @@ impl OnnxRuntime {
             tracing::warn!("ORT_DYLIB_PATH set but file not found: {}", path);
         }
 
+        // 1b. Check installed optional asset-pack roots
+        let roots = [
+            crate::bootstrap::default_asset_install_dir(),
+            std::env::var("PHOTOVAULT_ASSET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("")),
+        ];
+        for root in roots {
+            if root.as_os_str().is_empty() {
+                continue;
+            }
+            let candidate_dir = root.join("libs").join("onnxruntime");
+            if let Some(candidate) = Self::find_runtime_in_dir(&candidate_dir) {
+                tracing::info!(
+                    "Using ONNX Runtime from optional asset-pack path: {}",
+                    candidate.display()
+                );
+                return Some(candidate);
+            }
+        }
+
         let rel_dir = Path::new("libs").join("onnxruntime");
 
         // 2. Relative to the executable
