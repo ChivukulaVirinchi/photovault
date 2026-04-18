@@ -124,6 +124,13 @@ try {
         }
     }
 
+    Invoke-Step "lint-clippy-gate" {
+        & cargo clippy --all-targets
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo clippy failed"
+        }
+    }
+
     Invoke-Step "build-portable-zip" {
         $stage = Join-Path $ArtifactsDir "zip-stage\photovault"
         Remove-PathSafe (Join-Path $ArtifactsDir "zip-stage")

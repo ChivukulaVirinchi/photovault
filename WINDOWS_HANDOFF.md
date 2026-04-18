@@ -35,6 +35,18 @@ Use this file from a Windows PowerShell session in the same repo.
 
 This should address the previous issues where setup looked generic and did not visibly present PhotoVault branding.
 
+## Asset installer 404 clarification
+
+- Local/dev runs can return 404 for asset download when no published release contains `PhotoVault-Assets.zip` yet.
+- This is expected if the release is still draft or has not been published.
+- For local testing, set:
+
+```powershell
+$env:PHOTOVAULT_ASSET_PACK_PATH = "C:\path\to\PhotoVault-Assets.zip"
+```
+
+App now also attempts a version-pinned fallback URL (`.../releases/download/v<app-version>/PhotoVault-Assets.zip`) after trying `releases/latest`.
+
 ## Primary objective
 
 Verify locally on Windows, end-to-end:

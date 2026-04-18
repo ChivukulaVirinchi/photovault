@@ -171,6 +171,14 @@ powershell -ExecutionPolicy Bypass -File scripts\release_local.ps1 -Mode full
 
 These scripts summarize installer packaging status locally before you create release tags.
 
+Mandatory push gate before any `git push`:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets
+cargo test --no-run
+```
+
 ## Automated release orchestration (draft-only publish flow)
 
 From Windows PowerShell, once local checks are green:
@@ -189,3 +197,14 @@ Behavior:
 - prints draft release URL for manual publish
 
 By design, this script does **not** auto-publish the release.
+
+## Asset installer URL behavior
+
+In-app optional asset installation resolves in this order:
+
+1. `PHOTOVAULT_ASSET_PACK_PATH` (local zip path override)
+2. `PHOTOVAULT_ASSET_PACK_URL` (custom URL override)
+3. latest published release URL (`.../releases/latest/download/PhotoVault-Assets.zip`)
+4. version-pinned fallback (`.../releases/download/v<app-version>/PhotoVault-Assets.zip`)
+
+If you are testing locally before publishing a release, set `PHOTOVAULT_ASSET_PACK_PATH`.

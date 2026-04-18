@@ -8,7 +8,7 @@
 
   <p>
     <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
-      <img src="https://img.shields.io/github/v/release/ChivukulaVirinchi/photovault?label=Download&style=for-the-badge" alt="Download">
+      <img src="https://img.shields.io/github/v/tag/ChivukulaVirinchi/photovault?label=Download&style=for-the-badge" alt="Download">
     </a>
     <a href="LICENSE">
       <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge" alt="License">
@@ -103,6 +103,14 @@ powershell -ExecutionPolicy Bypass -File scripts\release_publish.ps1 -Version v0
 
 Windows/macOS installers should be built on their native platforms. The official
 release flow is CI-driven from Git tags (`v*`) via `.github/workflows/release.yml`.
+
+Note for local dev builds:
+- The in-app optional asset installer uses the latest published release asset by default.
+- Before publishing a release, use a local override:
+
+```powershell
+$env:PHOTOVAULT_ASSET_PACK_PATH = "C:\path\to\PhotoVault-Assets.zip"
+```
 
 ## Documentation
 

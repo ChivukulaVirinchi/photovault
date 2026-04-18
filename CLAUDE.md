@@ -110,7 +110,20 @@ cargo build --release
 
 # Tests
 cargo test
+
+# Lint gate (required before any push)
+cargo clippy --all-targets
 ```
+
+## Push gate (mandatory)
+
+Before pushing any commit to remote, the local workspace must pass:
+
+1. `cargo fmt --all --check`
+2. `cargo clippy --all-targets`
+3. `cargo test --no-run`
+
+Do not push if any of these fail.
 
 ## Project Structure
 

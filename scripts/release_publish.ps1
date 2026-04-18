@@ -73,6 +73,20 @@ if ($RunLocalChecks) {
     }
 }
 
+Write-Host "Enforcing push gate: cargo fmt --all --check, cargo clippy --all-targets, cargo test --no-run"
+& cargo fmt --all --check
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo fmt --all --check failed"
+}
+& cargo clippy --all-targets
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo clippy --all-targets failed"
+}
+& cargo test --no-run
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo test --no-run failed"
+}
+
 if ((& git rev-parse -q --verify "refs/tags/$Version" 2>$null)) {
     throw "Tag already exists locally: $Version"
 }

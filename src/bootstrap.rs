@@ -196,22 +196,47 @@ pub async fn install_asset_pack() -> Result<String, String> {
             )
         })?
     } else {
-        let url = asset_pack_url();
-        let response = reqwest::get(&url)
-            .await
-            .map_err(|e| format!("Failed downloading asset pack from {}: {}", url, e))?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "Asset pack download failed with HTTP status {} from {}",
-                response.status(),
-                url
-            ));
+        let primary_url = asset_pack_url();
+        let fallback_url = std::env::var("PHOTOVAULT_ASSET_PACK_FALLBACK_URL").unwrap_or_else(|_| {
+            format!(
+                "https://github.com/ChivukulaVirinchi/photovault/releases/download/v{}/PhotoVault-Assets.zip",
+                env!("CARGO_PKG_VERSION")
+            )
+        });
+
+        let mut last_error = None;
+        let mut downloaded = None;
+        for url in [primary_url.as_str(), fallback_url.as_str()] {
+            let response = match reqwest::get(url).await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = Some(format!("request error from {}: {}", url, e));
+                    continue;
+                }
+            };
+
+            if !response.status().is_success() {
+                last_error = Some(format!("HTTP {} from {}", response.status(), url));
+                continue;
+            }
+
+            match response.bytes().await {
+                Ok(bytes) => {
+                    downloaded = Some(bytes.to_vec());
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(format!("body read error from {}: {}", url, e));
+                }
+            }
         }
-        response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed reading asset pack response body: {}", e))?
-            .to_vec()
+
+        downloaded.ok_or_else(|| {
+            format!(
+                "Asset pack download failed. {}. If you are testing locally before publishing a release, set PHOTOVAULT_ASSET_PACK_PATH to a local PhotoVault-Assets.zip.",
+                last_error.unwrap_or_else(|| "No successful download source".to_string())
+            )
+        })?
     };
 
     let install_root = default_asset_install_dir();

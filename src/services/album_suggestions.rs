@@ -574,22 +574,23 @@ pub fn detect_suggestions_with_diagnostics(
     conn: &Connection,
     home_city_override: Option<&str>,
 ) -> (Vec<DetectedSuggestion>, SuggestionDiagnostics) {
-    let mut diag = SuggestionDiagnostics::default();
-
-    diag.total_photos_with_date = conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    diag.photos_with_city = conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND location_city IS NOT NULL AND location_city != ''",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    let mut diag = SuggestionDiagnostics {
+        total_photos_with_date: conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0),
+        photos_with_city: conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND location_city IS NOT NULL AND location_city != ''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0),
+        ..SuggestionDiagnostics::default()
+    };
 
     let repo = AlbumSuggestionRepo::new(conn);
     let existing_fps: HashSet<String> = repo
