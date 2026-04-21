@@ -1,6 +1,6 @@
 [package]
 name = "photovault"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "PhotoVault contributors"]
@@ -144,7 +144,7 @@ assets = [
 name = "PhotoVault"
 identifier = "com.chivukulavirinchi.photovault"
 icon = ["packaging/photovault.icns"]
-version = "0.1.0"
+version = "0.2.0"
 copyright = "2026, Virinchi Chivukula"
 category = "public.app-category.photography"
 short_description = "Offline-first photo library manager"
