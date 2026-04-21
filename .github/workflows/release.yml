@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-x86_64-unknown-linux-gnu
       - name: Extract
@@ -227,7 +227,7 @@ jobs:
     needs: [deb, assets-pack]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-deb
           path: artifacts/deb
@@ -249,7 +249,7 @@ jobs:
           deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
           sudo dpkg -i "$deb_file"
           sudo apt-get -f install -y
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-assets
           path: artifacts/assets
@@ -285,7 +285,7 @@ jobs:
     needs: [appimage, assets-pack]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-appimage
           path: artifacts/appimage
@@ -302,7 +302,7 @@ jobs:
           chmod +x "$appimage"
           "$appimage" --appimage-extract >/dev/null
           test -f squashfs-root/usr/bin/photovault
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-assets
           path: artifacts/assets
@@ -340,7 +340,7 @@ jobs:
     needs: [msi, assets-pack]
     runs-on: windows-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-msi
           path: artifacts/msi
@@ -351,7 +351,7 @@ jobs:
           if (-not $msi) {
             throw "PhotoVault-Setup-x64.msi not found"
           }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: photovault-assets
           path: artifacts/assets
@@ -477,7 +477,7 @@ jobs:
     needs: [build, appimage, deb, msi, assets-pack, smoke-appimage, smoke-deb, smoke-msi]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Create SHA256SUMS
@@ -513,7 +513,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Create release
