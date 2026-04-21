@@ -12,7 +12,9 @@
 //! an "open release page in browser" fallback, so a wrong answer
 //! here fails safely rather than corrupting an install.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 /// How PhotoVault was installed on this machine.
 ///
@@ -61,6 +63,7 @@ pub fn detect() -> InstallMethod {
 }
 
 /// Pure, testable version of the detection heuristic.
+#[allow(clippy::needless_return)]
 pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
     let path_str = exe.to_string_lossy();
     let lower = path_str.to_lowercase();

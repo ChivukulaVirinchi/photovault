@@ -1,14 +1,17 @@
 version: 2
+# Dependabot is tuned for a hobby project: monthly cadence so Monday
+# mornings don't drown in a dozen PRs, and a single grouped PR per
+# ecosystem so a minor bump across five crates opens one review, not
+# five. Majors still land as individual PRs so the reviewer sees the
+# breaking change in isolation.
 updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 3
     groups:
-      patch-and-minor:
+      cargo-minor-and-patch:
         update-types:
           - patch
           - minor
@@ -19,10 +22,13 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - patch
+          - minor
     labels:
       - dependencies
       - github-actions

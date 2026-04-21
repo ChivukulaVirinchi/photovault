@@ -41,7 +41,7 @@ impl DrivePicker {
         } else {
             // Show indexed drives first, then unindexed
             let mut sorted_drives: Vec<&DriveInfo> = drives.iter().collect();
-            sorted_drives.sort_by(|a, b| b.has_photovault_db.cmp(&a.has_photovault_db));
+            sorted_drives.sort_by_key(|d| std::cmp::Reverse(d.has_photovault_db));
 
             let items: Vec<Element<'static, Message>> = sorted_drives
                 .iter()

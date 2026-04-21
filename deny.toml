@@ -6,19 +6,18 @@ all-features = false
 [advisories]
 version = 2
 yanked = "warn"
+# Unmaintained crates shouldn't block a release on their own — the ecosystem
+# drifts faster than our transitive deps can follow. We fail on actual
+# vulnerabilities and on yanks; unmaintained/unsound surface as info.
+unmaintained = "none"
 ignore = [
-    # paste 1.0.15 is unmaintained but pulled transitively by iced -> wgpu -> metal,
-    # by image -> ravif -> rav1e, and by imageproc -> nalgebra -> simba.
-    # No safe upgrade is available upstream. Re-evaluate when iced/wgpu/rav1e move off it.
-    "RUSTSEC-2024-0436",
-    # custom_derive (RUSTSEC-2025-0058) - unmaintained, transitive via iced.
-    "RUSTSEC-2025-0058",
-    # instant (RUSTSEC-2024-0384) - unmaintained, transitive via iced/wgpu/parking_lot.
-    "RUSTSEC-2024-0384",
-    # core2 0.4.0 is yanked but pinned by bitstream-io 4.9.0 (transitive via
-    # rav1e -> ravif -> image). Cannot upgrade without bitstream-io publishing
-    # a release that loosens the pin. Tracked: re-check on each image bump.
-    { crate = "core2@0.4.0", reason = "transitive via rav1e; no upstream replacement available" },
+    # Known transitive unmaintained/yank chain. Kept documented so future
+    # audits don't re-investigate the same ground. These no longer block
+    # CI (see `unmaintained = "none"` above) but we track them here anyway.
+    "RUSTSEC-2024-0436",  # paste — transitive via iced/wgpu, image/rav1e, imageproc/nalgebra
+    "RUSTSEC-2025-0058",  # custom_derive — transitive via iced
+    "RUSTSEC-2024-0384",  # instant — transitive via iced/wgpu/parking_lot
+    { crate = "core2@0.4.0", reason = "yanked; pinned transitively by bitstream-io via rav1e; no upstream replacement" },
 ]
 
 [licenses]

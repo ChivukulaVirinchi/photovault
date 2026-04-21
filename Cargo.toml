@@ -2,7 +2,7 @@
 name = "photovault"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.82"
 authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "PhotoVault contributors"]
 license = "Apache-2.0"
 description = "Offline-first desktop photo library manager with face recognition, smart albums, and full-text search."

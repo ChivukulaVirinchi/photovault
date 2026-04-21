@@ -225,6 +225,7 @@ pub(crate) fn next_photo(app: &mut PhotoVault) -> Task<Message> {
     Task::none()
 }
 
+#[allow(clippy::collapsible_match)]
 pub(crate) fn key_pressed(
     app: &mut PhotoVault,
     key: keyboard::Key,
