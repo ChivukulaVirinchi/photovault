@@ -76,7 +76,7 @@ regex = "1"
 lazy_static = "1.4"
 
 # Native file dialogs
-rfd = "0.15"
+rfd = "0.17"
 
 # Error handling
 thiserror = "1"
