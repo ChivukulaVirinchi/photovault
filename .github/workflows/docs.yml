@@ -71,7 +71,7 @@ jobs:
           <p>Redirecting to <a href="./photovault/">photovault crate docs</a>&hellip;</p>
           EOF
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
