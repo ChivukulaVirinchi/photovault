@@ -1,6 +1,8 @@
 //! Burst groups database operations
 
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, types::ToSql, Connection, Result as SqliteResult};
+
+use super::MAX_ROWS_PER_INSERT;
 
 /// Burst group record
 #[derive(Debug, Clone)]
@@ -28,37 +30,6 @@ pub struct BurstRepo<'a> {
 impl<'a> BurstRepo<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
-    }
-
-    /// Create a new burst group
-    pub fn create_group(
-        &self,
-        start_time: &str,
-        end_time: &str,
-        photo_ids: &[i64],
-    ) -> SqliteResult<i64> {
-        self.conn.execute(
-            r#"
-            INSERT INTO burst_groups (start_time, end_time, photo_count)
-            VALUES (?1, ?2, ?3)
-            "#,
-            params![start_time, end_time, photo_ids.len() as i64],
-        )?;
-
-        let group_id = self.conn.last_insert_rowid();
-
-        // Add members
-        for photo_id in photo_ids {
-            self.conn.execute(
-                r#"
-                INSERT INTO burst_group_members (group_id, photo_id)
-                VALUES (?1, ?2)
-                "#,
-                params![group_id, photo_id],
-            )?;
-        }
-
-        Ok(group_id)
     }
 
     /// Sync burst groups from detection results, preserving user decisions.
@@ -104,7 +75,9 @@ impl<'a> BurstRepo<'a> {
             if existing_sets.contains_key(&set) {
                 continue; // Group exists — preserve user decisions
             }
-            self.create_group(start_time, end_time, photo_ids)?;
+            // Call the free helper directly — nested unchecked_transaction
+            // would conflict with the outer `tx` we opened above.
+            create_group_in_conn(&tx, start_time, end_time, photo_ids)?;
         }
 
         // Remove groups that no longer match any detection
@@ -226,4 +199,52 @@ impl<'a> BurstRepo<'a> {
             .execute("DELETE FROM burst_groups WHERE id = ?1", params![group_id])?;
         Ok(())
     }
+}
+
+/// Insert a burst group header + its members using the given connection.
+/// Caller owns the transaction. Used by both the public `create_group`
+/// (which wraps in its own tx) and `sync_burst_groups` (already in a tx).
+fn create_group_in_conn(
+    conn: &Connection,
+    start_time: &str,
+    end_time: &str,
+    photo_ids: &[i64],
+) -> SqliteResult<i64> {
+    conn.execute(
+        r#"
+        INSERT INTO burst_groups (start_time, end_time, photo_count)
+        VALUES (?1, ?2, ?3)
+        "#,
+        params![start_time, end_time, photo_ids.len() as i64],
+    )?;
+    let group_id = conn.last_insert_rowid();
+    insert_group_members(conn, group_id, photo_ids)?;
+    Ok(group_id)
+}
+
+/// Batch-insert members for a burst group via multi-row VALUES inside
+/// whatever transaction the caller is holding. ~3× faster than one
+/// INSERT per row for large groups and keeps the whole write atomic.
+fn insert_group_members(conn: &Connection, group_id: i64, photo_ids: &[i64]) -> SqliteResult<()> {
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+    for chunk in photo_ids.chunks(MAX_ROWS_PER_INSERT) {
+        let placeholders: String = (0..chunk.len())
+            .map(|_| "(?, ?)")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO burst_group_members (group_id, photo_id) VALUES {}",
+            placeholders
+        );
+        let mut params_vec: Vec<Box<dyn ToSql>> = Vec::with_capacity(chunk.len() * 2);
+        for pid in chunk {
+            params_vec.push(Box::new(group_id));
+            params_vec.push(Box::new(*pid));
+        }
+        let params_refs: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, params_refs.as_slice())?;
+    }
+    Ok(())
 }

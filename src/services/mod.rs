@@ -10,15 +10,18 @@ pub mod face_processor;
 pub mod geocoding;
 pub mod image_utils;
 pub mod insights;
+pub mod install_method;
 pub mod map_math;
 pub mod memories;
 pub mod ocr_processor;
 pub mod reindexer;
 pub mod scanner;
 pub mod search;
+pub mod self_replace;
 pub mod thumbnail;
 pub mod tile_cache;
 pub mod trash;
+pub mod update_checker;
 
 pub use burst_detector::{BurstConfig, BurstDetector};
 pub use document_detector::DocumentDetector;

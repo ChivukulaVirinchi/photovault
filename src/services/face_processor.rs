@@ -727,8 +727,17 @@ impl FaceProcessor {
         relative_path: &str,
     ) -> Option<f32> {
         let path = drive_path.join(relative_path);
-        let image = image::open(path).ok()?;
-        Some(Self::average_brightness(&image))
+        match image::open(&path) {
+            Ok(image) => Some(Self::average_brightness(&image)),
+            Err(e) => {
+                tracing::trace!(
+                    "context-brightness lookup failed for {}: {}",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        }
     }
 }
 

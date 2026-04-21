@@ -45,6 +45,27 @@ pub struct AppConfig {
     /// Stored as a string for forward compatibility across View enum changes.
     #[serde(default)]
     pub last_view: Option<String>,
+
+    /// Opt-in: whether PhotoVault should query GitHub Releases once
+    /// every 24 hours to see if a new version is available. Off by
+    /// default — the first-run prompt flips it on if the user agrees.
+    /// See PRIVACY.md.
+    #[serde(default)]
+    pub auto_update_check_enabled: bool,
+
+    /// Unix timestamp of the last update check. Used to rate-limit
+    /// the background subscription to at most one check per 24 h.
+    #[serde(default)]
+    pub last_update_check_at_unix: Option<i64>,
+
+    /// True until the user accepts or declines the first-run update
+    /// prompt. After that, toggling is done through Settings.
+    #[serde(default = "default_show_first_run_update_prompt")]
+    pub show_first_run_update_prompt: bool,
+}
+
+fn default_show_first_run_update_prompt() -> bool {
+    true
 }
 
 fn default_weight_cooccurrence() -> f32 {
@@ -84,6 +105,9 @@ impl Default for AppConfig {
             memories_enabled: default_memories_enabled(),
             home_city_override: None,
             last_view: None,
+            auto_update_check_enabled: false,
+            last_update_check_at_unix: None,
+            show_first_run_update_prompt: true,
         }
     }
 }

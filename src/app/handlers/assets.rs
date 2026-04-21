@@ -13,6 +13,9 @@ pub(crate) fn install_asset_pack(app: &mut PhotoVault) -> Task<Message> {
 
     app.asset_install_in_progress = true;
     app.asset_install_error = None;
+    // Ensure the overlay is visible even when kicked off from Settings
+    // after the user previously dismissed the first-run prompt.
+    app.show_asset_install_prompt = true;
 
     Task::perform(
         async { crate::bootstrap::install_asset_pack().await },

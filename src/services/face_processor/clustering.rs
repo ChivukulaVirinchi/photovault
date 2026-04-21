@@ -1,5 +1,17 @@
 use super::*;
 
+/// Upper bound on unresolved faces fed into Stage B (complete-link).
+/// Stage B is O(n²) in unresolved count, so large libraries would
+/// otherwise freeze the UI while clustering runs. Above this cap we
+/// skip Stage B for the current pass and let the rescue pipeline
+/// (loose gallery k-NN + ambiguous-review queue) handle the overflow;
+/// a future run with more gallery coverage will shrink the unresolved
+/// set back under the cap.
+///
+/// v1.0 is an interim mitigation; Phase 2 replaces complete-link with
+/// HNSW-based approximate clustering and removes the cap.
+const MAX_STAGE_B_INPUT: usize = 2000;
+
 impl FaceProcessor {
     /// Run incremental clustering in two stages:
     /// 1) Gallery k-NN retrieval + confidence bands:
@@ -132,6 +144,29 @@ impl FaceProcessor {
             tracing::info!(
                 "Agglomerative clustering: assigned {} faces to existing galleries; no unresolved faces left",
                 assigned_to_existing
+            );
+            return Ok(0);
+        }
+
+        if unresolved.len() > MAX_STAGE_B_INPUT {
+            // Skip Stage B; route unresolved faces through the rescue pipeline
+            // so they remain visible (auto-matched against galleries or queued
+            // for ambiguous review) instead of getting clustered O(n²).
+            tracing::warn!(
+                "Skipping Stage B complete-link clustering: {} unresolved faces exceeds cap of {}. Routing to rescue/ambiguous-review path. Phase 2 HNSW clustering will lift this cap.",
+                unresolved.len(),
+                MAX_STAGE_B_INPUT
+            );
+            face_repo
+                .refresh_all_galleries()
+                .map_err(|e| format!("Failed to refresh galleries: {}", e))?;
+            let (rescued, queued) = Self::rescue_orphan_faces(face_repo)?;
+            tracing::info!(
+                "Clustering (Stage B skipped): {} to-existing, {} rescued, {} queued, from {} unresolved",
+                assigned_to_existing,
+                rescued,
+                queued,
+                unresolved.len()
             );
             return Ok(0);
         }
@@ -398,10 +433,17 @@ impl FaceProcessor {
                 let mut sims: Vec<f32> = Vec::with_capacity(ga.len() * gb.len());
                 for ea in ga {
                     for eb in gb {
-                        sims.push(ea.cosine_similarity(eb));
+                        let s = ea.cosine_similarity(eb);
+                        if s.is_nan() {
+                            continue;
+                        }
+                        sims.push(s);
                     }
                 }
-                sims.sort_by(|x, y| y.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+                if sims.is_empty() {
+                    continue;
+                }
+                sims.sort_by(|x, y| y.total_cmp(x));
                 let k = TOP_K_PAIRS.min(sims.len());
                 let mean_top_k: f32 = sims.iter().take(k).sum::<f32>() / k as f32;
 
@@ -411,7 +453,7 @@ impl FaceProcessor {
             }
         }
 
-        candidates.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|x, y| y.0.total_cmp(&x.0));
 
         // Union-find: each cluster starts pointing to itself; merges redirect.
         let mut parent: HashMap<i64, i64> = cluster_ids.iter().map(|&c| (c, c)).collect();

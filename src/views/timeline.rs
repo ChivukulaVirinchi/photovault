@@ -3,7 +3,6 @@
 //! Displays photos organized by date with day headers.
 //! Uses scrollable grid for the photo layout.
 
-use chrono::{DateTime, Datelike, Utc};
 use iced::widget::{column, container, scrollable, text, Column, Space};
 use iced::{Alignment, Element, Length};
 use std::collections::HashSet;
@@ -11,27 +10,27 @@ use std::collections::HashSet;
 use crate::app::Message;
 use crate::components::photo_grid::{day_header, photo_grid_simple};
 use crate::config::AppTheme;
-use crate::models::Photo;
+use crate::models::{DateGroupRange, Photo};
 use crate::theme::colors;
-
-/// Group of photos taken on the same date
-#[derive(Debug, Clone)]
-pub struct DateGroup {
-    pub day_key: String,
-    pub display_date: String,
-    pub location: Option<String>,
-    pub photos: Vec<Photo>,
-}
 
 /// Timeline view component
 pub struct TimelineView;
 
 impl TimelineView {
-    /// Render the timeline view with photos.
+    /// Pre-compute timeline date groups. Delegates to the pure
+    /// `models::timeline_group::compute_groups` implementation so the
+    /// grouping logic can be exercised by integration tests that
+    /// don't depend on the iced view layer.
+    pub fn compute_groups(photos: &[Photo]) -> Vec<DateGroupRange> {
+        crate::models::compute_groups(photos)
+    }
+
+    /// Render the timeline view with pre-computed date groups.
     /// An optional `banner` element (e.g. memories carousel) is placed at the
     /// top of the scrollable area so it scrolls with the photo content.
     pub fn view_with_photos(
         photos: &[Photo],
+        groups: &[DateGroupRange],
         columns: usize,
         selected_photo_ids: &HashSet<i64>,
         hovered_photo_id: Option<i64>,
@@ -44,11 +43,8 @@ impl TimelineView {
             return Self::empty_view(theme);
         }
 
-        // Group photos by date
-        let groups = Self::group_by_date(photos);
-
-        // Build the timeline content
-        let mut timeline_items: Vec<Element<'static, Message>> = Vec::new();
+        let mut timeline_items: Vec<Element<'static, Message>> =
+            Vec::with_capacity(groups.len() * 2 + 1);
 
         // Banner scrolls with the rest of the content
         if let Some(b) = banner {
@@ -56,25 +52,24 @@ impl TimelineView {
         }
 
         for group in groups {
-            let selected_count_for_day = group
-                .photos
+            let group_photos = &photos[group.start..group.end];
+
+            let selected_count_for_day = group_photos
                 .iter()
                 .filter(|p| selected_photo_ids.contains(&p.id))
                 .count();
 
-            // Add day header
             timeline_items.push(day_header(
                 &group.day_key,
                 &group.display_date,
-                group.photos.len(),
+                group_photos.len(),
                 selected_count_for_day,
                 hovered_day_key == Some(group.day_key.as_str()),
                 theme,
             ));
 
-            // Add photo grid for this day with dynamic column count
             timeline_items.push(photo_grid_simple(
-                &group.photos,
+                group_photos,
                 160.0,
                 columns,
                 Some(selected_photo_ids),
@@ -146,60 +141,5 @@ impl TimelineView {
                 ..Default::default()
             })
             .into()
-    }
-
-    /// Group photos by date (newest first)
-    fn group_by_date(photos: &[Photo]) -> Vec<DateGroup> {
-        use std::collections::BTreeMap;
-
-        let mut groups: BTreeMap<String, DateGroup> = BTreeMap::new();
-
-        for photo in photos {
-            let date_key = photo
-                .date_taken
-                .map(|d| d.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|| "0000-00-00".to_string());
-
-            let display_date = photo
-                .date_taken
-                .map(|d| Self::format_display_date(&d))
-                .unwrap_or_else(|| "Unknown Date".to_string());
-
-            let group = groups.entry(date_key.clone()).or_insert_with(|| DateGroup {
-                day_key: date_key.clone(),
-                display_date,
-                location: photo.location_string(),
-                photos: Vec::new(),
-            });
-
-            // Update location if this photo has one and group doesn't yet
-            if group.location.is_none() && photo.has_location() {
-                group.location = photo.location_string();
-            }
-
-            group.photos.push(photo.clone());
-        }
-
-        // Convert to vec and reverse (newest first, since BTreeMap is ascending)
-        let mut result: Vec<_> = groups.into_values().collect();
-        result.reverse();
-        result
-    }
-
-    /// Format a date for display
-    fn format_display_date(date: &DateTime<Utc>) -> String {
-        let now = Utc::now();
-        let today = now.date_naive();
-        let photo_date = date.date_naive();
-
-        if photo_date == today {
-            "Today".to_string()
-        } else if photo_date == today.pred_opt().unwrap_or(today) {
-            "Yesterday".to_string()
-        } else if photo_date.year() == today.year() {
-            date.format("%B %d").to_string() // "March 15"
-        } else {
-            date.format("%B %d, %Y").to_string() // "March 15, 2019"
-        }
     }
 }

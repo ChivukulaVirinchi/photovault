@@ -71,7 +71,7 @@ pub fn albums_view(
     let create_input: Element<'static, Message> = if creating {
         let name_owned = create_name.to_owned();
         let input = text_input("Album name...", &name_owned)
-            .on_input(|s| Message::AlbumPickerNameChanged(s))
+            .on_input(Message::AlbumPickerNameChanged)
             .on_submit(Message::CreateAlbum(create_name.to_owned()))
             .size(14)
             .width(Length::Fixed(300.0));
@@ -401,7 +401,7 @@ pub fn album_detail_view(
         let edit_name_owned = edit_name.to_owned();
         row![text_input("Album name...", &edit_name_owned)
             .id(text_input::Id::new(format!("album-edit-{}", album_id)))
-            .on_input(|s| Message::EditAlbumName(s))
+            .on_input(Message::EditAlbumName)
             .on_submit(Message::SaveAlbumName(album_id))
             .size(22)
             .width(Length::Fixed(300.0)),]
@@ -725,7 +725,7 @@ fn suggestion_accept_form(
 
     let input = text_input("Album name...", &name_owned)
         .id(text_input::Id::new(format!("suggestion-name-{}", sug_id)))
-        .on_input(|s| Message::AcceptSuggestionNameChanged(s))
+        .on_input(Message::AcceptSuggestionNameChanged)
         .on_submit(Message::ConfirmAcceptSuggestion(sug_id))
         .size(12)
         .width(Length::Fill);

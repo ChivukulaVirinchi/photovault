@@ -1,12 +1,14 @@
 //! Incremental re-indexing service.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 use walkdir::WalkDir;
+
+use crate::services::scanner::calculate_hash;
 
 #[derive(Debug, Default, Clone)]
 pub struct IndexChanges {
@@ -187,36 +189,57 @@ impl Reindexer {
                 missing.push(row?);
             }
 
-            // Check for moves: find new paths with matching hash
-            for (id, old_path, hash) in &missing {
-                let mut found_move = false;
+            // Pre-hash all candidate (added) files exactly once into a hash → path map.
+            // Without this, we'd re-hash every candidate for every missing file (N×M).
+            // Hashes computed here use the same full-file SHA256 as the scanner so the
+            // result matches the stored `photos.file_hash` column. A 64KB-prefix hash
+            // (the previous quick_hash) collides on photos sharing camera EXIF headers
+            // and never matches the scanner's full-file hash either way, so move
+            // detection was effectively broken.
+            let candidate_paths: Vec<String> = changes
+                .added
+                .iter()
+                .filter_map(|p| p.strip_prefix(drive_root).ok())
+                .filter_map(|p| p.to_str())
+                .map(|s| s.to_string())
+                .collect();
 
-                // Look for an added file with the same quick hash
-                let mut move_stmt = conn.prepare(
-                    "SELECT f.path FROM temp.found_files f
-                     LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
-                     WHERE p.id IS NULL",
-                )?;
-                let candidates = move_stmt.query_map([], |row| row.get::<_, String>(0))?;
-                for candidate in candidates {
-                    let new_path = candidate?;
-                    let new_full_path = drive_root.join(&new_path);
-                    if let Ok(new_hash) = Self::quick_hash(&new_full_path) {
-                        if &new_hash == hash {
-                            changes.moved.push((
-                                *id,
-                                PathBuf::from(old_path),
-                                PathBuf::from(new_path),
-                            ));
-                            found_move = true;
-                            break;
-                        }
+            let mut hash_to_candidate: HashMap<String, String> = HashMap::new();
+            for relative in &candidate_paths {
+                let full = drive_root.join(relative);
+                if let Ok(hash) = calculate_hash(&full) {
+                    hash_to_candidate
+                        .entry(hash)
+                        .or_insert_with(|| relative.clone());
+                }
+            }
+
+            let mut consumed_candidates: HashSet<String> = HashSet::new();
+            for (id, old_path, hash) in &missing {
+                match hash_to_candidate.get(hash) {
+                    Some(new_path) if !consumed_candidates.contains(new_path) => {
+                        consumed_candidates.insert(new_path.clone());
+                        changes
+                            .moved
+                            .push((*id, PathBuf::from(old_path), PathBuf::from(new_path)));
+                    }
+                    _ => {
+                        changes.removed.push((*id, PathBuf::from(old_path)));
                     }
                 }
+            }
 
-                if !found_move {
-                    changes.removed.push((*id, PathBuf::from(old_path)));
-                }
+            // Files matched as moves are no longer "added"; drop them from the added list.
+            if !consumed_candidates.is_empty() {
+                changes.added.retain(|p| {
+                    let relative = p
+                        .strip_prefix(drive_root)
+                        .ok()
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    !consumed_candidates.contains(&relative)
+                });
             }
         }
 
@@ -271,22 +294,46 @@ impl Reindexer {
         self.skip_patterns.iter().any(|p| name.starts_with(p))
     }
 
-    fn quick_hash(path: &Path) -> std::io::Result<String> {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
-
-        let mut file = fs::File::open(path)?;
-        let mut buffer = vec![0u8; 65536];
-        let n = file.read(&mut buffer)?;
-        buffer.truncate(n);
-        let hash = Sha256::digest(&buffer);
-        Ok(format!("{:x}", hash))
-    }
-
     fn system_time_to_string(time: SystemTime) -> String {
         use chrono::{DateTime, Utc};
 
         let datetime: DateTime<Utc> = time.into();
         datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    /// Two files sharing a 64 KB prefix but differing afterwards must hash
+    /// differently. The previous quick_hash (64 KB only) collided here, which
+    /// caused the reindexer to misidentify distinct files as moves of each
+    /// other.
+    #[test]
+    fn full_hash_distinguishes_files_with_shared_prefix() {
+        let temp = tempdir().unwrap();
+        let prefix = vec![0xABu8; 65_536];
+
+        let path_a = temp.path().join("a.bin");
+        let mut f = fs::File::create(&path_a).unwrap();
+        f.write_all(&prefix).unwrap();
+        f.write_all(&[0x01u8; 4096]).unwrap();
+        drop(f);
+
+        let path_b = temp.path().join("b.bin");
+        let mut f = fs::File::create(&path_b).unwrap();
+        f.write_all(&prefix).unwrap();
+        f.write_all(&[0x02u8; 4096]).unwrap();
+        drop(f);
+
+        let hash_a = calculate_hash(&path_a).unwrap();
+        let hash_b = calculate_hash(&path_b).unwrap();
+        assert_ne!(
+            hash_a, hash_b,
+            "files differing past the first 64 KB must produce different hashes"
+        );
     }
 }

@@ -1,4 +1,11 @@
-//! Application views
+//! Application views.
+//!
+//! Several view-rendering entry points take many parameters because
+//! they receive narrowly-scoped slices of the app state instead of the
+//! monolithic `PhotoVault` struct. This is intentional during Phase 1;
+//! Phase 2 splits the state into sub-structs and these signatures
+//! collapse to a single param. Until then the lint is allowed module-wide.
+#![allow(clippy::too_many_arguments)]
 
 pub mod albums;
 pub mod albums_banner;

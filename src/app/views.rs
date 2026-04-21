@@ -18,6 +18,26 @@ fn apply_global_overlays<'a>(
     base: Element<'a, Message>,
     app: &'a PhotoVault,
 ) -> Element<'a, Message> {
+    // Update banner goes INSIDE the base view — it's an inline
+    // strip at the top of the app, not a modal overlay. Only visible
+    // when a newer version is available and the user hasn't dismissed
+    // this specific tag.
+    let base: Element<'a, Message> = if let Some(ref release) = app.pending_update {
+        let banner = crate::components::update_banner::banner(
+            release,
+            &app.install_method,
+            app.update_install_in_progress,
+            app.update_download_progress,
+            app.config.theme,
+        );
+        iced::widget::column![banner, base]
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill)
+            .into()
+    } else {
+        base
+    };
+
     let base = if app.show_asset_install_prompt && app.asset_health.missing_any() {
         let overlay = crate::components::asset_prompt::overlay(
             &app.asset_health,
@@ -215,6 +235,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                     .map(|p| p.id);
                 let timeline = TimelineView::view_with_photos(
                     &app.photos,
+                    &app.timeline_groups,
                     columns,
                     &app.selected_timeline_photo_ids,
                     app.hovered_timeline_photo_id,
@@ -587,6 +608,8 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.map_cache_limit_bytes_display()
                 .parse::<u32>()
                 .unwrap_or(500),
+            app.auto_update_check_enabled,
+            app.update_check_in_progress,
         ),
         View::Duplicates => DuplicatesView::view(
             &app.duplicate_groups,

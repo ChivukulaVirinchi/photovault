@@ -302,6 +302,11 @@ pub struct PhotoVault {
     /// back to Timeline after opening a photo / switching views.
     pub(crate) timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset,
 
+    /// Pre-computed date groups for the timeline, built once on photos_loaded
+    /// rather than every render. Indices point into `photos`, so groups are
+    /// zero-copy views rather than owning clones. Phase 2 Track A.
+    pub(crate) timeline_groups: Vec<crate::models::DateGroupRange>,
+
     /// Whether cull finish confirmation is pending
     pub(crate) cull_confirm_pending: bool,
 
@@ -350,6 +355,32 @@ pub struct PhotoVault {
 
     /// Latest asset installer error (shown in startup prompt).
     pub(crate) asset_install_error: Option<String>,
+
+    // --- Update checker state (Phase 3) ---
+    /// Mirrored from AppConfig.auto_update_check_enabled. Off by
+    /// default; flipped on via the first-run prompt or Settings.
+    pub(crate) auto_update_check_enabled: bool,
+    /// Whether an update check is currently in flight. Prevents
+    /// double-dispatch when the user mashes "Check for updates now".
+    pub(crate) update_check_in_progress: bool,
+    /// Most recent update-check error, surfaced as a toast.
+    pub(crate) update_check_error: Option<String>,
+    /// The latest release if it's strictly newer than us. Drives the
+    /// banner visibility.
+    pub(crate) pending_update: Option<crate::services::update_checker::LatestRelease>,
+    /// Tag name (e.g. "v1.0.1") the user has explicitly dismissed;
+    /// the banner stays hidden for this version only.
+    pub(crate) update_banner_dismissed_for_tag: Option<String>,
+    /// Streamed download progress while the installer is being fetched.
+    pub(crate) update_download_progress: Option<(u64, u64)>,
+    /// True while the download/install pipeline is running.
+    pub(crate) update_install_in_progress: bool,
+    /// Terminal install outcome, persisted until the user dismisses
+    /// the banner or restarts the app.
+    pub(crate) update_install_outcome: Option<crate::services::self_replace::InstallOutcome>,
+    /// Cached install-method classification from startup. Stored once
+    /// rather than re-detected on every message dispatch.
+    pub(crate) install_method: crate::services::install_method::InstallMethod,
 
     /// People detected in the currently viewed photo: (cluster_id, display_name).
     pub(crate) current_photo_people: Vec<(i64, String)>,
@@ -585,6 +616,7 @@ impl PhotoVault {
     /// Create new application instance
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load();
+        let auto_update_check_enabled = config.auto_update_check_enabled;
         let asset_health = crate::bootstrap::asset_health();
         let app = Self {
             current_view: View::Welcome,
@@ -662,6 +694,7 @@ impl PhotoVault {
             memory_slideshow_paused: false,
             memories_enabled: config.memories_enabled,
             timeline_scroll_offset: iced::widget::scrollable::AbsoluteOffset::default(),
+            timeline_groups: Vec::new(),
             cull_confirm_pending: false,
             cull_return_view: None,
             trash_items: Vec::new(),
@@ -680,6 +713,15 @@ impl PhotoVault {
             show_asset_install_prompt: asset_health.missing_any(),
             asset_install_in_progress: false,
             asset_install_error: None,
+            auto_update_check_enabled,
+            update_check_in_progress: false,
+            update_check_error: None,
+            pending_update: None,
+            update_banner_dismissed_for_tag: None,
+            update_download_progress: None,
+            update_install_in_progress: false,
+            update_install_outcome: None,
+            install_method: crate::services::install_method::detect(),
             current_photo_people: Vec::new(),
             current_photo_face_count: 0,
             current_photo_location: None,

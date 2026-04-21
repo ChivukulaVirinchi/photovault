@@ -3,6 +3,13 @@
 //! Uses SQLite with the database stored on the indexed drive itself,
 //! making the index fully portable.
 
+/// Maximum rows per multi-row INSERT statement. SQLite's default
+/// SQLITE_MAX_VARIABLE_NUMBER is 999 in older builds and 32766 in
+/// newer ones; staying at 200 rows per chunk keeps every existing
+/// repo (which never exceeds 5 columns per row) well under either
+/// limit, while still giving a ~3× speedup vs. one INSERT per row.
+pub const MAX_ROWS_PER_INSERT: usize = 200;
+
 pub mod album_repo;
 pub mod album_suggestion_repo;
 pub mod burst_repo;

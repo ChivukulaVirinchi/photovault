@@ -78,6 +78,22 @@ impl PhotoVault {
             );
         }
 
+        // Background update check. Runs at most once per 24 hours —
+        // we ask the subscription to tick every 60 minutes, and the
+        // handler itself gates on `last_update_check_at_unix` so a
+        // close-and-reopen doesn't force an extra check. The actual
+        // HTTP call only fires when the user has opted in AND a full
+        // 24 h have elapsed since the last run.
+        if self.auto_update_check_enabled
+            && !self.update_check_in_progress
+            && should_check_for_updates_now(self.config.last_update_check_at_unix)
+        {
+            subs.push(
+                iced::time::every(std::time::Duration::from_secs(60 * 60))
+                    .map(|_| Message::CheckForUpdates),
+            );
+        }
+
         // Memory slideshow auto-advance — only when actually viewing a
         // memory slideshow and not paused.
         if self.current_view == state::View::MemoryDetail
@@ -117,5 +133,19 @@ impl PhotoVault {
     /// Render the application
     pub fn view(&self) -> Element<'_, Message> {
         views::view(self)
+    }
+}
+
+/// True if we haven't checked for updates in the last 24 hours (or
+/// haven't checked at all). Keeps the background subscription from
+/// spamming GitHub on every session.
+fn should_check_for_updates_now(last_check_unix: Option<i64>) -> bool {
+    const DAY_SECS: i64 = 24 * 60 * 60;
+    match last_check_unix {
+        None => true,
+        Some(last) => {
+            let now = chrono::Utc::now().timestamp();
+            now - last >= DAY_SECS
+        }
     }
 }

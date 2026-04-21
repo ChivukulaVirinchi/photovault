@@ -12,10 +12,12 @@
 //! 3. Per-image timeout to prevent stuck queue from corrupt/huge images
 //! 4. Higher concurrency (8 workers) with streaming results
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+
+use lru::LruCache;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
@@ -55,13 +57,23 @@ impl ThumbnailSize {
     }
 }
 
-/// Cached thumbnail entry
+/// Cached thumbnail entry.
+///
+/// Access recency is tracked by the enclosing `LruCache` — no explicit
+/// `last_accessed` field. Previously the struct carried an `Instant`
+/// that was set on insert but never bumped on access, so the "LRU"
+/// eviction was effectively FIFO.
 #[derive(Debug, Clone)]
 pub struct ThumbnailEntry {
     pub path: PathBuf,
-    pub last_accessed: Instant,
     pub file_size: u64,
 }
+
+/// Maximum number of entries the in-memory cache tracks. Serves as a
+/// backstop against unbounded metadata growth — actual eviction
+/// typically fires from the byte-budget check in `evict_if_needed`
+/// well before the count limit is hit.
+const CACHE_ENTRY_CAPACITY: usize = 100_000;
 
 /// Concurrency limiter using std::sync primitives (safe for spawn_blocking)
 struct ConcurrencyLimiter {
@@ -103,8 +115,12 @@ pub struct ThumbnailService {
     /// Thumbnail cache directory
     cache_dir: PathBuf,
 
-    /// In-memory cache of thumbnail paths (for quick lookup)
-    cache: Arc<RwLock<HashMap<(String, ThumbnailSize), ThumbnailEntry>>>,
+    /// In-memory cache of thumbnail paths. Switched from
+    /// `HashMap + last_accessed Instant` to `LruCache` so eviction is
+    /// O(1) via `pop_lru()` instead of O(n) sort-by-timestamp, and so
+    /// access recency is tracked correctly (the old field was set on
+    /// insert and never updated).
+    cache: Arc<RwLock<LruCache<(String, ThumbnailSize), ThumbnailEntry>>>,
 
     /// Maximum cache size in bytes
     max_cache_bytes: u64,
@@ -136,10 +152,13 @@ impl ThumbnailService {
 
         let max_cache_bytes = (max_cache_gb * 1024.0 * 1024.0 * 1024.0) as u64;
 
+        let capacity = NonZeroUsize::new(CACHE_ENTRY_CAPACITY)
+            .expect("CACHE_ENTRY_CAPACITY is a non-zero compile-time constant");
+
         Ok(Self {
             _drive_root: drive_root,
             cache_dir,
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache: Arc::new(RwLock::new(LruCache::new(capacity))),
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
             generation_limiter: Arc::new(ConcurrencyLimiter::new(8)),
@@ -319,16 +338,18 @@ impl ThumbnailService {
 
         let entry = ThumbnailEntry {
             path: path.to_path_buf(),
-            last_accessed: Instant::now(),
             file_size,
         };
 
         if let Ok(mut cache) = self.cache.write() {
-            cache.insert((file_hash.to_string(), size), entry);
+            cache.put((file_hash.to_string(), size), entry);
         }
     }
 
-    /// Evict old thumbnails if cache is over limit
+    /// Evict oldest thumbnails until we're back under 80% of the
+    /// byte budget. LruCache's `pop_lru` gives O(1) access to the
+    /// oldest entry, vs. the previous O(n log n) sort of every
+    /// thumbnail by timestamp.
     fn evict_if_needed(&self) {
         let current = match self.current_cache_bytes.read() {
             Ok(v) => *v,
@@ -339,39 +360,32 @@ impl ThumbnailService {
             return;
         }
 
-        // Get all entries sorted by last accessed time (oldest first)
-        let mut entries: Vec<_> = match self.cache.read() {
-            Ok(cache) => cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            Err(_) => return,
-        };
-
-        entries.sort_by_key(|entry| entry.1.last_accessed);
-
-        // Remove oldest entries until under 80% of max
         let target = self.max_cache_bytes * 80 / 100;
         let mut freed = 0u64;
-        let mut to_remove = Vec::new();
 
-        for (key, entry) in entries {
-            if current - freed <= target {
-                break;
-            }
+        // Pop oldest entries one at a time until we're under target.
+        // The cache lock is held only for the pop; file deletion
+        // happens without it.
+        loop {
+            let popped = {
+                let mut cache = match self.cache.write() {
+                    Ok(c) => c,
+                    Err(_) => break,
+                };
+                cache.pop_lru()
+            };
 
-            // Delete file
+            let Some((_, entry)) = popped else { break };
+
             if std::fs::remove_file(&entry.path).is_ok() {
                 freed += entry.file_size;
-                to_remove.push(key);
+            }
+
+            if current.saturating_sub(freed) <= target {
+                break;
             }
         }
 
-        // Remove from cache
-        if let Ok(mut cache) = self.cache.write() {
-            for key in to_remove {
-                cache.remove(&key);
-            }
-        }
-
-        // Update current size
         if let Ok(mut current) = self.current_cache_bytes.write() {
             *current = current.saturating_sub(freed);
         }
@@ -413,12 +427,11 @@ impl ThumbnailService {
 
                             let entry = ThumbnailEntry {
                                 path: path.clone(),
-                                last_accessed: Instant::now(),
                                 file_size,
                             };
 
                             if let Ok(mut cache) = self.cache.write() {
-                                cache.insert((hash, size), entry);
+                                cache.put((hash, size), entry);
                             }
                         }
                     }

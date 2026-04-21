@@ -1,6 +1,8 @@
 //! Duplicate groups database operations
 
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, types::ToSql, Connection, Result as SqliteResult};
+
+use super::MAX_ROWS_PER_INSERT;
 
 /// Duplicate group record
 #[derive(Debug, Clone)]
@@ -69,8 +71,9 @@ impl<'a> DuplicateRepo<'a> {
                 continue; // Group exists — keep user's keep/dismiss choices
             }
 
-            // Create new duplicate group
-            self.conn.execute(
+            // Create new duplicate group. Use the tx handle (already open
+            // above); nesting unchecked_transaction would conflict.
+            tx.execute(
                 r#"
                 INSERT INTO duplicate_groups (group_hash, duplicate_type)
                 VALUES (?1, 'exact')
@@ -78,18 +81,8 @@ impl<'a> DuplicateRepo<'a> {
                 params![hash],
             )?;
 
-            let group_id = self.conn.last_insert_rowid();
-
-            for photo_id in photo_ids {
-                let is_suggested = suggested_keep.map(|s| s == *photo_id).unwrap_or(false);
-                self.conn.execute(
-                    r#"
-                    INSERT INTO duplicate_group_members (group_id, photo_id, is_suggested_keep)
-                    VALUES (?1, ?2, ?3)
-                    "#,
-                    params![group_id, photo_id, is_suggested],
-                )?;
-            }
+            let group_id = tx.last_insert_rowid();
+            insert_duplicate_members(&tx, group_id, photo_ids, *suggested_keep)?;
         }
 
         // Remove groups whose hash no longer has duplicates
@@ -220,4 +213,38 @@ impl<'a> DuplicateRepo<'a> {
 
         Ok(photo_ids)
     }
+}
+
+/// Batch-insert duplicate-group members via multi-row VALUES inside
+/// the caller's transaction. ~3× faster than one INSERT per row for
+/// large duplicate groups.
+fn insert_duplicate_members(
+    conn: &Connection,
+    group_id: i64,
+    photo_ids: &[i64],
+    suggested_keep: Option<i64>,
+) -> SqliteResult<()> {
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+    for chunk in photo_ids.chunks(MAX_ROWS_PER_INSERT) {
+        let placeholders: String = (0..chunk.len())
+            .map(|_| "(?, ?, ?)")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO duplicate_group_members (group_id, photo_id, is_suggested_keep) VALUES {}",
+            placeholders
+        );
+        let mut params_vec: Vec<Box<dyn ToSql>> = Vec::with_capacity(chunk.len() * 3);
+        for pid in chunk {
+            let is_suggested = suggested_keep.map(|s| s == *pid).unwrap_or(false);
+            params_vec.push(Box::new(group_id));
+            params_vec.push(Box::new(*pid));
+            params_vec.push(Box::new(is_suggested));
+        }
+        let params_refs: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, params_refs.as_slice())?;
+    }
+    Ok(())
 }

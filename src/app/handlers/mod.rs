@@ -25,6 +25,7 @@ mod timeline;
 mod timeline_helpers;
 mod toasts;
 mod trash;
+mod updates;
 
 pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
     match message {
@@ -336,5 +337,13 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::InstallAssetPack => assets::install_asset_pack(app),
         Message::AssetPackInstalled(result) => assets::asset_pack_installed(app, result),
         Message::DismissAssetInstallPrompt => assets::dismiss_asset_install_prompt(app),
+
+        // --- In-app updater (Phase 3) ---
+        Message::CheckForUpdates => updates::check_for_updates(app),
+        Message::UpdateCheckResult(r) => updates::update_check_result(app, r),
+        Message::DownloadUpdate => updates::download_update(app),
+        Message::UpdateReady(r) => updates::update_ready(app, r),
+        Message::DismissUpdateBanner => updates::dismiss_update_banner(app),
+        Message::SetAutoUpdateCheck(enabled) => updates::set_auto_update_check(app, enabled),
     }
 }

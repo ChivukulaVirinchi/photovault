@@ -17,6 +17,8 @@ impl SettingsView {
         rotated_fix_running: bool,
         map_cache_size_mb: f64,
         map_cache_limit_mb: u32,
+        auto_update_check_enabled: bool,
+        update_check_in_progress: bool,
     ) -> Element<'static, Message> {
         let p = colors::palette(config.theme);
         let bg_primary = p.bg_primary;
@@ -52,6 +54,13 @@ impl SettingsView {
             Space::with_height(24),
             Self::section_header(config.theme, "Map"),
             Self::map_cache_setting(config.theme, map_cache_size_mb, map_cache_limit_mb,),
+            Space::with_height(24),
+            Self::section_header(config.theme, "Updates"),
+            Self::updates_setting(
+                config.theme,
+                auto_update_check_enabled,
+                update_check_in_progress,
+            ),
             Space::with_height(32),
             Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
             Space::with_height(32),
@@ -141,6 +150,63 @@ impl SettingsView {
         )
     }
 
+    fn updates_setting(
+        theme: AppTheme,
+        auto_update_check_enabled: bool,
+        check_in_progress: bool,
+    ) -> Element<'static, Message> {
+        let toggle_row = Self::setting_row(
+            theme,
+            "Automatically check for updates",
+            "Query GitHub once every 24 hours. Off by default. See PRIVACY.md.",
+            toggler(auto_update_check_enabled)
+                .on_toggle(Message::SetAutoUpdateCheck)
+                .into(),
+        );
+
+        let check_label = if check_in_progress {
+            "Checking..."
+        } else {
+            "Check for updates now"
+        };
+        let on_press = if check_in_progress {
+            None
+        } else {
+            Some(Message::CheckForUpdates)
+        };
+
+        let p = colors::palette(theme);
+        let text_primary = p.text_primary;
+        let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
+        let border_subtle = p.border_subtle;
+
+        let mut btn = button(text(check_label.to_string()).size(14).color(text_primary))
+            .padding(Padding::from([8, 14]))
+            .style(move |_theme, status| {
+                let background = match status {
+                    button::Status::Hovered => Some(bg_hover.into()),
+                    _ => Some(bg_elevated.into()),
+                };
+                button::Style {
+                    background,
+                    border: iced::Border {
+                        color: border_subtle,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }
+            });
+        if let Some(msg) = on_press {
+            btn = btn.on_press(msg);
+        }
+
+        column![toggle_row, Space::with_height(10), btn]
+            .spacing(0)
+            .into()
+    }
+
     fn map_cache_setting(
         theme: AppTheme,
         cache_size_mb: f64,
@@ -216,7 +282,7 @@ impl SettingsView {
             "Home City",
             "Override auto-detected home city for trip suggestions (leave blank for auto)",
             text_input("Auto-detect", &value)
-                .on_input(|s| Message::SetHomeCity(s))
+                .on_input(Message::SetHomeCity)
                 .size(13)
                 .width(Length::Fixed(200.0))
                 .into(),
@@ -387,6 +453,8 @@ impl SettingsView {
                 geocode_button,
                 Space::with_width(16),
                 rotated_button,
+                Space::with_width(16),
+                Self::action_button(theme, "Reinstall Assets", Message::InstallAssetPack),
             ],
             Space::with_height(24),
             text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION")))

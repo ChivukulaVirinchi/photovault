@@ -405,14 +405,14 @@ impl BurstsView {
         for m in members {
             current_row.push(Self::member_card(group_id, m, drive_path, photos, theme));
             if current_row.len() == 4 {
-                let row_items: Vec<Element<'static, Message>> = current_row.drain(..).collect();
+                let row_items: Vec<Element<'static, Message>> = std::mem::take(&mut current_row);
                 rows.push(Row::with_children(row_items).spacing(12).into());
             }
         }
 
         // Push any remaining items
         if !current_row.is_empty() {
-            let row_items: Vec<Element<'static, Message>> = current_row.drain(..).collect();
+            let row_items: Vec<Element<'static, Message>> = std::mem::take(&mut current_row);
             rows.push(Row::with_children(row_items).spacing(12).into());
         }
 

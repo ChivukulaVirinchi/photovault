@@ -10,6 +10,7 @@ pub mod sidebar;
 pub mod spinner;
 pub mod toast;
 pub mod tooltip;
+pub mod update_banner;
 
 pub use drive_picker::DrivePicker;
 pub use scan_progress::ScanProgressView;

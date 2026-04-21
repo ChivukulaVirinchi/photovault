@@ -2,6 +2,7 @@
 name = "photovault"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.75"
 authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "PhotoVault contributors"]
 license = "Apache-2.0"
 description = "Offline-first desktop photo library manager with face recognition, smart albums, and full-text search."
@@ -68,7 +69,7 @@ rayon = "1.10"
 
 # Additional async utilities
 async-channel = "2.0"
-lru = "0.12"
+lru = "0.16"
 
 # Regex for filename parsing
 regex = "1"
@@ -85,6 +86,12 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fs2 = "0.4"
+
+# Update mechanism (Phase 3)
+semver = { version = "1", features = ["serde"] }
+self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-zip", "compression-zip-deflate"] }
+futures = "0.3"
+open = "5"
 
 # Optimize key deps even in debug mode — image decoding is unusable without this
 [profile.dev.package.image]
@@ -150,3 +157,12 @@ osx_minimum_system_version = "10.13"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+
+[[bench]]
+name = "clustering"
+harness = false
+
+[[bench]]
+name = "hashing"
+harness = false

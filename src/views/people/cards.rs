@@ -105,9 +105,7 @@ pub fn person_card_merge(
     .spacing(4)
     .align_x(Alignment::Center);
 
-    let border_color = if is_highlighted {
-        accent_primary
-    } else if is_selected {
+    let border_color = if is_highlighted || is_selected {
         accent_primary
     } else {
         border_subtle

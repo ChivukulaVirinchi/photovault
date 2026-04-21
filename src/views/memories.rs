@@ -21,7 +21,7 @@ pub fn memories_banner(cards: &[MemoryCard], theme: AppTheme) -> Option<Element<
 
     // Show top 5 on the banner; rest accessible via the sidebar "Memories" entry.
     for card in cards.iter().take(5) {
-        strip = strip.push(banner_card(card, &p));
+        strip = strip.push(banner_card(card, p));
     }
 
     let banner = container(
@@ -137,7 +137,7 @@ pub fn memories_view(
         left: 32.0,
     });
     for (idx, card) in cards.iter().enumerate() {
-        list = list.push(wide_card(card, highlighted_index == Some(idx), &p));
+        list = list.push(wide_card(card, highlighted_index == Some(idx), p));
     }
 
     container(scrollable(column![header, list]))

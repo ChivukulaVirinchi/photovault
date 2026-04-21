@@ -4,7 +4,7 @@
 //! querying, geocoding updates, trash flow, and data integrity.
 
 use photovault::db::photo_repo::PhotoInsert;
-use photovault::db::{create_schema, Database, PhotoRepo, TrashRepo};
+use photovault::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
 use photovault::services::TrashService;
 use tempfile::tempdir;
 
@@ -69,6 +69,76 @@ fn test_schema_creation() {
             .unwrap();
         assert_eq!(count, 1, "Table '{}' should exist", table);
     }
+}
+
+/// Phase 2 Track A4/B2: composite indexes added in migration v15.
+#[test]
+fn test_v15_composite_indexes_present_and_used() {
+    let (_temp, db) = setup_db();
+    photovault::db::migrations::run_migrations(&db.conn).unwrap();
+
+    // Expected indexes after migration v15.
+    for index in &[
+        "idx_photos_trashed_date",
+        "idx_photos_faces_processed_trashed",
+        "idx_faces_cluster_confidence",
+        "idx_faces_photo_cluster",
+    ] {
+        let count: i32 = db
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='{}'",
+                    index
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "Index '{}' should exist after v15 migration",
+            index
+        );
+    }
+
+    let schema_version: i32 = db
+        .conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+        .unwrap();
+    assert!(schema_version >= 15, "schema_version should be >= 15");
+
+    // Verify SQLite's planner picks idx_photos_trashed_date for the
+    // timeline's paginated query.
+    let plan_rows: Vec<String> = db
+        .conn
+        .prepare("EXPLAIN QUERY PLAN SELECT id FROM photos WHERE is_trashed = 0 ORDER BY date_taken DESC LIMIT 100 OFFSET 0")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    let joined = plan_rows.join(" | ");
+    assert!(
+        joined.contains("idx_photos_trashed_date"),
+        "timeline pagination should use idx_photos_trashed_date, got: {}",
+        joined
+    );
+
+    // Idempotent re-run should not error or double-insert version rows.
+    photovault::db::migrations::run_migrations(&db.conn).unwrap();
+    let version_count: i32 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_version WHERE version = 15",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        version_count, 1,
+        "migration should record version 15 exactly once even on re-run"
+    );
 }
 
 #[test]
@@ -256,4 +326,115 @@ fn test_database_backup() {
         )
         .unwrap();
     assert!(count > 0);
+}
+
+/// Phase 2 Track B1: multi-row batch inserts should insert every row
+/// exactly once, even when the group size exceeds MAX_ROWS_PER_INSERT
+/// (so the chunking path is exercised) and when the group size is an
+/// exact multiple of the chunk size (boundary).
+#[test]
+fn test_burst_and_duplicate_large_group_inserts() {
+    let (_temp, db) = setup_db();
+    let photo_repo = PhotoRepo::new(&db.conn);
+
+    // Seed 800 photos so the foreign-key constraint on group members
+    // has something to point at.
+    let photos: Vec<PhotoInsert> = (0..800)
+        .map(|i| sample_photo(&format!("photos/IMG_{:04}.jpg", i), &format!("h{:04}", i)))
+        .collect();
+    photo_repo.insert_batch(&photos).unwrap();
+
+    let all_photo_ids: Vec<i64> = db
+        .conn
+        .prepare("SELECT id FROM photos ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert_eq!(all_photo_ids.len(), 800);
+
+    // Burst: one group of 600 members (triggers 3 chunks at
+    // MAX_ROWS_PER_INSERT = 200).
+    let burst_ids = all_photo_ids[..600].to_vec();
+    let burst_repo = BurstRepo::new(&db.conn);
+    burst_repo
+        .sync_burst_groups(&[(
+            "2024-01-01T00:00:00Z".to_string(),
+            "2024-01-01T00:00:03Z".to_string(),
+            burst_ids.clone(),
+        )])
+        .unwrap();
+
+    let burst_member_count: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM burst_group_members", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        burst_member_count, 600,
+        "every burst member must land exactly once"
+    );
+
+    // Duplicate: one group of 400 members (2 full chunks of 200,
+    // exactly at the chunk boundary).
+    let dup_ids = all_photo_ids[..400].to_vec();
+    let dup_repo = DuplicateRepo::new(&db.conn);
+    dup_repo
+        .sync_duplicate_groups(&[(
+            "dup-hash-abc".to_string(),
+            dup_ids.clone(),
+            Some(dup_ids[0]),
+        )])
+        .unwrap();
+
+    let dup_member_count: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM duplicate_group_members", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        dup_member_count, 400,
+        "every duplicate member must land exactly once"
+    );
+
+    let keep_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM duplicate_group_members WHERE is_suggested_keep = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        keep_count, 1,
+        "only the requested photo should be flagged is_suggested_keep"
+    );
+
+    // Idempotent resync: the same groups shouldn't create duplicates
+    // (merge-based sync preserves existing groups).
+    burst_repo
+        .sync_burst_groups(&[(
+            "2024-01-01T00:00:00Z".to_string(),
+            "2024-01-01T00:00:03Z".to_string(),
+            burst_ids,
+        )])
+        .unwrap();
+    dup_repo
+        .sync_duplicate_groups(&[("dup-hash-abc".to_string(), dup_ids, None)])
+        .unwrap();
+
+    let burst_groups: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM burst_groups", [], |r| r.get(0))
+        .unwrap();
+    let dup_groups: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM duplicate_groups", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(burst_groups, 1, "resync must not duplicate the burst group");
+    assert_eq!(
+        dup_groups, 1,
+        "resync must not duplicate the duplicate group"
+    );
 }

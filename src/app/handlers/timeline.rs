@@ -32,6 +32,10 @@ pub(crate) fn photos_loaded(app: &mut PhotoVault, photos: Vec<Photo>) -> Task<Me
     app.photos = photos;
     app.photo_count = app.photos.len() as i64;
 
+    // Pre-compute date groups once. The render path consumes this
+    // directly instead of re-grouping every frame.
+    app.timeline_groups = crate::views::timeline::TimelineView::compute_groups(&app.photos);
+
     let valid_ids: HashSet<i64> = app.photos.iter().map(|p| p.id).collect();
     app.selected_timeline_photo_ids
         .retain(|photo_id| valid_ids.contains(photo_id));

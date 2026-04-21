@@ -58,8 +58,36 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 14 {
         migrate_v13_to_v14(conn)?;
     }
+    if current_version < 15 {
+        migrate_v14_to_v15(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v14_to_v15(conn: &Connection) -> SqliteResult<()> {
+    // Phase 2 Track A4/B2: composite indexes for hot query paths.
+    // Single-column indexes exist for these columns already, but the
+    // combined access pattern (filter-then-sort) hit the table before.
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_photos_trashed_date
+            ON photos(is_trashed, date_taken DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_photos_faces_processed_trashed
+            ON photos(faces_processed, is_trashed, date_taken DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_faces_cluster_confidence
+            ON faces(cluster_id, confidence DESC, id);
+
+        CREATE INDEX IF NOT EXISTS idx_faces_photo_cluster
+            ON faces(photo_id, cluster_id);
+
+        INSERT INTO schema_version (version) VALUES (15);
+        "#,
+    )?;
+    tracing::info!("Migrated database to schema version 15 (composite indexes)");
     Ok(())
 }
 

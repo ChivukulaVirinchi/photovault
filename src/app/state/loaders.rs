@@ -31,8 +31,16 @@ impl PhotoVault {
                 match Database::open_for_drive(&drive_path) {
                     Ok(db) => {
                         let repo = PhotoRepo::new(&db.conn);
-                        // Load all photos (up to 50k for now)
-                        let mut photos = match repo.get_all_by_date(50000, 0) {
+
+                        // Load up to 250K photos. At ~500 bytes per
+                        // Photo record that's ~125 MB of in-memory
+                        // metadata, still well within desktop budgets
+                        // but 5× the previous 50K ceiling. Libraries
+                        // beyond 250K will need the deferred
+                        // PhotoLibrary cursor work tracked on the
+                        // Phase 2 backlog.
+                        const LOAD_LIMIT: i64 = 250_000;
+                        let mut photos = match repo.get_all_by_date(LOAD_LIMIT, 0) {
                             Ok(p) => p,
                             Err(e) => {
                                 tracing::error!("Failed to load photos: {}", e);

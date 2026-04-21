@@ -295,7 +295,7 @@ fn run_scan(
             batch.clear();
 
             // Send progress
-            if files_processed.is_multiple_of(50) || files_processed <= 5 {
+            if files_processed % 50 == 0 || files_processed <= 5 {
                 let _ = progress_tx.send_blocking(ScanProgress {
                     files_found: total_found,
                     files_processed,
@@ -373,8 +373,8 @@ fn is_supported_file(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
-/// Calculate SHA256 hash of a file
-fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
+/// Calculate SHA256 hash of a file (full streaming hash).
+pub(crate) fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path)?;

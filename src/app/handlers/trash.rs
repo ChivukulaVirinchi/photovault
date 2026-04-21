@@ -77,19 +77,17 @@ pub(crate) fn trash_photos(app: &mut PhotoVault, photo_ids: Vec<i64>) -> Task<Me
                 app.current_view = app.previous_view.take().unwrap_or(View::Timeline);
             }
         }
+    } else if app.current_view == View::Timeline {
+        // Timeline multi-delete stays in timeline (Google Photos style)
+        app.selected_timeline_photo_ids.clear();
+    } else if app.current_view == View::Documents {
+        // Documents multi-delete stays in documents view
+        app.selected_timeline_photo_ids.clear();
     } else {
-        if app.current_view == View::Timeline {
-            // Timeline multi-delete stays in timeline (Google Photos style)
-            app.selected_timeline_photo_ids.clear();
-        } else if app.current_view == View::Documents {
-            // Documents multi-delete stays in documents view
-            app.selected_timeline_photo_ids.clear();
-        } else {
-            // From other views, go to Trash
-            app.cull_state = None;
-            app.cull_confirm_pending = false;
-            app.current_view = View::Trash;
-        }
+        // From other views, go to Trash
+        app.cull_state = None;
+        app.cull_confirm_pending = false;
+        app.current_view = View::Trash;
     }
     let reload = app.load_photos();
     let invalidate = super::handle(app, Message::InvalidateInsights);

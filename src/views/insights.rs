@@ -413,14 +413,12 @@ fn activity_heatmap(data: &InsightsData, p: &colors::Palette) -> Element<'static
     let accent = p.accent_primary;
     let text_tertiary = p.text_tertiary;
 
-    for day_of_week in 0..7usize {
-        let mut week_row = row![container(
-            text(day_labels[day_of_week].to_string())
-                .size(9)
-                .color(text_tertiary),
-        )
-        .width(Length::Fixed(28.0))
-        .height(Length::Fixed(14.0))];
+    for (day_of_week, label) in day_labels.iter().enumerate() {
+        let mut week_row = row![
+            container(text((*label).to_string()).size(9).color(text_tertiary),)
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(14.0))
+        ];
 
         for week in 0..53usize {
             let day_index = week * 7 + day_of_week;

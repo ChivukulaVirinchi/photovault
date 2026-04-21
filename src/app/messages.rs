@@ -512,6 +512,25 @@ pub enum Message {
     AssetPackInstalled(Result<String, String>),
     /// Dismiss startup installer prompt for this run.
     DismissAssetInstallPrompt,
+
+    // --- In-app updater (Phase 3) ---
+    /// Manual or subscription-driven update check.
+    CheckForUpdates,
+    /// Async check-for-updates completion.
+    UpdateCheckResult(Result<crate::services::update_checker::UpdateStatus, String>),
+    /// User clicked "Download" in the update banner.
+    DownloadUpdate,
+    /// Async install completion (either ReplacedRestartRequired or
+    /// InstallerLaunched). Streamed download progress isn't wired
+    /// to a Message variant yet — the service accepts a progress
+    /// callback but the handler passes `None` in v1.0. The banner
+    /// shows a spinner instead of a precise percentage until we
+    /// thread progress through (post-v1.0 nice-to-have).
+    UpdateReady(Result<crate::services::self_replace::InstallOutcome, String>),
+    /// User clicked "Later" in the banner; suppress for this release.
+    DismissUpdateBanner,
+    /// Settings toggle for the background update check.
+    SetAutoUpdateCheck(bool),
 }
 
 /// Wrapper for scan result to make it Debug + Clone for Message

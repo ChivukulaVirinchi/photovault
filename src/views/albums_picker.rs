@@ -54,7 +54,7 @@ pub fn album_picker_overlay(
         let name_owned = create_name.to_owned();
         let input = text_input("New album name...", &name_owned)
             .id(text_input::Id::new("album-picker-new"))
-            .on_input(|s| Message::AlbumPickerNameChanged(s))
+            .on_input(Message::AlbumPickerNameChanged)
             .on_submit(Message::AlbumPickerCreateAndAdd)
             .size(13)
             .width(Length::Fill);
