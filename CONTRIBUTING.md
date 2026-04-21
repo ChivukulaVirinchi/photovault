@@ -29,10 +29,56 @@ Thanks for your interest. Contributions of all sizes are welcome.
 - Write tests for non-trivial logic
 - Keep commits focused -- one logical change per commit
 
+### Commit message style
+
+We follow [Conventional Commits](https://www.conventionalcommits.org).
+The `release-plz` automation reads commit prefixes to decide version
+bumps and to generate the changelog, so the prefix matters.
+
+| Prefix      | Meaning                          | Example                                                 |
+|-------------|----------------------------------|---------------------------------------------------------|
+| `feat:`     | User-visible new feature         | `feat(timeline): virtualize scroll for 100K libraries`  |
+| `fix:`      | Bug fix                          | `fix(reindexer): hash full file instead of 64 KB prefix` |
+| `perf:`     | Performance improvement          | `perf(clustering): skip Stage B above 2000 faces`       |
+| `docs:`     | Documentation only               | `docs(privacy): disclose update-check endpoint`         |
+| `refactor:` | No behavior change               | `refactor(db): extract timeline_group into models`      |
+| `test:`     | Test-only changes                | `test(scale): assert 50K compute_groups <100 ms`        |
+| `chore:`    | Tooling, deps, CI, housekeeping  | `chore(deps): bump lru 0.12 → 0.16`                     |
+
+Commits that don't match a prefix are still merged fine — they just
+won't appear in the generated changelog. Breaking changes go in the
+body of the commit message with a `BREAKING CHANGE:` token.
+
 ### Running tests
 
 ```bash
 cargo test
+```
+
+### CI gates (required to merge)
+
+Every PR must pass these checks before it can be merged into `master`:
+
+| Check  | What runs                                  | Where                  |
+|--------|--------------------------------------------|------------------------|
+| Format | `cargo fmt --all --check`                  | `ci.yml` `fmt`         |
+| Lint   | `cargo clippy --all-targets`               | `ci.yml` `quality` × 3 |
+| Tests  | `cargo test`                               | `ci.yml` `quality` × 3 |
+| MSRV   | `cargo check --all-targets` on Rust 1.75   | `ci.yml` `msrv`        |
+| Audit  | `cargo audit` (RUSTSEC advisories)         | `ci.yml` `audit`       |
+| Deny   | `cargo deny check` (licenses + bans)       | `ci.yml` `deny`        |
+
+The `quality` job runs on Linux, Windows, and macOS. All six checks must
+be green; the maintainer will not merge a red PR. Run them locally before
+pushing — debugging in CI is slower than running locally.
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets
+cargo test
+cargo +1.75 check --all-targets   # MSRV
+cargo audit                       # if installed
+cargo deny check                  # if installed
 ```
 
 ### Architecture overview

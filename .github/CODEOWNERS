@@ -1,0 +1,8 @@
+# CODEOWNERS — auto-requested reviewers for PRs.
+#
+# Right now the whole project has a single maintainer. When other
+# maintainers emerge, add area-specific lines above the catch-all,
+# e.g. `/src/ml/ @ml-lead` or `/docs/ @docs-lead`. The last matching
+# pattern wins, so put the catch-all `*` at the bottom.
+
+* @ChivukulaVirinchi

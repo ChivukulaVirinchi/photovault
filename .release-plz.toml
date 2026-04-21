@@ -1,0 +1,46 @@
+# release-plz configuration.
+#
+# This config keeps release-plz scoped to version bumps and CHANGELOG
+# updates only. The existing .github/workflows/release.yml already
+# owns building + uploading release artifacts, so:
+#   * `git_release_enable = false`   → don't create a GitHub Release
+#   * `publish = false`              → don't push to crates.io
+#     (PhotoVault is a GUI binary; crates.io publish is not useful)
+#   * `git_tag_enable = true`        → DO create the `vX.Y.Z` tag, which
+#     is what release.yml triggers on.
+
+[workspace]
+git_release_enable = false
+git_tag_enable = true
+publish = false
+semver_check = false
+changelog_update = true
+
+# Follow Keep-a-Changelog with conventional-commit groupings.
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+body = """
+## [{{ version }}]{%- if release_link -%}({{ release_link }}){%- endif %} — {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | upper_first }}{% if commit.breaking %} [**BREAKING**]{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^test", group = "Tests" },
+    { message = "^chore", group = "Chore", default_scope = "internal" },
+    { message = ".*", skip = true },
+]

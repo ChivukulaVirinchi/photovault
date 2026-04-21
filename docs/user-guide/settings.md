@@ -1,6 +1,107 @@
 # Settings
 
-Settings control theme, indexing behavior, face thresholds, burst windows,
-map cache, and maintenance actions.
+Settings control theme, indexing behavior, face thresholds, burst
+windows, map cache, updates, and maintenance actions.
 
 Changes are persisted locally in user config storage.
+
+## Appearance
+
+- **Theme** — dark, light, or follow the system theme.
+- **Thumbnail size** — grid density. Smaller thumbnails fit more
+  photos per row at the cost of per-photo detail.
+
+## Indexing
+
+- **Scan hidden folders** — include directories starting with `.`.
+  Off by default because hidden folders often contain metadata, not
+  photos.
+- **Date format** — how dates render in day headers and insights.
+
+## Face Recognition
+
+- **Face confidence** — minimum detection score for a face to be
+  stored. Lower values catch more faces but also more false
+  positives.
+- **Clustering threshold** — how tolerant the system is when grouping
+  visually similar faces. Lower means tighter clusters (more groups,
+  cleaner), higher means looser (fewer groups, more mixing). Default
+  works for most libraries.
+
+See the [People and Faces](people.md) guide for the full pipeline.
+
+## Burst detection
+
+- **Burst window** — time window (in seconds) used to group burst
+  shots. Default 3 seconds matches most camera apps.
+
+## Trash
+
+- **Auto-delete after** — days before trashed photos are permanently
+  removed. Default 30.
+
+## Map
+
+- **Tile cache size** — how much disk space tile caching can use.
+  Clearing the cache forces a redownload on next view.
+- **Home city override** — used for trip-detection and "photos from
+  this trip" grouping.
+
+## Memories
+
+- **Enable memories** — toggle the "on this day" cards in the
+  Timeline banner and the dedicated Memories view.
+
+## Updates
+
+- **Automatically check for updates** — when enabled, PhotoVault
+  queries `api.github.com` at most once every 24 hours to see if a
+  new release has been published. This is **opt-in** and off by
+  default. See [PRIVACY.md](../../PRIVACY.md) for the full
+  disclosure.
+- **Check for updates now** — run the check immediately, regardless
+  of the automatic-check setting.
+
+When an update is available, a banner appears at the top of the app
+with a **Download** button. What the button does depends on how you
+installed PhotoVault:
+
+- **AppImage, portable Windows zip** — downloads the new artifact,
+  verifies its SHA256 against the published `SHA256SUMS`, and
+  atomically replaces the running binary. You'll be prompted to
+  relaunch.
+- **Windows MSI** — downloads the new MSI, triggers the Windows
+  installer with a UAC prompt. PhotoVault exits; relaunch from the
+  Start menu when the install completes.
+- **macOS .dmg** — downloads the new .dmg and opens it. Drag the
+  new `.app` into `/Applications` as you did for the first install.
+- **System package manager (apt, brew, flatpak, winget)** — the
+  banner shows the matching upgrade command instead of
+  self-replacing. PhotoVault won't interfere with your package
+  manager.
+- **Source build** — the banner suggests `git pull && cargo build
+  --release`.
+
+## Maintenance actions
+
+These are one-shot operations — PhotoVault doesn't run them on a
+schedule.
+
+- **Rescan Library** — re-walk the drive and pick up newly added,
+  moved, or deleted files.
+- **Rebuild Faces (Full)** — re-run face detection + clustering
+  from scratch. Useful after a face-model update.
+- **Check for Changes** — scan for moves and deletions without
+  re-indexing unchanged files.
+- **Regenerate Thumbnails** — rebuild all three thumbnail tiers.
+- **Refresh Photo Dates** — re-parse EXIF for photos with unreliable
+  `date_taken`.
+- **Reinstall Assets** — re-run the optional asset installer
+  (ONNX runtime + ML models + GeoNames DB).
+- **Fix Rotated Photos** — regenerate cached data for photos whose
+  EXIF orientation wasn't previously applied.
+
+## Keyboard shortcuts
+
+See the [Keyboard shortcuts](keyboard-shortcuts.md) guide for the
+full list. Settings also renders an inline reference at the bottom.

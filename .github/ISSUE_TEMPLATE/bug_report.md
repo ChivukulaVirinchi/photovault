@@ -1,8 +1,13 @@
 ---
 name: Bug report
 about: Something is not working as expected
-labels: bug
+labels: type/bug, status/needs-review
 ---
+
+## Pre-flight
+
+- [ ] I searched [existing issues](https://github.com/ChivukulaVirinchi/photovault/issues?q=is%3Aissue) and didn't find a duplicate.
+- [ ] I'm on the [latest release](https://github.com/ChivukulaVirinchi/photovault/releases/latest), or the bug also happens there.
 
 ## Description
 
@@ -24,17 +29,26 @@ What actually happened.
 
 ## Environment
 
-- OS: (e.g. Ubuntu 24.04, Windows 11, macOS 14)
-- PhotoVault version: (Settings -> About, or `photovault --version`)
-- Library size: (approximately how many photos)
+- **OS:** (e.g. Ubuntu 24.04, Windows 11 23H2, macOS 14.5)
+- **PhotoVault version:** (Settings → About, or `photovault --version`)
+- **Install method:** (MSI / AppImage / deb / Homebrew / built from source)
+- **Library size:** (approximately how many photos)
 
 ## Logs
 
-Relevant log entries from:
+Relevant log entries. Paths by OS:
+
 - Linux: `~/.config/photovault/photovault.log`
-- Windows: `%APPDATA%\\photovault\\photovault.log`
+- Windows: `%APPDATA%\photovault\photovault.log`
 - macOS: `~/Library/Application Support/photovault/photovault.log`
 
 ## Screenshots
 
-If applicable, add screenshots.
+If applicable, drag-and-drop screenshots into the box.
+
+---
+
+*For security-related issues, please use
+[GitHub Security Advisories](https://github.com/ChivukulaVirinchi/photovault/security/advisories/new)
+instead of a public issue. See [SECURITY.md](../../SECURITY.md).
+For update-check related issues, see [PRIVACY.md](../../PRIVACY.md).*

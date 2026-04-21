@@ -1,0 +1,22 @@
+name: Sync issue labels
+
+# Seeds the repo's label taxonomy from .github/labels.yml. Manually
+# triggered from the Actions tab — safe to re-run; existing labels
+# are updated in place rather than recreated.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    name: Sync labels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          delete-other-labels: false

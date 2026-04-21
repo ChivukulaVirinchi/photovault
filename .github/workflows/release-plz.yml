@@ -1,0 +1,40 @@
+name: Release PR
+
+# release-plz watches master for conventional-commit-prefixed commits
+# (`feat:`, `fix:`, etc.) and opens a PR that bumps the version in
+# Cargo.toml and rewrites CHANGELOG.md accordingly. Merging that PR
+# creates the git tag, which fires .github/workflows/release.yml and
+# builds artifacts.
+#
+# This workflow only owns version + CHANGELOG. It does NOT create
+# GitHub releases or upload artifacts (`git_release_enable = false`
+# in .release-plz.toml) — release.yml keeps that role.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-plz:
+    name: Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ""

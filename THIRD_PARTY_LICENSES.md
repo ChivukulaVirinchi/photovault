@@ -18,35 +18,58 @@ Map tiles used in the Map view.
 
 ## ML Models
 
-### SCRFD 10G BNKPS (face detection)
-- Source: downloaded by `scripts/setup_assets.sh` / `scripts/setup_assets.ps1`
-- URL default: HuggingFace mirror configured in setup scripts
-- License: check upstream model card before redistribution
+PhotoVault does **not** bundle ML model weights in the installer.
+The optional asset-pack installer downloads them from the upstream
+projects linked below, on the user's machine, after install.
+Whatever terms the upstream projects publish govern how you're
+allowed to use those weights — PhotoVault is a neutral integrator.
 
-### GLinTR-100 (face recognition)
-- Source: downloaded by `scripts/setup_assets.sh` / `scripts/setup_assets.ps1`
-- URL default: HuggingFace mirror configured in setup scripts
-- License: check upstream model card before redistribution
+### SCRFD-10G-BNKPS (face detection)
+- Upstream: [InsightFace](https://github.com/deepinsight/insightface)
+- Paper: *Sample and Computation Redistribution for Efficient Face
+  Detection* (Guo et al., CVPR 2021)
+- Please refer to the InsightFace model-zoo README for the terms
+  that apply to you.
+
+### GLinT-R100 (face recognition)
+- Upstream: [InsightFace](https://github.com/deepinsight/insightface)
+- Trained on the GLINT360K dataset
+- Please refer to the InsightFace model-zoo README for the terms
+  that apply to you.
+
+### ONNX Runtime
+The shared library that loads and executes the above models.
+- License: [MIT License](https://github.com/microsoft/onnxruntime/blob/main/LICENSE)
+- Attribution: Microsoft Corporation
+- Distributed via official GitHub releases; PhotoVault's setup
+  script downloads the matching platform binary on demand.
 
 ## Software dependencies
 
-PhotoVault uses many Rust crates. Run the following to generate a full list:
+PhotoVault depends on many Rust crates. Run the following to
+generate a full per-crate license list:
 
 ```bash
 cargo install cargo-license
 cargo license --json > THIRD_PARTY_LICENSES.json
 ```
 
-A summary of major dependencies and their licenses:
+Headline dependencies and their licenses:
 
-| Crate | License |
-|---|---|
-| iced | MIT |
-| rusqlite | MIT |
-| tokio | MIT |
-| ort | MIT/Apache-2.0 |
-| image | MIT/Apache-2.0 |
-| chrono | MIT/Apache-2.0 |
+| Crate      | License                     |
+|------------|-----------------------------|
+| iced       | MIT                         |
+| rusqlite   | MIT                         |
+| tokio      | MIT                         |
+| ort        | MIT OR Apache-2.0           |
+| image      | MIT OR Apache-2.0           |
+| chrono     | MIT OR Apache-2.0           |
+| reqwest    | MIT OR Apache-2.0           |
+| rayon      | MIT OR Apache-2.0           |
+| sha2       | MIT OR Apache-2.0           |
+| ndarray    | MIT OR Apache-2.0           |
+| self_update| MIT OR Apache-2.0           |
+| semver     | MIT OR Apache-2.0           |
 
-For full versions and transitive dependencies, generate and review
-`THIRD_PARTY_LICENSES.json` in release CI.
+License compliance is enforced in CI by `cargo deny check licenses`
+(see `deny.toml` for the allow-list).

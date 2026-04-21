@@ -1,0 +1,98 @@
+# Label taxonomy for PhotoVault issues and PRs.
+#
+# Applied by .github/workflows/setup-labels.yml on workflow_dispatch.
+# Run the workflow from the Actions tab once after merging Phase 3.
+#
+# Color scheme (hex, no leading #):
+#   type/*      blue   0052cc / 1d76db / 006b75
+#   priority/*  red    b60205 / d93f0b / fbca04
+#   area/*      purple bfd4f2 / c5def5
+#   status/*    gray   cccccc / c2e0c6
+#   onboarding  green  7057ff / 008672
+
+# --- Type -------------------------------------------------------------
+- name: type/bug
+  color: d73a4a
+  description: Something isn't working
+- name: type/feature
+  color: 0075ca
+  description: New functionality or enhancement
+- name: type/docs
+  color: 0075ca
+  description: Documentation improvement
+- name: type/perf
+  color: 0075ca
+  description: Performance improvement
+- name: type/refactor
+  color: c2e0c6
+  description: Refactor without behavior change
+
+# --- Priority ---------------------------------------------------------
+- name: priority/p0
+  color: b60205
+  description: Drop everything else
+- name: priority/p1
+  color: d93f0b
+  description: Next up
+- name: priority/p2
+  color: fbca04
+  description: Nice to have
+
+# --- Area -------------------------------------------------------------
+- name: area/scanner
+  color: bfd4f2
+  description: Indexing, reindex, EXIF extraction
+- name: area/faces
+  color: bfd4f2
+  description: Face detection, clustering, people view
+- name: area/ui
+  color: bfd4f2
+  description: iced views, components, interactions
+- name: area/ml
+  color: bfd4f2
+  description: ONNX runtime, models, embeddings
+- name: area/ci
+  color: bfd4f2
+  description: CI workflows, lints, formatting
+- name: area/release
+  color: bfd4f2
+  description: Packaging, release pipeline, distribution
+- name: area/docs
+  color: bfd4f2
+  description: User guide, contributor docs, website
+- name: area/db
+  color: bfd4f2
+  description: SQLite schema, repos, migrations
+- name: area/updates
+  color: bfd4f2
+  description: In-app update mechanism
+
+# --- Status -----------------------------------------------------------
+- name: status/blocked
+  color: cccccc
+  description: Waiting on external dependency or decision
+- name: status/needs-review
+  color: cccccc
+  description: Awaiting maintainer triage
+- name: status/needs-info
+  color: cccccc
+  description: Waiting for reporter to provide details
+
+# --- Onboarding -------------------------------------------------------
+- name: good-first-issue
+  color: 7057ff
+  description: Good entry point for first-time contributors
+- name: help-wanted
+  color: 008672
+  description: Extra attention needed from contributors
+
+# --- Dependency automation (Dependabot uses these) -------------------
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates
+- name: rust
+  color: dea584
+  description: Rust toolchain / cargo dependencies
+- name: github-actions
+  color: 2088ff
+  description: GitHub Actions workflow dependencies
