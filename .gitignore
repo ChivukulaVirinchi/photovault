@@ -9,7 +9,8 @@
 /models/
 
 # Downloaded data and build cache
-/data/
+/data/*
+!/data/README.md
 /.cache/
 
 # IDE

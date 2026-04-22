@@ -1,7 +1,6 @@
 [book]
 authors = ["Virinchi Chivukula"]
 language = "en"
-multilingual = false
 src = "docs"
 title = "PhotoVault Documentation"
 description = "Offline-first photo library manager -- user guide and contributor docs"
