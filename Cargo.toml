@@ -23,7 +23,7 @@ exclude = [
 
 [dependencies]
 # UI Framework
-iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced", "canvas"] }
+iced = { version = "0.14", features = ["image", "svg", "tokio", "advanced", "canvas"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
