@@ -56,7 +56,7 @@ imageproc = "0.26"
 # This avoids linking against a prebuilt static lib that requires glibc 2.38+.
 # Place the ONNX Runtime 1.23.x shared library in libs/onnxruntime/ or set ORT_DYLIB_PATH.
 # default-features = false is critical: the default features include download-binaries.
-ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic", "cuda", "directml", "coreml"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "cuda", "directml", "coreml"] }
 
 # Linear algebra for face embeddings
 ndarray = "0.16"
@@ -65,7 +65,7 @@ ndarray = "0.16"
 kamadak-exif = "0.5"
 
 # Parallel processing
-rayon = "1.10"
+rayon = "1.12"
 
 # Additional async utilities
 async-channel = "2.0"
