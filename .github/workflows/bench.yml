@@ -1,0 +1,41 @@
+name: Benches
+
+# Benchmarks rarely change between releases, so we don't run them on
+# every push. The release-profile compile is the heaviest single CI
+# step (thin LTO, codegen-units=1, ~15 min cold) and is wasted on
+# unrelated source edits.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'benches/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '.github/workflows/bench.yml'
+  pull_request:
+    paths:
+      - 'benches/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '.github/workflows/bench.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: Benches smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      # Compile-only smoke test. Actually running the benches needs
+      # warmup iterations that, combined with the heavy release
+      # profile, push past the free-tier runner time budget.
+      - run: cargo bench --workspace --no-run

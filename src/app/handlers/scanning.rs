@@ -174,11 +174,22 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
             }
 
             if let Err(e) = migrations::run_migrations(&db.conn) {
+                // Distinguish the "library was made by a newer build"
+                // case so the toast points users at an upgrade rather
+                // than looking like a corruption error.
+                let too_new = e.downcast_ref::<migrations::SchemaTooNewError>().is_some();
                 tracing::error!("Failed to run migrations: {}", e);
+                let title = if too_new {
+                    "Library needs a newer PhotoVault"
+                } else {
+                    "Couldn't migrate database"
+                };
+                // Critical: abort drive selection. Reading from a
+                // partially migrated or too-new schema risks data loss.
                 return super::handle(
                     app,
                     Message::ToastShow(crate::components::toast::Toast::error(
-                        "Couldn't migrate database",
+                        title,
                         format!("{}", e),
                     )),
                 );
@@ -324,7 +335,15 @@ pub(crate) fn folder_dropped(app: &mut PhotoVault, path: PathBuf) -> Task<Messag
 pub(crate) fn back_to_welcome(app: &mut PhotoVault) -> Task<Message> {
     app.current_view = View::Welcome;
     app.selected_drive = None;
-    app.database = None;
+    // Stop any background prewarm targeting the previous drive.
+    if let Some(flag) = app.thumbnail_prewarm_cancel.take() {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // Strict-checkpoint the WAL before dropping — protects users who
+    // yank an external drive without quitting the app.
+    if let Some(db) = app.database.take() {
+        db.flush_and_close();
+    }
     app.photos.clear();
     app.albums.clear();
     app.face_clusters.clear();
@@ -498,7 +517,9 @@ pub(crate) fn scan_finished(app: &mut PhotoVault, result: ScanResult) -> Task<Me
 
     // If still on Scanning view (first scan), auto-advance
     if app.current_view == View::Scanning {
-        Task::none()
+        // Even on the first scan, kick off thumbnail prewarm so the
+        // user sees a populated grid the moment they continue.
+        super::handle(app, Message::PrewarmThumbnails)
     } else {
         // Scan was running in background — clear state and reload if on Timeline
         app.scan_state = None;
@@ -516,12 +537,75 @@ pub(crate) fn scan_finished(app: &mut PhotoVault, result: ScanResult) -> Task<Me
         // Trigger suggestion detection after scan completes
         tasks.push(super::handle(app, Message::RunSuggestionDetection));
 
+        // Background-fill the thumbnail cache so first scroll feels fast.
+        tasks.push(super::handle(app, Message::PrewarmThumbnails));
+
         if tasks.is_empty() {
             Task::none()
         } else {
             Task::batch(tasks)
         }
     }
+}
+
+pub(crate) fn prewarm_thumbnails(app: &mut PhotoVault) -> Task<Message> {
+    let Some(ref drive_path) = app.selected_drive else {
+        return Task::none();
+    };
+    let Some(ref db) = app.database else {
+        return Task::none();
+    };
+
+    // Build the work list: every non-trashed photo's (full path, hash,
+    // orientation). The prewarm method itself stat-skips photos that
+    // already have a Small thumb on disk, so this is cheap on warm
+    // libraries.
+    let repo = crate::db::PhotoRepo::new(&db.conn);
+    // i64::MAX would dominate the LIMIT clause; 1M is plenty for any
+    // realistic library and keeps the query bounded.
+    let photos = match repo.get_all_by_date(1_000_000, 0) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Prewarm: failed to list photos: {}", e);
+            return Task::none();
+        }
+    };
+    let drive = drive_path.clone();
+    let items: Vec<(std::path::PathBuf, String, i32)> = photos
+        .into_iter()
+        .map(|p| (drive.join(&p.file_path), p.file_hash, p.orientation))
+        .collect();
+
+    if items.is_empty() {
+        return Task::none();
+    }
+
+    // Replace any prior cancel flag so a freshly-kicked prewarm wins.
+    if let Some(prev) = app.thumbnail_prewarm_cancel.take() {
+        prev.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.thumbnail_prewarm_cancel = Some(cancel.clone());
+
+    let max_cache_gb = (app.config.map_cache_limit_mb as f64) / 1024.0;
+    let drive_for_task = drive.clone();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                match crate::services::ThumbnailService::new(&drive_for_task, max_cache_gb.max(1.0))
+                {
+                    Ok(svc) => svc.prewarm_small(&items, &cancel),
+                    Err(e) => {
+                        tracing::warn!("Prewarm: ThumbnailService init failed: {}", e);
+                        0
+                    }
+                }
+            })
+            .await
+            .unwrap_or(0)
+        },
+        Message::PrewarmThumbnailsComplete,
+    )
 }
 
 pub(crate) fn scan_complete(app: &mut PhotoVault) -> Task<Message> {

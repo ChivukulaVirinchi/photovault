@@ -21,6 +21,16 @@ exclude = [
     "/.claude",
 ]
 
+[features]
+# `heic` decodes HEIC/HEIF photos via libheif. Off by default because
+# libheif is a system C library; turn on once `libheif-dev` (Linux) /
+# `libheif` (macOS) / Windows binaries are available on the build
+# host. The runtime check inside services::image_io falls back to a
+# clear error message when the feature is disabled — no silent
+# corruption either way.
+default = []
+heic = ["dep:libheif-rs"]
+
 [dependencies]
 # UI Framework
 iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced", "canvas"] }
@@ -50,6 +60,12 @@ sha2 = "0.10"
 # Image processing
 image = "0.25"
 imageproc = "0.26"
+
+# Optional HEIC decoder. Requires the `libheif` system library at
+# runtime (apt install libheif-dev / brew install libheif / Windows
+# binaries shipped with the asset pack). Gated behind the `heic`
+# Cargo feature so default builds still work without the system dep.
+libheif-rs = { version = "2", optional = true, default-features = false }
 
 # ONNX Runtime for ML inference (face detection/recognition)
 # Using load-dynamic to load libonnxruntime.so at runtime via dlopen.

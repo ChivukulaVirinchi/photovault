@@ -171,8 +171,10 @@ fn run_scan(
         let relative_path = entry
             .path()
             .strip_prefix(&root_path)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| entry.path().to_string_lossy().to_string());
+            .map(crate::services::path_util::relative_path_for_storage)
+            .unwrap_or_else(|_| {
+                crate::services::path_util::relative_path_for_storage(entry.path())
+            });
 
         let mtime = metadata
             .modified()

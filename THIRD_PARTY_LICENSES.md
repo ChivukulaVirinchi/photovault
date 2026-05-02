@@ -44,6 +44,15 @@ The shared library that loads and executes the above models.
 - Distributed via official GitHub releases; PhotoVault's setup
   script downloads the matching platform binary on demand.
 
+### libheif (optional, `heic` Cargo feature)
+Decoder for HEIC / HEIF photos (every iPhone export since iOS 11).
+- License: [LGPL-3.0](https://github.com/strukturag/libheif/blob/master/COPYING)
+- Attribution: Dirk Farin / Struktur AG
+- System library — install via `apt install libheif-dev` (Linux),
+  `brew install libheif` (macOS), or vendor binaries (Windows).
+  When the `heic` feature is off PhotoVault still indexes HEIC files
+  but reports a clear "HEIC support not compiled in" error on decode.
+
 ## Fonts
 
 ### Inter

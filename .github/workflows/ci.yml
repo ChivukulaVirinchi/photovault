@@ -3,7 +3,19 @@ name: CI
 on:
   push:
     branches: [master, main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_LICENSES.md'
+      - '.github/workflows/docs.yml'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_LICENSES.md'
+      - '.github/workflows/docs.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,7 +37,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # PRs run Linux only to conserve minutes (Windows = 2x, macOS =
+        # 10x). Pushes to master keep the full matrix; the release
+        # pipeline exercises Windows + macOS independently.
+        os: ${{ github.event_name == 'pull_request' && fromJson('["ubuntu-latest"]') || fromJson('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -38,7 +53,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --no-run
+      # `cargo test` already builds before running, so a separate
+      # `--no-run` step would just duplicate the compile.
       - run: cargo test
 
   msrv:
@@ -54,57 +70,25 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo check --all-targets
 
-  audit:
-    name: Security advisories
+  supply-chain:
+    name: Supply chain (audit + deny)
     runs-on: ubuntu-latest
-    # rustsec/audit-check posts findings as a GitHub Check Run, which needs
-    # checks:write. On PRs from forks the token is read-only and the post
-    # can still fail — so we also fall back to the CLI, which just exits
-    # non-zero on vulnerabilities and is what actually gates merges.
     permissions:
       contents: read
       checks: write
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run cargo audit (actual gate)
+      - name: Install cargo-audit (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Run cargo audit
         # cargo-audit exits non-zero only on real vulnerabilities by
         # default; unmaintained/unsound/yanked are warnings we surface
-        # but don't block on. The deny job covers dupes/licenses; we
-        # intentionally don't pass --deny warnings here.
+        # but don't block on. The deny step below covers dupes/licenses.
         run: cargo audit
-
-  deny:
-    name: Dependency policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Run cargo deny (bans, licenses, sources, advisories)
+        uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans licenses sources advisories
-
-  bench:
-    name: Benches smoke test
-    runs-on: ubuntu-latest
-    # Compile-only gate with a hard ceiling. The release profile uses
-    # thin LTO + codegen-units=1 so full bench compilation is ~15 min on
-    # a cold CI runner; we bounded it here so a runaway never burns an
-    # hour like it did in the first release run.
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Linux deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      # Compile-only smoke test. Actually running the benches requires
-      # warmup iterations that, combined with the heavy release profile,
-      # push the job past the free-tier runner time budget. We gate
-      # compile breakage here; perf regressions need committed baselines
-      # under `benches/baselines/` and a separate nightly job — deferred
-      # until we have a stable baseline worth committing.
-      - run: cargo bench --workspace --no-run

@@ -117,14 +117,10 @@ impl Reindexer {
                 continue;
             }
 
-            let relative_path = match entry
-                .path()
-                .strip_prefix(drive_root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .map(|s| s.to_string())
-            {
-                Some(p) => p,
+            // Forward-slash-normalized so a Windows write and a Linux
+            // write of the same drive produce identical strings.
+            let relative_path = match entry.path().strip_prefix(drive_root).ok() {
+                Some(p) => crate::services::path_util::relative_path_for_storage(p),
                 None => continue,
             };
 

@@ -72,8 +72,9 @@ pub struct ThumbnailEntry {
 /// Maximum number of entries the in-memory cache tracks. Serves as a
 /// backstop against unbounded metadata growth — actual eviction
 /// typically fires from the byte-budget check in `evict_if_needed`
-/// well before the count limit is hit.
-const CACHE_ENTRY_CAPACITY: usize = 100_000;
+/// well before the count limit is hit. 10k is plenty for any visible
+/// scrolling window even on huge libraries.
+const CACHE_ENTRY_CAPACITY: usize = 10_000;
 
 /// Concurrency limiter using std::sync primitives (safe for spawn_blocking)
 struct ConcurrencyLimiter {
@@ -164,6 +165,44 @@ impl ThumbnailService {
             generation_limiter: Arc::new(ConcurrencyLimiter::new(8)),
             generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
+    }
+
+    /// Prewarm Small thumbnails for a batch of photos. Skips any that
+    /// already exist on disk (cheap stat). Runs sequentially relying on
+    /// the existing 8-permit concurrency limiter inside
+    /// `generate_thumbnail` — caller wraps in `spawn_blocking`.
+    ///
+    /// Aborts as soon as `cancel` is set so a fresh scan or app-exit
+    /// can stop prewarm immediately. Returns the number of newly
+    /// generated thumbnails.
+    pub fn prewarm_small(
+        &self,
+        items: &[(PathBuf, String, i32)],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> usize {
+        use std::sync::atomic::Ordering;
+        let size = ThumbnailSize::Small;
+        let mut generated = 0usize;
+        for (photo_path, file_hash, orientation) in items {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            // Skip if a thumbnail file already exists on disk for this
+            // hash+size — that's the same key the on-demand generator
+            // uses, so the cost is one stat per photo.
+            let cached = self
+                .cache_dir
+                .join(size.dir_name())
+                .join(format!("{}.jpg", file_hash));
+            if cached.exists() {
+                continue;
+            }
+            match self.generate_thumbnail(photo_path, file_hash, *orientation, size) {
+                Ok(_) => generated += 1,
+                Err(e) => tracing::trace!("prewarm skipped {}: {}", photo_path.display(), e),
+            }
+        }
+        generated
     }
 
     /// Generate a thumbnail synchronously with a timeout guard.
@@ -266,11 +305,24 @@ impl ThumbnailService {
     ///
     /// For JPEGs, the underlying libjpeg can decode at 1/2, 1/4, or 1/8 scale
     /// natively — much faster than decoding full resolution then resizing.
+    /// HEIC/HEIF route through `services::image_io::open_image` (libheif).
     fn decode_image_fast(
         photo_path: &Path,
         _target_size: ThumbnailSize,
     ) -> Result<DynamicImage, String> {
-        // Try to get image dimensions without full decode
+        // Route HEIC/HEIF through the format-aware wrapper. The
+        // `image` crate's reader doesn't recognise these formats so we
+        // can't use its guessed-format path; fall back to a full decode
+        // via libheif. For JPEG/PNG/etc, the existing fast path with
+        // alloc limits stays in effect.
+        let ext = photo_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        if matches!(ext.as_deref(), Some("heic") | Some("heif")) {
+            return crate::services::image_io::open_image(photo_path);
+        }
+
         let reader =
             ImageReader::open(photo_path).map_err(|e| format!("Failed to open image: {}", e))?;
 

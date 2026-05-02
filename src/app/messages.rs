@@ -40,6 +40,15 @@ pub enum Message {
     /// it points at a directory and dispatches `SelectDrive`.
     FolderDropped(PathBuf),
 
+    /// Window close requested by the OS. Triggers WAL flush + DB
+    /// flush-and-close so a yanked drive doesn't leave unwritten data.
+    AppExiting,
+
+    /// Background prewarm of Small thumbnails after a scan completes.
+    /// Best-effort — the on-demand path still works if prewarm aborts.
+    PrewarmThumbnails,
+    PrewarmThumbnailsComplete(usize),
+
     /// Drives detected
     DrivesDetected(Vec<DriveInfo>),
 

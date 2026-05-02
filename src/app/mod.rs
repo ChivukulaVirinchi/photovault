@@ -135,6 +135,7 @@ impl PhotoVault {
                     height: size.height,
                 })
             }
+            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::AppExiting),
             _ => None,
         }));
 

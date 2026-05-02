@@ -118,7 +118,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-deb
+      - name: Install cargo-deb (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux deps
         run: |
@@ -163,8 +166,10 @@ jobs:
           if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
             throw "WiX light.exe was not found after installation"
           }
-      - name: Install cargo-wix
-        run: cargo install cargo-wix --locked
+      - name: Install cargo-wix (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-wix
       - name: Build MSI
         run: cargo wix --target x86_64-pc-windows-msvc --output target\wix\PhotoVault-Setup-x64.msi
       - uses: actions/upload-artifact@v5

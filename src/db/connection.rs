@@ -22,6 +22,16 @@ pub struct Database {
     pub conn: Connection,
 }
 
+impl Drop for Database {
+    fn drop(&mut self) {
+        // Best-effort PASSIVE checkpoint on drop. The clean-exit path
+        // already calls `flush_and_close` (TRUNCATE), so this only
+        // catches accidental drops (panics, early-return paths) and
+        // never blocks long.
+        let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    }
+}
+
 /// Returns the `.photovault` metadata directory for a drive root.
 pub fn photovault_dir(drive_root: &Path) -> PathBuf {
     drive_root.join(".photovault")
@@ -84,6 +94,12 @@ impl Database {
         // Foreign key enforcement
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
+        // Wait up to 5 seconds for a busy lock instead of failing
+        // immediately. Without this, two writers (e.g. face-processor
+        // writer thread + scanner upserts during a re-index) surface
+        // SQLITE_BUSY to the user instead of retrying.
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+
         Ok(())
     }
 
@@ -125,6 +141,18 @@ impl Database {
         // Checkpoint WAL to keep it from growing unbounded
         self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
         Ok(())
+    }
+
+    /// Aggressively flush WAL to the main DB file and consume the
+    /// connection. Use on drive deselect / app exit so a yanked USB
+    /// drive doesn't leave unwritten data behind. TRUNCATE is the
+    /// strict mode (vs PASSIVE) — it both checkpoints AND empties the
+    /// WAL file.
+    pub fn flush_and_close(self) {
+        if let Err(e) = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            tracing::debug!("WAL truncate-checkpoint failed: {}", e);
+        }
+        // Connection drops here, releasing file handles.
     }
 
     /// Run integrity check on the database.

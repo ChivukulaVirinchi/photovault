@@ -367,9 +367,10 @@ impl FaceProcessor {
                         }
                     });
 
-                    // Load and orient image (once!)
+                    // Load and orient image (once!) — image_io routes
+                    // HEIC/HEIF through libheif when the feature is on.
                     let full_path = drive_path_arc.join(file_path);
-                    let image = match image::open(&full_path) {
+                    let image = match crate::services::image_io::open_image(&full_path) {
                         Ok(img) => {
                             let img = apply_exif_orientation(img, *orientation);
                             let max_dim = img.width().max(img.height());
@@ -682,11 +683,20 @@ impl FaceProcessor {
             let temporal_score = 1.0 - (delta / Self::CONTEXT_WINDOW_SECS as f32).clamp(0.0, 1.0);
             let mut confidence = 0.5 + (temporal_score * 0.4);
 
-            // Use precomputed brightness if available, otherwise load from disk
+            // Brightness lookup: in-run map (this run's photos) →
+            // photos.brightness column (prior runs) → on-disk recompute
+            // (legacy rows from before brightness was persisted, until
+            // they get reprocessed and rewritten).
             let source_brightness = params
                 .brightness_map
                 .get(&source_photo_id)
                 .copied()
+                .or_else(|| {
+                    face_repo
+                        .get_photo_brightness(source_photo_id)
+                        .ok()
+                        .flatten()
+                })
                 .or_else(|| {
                     Self::load_average_brightness_from_relative(
                         params.drive_path,
@@ -851,7 +861,7 @@ impl FaceProcessor {
         relative_path: &str,
     ) -> Option<f32> {
         let path = drive_path.join(relative_path);
-        match image::open(&path) {
+        match crate::services::image_io::open_image(&path) {
             Ok(image) => Some(Self::average_brightness(&image)),
             Err(e) => {
                 tracing::trace!(
@@ -938,9 +948,12 @@ fn flush_result_chunk(
             }
         }
 
+        // Persist brightness alongside the processed flag so future
+        // runs and propagation lookups can read it from SQL instead of
+        // re-decoding the JPEG to compute luma again.
         let _ = tx.execute(
-            "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
-            rusqlite::params![result.photo_id],
+            "UPDATE photos SET faces_processed = TRUE, brightness = ?2 WHERE id = ?1",
+            rusqlite::params![result.photo_id, result.brightness],
         );
         photos_added += 1;
     }

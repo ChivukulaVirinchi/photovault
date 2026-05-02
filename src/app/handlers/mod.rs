@@ -35,6 +35,24 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::BrowseForFolder => scanning::browse_for_folder(app),
         Message::FolderSelected(path) => scanning::folder_selected(app, path),
         Message::FolderDropped(path) => scanning::folder_dropped(app, path),
+        Message::AppExiting => {
+            // Best-effort flush; iced will close the window after this
+            // returns. We can't actually halt the close, just make sure
+            // we don't leave a dirty WAL behind.
+            if let Some(flag) = app.thumbnail_prewarm_cancel.take() {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some(db) = app.database.take() {
+                db.flush_and_close();
+            }
+            Task::none()
+        }
+        Message::PrewarmThumbnails => scanning::prewarm_thumbnails(app),
+        Message::PrewarmThumbnailsComplete(n) => {
+            tracing::info!("Thumbnail prewarm complete: {} new thumbs generated", n);
+            app.thumbnail_prewarm_cancel = None;
+            Task::none()
+        }
         Message::DrivesDetected(drives) => scanning::drives_detected(app, drives),
         Message::BackToWelcome => scanning::back_to_welcome(app),
         Message::StartScan => scanning::start_scan(app),

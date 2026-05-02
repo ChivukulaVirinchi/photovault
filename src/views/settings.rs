@@ -37,6 +37,7 @@ impl SettingsView {
             Self::section_header(config.theme, "Face Recognition"),
             Self::face_confidence_setting(config.theme, config.face_detection_confidence),
             Self::clustering_threshold_setting(config.theme, config.face_clustering_threshold),
+            Self::inference_backend_row(config.theme),
             Space::with_height(24),
             Self::section_header(config.theme, "Burst Detection"),
             Self::burst_window_setting(config.theme, config.burst_time_window_seconds),
@@ -292,6 +293,22 @@ impl SettingsView {
                 .size(13)
                 .width(Length::Fixed(200.0))
                 .into(),
+        )
+    }
+
+    fn inference_backend_row(theme: AppTheme) -> Element<'static, Message> {
+        let p = colors::palette(theme);
+        let provider = crate::ml::runtime::active_execution_provider();
+        let value = if provider == "CPU" {
+            "CPU".to_string()
+        } else {
+            format!("GPU ({})", provider)
+        };
+        Self::setting_row(
+            theme,
+            "Face Inference Backend",
+            "Where face detection and recognition models run.",
+            text(value).size(14).color(p.text_secondary).into(),
         )
     }
 

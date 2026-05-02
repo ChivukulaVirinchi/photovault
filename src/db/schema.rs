@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS photos (
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
     faces_processed BOOLEAN DEFAULT FALSE,
+    brightness REAL,                   -- Average luma in [0,1], cached from face pipeline
     content_category TEXT DEFAULT 'photo', -- 'photo' | 'document' | 'screenshot' | 'presentation' | 'whiteboard' | 'receipt'
     ocr_text TEXT,
     ocr_processed BOOLEAN DEFAULT FALSE,

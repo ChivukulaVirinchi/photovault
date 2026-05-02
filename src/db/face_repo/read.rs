@@ -318,6 +318,23 @@ impl<'a> FaceRepo<'a> {
         Ok(result)
     }
 
+    /// Read the cached `photos.brightness` value for a photo. Returns
+    /// `None` if the photo doesn't exist OR brightness was never
+    /// computed (NULL in the column). Caller is expected to fall back
+    /// to on-disk recomputation in that case.
+    pub fn get_photo_brightness(&self, photo_id: i64) -> SqliteResult<Option<f32>> {
+        self.conn
+            .query_row(
+                "SELECT brightness FROM photos WHERE id = ?1",
+                rusqlite::params![photo_id],
+                |row| row.get::<_, Option<f32>>(0),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+    }
+
     /// Count of unresolved entries in the face review queue.
     pub fn review_queue_size(&self) -> SqliteResult<i64> {
         self.conn.query_row(

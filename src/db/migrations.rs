@@ -2,6 +2,15 @@
 
 use rusqlite::{Connection, Result as SqliteResult};
 
+/// The highest schema version this binary knows how to produce. Bump
+/// this in lockstep with each new `migrate_vN_to_vM` (and add the
+/// matching `if current_version < N` line in `run_migrations`).
+///
+/// `run_migrations` refuses to open a DB whose `schema_version` is
+/// higher than this — that would mean a newer build wrote it, and
+/// blindly reading would expose missing tables / columns to old code.
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 17;
+
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
     let result = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
@@ -15,9 +24,42 @@ pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
     }
 }
 
+/// Distinct error returned by `run_migrations` when the DB is newer
+/// than this binary supports. Surfaced to the user with a friendlier
+/// message than a generic SQLite error.
+#[derive(Debug)]
+pub struct SchemaTooNewError {
+    pub db_version: i32,
+    pub max_supported: i32,
+}
+
+impl std::fmt::Display for SchemaTooNewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Library was created by a newer version of PhotoVault \
+             (schema v{}). This build only supports up to v{}. \
+             Please update PhotoVault to open this library.",
+            self.db_version, self.max_supported
+        )
+    }
+}
+
+impl std::error::Error for SchemaTooNewError {}
+
 /// Run any pending migrations
-pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
+pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let current_version = get_schema_version(conn).unwrap_or(0);
+
+    // Forward-compat guard: don't read schemas this binary doesn't
+    // know about. Better to refuse opening than to silently
+    // mis-interpret unfamiliar columns or miss new tables.
+    if current_version > MAX_KNOWN_SCHEMA_VERSION {
+        return Err(Box::new(SchemaTooNewError {
+            db_version: current_version,
+            max_supported: MAX_KNOWN_SCHEMA_VERSION,
+        }));
+    }
 
     if current_version < 2 {
         migrate_v1_to_v2(conn)?;
@@ -61,8 +103,54 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     if current_version < 15 {
         migrate_v14_to_v15(conn)?;
     }
+    if current_version < 16 {
+        migrate_v15_to_v16(conn)?;
+    }
+    if current_version < 17 {
+        migrate_v16_to_v17(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v16_to_v17(conn: &Connection) -> SqliteResult<()> {
+    // Persist average brightness per photo. Previously face_processor
+    // recomputed it every run; now it's stored, queried via SQL during
+    // contextual identity propagation, and reused across runs.
+    let tx = conn.unchecked_transaction()?;
+    match tx.execute("ALTER TABLE photos ADD COLUMN brightness REAL", []) {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    tx.execute("INSERT INTO schema_version (version) VALUES (17)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 17 (photos.brightness)");
+    Ok(())
+}
+
+fn migrate_v15_to_v16(conn: &Connection) -> SqliteResult<()> {
+    // Path-string normalization: rewrite stored relative paths to use
+    // forward slashes only. Backslashes from prior Windows writes are
+    // remapped so the same drive opens identically on every OS.
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        UPDATE photos SET file_path = REPLACE(file_path, '\', '/');
+        UPDATE photos SET thumbnail_path = REPLACE(thumbnail_path, '\', '/')
+            WHERE thumbnail_path IS NOT NULL;
+        UPDATE trash SET original_path = REPLACE(original_path, '\', '/');
+
+        INSERT INTO schema_version (version) VALUES (16);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 16 (forward-slash paths)");
     Ok(())
 }
 
@@ -196,7 +284,10 @@ fn migrate_v10_to_v11(conn: &Connection) -> SqliteResult<()> {
 }
 
 fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
-    // Add lens_model, flash, gps_altitude (these were missed in v3)
+    // Add lens_model, flash, gps_altitude (these were missed in v3).
+    // Wrap in an explicit transaction so a crash mid-loop doesn't leave
+    // some columns added without bumping schema_version.
+    let tx = conn.unchecked_transaction()?;
     let columns = [
         ("lens_model", "TEXT"),
         ("flash", "TEXT"),
@@ -205,7 +296,7 @@ fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
 
     for (col, col_type) in &columns {
         let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
-        match conn.execute(&sql, []) {
+        match tx.execute(&sql, []) {
             Ok(_) => {}
             Err(e) => {
                 let msg = e.to_string();
@@ -216,12 +307,18 @@ fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
         }
     }
 
-    conn.execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
+    tx.commit()?;
     tracing::info!("Migrated database to schema version 4 (lens, flash, altitude)");
     Ok(())
 }
 
 fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
+    // Atomic: ALTER loop + FTS table + triggers + version bump all in
+    // one transaction. Without this, a kill mid-ALTER could land us
+    // with new columns but no FTS index — confusing on next launch.
+    let tx = conn.unchecked_transaction()?;
+
     let columns = [
         ("content_category", "TEXT DEFAULT 'photo'"),
         ("ocr_text", "TEXT"),
@@ -231,7 +328,7 @@ fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
 
     for (col, col_type) in &columns {
         let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
-        match conn.execute(&sql, []) {
+        match tx.execute(&sql, []) {
             Ok(_) => {}
             Err(e) => {
                 let msg = e.to_string();
@@ -242,7 +339,7 @@ fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
         }
     }
 
-    conn.execute_batch(
+    tx.execute_batch(
         r#"
         CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
             ocr_text,
@@ -268,6 +365,7 @@ fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
         INSERT INTO schema_version (version) VALUES (6);
         "#,
     )?;
+    tx.commit()?;
 
     tracing::info!("Migrated database to schema version 6 (documents + OCR fields)");
     Ok(())
@@ -467,7 +565,10 @@ fn migrate_v4_to_v5(conn: &Connection) -> SqliteResult<()> {
 }
 
 fn migrate_v2_to_v3(conn: &Connection) -> SqliteResult<()> {
-    // Add EXIF shooting parameters
+    // Add EXIF shooting parameters. Wrap the ALTER loop + version
+    // bump in one transaction so partial application can't leave us
+    // with some columns added but schema_version still at 2.
+    let tx = conn.unchecked_transaction()?;
     let columns = [
         ("iso", "INTEGER"),
         ("aperture", "TEXT"),
@@ -480,7 +581,7 @@ fn migrate_v2_to_v3(conn: &Connection) -> SqliteResult<()> {
 
     for (col, col_type) in &columns {
         let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
-        match conn.execute(&sql, []) {
+        match tx.execute(&sql, []) {
             Ok(_) => {}
             Err(e) => {
                 // Column may already exist if migration was partially applied
@@ -492,7 +593,8 @@ fn migrate_v2_to_v3(conn: &Connection) -> SqliteResult<()> {
         }
     }
 
-    conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+    tx.commit()?;
     tracing::info!("Migrated database to schema version 3 (EXIF shooting params)");
     Ok(())
 }

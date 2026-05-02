@@ -547,6 +547,11 @@ pub struct PhotoVault {
     /// default so first-time users don't see destructive buttons.
     /// Transient — not persisted across launches.
     pub(crate) settings_show_advanced: bool,
+
+    /// Cancel flag for background thumbnail prewarm. Set true on
+    /// drive deselect or app exit so the worker thread can bail
+    /// instead of churning over the disk after the user moved on.
+    pub(crate) thumbnail_prewarm_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// A pending destructive action awaiting user confirmation.
@@ -809,6 +814,7 @@ impl PhotoVault {
             // Phase C: destructive polish
             pending_confirmation: None,
             settings_show_advanced: false,
+            thumbnail_prewarm_cancel: None,
         };
 
         // Detect drives on startup

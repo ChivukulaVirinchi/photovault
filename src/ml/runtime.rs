@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
@@ -10,6 +11,21 @@ use ort::session::Session;
 /// Latch: only log the provider-probe result the first time a session is
 /// built. Subsequent sessions reuse whichever provider won without spamming.
 static EP_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Best-known label for the actual execution provider in use, populated
+/// the first time a session is built. Read by Settings to surface
+/// "Face inference: GPU (DirectML)" or "Face inference: CPU".
+///
+/// Best-effort: ORT silently falls back across providers per-node, so
+/// this reflects the *best* provider that probed available, not a
+/// proof that every op runs on it.
+static ACTIVE_PROVIDER: OnceLock<&'static str> = OnceLock::new();
+
+/// User-facing label for the active execution provider, e.g. "DirectML",
+/// "CUDA", "CoreML", "CPU". Returns "CPU" before any session is built.
+pub fn active_execution_provider() -> &'static str {
+    ACTIVE_PROVIDER.get().copied().unwrap_or("CPU")
+}
 
 /// Platform-specific ONNX Runtime library name
 #[cfg(target_os = "windows")]
@@ -224,6 +240,12 @@ impl OnnxRuntime {
         }
 
         available.push("CPU");
+
+        // Capture the best (front-of-list) provider so Settings can
+        // show what's actually engaging — falling back to CPU when no
+        // GPU EP probed available.
+        let chosen = *available.first().unwrap_or(&"CPU");
+        let _ = ACTIVE_PROVIDER.set(chosen);
 
         if available.len() > 1 {
             tracing::info!(
