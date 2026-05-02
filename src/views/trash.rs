@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, scrollable, text, Column, Spa
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::db::TrashedPhotoRecord;
@@ -159,7 +160,7 @@ impl TrashView {
 
         let empty_card = container(
             column![
-                text("\u{1F5D1}").size(36).color(p.text_tertiary),
+                icon(Lucide::Trash, 36, p.text_tertiary),
                 Space::with_height(12),
                 text("Trash is empty").size(16).color(p.text_secondary),
                 Space::with_height(8),

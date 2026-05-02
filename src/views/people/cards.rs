@@ -4,6 +4,7 @@ use iced::widget::{button, column, container, row, text, text_input, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::config::AppTheme;
 use crate::db::FaceClusterRecord;
 use crate::theme::colors;
@@ -74,10 +75,10 @@ pub fn person_card_merge(
         };
 
     // Selection indicator
-    let check_indicator = if is_selected {
-        text("\u{2713}").size(16).color(accent_primary) // checkmark
+    let check_indicator: Element<'static, Message> = if is_selected {
+        icon(Lucide::Check, 16, accent_primary)
     } else {
-        text("\u{25CB}").size(16).color(text_tertiary) // empty circle
+        icon(Lucide::Circle, 16, text_tertiary)
     };
 
     let display_name = cluster

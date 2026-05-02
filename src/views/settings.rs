@@ -19,6 +19,7 @@ impl SettingsView {
         map_cache_limit_mb: u32,
         auto_update_check_enabled: bool,
         update_check_in_progress: bool,
+        show_advanced: bool,
     ) -> Element<'static, Message> {
         let p = colors::palette(config.theme);
         let bg_primary = p.bg_primary;
@@ -62,7 +63,12 @@ impl SettingsView {
                 update_check_in_progress,
             ),
             Space::with_height(32),
-            Self::actions_section(config.theme, geocoding_progress, rotated_fix_running),
+            Self::actions_section(
+                config.theme,
+                geocoding_progress,
+                rotated_fix_running,
+                show_advanced,
+            ),
             Space::with_height(32),
             Self::section_header(config.theme, "Keyboard Shortcuts"),
             Space::with_height(8),
@@ -385,11 +391,13 @@ impl SettingsView {
         theme: AppTheme,
         geocoding_progress: Option<(usize, usize)>,
         rotated_fix_running: bool,
+        show_advanced: bool,
     ) -> Element<'static, Message> {
         let p = colors::palette(theme);
         let text_secondary = p.text_secondary;
         let text_tertiary = p.text_tertiary;
         let bg_elevated = p.bg_elevated;
+        let bg_hover = p.bg_hover;
         let border_subtle = p.border_subtle;
 
         let geocode_button: Element<'static, Message> =
@@ -432,36 +440,90 @@ impl SettingsView {
             Self::action_button(theme, "Fix Rotated Photos", Message::RegenerateRotatedData)
         };
 
-        column![
-            Self::section_header(theme, "Advanced"),
+        // Library Maintenance: friendly, non-destructive actions any
+        // user can run. ProcessFaces here only processes photos that
+        // haven't been analyzed yet — it does NOT discard existing
+        // clusters (that's the destructive Rebuild in Advanced).
+        let maintenance_row = row![
+            Self::action_button(theme, "Find Faces in New Photos", Message::ProcessFaces),
+            Space::with_width(16),
+            Self::action_button(theme, "Check for New Photos", Message::CheckForChanges),
+            Space::with_width(16),
+            geocode_button,
+        ];
+
+        // Show advanced toggle (low-key text button).
+        let toggle_label = if show_advanced {
+            "Hide advanced"
+        } else {
+            "Show advanced"
+        };
+        let advanced_toggle = button(text(toggle_label).size(12).color(text_tertiary))
+            .padding(Padding::from([6, 10]))
+            .style(move |_t, status| button::Style {
+                background: Some(match status {
+                    button::Status::Hovered => bg_hover.into(),
+                    _ => iced::Background::Color(iced::Color::TRANSPARENT),
+                }),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::ToggleSettingsAdvanced);
+
+        let mut content = column![
+            Self::section_header(theme, "Library Maintenance"),
             Space::with_height(16),
-            row![
-                Self::action_button(theme, "Re-scan Library", Message::RescanLibrary),
-                Space::with_width(16),
-                Self::action_button(theme, "Rebuild Faces (Full)", Message::RebuildFaceClusters),
-                Space::with_width(16),
-                Self::action_button(theme, "Check for Changes", Message::CheckForChanges),
-                Space::with_width(16),
-                Self::action_button(
-                    theme,
-                    "Regenerate Thumbnails",
-                    Message::RegenerateThumbnails
-                ),
-                Space::with_width(16),
-                Self::action_button(theme, "Refresh Photo Dates", Message::RefreshPhotoDates,),
-                Space::with_width(16),
-                geocode_button,
-                Space::with_width(16),
-                rotated_button,
-                Space::with_width(16),
-                Self::action_button(theme, "Reinstall Assets", Message::InstallAssetPack),
-            ],
+            maintenance_row,
             Space::with_height(24),
-            text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION")))
-                .size(12)
-                .color(text_tertiary),
-        ]
-        .into()
+            advanced_toggle,
+        ];
+
+        if show_advanced {
+            content = content.push(Space::with_height(16)).push(
+                column![
+                    Self::section_header(theme, "Advanced (developer / destructive)"),
+                    Space::with_height(16),
+                    row![
+                        Self::action_button(theme, "Re-scan Library", Message::RescanLibrary),
+                        Space::with_width(16),
+                        Self::action_button(
+                            theme,
+                            "Rebuild All Face Groups",
+                            Message::RequestRebuildFaces,
+                        ),
+                        Space::with_width(16),
+                        Self::action_button(
+                            theme,
+                            "Regenerate Thumbnails",
+                            Message::RegenerateThumbnails,
+                        ),
+                        Space::with_width(16),
+                        Self::action_button(
+                            theme,
+                            "Refresh Photo Dates",
+                            Message::RefreshPhotoDates,
+                        ),
+                        Space::with_width(16),
+                        rotated_button,
+                        Space::with_width(16),
+                        Self::action_button(theme, "Reinstall Assets", Message::InstallAssetPack),
+                    ],
+                ]
+                .spacing(0),
+            );
+        }
+
+        content
+            .push(Space::with_height(24))
+            .push(
+                text(format!("PhotoVault v{}", env!("CARGO_PKG_VERSION")))
+                    .size(12)
+                    .color(text_tertiary),
+            )
+            .into()
     }
 
     fn action_button(theme: AppTheme, label: &str, on_press: Message) -> Element<'static, Message> {

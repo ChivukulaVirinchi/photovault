@@ -20,6 +20,7 @@ pub(crate) fn confirm(app: &mut PhotoVault) -> Task<Message> {
         PendingConfirmation::PermanentlyDeletePhoto(id) => {
             super::handle(app, Message::ConfirmPermanentlyDeletePhoto(id))
         }
+        PendingConfirmation::RebuildFaces => super::handle(app, Message::RebuildFaceClusters),
     }
 }
 

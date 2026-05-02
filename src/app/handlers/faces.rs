@@ -25,6 +25,10 @@ pub(crate) fn process_faces(app: &mut PhotoVault) -> Task<Message> {
     app.face_processing_active = true;
     app.face_processing_progress = Some(FaceProcessingProgress::default());
     app.face_processing_error = None;
+    // Reset streaming-flush bookkeeping so chunks from this run drive
+    // a fresh wave of People-view refreshes.
+    app.face_last_chunks_flushed = 0;
+    app.face_last_chunk_refresh_at = None;
 
     // Only process photos that haven't been analyzed yet.
     // (Previously this reset ALL flags, causing re-detection of every photo
@@ -99,8 +103,11 @@ pub(crate) fn face_processing_complete(
 ) -> Task<Message> {
     app.face_processing_active = false;
     app.face_progress_receiver = None;
-    app.face_processing_progress = None;
     app.face_cancel_flag = None;
+    // Keep `face_processing_progress` populated through the toast +
+    // cluster reload so the progress bar doesn't blank out one frame
+    // before the success toast appears. It's cleared in
+    // `face_clusters_loaded` once the People view has fresh data.
 
     let toast_task = match &result {
         Ok(r) => {
@@ -157,6 +164,12 @@ pub(crate) fn face_clusters_loaded(
         app.face_clusters.len()
     );
     app.face_clusters_loading = false;
+    // Clusters are now fresh — drop the lingering processing progress so
+    // the People view stops showing the status bar. (Set by
+    // face_processing_complete, deferred until this point on purpose.)
+    if !app.face_processing_active {
+        app.face_processing_progress = None;
+    }
     for cluster in &clusters {
         if cluster.photo_count > 0
             && !app.cluster_photos.is_empty()

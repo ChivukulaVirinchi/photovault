@@ -4,9 +4,10 @@ use iced::widget::{button, column, container, row, scrollable, text, Column, Row
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::config::AppTheme;
 use crate::db::FaceClusterRecord;
-use crate::services::FaceProcessingProgress;
+use crate::services::{FaceProcessingProgress, FaceProcessingStage};
 use crate::theme::colors;
 
 use super::cards;
@@ -41,7 +42,10 @@ pub fn view_with_clusters(
 
     let title = text("People").size(28).color(text_primary);
 
-    // Processing status bar with progress bar and ETA
+    // Processing status bar with progress bar and a single elapsed +
+    // ETA timer. We deliberately don't surface stage names — the user
+    // doesn't care whether we're detecting vs clustering, only how
+    // long until they get their faces.
     let status_bar: Element<'static, Message> = if processing_active {
         let (progress_text, pct) = if let Some(p) = progress {
             let fraction = if p.total > 0 {
@@ -49,25 +53,30 @@ pub fn view_with_clusters(
             } else {
                 0.0
             };
-            let eta_str = if p.processed > 0 && p.elapsed_secs > 0.5 && fraction < 1.0 {
-                let remaining = p.elapsed_secs / fraction as f64 * (1.0 - fraction as f64);
-                if remaining > 60.0 {
-                    format!("  ~{}m left", (remaining / 60.0).ceil() as u32)
-                } else {
-                    format!("  ~{}s left", remaining.ceil() as u32)
+            let elapsed_str = format_duration(p.elapsed_secs);
+            let progress_text = match p.stage {
+                FaceProcessingStage::Finishing => {
+                    format!("Almost done — wrapping up… · {} elapsed", elapsed_str)
                 }
-            } else {
-                String::new()
+                FaceProcessingStage::Done => {
+                    format!("Finishing up · {} elapsed", elapsed_str)
+                }
+                FaceProcessingStage::Detecting => {
+                    let eta = if p.processed > 0 && p.elapsed_secs > 0.5 && fraction < 1.0 {
+                        let remaining = p.elapsed_secs / fraction as f64 * (1.0 - fraction as f64);
+                        format!(" · ~{} left", format_duration(remaining))
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "Finding faces — {} of {} photos · {} elapsed{}",
+                        p.processed, p.total, elapsed_str, eta
+                    )
+                }
             };
-            (
-                format!(
-                    "Processing faces... {}/{} photos ({} faces found){}",
-                    p.processed, p.total, p.faces_found, eta_str
-                ),
-                fraction,
-            )
+            (progress_text, fraction)
         } else {
-            ("Starting face processing...".to_string(), 0.0)
+            ("Starting face processing…".to_string(), 0.0)
         };
 
         let cancel_btn = button(text("Cancel").size(12).color(text_primary))
@@ -432,7 +441,7 @@ fn empty_view_with_button(
 
     let empty_card = container(
         column![
-            text("\u{1F464}").size(36).color(text_tertiary),
+            icon(Lucide::Person, 36, text_tertiary),
             Space::with_height(12),
             text("No people detected yet")
                 .size(16)
@@ -462,4 +471,22 @@ fn empty_view_with_button(
             ..Default::default()
         })
         .into()
+}
+
+/// Format a wallclock duration in seconds as a short human string:
+/// "12 s", "3 m 04 s", "1 h 02 m". Used for both elapsed and ETA so
+/// they read consistently in the status bar.
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as u64;
+    if total < 60 {
+        format!("{} s", total)
+    } else if total < 3600 {
+        let m = total / 60;
+        let s = total % 60;
+        format!("{} m {:02} s", m, s)
+    } else {
+        let h = total / 3600;
+        let m = (total % 3600) / 60;
+        format!("{} h {:02} m", h, m)
+    }
 }

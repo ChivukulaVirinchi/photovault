@@ -27,7 +27,9 @@ pub use burst_detector::{BurstConfig, BurstDetector};
 pub use document_detector::DocumentDetector;
 pub use drive_detector::{DriveDetector, DriveInfo};
 pub use duplicate_detector::DuplicateDetector;
-pub use face_processor::{FaceProcessingProgress, FaceProcessingResult, FaceProcessor};
+pub use face_processor::{
+    FaceProcessingProgress, FaceProcessingResult, FaceProcessingStage, FaceProcessor,
+};
 pub use geocoding::GeocodingService;
 pub use memories::MemoryCard;
 pub use ocr_processor::{OcrProcessor, OcrProgress};

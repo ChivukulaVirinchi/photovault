@@ -6,6 +6,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::components::photo_grid::photo_grid_simple;
 use crate::config::AppTheme;
 use crate::db::{AlbumRecord, AlbumSuggestionRecord};
@@ -373,7 +374,7 @@ pub fn album_detail_view(
     // Back button
     let back_btn = button(
         row![
-            text("\u{2190}").size(16).color(text_primary),
+            icon(Lucide::ArrowLeft, 16, text_primary),
             text("Albums").size(14).color(text_secondary)
         ]
         .spacing(8)

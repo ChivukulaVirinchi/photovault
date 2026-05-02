@@ -6,6 +6,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::db::RecentSearch;
@@ -92,7 +93,7 @@ fn search_bar(query: &str, p: &Palette) -> Element<'static, Message> {
 
     if !query.is_empty() {
         items.push(Space::with_width(8).into());
-        let clear_btn = button(text("\u{00D7}").size(16).color(text_tertiary))
+        let clear_btn = button(icon(Lucide::Close, 16, text_tertiary))
             .padding(Padding::from([10, 14]))
             .style(move |_t, status| button::Style {
                 background: Some(match status {
@@ -248,7 +249,7 @@ fn recent_searches_panel(recent: &[RecentSearch], p: &Palette) -> Element<'stati
         let row_el = row![
             button(
                 row![
-                    text("\u{1F55B}").size(12).color(text_tertiary),
+                    icon(Lucide::Clock, 12, text_tertiary),
                     Space::with_width(8),
                     text(label).size(13).color(text_primary),
                 ]
@@ -269,7 +270,7 @@ fn recent_searches_panel(recent: &[RecentSearch], p: &Palette) -> Element<'stati
             })
             .on_press(Message::SearchRecentSelected(q)),
             Space::with_width(4),
-            button(text("\u{00D7}").size(13).color(text_tertiary))
+            button(icon(Lucide::Close, 13, text_tertiary))
                 .padding(Padding::from([8, 10]))
                 .style(move |_t, status| button::Style {
                     background: Some(match status {
@@ -493,7 +494,7 @@ fn album_row(hit: &AlbumHit, is_highlighted: bool, p: &Palette) -> Element<'stat
         })
         .into()
     } else {
-        container(text("\u{1F4C1}").size(18).color(text_secondary))
+        container(icon(Lucide::Folder, 18, text_secondary))
             .width(Length::Fixed(40.0))
             .height(Length::Fixed(40.0))
             .center_x(Length::Fixed(40.0))
@@ -557,21 +558,20 @@ fn place_row(hit: &PlaceHit, is_highlighted: bool, p: &Palette) -> Element<'stat
     let text_tertiary = p.text_tertiary;
     let text_secondary = p.text_secondary;
 
-    let pin: Element<'static, Message> =
-        container(text("\u{1F4CD}").size(18).color(text_secondary))
-            .width(Length::Fixed(40.0))
-            .height(Length::Fixed(40.0))
-            .center_x(Length::Fixed(40.0))
-            .center_y(Length::Fixed(40.0))
-            .style(move |_t| container::Style {
-                background: Some(bg_elevated.into()),
-                border: iced::Border {
-                    radius: 20.0.into(),
-                    ..Default::default()
-                },
+    let pin: Element<'static, Message> = container(icon(Lucide::MapPin, 18, text_secondary))
+        .width(Length::Fixed(40.0))
+        .height(Length::Fixed(40.0))
+        .center_x(Length::Fixed(40.0))
+        .center_y(Length::Fixed(40.0))
+        .style(move |_t| container::Style {
+            background: Some(bg_elevated.into()),
+            border: iced::Border {
+                radius: 20.0.into(),
                 ..Default::default()
-            })
-            .into();
+            },
+            ..Default::default()
+        })
+        .into();
 
     let bg = if is_highlighted {
         bg_selected

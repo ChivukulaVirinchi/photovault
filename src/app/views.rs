@@ -3,7 +3,7 @@
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Length};
 
-use crate::components::{ScanProgressView, Sidebar};
+use crate::components::{icon, Lucide, ScanProgressView, Sidebar};
 use crate::services::ScanProgress;
 use crate::theme::colors;
 use crate::views::{
@@ -162,22 +162,20 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
         let bg = p.bg_secondary;
         let tc = p.text_secondary;
         let hover_bg = p.bg_hover;
-        let expand_btn = iced::widget::button(
-            text("\u{00BB}").size(16).color(tc), // » double right arrow
-        )
-        .padding(iced::Padding::from([8, 8]))
-        .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
-            background: match s {
-                iced::widget::button::Status::Hovered => Some(hover_bg.into()),
-                _ => None,
-            },
-            border: iced::Border {
-                radius: 4.0.into(),
+        let expand_btn = iced::widget::button(icon(Lucide::ChevronDoubleRight, 16, tc))
+            .padding(iced::Padding::from([8, 8]))
+            .style(move |_t: &iced::Theme, s| iced::widget::button::Style {
+                background: match s {
+                    iced::widget::button::Status::Hovered => Some(hover_bg.into()),
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })
-        .on_press(Message::ToggleSidebar);
+            })
+            .on_press(Message::ToggleSidebar);
         container(crate::components::tooltip::with_tooltip(
             expand_btn.into(),
             "Expand sidebar",
@@ -610,6 +608,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
                 .unwrap_or(500),
             app.auto_update_check_enabled,
             app.update_check_in_progress,
+            app.settings_show_advanced,
         ),
         View::Duplicates => DuplicatesView::view(
             &app.duplicate_groups,

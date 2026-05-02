@@ -244,6 +244,15 @@ pub(crate) fn key_pressed(
         }
     }
 
+    // Asset install prompt is also modal — Esc dismisses, everything
+    // else is swallowed.
+    if app.show_asset_install_prompt && app.asset_health.missing_any() {
+        if let keyboard::Key::Named(keyboard::key::Named::Escape) = key {
+            return super::handle(app, Message::DismissAssetInstallPrompt);
+        }
+        return Task::none();
+    }
+
     if app.shortcuts_overlay_open {
         match key {
             keyboard::Key::Named(keyboard::key::Named::Escape) | keyboard::Key::Character(_) => {

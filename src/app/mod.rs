@@ -122,6 +122,22 @@ impl PhotoVault {
             }));
         }
 
+        // Always-on window event listener: file drops work on Welcome too.
+        subs.push(event::listen_with(|event, _status, _id| match event {
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Message::FolderDropped(path))
+            }
+            iced::Event::Window(iced::window::Event::Resized(size)) => {
+                // Mirror the keyboard-listener resize so window-size
+                // persistence works even before a drive is chosen.
+                Some(Message::WindowResized {
+                    width: size.width,
+                    height: size.height,
+                })
+            }
+            _ => None,
+        }));
+
         Subscription::batch(subs)
     }
 

@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{Message, PhotoVault};
+use crate::components::icon::{icon, Lucide};
 use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::models::Photo;
@@ -88,14 +89,14 @@ impl PhotoDetailView {
 
         // === Navigation arrows ===
         let prev_btn = Self::nav_arrow(
-            "\u{2039}",
+            Lucide::ChevronLeft,
             Message::PreviousPhoto,
             "Previous photo (←)",
             has_prev,
             p,
         );
         let next_btn = Self::nav_arrow(
-            "\u{203A}",
+            Lucide::ChevronRight,
             Message::NextPhoto,
             "Next photo (→)",
             has_next,
@@ -149,7 +150,7 @@ impl PhotoDetailView {
     }
 
     fn nav_arrow(
-        symbol: &str,
+        kind: Lucide,
         msg: Message,
         tooltip_label: &str,
         enabled: bool,
@@ -161,8 +162,7 @@ impl PhotoDetailView {
             p.text_tertiary
         };
         let hover_bg = p.bg_hover;
-        let symbol = symbol.to_owned();
-        let btn = button(text(symbol).size(28).color(color))
+        let btn = button(icon(kind, 28, color))
             .padding(Padding::from([20, 8]))
             .style(move |_t: &iced::Theme, s| button::Style {
                 background: if enabled {
@@ -229,16 +229,26 @@ impl PhotoDetailView {
         let mut date_loc_items: Vec<Element<'static, Message>> = Vec::new();
 
         if let Some(date) = &photo.date_taken {
-            date_loc_items.push(
-                column![
-                    text("DATE").size(9).color(label_color),
-                    text(date.format("%b %d, %Y  %H:%M").to_string())
-                        .size(12)
-                        .color(value_color),
-                ]
-                .spacing(1)
-                .into(),
-            );
+            // Show a small caveat for dates that didn't come from a
+            // capture-time EXIF tag — filename and file-metadata-derived
+            // dates can be off, especially for copied/exported photos.
+            let source_hint = match photo.date_taken_source.as_deref() {
+                Some("filename") => Some("from filename"),
+                Some("file_meta") => Some("from file metadata — may be inaccurate"),
+                Some("mtime") => Some("from file date — may be inaccurate"),
+                _ => None,
+            };
+            let mut entry = column![
+                text("DATE").size(9).color(label_color),
+                text(date.format("%b %d, %Y  %H:%M").to_string())
+                    .size(12)
+                    .color(value_color),
+            ]
+            .spacing(1);
+            if let Some(hint) = source_hint {
+                entry = entry.push(text(hint).size(10).color(label_color));
+            }
+            date_loc_items.push(entry.into());
         }
 
         // Use the pre-resolved location name (from DB or on-demand geocode),
@@ -435,10 +445,13 @@ impl PhotoDetailView {
         if let Some(ref flash) = photo.flash {
             if flash == "Fired" {
                 exposure_items.push(
-                    text("\u{26A1} Flash")
-                        .size(11)
-                        .color(secondary_color)
-                        .into(),
+                    row![
+                        icon(Lucide::Flash, 11, secondary_color),
+                        Space::with_width(4),
+                        text("Flash").size(11).color(secondary_color),
+                    ]
+                    .align_y(Alignment::Center)
+                    .into(),
                 );
             }
         }

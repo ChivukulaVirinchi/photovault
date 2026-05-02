@@ -44,6 +44,26 @@ The shared library that loads and executes the above models.
 - Distributed via official GitHub releases; PhotoVault's setup
   script downloads the matching platform binary on demand.
 
+## Fonts
+
+### Inter
+UI text font.
+- License: [SIL Open Font License 1.1](https://openfontlicense.org/)
+- Attribution: Rasmus Andersson, https://rsms.me/inter/
+- Bundled at `assets/fonts/Inter-{Regular,Medium,SemiBold}.ttf`.
+
+### JetBrains Mono
+Monospaced font (used for the loading spinner, braille glyphs).
+- License: [SIL Open Font License 1.1](https://openfontlicense.org/)
+- Attribution: JetBrains s.r.o., https://www.jetbrains.com/lp/mono/
+- Bundled at `assets/fonts/JetBrainsMono-Regular.ttf`.
+
+### Lucide
+Icon font.
+- License: [ISC License](https://github.com/lucide-icons/lucide/blob/main/LICENSE) (with Feather-derived icons under the MIT License)
+- Attribution: Lucide Icons and Contributors, https://lucide.dev/
+- Bundled at `assets/fonts/lucide.ttf`.
+
 ## Software dependencies
 
 PhotoVault depends on many Rust crates. Run the following to

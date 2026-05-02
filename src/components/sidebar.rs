@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Element, Length, Padding};
 
 use crate::app::{Message, View};
+use crate::components::icon::{icon, Lucide};
 use crate::components::tooltip::with_tooltip;
 use crate::config::AppTheme;
 use crate::theme::colors;
@@ -27,22 +28,20 @@ impl Sidebar {
 
         let hover_bg = p.bg_hover;
         let tc = p.text_tertiary;
-        let collapse_btn = button(
-            text("\u{00AB}").size(14).color(tc), // « double left arrow
-        )
-        .padding(Padding::from([2, 6]))
-        .style(move |_t: &iced::Theme, s| button::Style {
-            background: match s {
-                button::Status::Hovered => Some(hover_bg.into()),
-                _ => None,
-            },
-            border: iced::Border {
-                radius: 4.0.into(),
+        let collapse_btn = button(icon(Lucide::ChevronDoubleLeft, 14, tc))
+            .padding(Padding::from([2, 6]))
+            .style(move |_t: &iced::Theme, s| button::Style {
+                background: match s {
+                    button::Status::Hovered => Some(hover_bg.into()),
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })
-        .on_press(Message::ToggleSidebar);
+            })
+            .on_press(Message::ToggleSidebar);
 
         let collapse_btn = with_tooltip(collapse_btn.into(), "Collapse sidebar");
 

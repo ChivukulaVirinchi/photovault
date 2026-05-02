@@ -297,6 +297,30 @@ pub(crate) fn folder_selected(app: &mut PhotoVault, path: Option<PathBuf>) -> Ta
     Task::none()
 }
 
+pub(crate) fn folder_dropped(app: &mut PhotoVault, path: PathBuf) -> Task<Message> {
+    // Files dropped from a manager arrive as either a directory (good)
+    // or a file (use its parent so dropping a single photo opens the
+    // enclosing folder). Reject if neither resolves to a real dir.
+    let target = if path.is_dir() {
+        Some(path)
+    } else if path.is_file() {
+        path.parent().map(|p| p.to_path_buf())
+    } else {
+        None
+    };
+
+    match target {
+        Some(p) if p.is_dir() => super::handle(app, Message::SelectDrive(p)),
+        _ => super::handle(
+            app,
+            Message::ToastShow(crate::components::toast::Toast::error(
+                "Couldn't open dropped item",
+                "Drop a folder onto the window to open it as a library.",
+            )),
+        ),
+    }
+}
+
 pub(crate) fn back_to_welcome(app: &mut PhotoVault) -> Task<Message> {
     app.current_view = View::Welcome;
     app.selected_drive = None;
@@ -406,8 +430,23 @@ pub(crate) fn poll_scan_channels(app: &mut PhotoVault) -> Task<Message> {
         }
     }
 
+    let mut refresh_clusters = false;
     if let Some(ref mut rx) = app.face_progress_receiver {
         while let Ok(progress) = rx.try_recv() {
+            // Detect a streaming chunk landing — that's our cue to
+            // refresh the People view so newly-detected faces show up
+            // mid-run instead of only at the end.
+            if progress.chunks_flushed > app.face_last_chunks_flushed {
+                app.face_last_chunks_flushed = progress.chunks_flushed;
+                let allow = match app.face_last_chunk_refresh_at {
+                    None => true,
+                    Some(t) => t.elapsed() >= std::time::Duration::from_secs(2),
+                };
+                if allow {
+                    app.face_last_chunk_refresh_at = Some(std::time::Instant::now());
+                    refresh_clusters = true;
+                }
+            }
             app.face_processing_progress = Some(progress);
         }
     }
@@ -416,6 +455,10 @@ pub(crate) fn poll_scan_channels(app: &mut PhotoVault) -> Task<Message> {
         while let Ok(progress) = rx.try_recv() {
             app.ocr_progress = Some(progress);
         }
+    }
+
+    if refresh_clusters {
+        return app.load_face_clusters();
     }
     Task::none()
 }

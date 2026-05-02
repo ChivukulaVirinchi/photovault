@@ -36,6 +36,10 @@ pub enum Message {
     /// Folder selected from browser
     FolderSelected(Option<PathBuf>),
 
+    /// File or folder dropped onto the app window. The handler validates
+    /// it points at a directory and dispatches `SelectDrive`.
+    FolderDropped(PathBuf),
+
     /// Drives detected
     DrivesDetected(Vec<DriveInfo>),
 
@@ -260,7 +264,15 @@ pub enum Message {
 
     RescanLibrary,
     RebuildFaceClusters,
+    /// Open the confirm modal before kicking off a destructive face
+    /// rebuild. Settings dispatches this; the user confirms; then
+    /// `RebuildFaceClusters` runs.
+    RequestRebuildFaces,
     FaceDataResetComplete(Result<usize, String>),
+
+    /// Toggle the "Show advanced" disclosure in the Settings actions
+    /// section. Transient UI state (not persisted).
+    ToggleSettingsAdvanced,
 
     CheckForChanges,
     ChangesDetected(IndexChanges),

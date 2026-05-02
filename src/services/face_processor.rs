@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use rayon::prelude::*;
@@ -19,6 +19,21 @@ use crate::ml::{
 };
 use crate::services::image_utils::apply_exif_orientation;
 
+/// Coarse progress phase. The UI uses this to keep the bar moving past
+/// the per-photo loop into clustering, so we never sit at "x/x" while
+/// the post-processing tail runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceProcessingStage {
+    /// Per-photo detect + embed loop. `processed` counts photos.
+    Detecting,
+    /// Stage 3 propagation + Stage 4 clustering — runs once after the
+    /// per-photo loop finishes. `processed` is capped at 95% of `total`
+    /// so the UI shows a "wrapping up" state instead of staying at 100%.
+    Finishing,
+    /// Pipeline complete. `processed == total`.
+    Done,
+}
+
 /// Progress information for face processing
 #[derive(Debug, Clone)]
 pub struct FaceProcessingProgress {
@@ -27,6 +42,12 @@ pub struct FaceProcessingProgress {
     pub faces_found: usize,
     /// Wall-clock seconds since processing started.
     pub elapsed_secs: f64,
+    pub stage: FaceProcessingStage,
+    /// Number of streaming flushes the writer thread has committed so
+    /// far. The UI watches this and refreshes the People view when it
+    /// increments — that's how new clusters appear during a long run
+    /// instead of only at the end.
+    pub chunks_flushed: u32,
 }
 
 impl Default for FaceProcessingProgress {
@@ -36,6 +57,8 @@ impl Default for FaceProcessingProgress {
             total: 0,
             faces_found: 0,
             elapsed_secs: 0.0,
+            stage: FaceProcessingStage::Detecting,
+            chunks_flushed: 0,
         }
     }
 }
@@ -56,6 +79,19 @@ struct PhotoFaceResult {
     taken_ts: Option<i64>,
     brightness: f32,
     had_error: bool,
+}
+
+/// Lightweight summary kept around after a result has been handed off
+/// to the writer thread. Stage 3 (contextual identity propagation)
+/// runs over these — it doesn't need the (large) face crops or
+/// embeddings, just enough to look up neighbors.
+struct ProcessedPhotoSummary {
+    photo_id: i64,
+    file_path: String,
+    taken_ts: Option<i64>,
+    brightness: f32,
+    had_error: bool,
+    has_faces: bool,
 }
 
 /// A face ready for DB insertion
@@ -188,6 +224,15 @@ impl FaceProcessor {
         let cancel = cancel_flag
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        // Stage flag: 0=Detecting, 1=Finishing, 2=Done. The reporter
+        // thread reads this to decide whether to clamp `processed` to
+        // 95% of total — that's how the bar keeps moving during the
+        // clustering tail instead of stalling at 100%.
+        let stage_flag = Arc::new(AtomicU8::new(0));
+        // Bumped by the streaming writer after every chunk commit. The
+        // UI uses this signal to refresh the People view mid-run so
+        // newly-detected faces show up before the whole pipeline ends.
+        let chunks_flushed = Arc::new(AtomicUsize::new(0));
 
         // Shared paths for thread-local session init
         let detector_path = Arc::new(detector_path);
@@ -200,19 +245,41 @@ impl FaceProcessor {
             let processed_count = processed_count.clone();
             let faces_count = faces_count.clone();
             let cancel = cancel.clone();
+            let stage_flag = stage_flag.clone();
+            let chunks_flushed_atomic = chunks_flushed.clone();
             let start_time = std::time::Instant::now();
             std::thread::spawn(move || {
-                while !cancel.load(Ordering::Relaxed) {
-                    let processed = processed_count.load(Ordering::Relaxed);
+                loop {
+                    let stage_raw = stage_flag.load(Ordering::Relaxed);
+                    let processed_raw = processed_count.load(Ordering::Relaxed);
+                    let stage = match stage_raw {
+                        0 => FaceProcessingStage::Detecting,
+                        1 => FaceProcessingStage::Finishing,
+                        _ => FaceProcessingStage::Done,
+                    };
+                    // Cap at 95% during Finishing so the UI shows a
+                    // moving bar with a "wrapping up" hint rather than
+                    // a frozen 100%.
+                    let processed = match stage {
+                        FaceProcessingStage::Finishing if total > 0 => {
+                            let cap = ((total as f64) * 0.95).floor() as usize;
+                            processed_raw.min(cap.max(1))
+                        }
+                        _ => processed_raw,
+                    };
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.try_send(FaceProcessingProgress {
                             processed,
                             total,
                             faces_found: faces_count.load(Ordering::Relaxed),
                             elapsed_secs: start_time.elapsed().as_secs_f64(),
+                            stage,
+                            chunks_flushed: chunks_flushed_atomic.load(Ordering::Relaxed) as u32,
                         });
                     }
-                    if processed >= total {
+                    // Exit only when the pipeline is fully done OR cancelled.
+                    if matches!(stage, FaceProcessingStage::Done) || cancel.load(Ordering::Relaxed)
+                    {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(250));
@@ -220,22 +287,51 @@ impl FaceProcessor {
             })
         };
 
-        // ---- Stage 1: Parallel Detection + Embedding ----
-        let results: Vec<PhotoFaceResult> = pool.install(|| {
+        // ---- Streaming writer thread ----
+        // Owns its own DB connection (rusqlite Connection isn't Send,
+        // so we can't share `db.conn` here). Drains chunks of
+        // PhotoFaceResult from the channel below, transactionally
+        // writes faces + flips faces_processed, and bumps the
+        // chunks_flushed atomic so the UI can refresh mid-run.
+        const FLUSH_CHUNK: usize = 25;
+        let (chunk_tx, chunk_rx) = mpsc::sync_channel::<Vec<PhotoFaceResult>>(4);
+        let writer_handle: std::thread::JoinHandle<Result<(usize, usize), String>> = {
+            let drive_path_buf = drive_path.to_path_buf();
+            let faces_dir_buf = faces_dir.clone();
+            let chunks_flushed = chunks_flushed.clone();
+            let cancel = cancel.clone();
+            std::thread::spawn(move || -> Result<(usize, usize), String> {
+                let writer_db = Database::open_for_drive(&drive_path_buf)
+                    .map_err(|e| format!("Failed to open writer DB: {}", e))?;
+                let mut total_faces = 0usize;
+                let mut photos_processed = 0usize;
+                while let Ok(chunk) = chunk_rx.recv() {
+                    let was_cancelled = cancel.load(Ordering::Relaxed);
+                    let (faces_added, photos_added) =
+                        flush_result_chunk(&writer_db, &faces_dir_buf, &chunk, was_cancelled)?;
+                    total_faces += faces_added;
+                    photos_processed += photos_added;
+                    chunks_flushed.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok((total_faces, photos_processed))
+            })
+        };
+
+        // ---- Stage 1: Parallel Detection + Embedding (streaming) ----
+        let summaries: Arc<Mutex<Vec<ProcessedPhotoSummary>>> = Arc::new(Mutex::new(Vec::new()));
+        let buffer: Arc<Mutex<Vec<PhotoFaceResult>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(FLUSH_CHUNK)));
+        let chunk_tx = Arc::new(chunk_tx);
+        pool.install(|| {
             unprocessed
                 .par_iter()
-                .map(|(photo_id, file_path, orientation, taken_ts)| {
-                    // Check cancellation
+                .for_each(|(photo_id, file_path, orientation, taken_ts)| {
+                    // Skip entirely on cancellation — don't mark this
+                    // photo processed, so a future run will retry it.
                     if cancel.load(Ordering::Relaxed) {
-                        return PhotoFaceResult {
-                            photo_id: *photo_id,
-                            file_path: file_path.clone(),
-                            faces: Vec::new(),
-                            taken_ts: *taken_ts,
-                            brightness: 0.0,
-                            had_error: true,
-                        };
+                        return;
                     }
+                    let result: PhotoFaceResult = (|| -> PhotoFaceResult {
 
                     // Thread-local ONNX sessions
                     thread_local! {
@@ -300,6 +396,19 @@ impl FaceProcessor {
                     // Compute brightness once (eliminates redundant image reload)
                     let brightness = Self::average_brightness(&image);
 
+                    // Cancel check: post-decode is a natural breakpoint
+                    // before the (~200 ms) detector inference fires.
+                    if cancel.load(Ordering::Relaxed) {
+                        return PhotoFaceResult {
+                            photo_id: *photo_id,
+                            file_path: file_path.clone(),
+                            faces: Vec::new(),
+                            taken_ts: *taken_ts,
+                            brightness,
+                            had_error: true,
+                        };
+                    }
+
                     // Detect faces
                     let detected = DETECTOR.with(|d| {
                         let mut borrow = d.borrow_mut();
@@ -317,9 +426,27 @@ impl FaceProcessor {
                         );
                     }
 
+                    // Cancel check: post-detect, before per-face embeds.
+                    if cancel.load(Ordering::Relaxed) {
+                        return PhotoFaceResult {
+                            photo_id: *photo_id,
+                            file_path: file_path.clone(),
+                            faces: Vec::new(),
+                            taken_ts: *taken_ts,
+                            brightness,
+                            had_error: true,
+                        };
+                    }
+
                     // Embed each detected face (after quality filter)
                     let mut face_inserts = Vec::new();
                     for face in &detected {
+                        // Cancel between embedding calls — group photos
+                        // can have many faces and embedding is the
+                        // single most expensive per-face step.
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
                         let (_bx, _by, bw, bh) = face.bbox;
                         if bw * bh < Self::MIN_FACE_AREA_PX2 {
                             rejected_small.fetch_add(1, Ordering::Relaxed);
@@ -366,12 +493,65 @@ impl FaceProcessor {
                         brightness,
                         had_error: false,
                     }
-                })
-                .collect()
+                    })();
+
+                    // Record summary BEFORE handing the result off — the
+                    // writer thread takes ownership of `result`, but
+                    // Stage 3 still needs the photo metadata.
+                    summaries.lock().unwrap().push(ProcessedPhotoSummary {
+                        photo_id: result.photo_id,
+                        file_path: result.file_path.clone(),
+                        taken_ts: result.taken_ts,
+                        brightness: result.brightness,
+                        had_error: result.had_error,
+                        has_faces: !result.faces.is_empty(),
+                    });
+
+                    // Push into the streaming buffer. When it hits
+                    // FLUSH_CHUNK, ship the chunk to the writer thread
+                    // so the user sees faces appear mid-run AND the
+                    // photos are persisted as faces_processed=TRUE.
+                    let mut buf = buffer.lock().unwrap();
+                    buf.push(result);
+                    if buf.len() >= FLUSH_CHUNK {
+                        let chunk = std::mem::replace(&mut *buf, Vec::with_capacity(FLUSH_CHUNK));
+                        drop(buf);
+                        // send blocks if writer is behind — that's fine,
+                        // it's natural backpressure that prevents memory
+                        // blow-up on a fast detector / slow disk.
+                        let _ = chunk_tx.send(chunk);
+                    }
+                });
         });
 
-        // Wait for progress reporter to finish
-        let _ = progress_handle.join();
+        // Final flush of any sub-FLUSH_CHUNK leftover photos.
+        {
+            let leftover = std::mem::take(&mut *buffer.lock().unwrap());
+            if !leftover.is_empty() {
+                let _ = chunk_tx.send(leftover);
+            }
+        }
+        // Drop the only remaining sender — once the writer drains the
+        // last chunk, recv() returns Err and the thread exits.
+        drop(chunk_tx);
+
+        // Wait for the writer to finish committing.
+        let (mut total_faces, mut photos_processed) = match writer_handle.join() {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err("Face writer thread panicked".to_string()),
+        };
+        // The writer used `mut` because Stage 3 below still adds via
+        // brightness lookups; but for now the only mutation here is to
+        // refresh `total_faces`/`photos_processed` for the toast text.
+        // Suppress the unused-mut lint if the compiler flags it.
+        let _ = (&mut total_faces, &mut photos_processed);
+
+        // Per-photo loop is done. Move into the post-processing tail
+        // (DB writes + propagation + clustering). The progress reporter
+        // keeps running and emits `Finishing` events with a 95% cap so
+        // the UI shows continued activity rather than stalling at x/x.
+        stage_flag.store(1, Ordering::Relaxed);
 
         // Check if cancelled partway through
         let was_cancelled = cancel.load(Ordering::Relaxed);
@@ -388,112 +568,48 @@ impl FaceProcessor {
             );
         }
 
-        // ---- Stage 2: Batched DB Writes ----
-        let mut total_faces = 0usize;
-        let mut photos_processed = 0usize;
-        let mut brightness_map: HashMap<i64, f32> = HashMap::new();
-
-        // Batch in groups of 100 photos per transaction
-        for chunk in results.chunks(100) {
-            let tx = db
-                .conn
-                .unchecked_transaction()
-                .map_err(|e| format!("Failed to begin transaction: {}", e))?;
-
-            for result in chunk {
-                if result.had_error && result.faces.is_empty() {
-                    // Mark errored/cancelled photos as processed so we don't retry
-                    let _ = tx.execute(
-                        "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
-                        rusqlite::params![result.photo_id],
-                    );
-                    if !was_cancelled {
-                        photos_processed += 1;
-                    }
-                    continue;
-                }
-
-                // Clear previous inferred identities
-                let _ = tx.execute(
-                    "DELETE FROM photo_inferred_identities WHERE photo_id = ?1",
-                    rusqlite::params![result.photo_id],
-                );
-
-                // Insert each detected face
-                for face in &result.faces {
-                    match tx.execute(
-                        r#"
-                        INSERT INTO faces (
-                            photo_id,
-                            bbox_x, bbox_y, bbox_width, bbox_height,
-                            confidence, embedding
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                        "#,
-                        rusqlite::params![
-                            result.photo_id,
-                            face.bbox_normalized.0,
-                            face.bbox_normalized.1,
-                            face.bbox_normalized.2,
-                            face.bbox_normalized.3,
-                            face.confidence,
-                            face.embedding.to_bytes(),
-                        ],
-                    ) {
-                        Ok(_) => {
-                            let face_id = tx.last_insert_rowid();
-                            // Save face crop
-                            let crop_path = faces_dir.join(format!("{}.jpg", face_id));
-                            if let Err(e) = Self::save_face_crop(&face.aligned_face, &crop_path) {
-                                tracing::warn!("Failed to save face crop {}: {}", face_id, e);
-                            }
-                            total_faces += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to insert face: {}", e);
-                        }
-                    }
-                }
-
-                // Mark photo as processed
-                let _ = tx.execute(
-                    "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
-                    rusqlite::params![result.photo_id],
-                );
-
-                brightness_map.insert(result.photo_id, result.brightness);
-                photos_processed += 1;
-            }
-
-            tx.commit()
-                .map_err(|e| format!("Failed to commit batch: {}", e))?;
-        }
-
         // ---- Stage 3: Contextual Identity Propagation ----
-        // Uses precomputed brightness values (no image reloading)
-        for result in &results {
-            if result.had_error || !result.faces.is_empty() {
+        // Build a brightness map from successful summaries so propagation
+        // can compare lighting between target and neighbor photos
+        // without reopening images. Errored photos are excluded — their
+        // brightness was never measured.
+        let summaries_vec = std::mem::take(&mut *summaries.lock().unwrap());
+        let brightness_map: HashMap<i64, f32> = summaries_vec
+            .iter()
+            .filter(|s| !s.had_error)
+            .map(|s| (s.photo_id, s.brightness))
+            .collect();
+
+        for summary in &summaries_vec {
+            if summary.had_error || summary.has_faces {
                 continue; // Only propagate for photos with no detected faces
             }
-            if let Some(target_ts) = result.taken_ts {
+            if let Some(target_ts) = summary.taken_ts {
                 let params = ContextPropagationInput {
                     drive_path,
-                    photo_id: result.photo_id,
-                    file_path: &result.file_path,
+                    photo_id: summary.photo_id,
+                    file_path: &summary.file_path,
                     target_ts,
-                    target_brightness: result.brightness,
+                    target_brightness: summary.brightness,
                     brightness_map: &brightness_map,
                 };
                 let _ = Self::propagate_identity_from_context(&face_repo, &inferred_repo, &params);
             }
         }
+        let _ = was_cancelled;
 
-        // Send final progress
+        // Mid-tail progress nudge so the UI sees an immediate "Finishing"
+        // tick once Stages 2-3 wrap up — the reporter would catch this on
+        // the next 250 ms cycle anyway, but an explicit send eliminates
+        // the visible gap before clustering kicks off.
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
                 processed: photos_processed,
                 total,
                 faces_found: total_faces,
                 elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
+                stage: FaceProcessingStage::Finishing,
+                chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
             });
         }
 
@@ -501,14 +617,22 @@ impl FaceProcessor {
         let clusters_created =
             Self::run_clustering(&face_repo, clustering_threshold, resolver_weights)?;
 
+        // Pipeline complete: flip stage so the reporter exits its loop
+        // and emit one final 100% Done tick for the UI.
+        stage_flag.store(2, Ordering::Relaxed);
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
                 processed: photos_processed,
                 total,
                 faces_found: total_faces,
                 elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
+                stage: FaceProcessingStage::Done,
+                chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
             });
         }
+
+        // Join the reporter now that we've signalled Done.
+        let _ = progress_handle.join();
 
         tracing::info!(
             "Face processing complete: {} photos, {} faces, {} clusters",
@@ -739,6 +863,91 @@ impl FaceProcessor {
             }
         }
     }
+}
+
+/// Commit one streamed chunk of per-photo results: insert detected
+/// faces, mark photos `faces_processed=TRUE`, save face crops to disk.
+/// On cancellation, photos with `had_error && faces.is_empty()` are
+/// left as `faces_processed=FALSE` so a later run will retry them.
+///
+/// Returns `(faces_added, photos_added)` for stats only — durable state
+/// is the SQL writes.
+fn flush_result_chunk(
+    db: &Database,
+    faces_dir: &Path,
+    chunk: &[PhotoFaceResult],
+    was_cancelled: bool,
+) -> Result<(usize, usize), String> {
+    let mut faces_added = 0usize;
+    let mut photos_added = 0usize;
+
+    let tx = db
+        .conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to begin chunk transaction: {}", e))?;
+
+    for result in chunk {
+        if result.had_error && result.faces.is_empty() {
+            // Mark errored photos processed only when we're not in the
+            // middle of a cancel — otherwise leave them queued for next run.
+            if !was_cancelled {
+                let _ = tx.execute(
+                    "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
+                    rusqlite::params![result.photo_id],
+                );
+                photos_added += 1;
+            }
+            continue;
+        }
+
+        let _ = tx.execute(
+            "DELETE FROM photo_inferred_identities WHERE photo_id = ?1",
+            rusqlite::params![result.photo_id],
+        );
+
+        for face in &result.faces {
+            match tx.execute(
+                r#"
+                INSERT INTO faces (
+                    photo_id,
+                    bbox_x, bbox_y, bbox_width, bbox_height,
+                    confidence, embedding
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                rusqlite::params![
+                    result.photo_id,
+                    face.bbox_normalized.0,
+                    face.bbox_normalized.1,
+                    face.bbox_normalized.2,
+                    face.bbox_normalized.3,
+                    face.confidence,
+                    face.embedding.to_bytes(),
+                ],
+            ) {
+                Ok(_) => {
+                    let face_id = tx.last_insert_rowid();
+                    let crop_path = faces_dir.join(format!("{}.jpg", face_id));
+                    if let Err(e) = FaceProcessor::save_face_crop(&face.aligned_face, &crop_path) {
+                        tracing::warn!("Failed to save face crop {}: {}", face_id, e);
+                    }
+                    faces_added += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to insert face: {}", e);
+                }
+            }
+        }
+
+        let _ = tx.execute(
+            "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
+            rusqlite::params![result.photo_id],
+        );
+        photos_added += 1;
+    }
+
+    tx.commit()
+        .map_err(|e| format!("Failed to commit chunk: {}", e))?;
+    Ok((faces_added, photos_added))
 }
 
 mod clustering;

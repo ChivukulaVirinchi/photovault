@@ -6,6 +6,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::config::AppTheme;
 use crate::theme::colors;
 
@@ -189,7 +190,7 @@ fn toast_card(t: &Toast, theme: AppTheme) -> Element<'static, Message> {
     let text_tertiary = p.text_tertiary;
     let bg_hover = p.bg_hover;
     card_row = card_row.push(Space::with_width(8)).push(
-        button(text("\u{00D7}").size(13).color(text_tertiary))
+        button(icon(Lucide::Close, 13, text_tertiary))
             .padding(Padding::from([4, 6]))
             .style(move |_t, status| button::Style {
                 background: Some(match status {

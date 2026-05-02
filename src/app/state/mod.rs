@@ -186,6 +186,16 @@ pub struct PhotoVault {
     /// Live progress channel receiver for face processing.
     pub(crate) face_progress_receiver: Option<Receiver<FaceProcessingProgress>>,
 
+    /// Last `chunks_flushed` value observed from the face progress
+    /// stream. When this jumps, we trigger an out-of-band People view
+    /// reload so newly-discovered faces appear mid-run.
+    pub(crate) face_last_chunks_flushed: u32,
+
+    /// Wall-clock time of the most recent mid-run cluster reload. Used
+    /// to throttle reloads to ~one every 2 s even when chunk flushes
+    /// arrive faster than that.
+    pub(crate) face_last_chunk_refresh_at: Option<std::time::Instant>,
+
     /// Last face-processing error shown in People view.
     pub(crate) face_processing_error: Option<String>,
 
@@ -531,6 +541,12 @@ pub struct PhotoVault {
     // --- Phase C: Destructive action polish ---
     /// Pending destructive confirmation (None = no pending).
     pub(crate) pending_confirmation: Option<PendingConfirmation>,
+
+    /// Whether the Settings page is showing the "Advanced" actions
+    /// (rescan library, rebuild faces, regen thumbnails, etc). Off by
+    /// default so first-time users don't see destructive buttons.
+    /// Transient — not persisted across launches.
+    pub(crate) settings_show_advanced: bool,
 }
 
 /// A pending destructive action awaiting user confirmation.
@@ -539,6 +555,9 @@ pub enum PendingConfirmation {
     DeleteAlbum(i64),
     EmptyTrash,
     PermanentlyDeletePhoto(i64),
+    /// Rebuild face clusters from scratch — destructive because it
+    /// drops every named cluster the user has assembled.
+    RebuildFaces,
 }
 
 impl PendingConfirmation {
@@ -547,6 +566,7 @@ impl PendingConfirmation {
             PendingConfirmation::DeleteAlbum(_) => "Delete this album?",
             PendingConfirmation::EmptyTrash => "Empty trash?",
             PendingConfirmation::PermanentlyDeletePhoto(_) => "Permanently delete photo?",
+            PendingConfirmation::RebuildFaces => "Rebuild all face groups?",
         }
     }
 
@@ -561,6 +581,11 @@ impl PendingConfirmation {
             PendingConfirmation::PermanentlyDeletePhoto(_) => {
                 "This photo will be permanently removed from disk. Cannot be undone."
             }
+            PendingConfirmation::RebuildFaces => {
+                "Every face group, including the names you've assigned, \
+                 will be discarded and rebuilt from scratch. Use this only \
+                 if recognition has gone seriously wrong."
+            }
         }
     }
 
@@ -569,6 +594,7 @@ impl PendingConfirmation {
             PendingConfirmation::DeleteAlbum(_) => "Delete album",
             PendingConfirmation::EmptyTrash => "Empty trash",
             PendingConfirmation::PermanentlyDeletePhoto(_) => "Delete forever",
+            PendingConfirmation::RebuildFaces => "Rebuild face groups",
         }
     }
 }
@@ -656,6 +682,8 @@ impl PhotoVault {
             face_processing_active: false,
             face_processing_progress: None,
             face_progress_receiver: None,
+            face_last_chunks_flushed: 0,
+            face_last_chunk_refresh_at: None,
             face_processing_error: None,
             editing_cluster_id: None,
             edit_cluster_name: String::new(),
@@ -780,6 +808,7 @@ impl PhotoVault {
             sidebar_highlight_index: None,
             // Phase C: destructive polish
             pending_confirmation: None,
+            settings_show_advanced: false,
         };
 
         // Detect drives on startup

@@ -46,17 +46,33 @@ pub struct ImageMetadata {
 pub struct ExifExtractor;
 
 impl ExifExtractor {
-    /// Extract metadata from an image file
+    /// Extract metadata from an image file.
+    ///
+    /// Date priority (most-trusted first):
+    ///   1. EXIF DateTimeOriginal — when the shutter fired
+    ///   2. EXIF DateTimeDigitized — when the JPEG/file was digitized
+    ///   3. Filename pattern (IMG_/PXL_/Screenshot_/etc.)
+    ///   4. EXIF DateTime — image last-modified, often the copy time
+    ///      on phone exports rather than the capture time
+    ///   5. File mtime — last resort for entirely undated files
+    ///
+    /// `had_exif_date_field` is set ONLY by capture tags (Original or
+    /// Digitized). The modification `DateTime` tag does not block the
+    /// filename fallback, because it's frequently wrong for our purpose.
     pub fn extract<P: AsRef<Path>>(path: P) -> ImageMetadata {
         let path = path.as_ref();
         let mut metadata = ImageMetadata::default();
+        let mut datetime_candidate: Option<DateTime<Utc>> = None;
 
         // Try EXIF extraction
-        if let Some(exif_data) = Self::extract_exif(path) {
+        if let Some((exif_data, candidate)) = Self::extract_exif(path) {
             metadata = exif_data;
+            datetime_candidate = candidate;
         }
 
-        // If no date from EXIF and EXIF date tags are absent, try filename.
+        // Filename fallback — runs unless we already have a capture-tag date.
+        // (had_exif_date_field is true only for Original/Digitized, so a
+        // mod-time-only photo still drops here.)
         if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
             if let Some(date) = Self::parse_date_from_filename(path) {
                 metadata.date_taken = Some(date);
@@ -64,8 +80,16 @@ impl ExifExtractor {
             }
         }
 
-        // If still no date and EXIF date tags are absent, use file mtime.
-        if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
+        // EXIF DateTime fallback — modification date, weaker than the above.
+        if metadata.date_taken.is_none() {
+            if let Some(date) = datetime_candidate {
+                metadata.date_taken = Some(date);
+                metadata.date_taken_source = Some("file_meta".to_string());
+            }
+        }
+
+        // File mtime — last resort.
+        if metadata.date_taken.is_none() {
             if let Some(date) = Self::get_file_mtime(path) {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("mtime".to_string());
@@ -83,15 +107,19 @@ impl ExifExtractor {
         metadata
     }
 
-    /// Extract EXIF data from a file
-    fn extract_exif<P: AsRef<Path>>(path: P) -> Option<ImageMetadata> {
+    /// Extract EXIF data from a file. Returns the metadata block plus
+    /// (separately) a `DateTime` candidate — the modification-time tag
+    /// — so the caller can decide whether to prefer it over the
+    /// filename fallback.
+    fn extract_exif<P: AsRef<Path>>(path: P) -> Option<(ImageMetadata, Option<DateTime<Utc>>)> {
         let file = std::fs::File::open(path.as_ref()).ok()?;
         let mut bufreader = std::io::BufReader::new(&file);
         let exif = ExifReader::new().read_from_container(&mut bufreader).ok()?;
 
         let mut metadata = ImageMetadata::default();
+        let mut datetime_candidate: Option<DateTime<Utc>> = None;
 
-        // Date taken
+        // Capture-time tag #1: when the shutter fired. Most trustworthy.
         if let Some(field) = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY) {
             metadata.had_exif_date_field = true;
             let date_str: String = field.display_value().to_string();
@@ -99,12 +127,29 @@ impl ExifExtractor {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("exif".to_string());
             }
-        } else if let Some(field) = exif.get_field(Tag::DateTime, In::PRIMARY) {
-            metadata.had_exif_date_field = true;
+        }
+
+        // Capture-time tag #2: when the file was digitized. Phone
+        // exports often carry this when DateTimeOriginal is missing.
+        if metadata.date_taken.is_none() {
+            if let Some(field) = exif.get_field(Tag::DateTimeDigitized, In::PRIMARY) {
+                metadata.had_exif_date_field = true;
+                let date_str: String = field.display_value().to_string();
+                if let Some(date) = Self::parse_exif_date(&date_str) {
+                    metadata.date_taken = Some(date);
+                    metadata.date_taken_source = Some("exif_digitized".to_string());
+                }
+            }
+        }
+
+        // Modification-time tag — held aside as a candidate. The caller
+        // tries the filename pattern first (often more accurate for
+        // copied phone photos than this tag's "I was modified in 2012"
+        // value) and only falls back to this when nothing else worked.
+        if let Some(field) = exif.get_field(Tag::DateTime, In::PRIMARY) {
             let date_str: String = field.display_value().to_string();
             if let Some(date) = Self::parse_exif_date(&date_str) {
-                metadata.date_taken = Some(date);
-                metadata.date_taken_source = Some("exif".to_string());
+                datetime_candidate = Some(date);
             }
         }
 
@@ -243,7 +288,7 @@ impl ExifExtractor {
             }
         }
 
-        Some(metadata)
+        Some((metadata, datetime_candidate))
     }
 
     /// Extract GPS coordinate from EXIF

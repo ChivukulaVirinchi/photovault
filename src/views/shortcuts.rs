@@ -4,6 +4,7 @@ use iced::widget::{button, column, container, mouse_area, row, scrollable, text,
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::config::AppTheme;
 use crate::theme::colors;
 
@@ -106,7 +107,7 @@ pub fn overlay(view: &View, theme: AppTheme) -> Element<'static, Message> {
         row![
             text("Keyboard Shortcuts").size(20).color(p.text_primary),
             Space::with_width(Length::Fill),
-            button(text("\u{00D7}").size(18).color(p.text_secondary))
+            button(icon(Lucide::Close, 18, p.text_secondary))
                 .padding(Padding::from([4, 10]))
                 .style(|_t, _s| button::Style::default())
                 .on_press(Message::ToggleShortcutsOverlay),

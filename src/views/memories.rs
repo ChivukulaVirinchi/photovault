@@ -4,6 +4,7 @@ use iced::widget::{button, column, container, image as iced_image, row, scrollab
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 use crate::app::Message;
+use crate::components::icon::{icon, Lucide};
 use crate::config::AppTheme;
 use crate::services::MemoryCard;
 use crate::theme::colors;
@@ -294,12 +295,21 @@ pub fn memory_detail_view(
         .on_press(Message::MemorySlideshowPrev)
         .padding(Padding::from([10, 16]));
 
-    let pause_label = if paused { "▶ Play" } else { "❚❚ Pause" };
-    let pause_btn = button(text(pause_label).size(13).color(p.text_primary))
-        .on_press(Message::MemorySlideshowTogglePause)
-        .padding(Padding::from([10, 18]));
+    let pause_icon = if paused { Lucide::Play } else { Lucide::Pause };
+    let pause_btn = button(
+        row![
+            icon(pause_icon, 14, p.text_primary),
+            Space::with_width(8),
+            text(if paused { "Play" } else { "Pause" })
+                .size(13)
+                .color(p.text_primary),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::MemorySlideshowTogglePause)
+    .padding(Padding::from([10, 18]));
 
-    let next_btn = button(text("\u{25B6}").size(20).color(p.text_primary))
+    let next_btn = button(icon(Lucide::ChevronRight, 20, p.text_primary))
         .on_press(Message::MemorySlideshowNext)
         .padding(Padding::from([10, 16]));
 

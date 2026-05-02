@@ -17,9 +17,17 @@ mod theme;
 mod utils;
 mod views;
 
-use iced::Size;
+use iced::{Font, Size};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
+
+// UI fonts. Bundled into the binary so the app renders consistently
+// regardless of the host OS's font fallback chain.
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+const LUCIDE_FONT: &[u8] = crate::components::icon::LUCIDE_FONT_BYTES;
 
 fn instance_lock_file() -> std::path::PathBuf {
     dirs::config_dir()
@@ -132,6 +140,15 @@ fn main() -> iced::Result {
 
     crate::bootstrap::ensure_geonames_db();
 
+    // Restore the user's last window size — `AppConfig::load` clamps to
+    // sane bounds, so an out-of-range value from a copied config can't
+    // produce a window we can't reach. The clamp here is belt-and-braces.
+    let saved = config::AppConfig::load();
+    let initial_size = Size::new(
+        (saved.window_width as f32).clamp(400.0, 7680.0),
+        (saved.window_height as f32).clamp(300.0, 4320.0),
+    );
+
     // Run the application
     iced::application(
         app::PhotoVault::title,
@@ -140,7 +157,13 @@ fn main() -> iced::Result {
     )
     .theme(app::PhotoVault::theme)
     .subscription(app::PhotoVault::subscription)
-    .window_size(Size::new(1200.0, 800.0))
+    .window_size(initial_size)
     .antialiasing(true)
+    .default_font(Font::with_name("Inter"))
+    .font(INTER_REGULAR)
+    .font(INTER_MEDIUM)
+    .font(INTER_SEMIBOLD)
+    .font(JETBRAINS_MONO)
+    .font(LUCIDE_FONT)
     .run_with(app::PhotoVault::new)
 }

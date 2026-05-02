@@ -34,6 +34,7 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::SelectDrive(path) => scanning::select_drive(app, path),
         Message::BrowseForFolder => scanning::browse_for_folder(app),
         Message::FolderSelected(path) => scanning::folder_selected(app, path),
+        Message::FolderDropped(path) => scanning::folder_dropped(app, path),
         Message::DrivesDetected(drives) => scanning::drives_detected(app, drives),
         Message::BackToWelcome => scanning::back_to_welcome(app),
         Message::StartScan => scanning::start_scan(app),
@@ -44,8 +45,19 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::WindowResized { width, height } => {
             app.window_width = width.max(1.0);
             app.window_height = height.max(1.0);
-            app.config.window_width = app.window_width.round().clamp(400.0, 7680.0) as u32;
-            app.config.window_height = app.window_height.round().clamp(300.0, 4320.0) as u32;
+            let new_w = app.window_width.round().clamp(400.0, 7680.0) as u32;
+            let new_h = app.window_height.round().clamp(300.0, 4320.0) as u32;
+            // Persist when the resize is significant (>20 px on either axis)
+            // so a drag from 1200→1480 produces ~5 saves, not 280.
+            let dw = new_w.abs_diff(app.config.window_width);
+            let dh = new_h.abs_diff(app.config.window_height);
+            app.config.window_width = new_w;
+            app.config.window_height = new_h;
+            if dw > 20 || dh > 20 {
+                if let Err(e) = app.config.save() {
+                    tracing::debug!("window-size save skipped: {}", e);
+                }
+            }
             if app.current_view == super::state::View::Map {
                 map::enqueue_visible_tile_fetches(app)
             } else {
@@ -129,7 +141,14 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::MergeSelectedClusters => faces::merge_selected_clusters(app),
         Message::CancelFaceProcessing => faces::cancel_face_processing(app),
         Message::RebuildFaceClusters => faces::rebuild_face_clusters(app),
+        Message::RequestRebuildFaces => {
+            confirm::request(app, super::state::PendingConfirmation::RebuildFaces)
+        }
         Message::FaceDataResetComplete(result) => faces::face_data_reset_complete(app, result),
+        Message::ToggleSettingsAdvanced => {
+            app.settings_show_advanced = !app.settings_show_advanced;
+            Task::none()
+        }
 
         // --- Duplicates ---
         Message::RunDuplicateDetection => duplicates::run_duplicate_detection(app),
