@@ -356,23 +356,37 @@ pub fn detect_trips(
             continue;
         }
 
-        let title =
+        // Natural-prose title: "Trip to Paris  ·  Mar 3 – 7, 2024" for
+        // longer trips, "Paris weekend  ·  Mar 3 – 4, 2024" for 2-day
+        // weekends. The `·` separator gives a clean visual break
+        // between the human-readable lead and the date suffix.
+        let date_suffix =
             if span.start.year() == span.end.year() && span.start.month() == span.end.month() {
                 format!(
-                    "{}, {} - {} {}",
-                    span.city,
-                    span.start.format("%b %d"),
-                    span.end.format("%d"),
+                    "{} – {}, {}",
+                    span.start.format("%b %-d"),
+                    span.end.format("%-d"),
                     span.start.format("%Y"),
+                )
+            } else if span.start.year() == span.end.year() {
+                format!(
+                    "{} – {}",
+                    span.start.format("%b %-d"),
+                    span.end.format("%b %-d, %Y"),
                 )
             } else {
                 format!(
-                    "{}, {} - {}",
-                    span.city,
-                    span.start.format("%b %d, %Y"),
-                    span.end.format("%b %d, %Y"),
+                    "{} – {}",
+                    span.start.format("%b %-d, %Y"),
+                    span.end.format("%b %-d, %Y"),
                 )
             };
+        let lead = if duration_days <= 2 {
+            format!("{} weekend", span.city)
+        } else {
+            format!("Trip to {}", span.city)
+        };
+        let title = format!("{}  ·  {}", lead, date_suffix);
 
         let fp = compute_fingerprint(&span.photo_ids);
         let cover = pick_cover(conn, &span.photo_ids);
@@ -534,10 +548,11 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
             .map(|dt| dt.format("%b %d, %Y").to_string())
             .unwrap_or_else(|| "Event".to_string());
 
+        // "A day in Paris  ·  Mar 12, 2024" / "A day worth remembering · Mar 12, 2024"
         let title = if let Some(city) = primary_city {
-            format!("{} - {}", city, date)
+            format!("A day in {}  ·  {}", city, date)
         } else {
-            format!("Event - {}", date)
+            format!("A day worth remembering  ·  {}", date)
         };
 
         let fp = compute_fingerprint(&ids);

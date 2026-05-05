@@ -40,11 +40,19 @@ pub fn photo_mini_map(app: &PhotoVault, photo: &Photo) -> Option<Element<'static
     });
 
     let p = colors::palette(app.config.theme);
-    let place = app
+    let place = if let Some(loc) = app
         .current_photo_location
         .clone()
         .or_else(|| photo.location_string())
-        .unwrap_or_else(|| "Resolving location...".to_string());
+    {
+        loc
+    } else if !app.current_photo_location_resolved {
+        "Looking up where this was taken…".to_string()
+    } else if crate::bootstrap::geonames_db_exists() {
+        "Place not in our atlas".to_string()
+    } else {
+        "Place names off — enable in Settings".to_string()
+    };
 
     let border = p.border_subtle;
     let bg = p.bg_elevated;

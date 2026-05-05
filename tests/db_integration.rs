@@ -384,6 +384,7 @@ fn test_burst_and_duplicate_large_group_inserts() {
             "dup-hash-abc".to_string(),
             dup_ids.clone(),
             Some(dup_ids[0]),
+            "exact",
         )])
         .unwrap();
 
@@ -421,7 +422,7 @@ fn test_burst_and_duplicate_large_group_inserts() {
         )])
         .unwrap();
     dup_repo
-        .sync_duplicate_groups(&[("dup-hash-abc".to_string(), dup_ids, None)])
+        .sync_duplicate_groups(&[("dup-hash-abc".to_string(), dup_ids, None, "exact")])
         .unwrap();
 
     let burst_groups: i64 = db

@@ -1,20 +1,28 @@
 version: 2
-# Dependabot is tuned for a hobby project: monthly cadence so Monday
-# mornings don't drown in a dozen PRs, and a single grouped PR per
-# ecosystem so a minor bump across five crates opens one review, not
-# five. Majors still land as individual PRs so the reviewer sees the
-# breaking change in isolation.
+# Hobby project — Dependabot is heavily toned down so it doesn't drown
+# the inbox after every push. Only minor / patch updates surface, and
+# only once a month as a single grouped PR per ecosystem. Major version
+# bumps are ignored entirely (they're breaking changes that need manual
+# triage). Security alerts still flow through GitHub's separate
+# "security updates" path even when this is dialled down. To turn
+# Dependabot off completely, delete this file.
 updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+      day: first
+    open-pull-requests-limit: 1
     groups:
       cargo-minor-and-patch:
         update-types:
           - patch
           - minor
+    ignore:
+      # Skip all major version bumps. Use `cargo outdated --major`
+      # locally when you're ready to handle the breaking changes.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - rust
@@ -23,12 +31,16 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+      day: first
+    open-pull-requests-limit: 1
     groups:
       actions-minor-and-patch:
         update-types:
           - patch
           - minor
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - github-actions

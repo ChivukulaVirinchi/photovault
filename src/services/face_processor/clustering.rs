@@ -1,16 +1,12 @@
 use super::*;
 
-/// Upper bound on unresolved faces fed into Stage B (complete-link).
-/// Stage B is O(n²) in unresolved count, so large libraries would
-/// otherwise freeze the UI while clustering runs. Above this cap we
-/// skip Stage B for the current pass and let the rescue pipeline
-/// (loose gallery k-NN + ambiguous-review queue) handle the overflow;
-/// a future run with more gallery coverage will shrink the unresolved
-/// set back under the cap.
-///
-/// v1.0 is an interim mitigation; Phase 2 replaces complete-link with
-/// HNSW-based approximate clustering and removes the cap.
-const MAX_STAGE_B_INPUT: usize = 2000;
+/// Upper bound on unresolved faces fed into Stage B when the legacy
+/// complete-link path is in use. With `hnsw_clustering` (default-on)
+/// FaceClusterer::cluster runs in O(n log n) so the cap is effectively
+/// infinite; we keep the constant only to bound the legacy fallback
+/// when someone disables the feature for A/B testing.
+#[cfg(not(feature = "hnsw_clustering"))]
+const MAX_STAGE_B_INPUT: usize = 800;
 
 impl FaceProcessor {
     /// Run incremental clustering in two stages:
@@ -148,12 +144,14 @@ impl FaceProcessor {
             return Ok(0);
         }
 
+        #[cfg(not(feature = "hnsw_clustering"))]
         if unresolved.len() > MAX_STAGE_B_INPUT {
-            // Skip Stage B; route unresolved faces through the rescue pipeline
-            // so they remain visible (auto-matched against galleries or queued
-            // for ambiguous review) instead of getting clustered O(n²).
+            // Legacy path only: skip Stage B; route unresolved faces
+            // through the rescue pipeline so they remain visible
+            // (auto-matched against galleries or queued for ambiguous
+            // review) instead of paying the quadratic cost.
             tracing::warn!(
-                "Skipping Stage B complete-link clustering: {} unresolved faces exceeds cap of {}. Routing to rescue/ambiguous-review path. Phase 2 HNSW clustering will lift this cap.",
+                "Skipping Stage B complete-link clustering: {} unresolved faces exceeds cap of {}. Enable `hnsw_clustering` to remove this cap.",
                 unresolved.len(),
                 MAX_STAGE_B_INPUT
             );
@@ -572,5 +570,109 @@ impl FaceProcessor {
     /// Get the face crops directory for a drive.
     pub fn faces_dir(drive_path: &Path) -> PathBuf {
         drive_path.join(".photovault").join("faces")
+    }
+
+    /// Streaming Stage A — run *only* the gallery-match leg of the
+    /// clustering pipeline so faces appear in the People view as the
+    /// writer thread commits chunks. Stage B (complete-link / new
+    /// cluster creation) and the rescue pass stay end-of-pipeline,
+    /// because both need the full unresolved set to make sane
+    /// decisions.
+    ///
+    /// HIGH-band hits are auto-assigned. AMBIGUOUS hits go onto the
+    /// review queue (so the badge bumps). LOW hits stay unassigned
+    /// for end-of-run clustering to handle.
+    pub(crate) fn stream_assign_existing_clusters(
+        face_repo: &FaceRepo,
+        clustering_threshold: f32,
+        resolver_weights: crate::ml::ResolverWeights,
+    ) -> Result<usize, String> {
+        let strict_max_distance = clustering_threshold.clamp(0.15, 0.6);
+
+        let galleries = face_repo
+            .get_gallery_embeddings()
+            .map_err(|e| format!("stream Stage A: load galleries: {}", e))?;
+        if galleries.is_empty() {
+            // No existing clusters yet; nothing to match against. Wait
+            // for end-of-run Stage B to seed the first set of people.
+            return Ok(0);
+        }
+
+        let cluster_photo_rows = face_repo
+            .get_cluster_photo_ids()
+            .map_err(|e| format!("stream Stage A: cluster-photo map: {}", e))?;
+        let cannot_merge = face_repo
+            .get_cannot_merge_map()
+            .map_err(|e| format!("stream Stage A: cannot-merge: {}", e))?;
+
+        let mut cluster_photo_ids: HashMap<i64, std::collections::HashSet<i64>> = HashMap::new();
+        for (cid, pid) in cluster_photo_rows {
+            cluster_photo_ids.entry(cid).or_default().insert(pid);
+        }
+
+        let mut gallery_by_cluster: HashMap<i64, Vec<(i64, crate::ml::FaceEmbedding)>> =
+            HashMap::new();
+        for g in galleries {
+            gallery_by_cluster
+                .entry(g.cluster_id)
+                .or_default()
+                .push((g.face_id, g.embedding));
+        }
+        let gallery_vec: Vec<(i64, Vec<(i64, crate::ml::FaceEmbedding)>)> =
+            gallery_by_cluster.into_iter().collect();
+
+        let banding = crate::ml::BandingConfig::default();
+        let unclustered = face_repo
+            .get_unclustered_faces_with_photo_embeddings()
+            .map_err(|e| format!("stream Stage A: get unclustered: {}", e))?;
+
+        let mut assigned = 0usize;
+        for (face_id, photo_id, embedding) in &unclustered {
+            let mut exclude: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            let clusters_in_photo: Vec<i64> = cluster_photo_ids
+                .iter()
+                .filter(|(_, set)| set.contains(photo_id))
+                .map(|(cid, _)| *cid)
+                .collect();
+            for cid in &clusters_in_photo {
+                exclude.insert(*cid);
+                if let Some(forbidden) = cannot_merge.get(cid) {
+                    for f in forbidden {
+                        exclude.insert(*f);
+                    }
+                }
+            }
+
+            let hits = crate::ml::retrieve_candidates(
+                embedding,
+                &gallery_vec,
+                5,
+                1.0 - strict_max_distance,
+                &exclude,
+            );
+            let resolver_ctx = Self::build_resolver_context(face_repo, *photo_id, *face_id, &hits);
+            let reranked = crate::ml::rerank(&hits, &resolver_ctx, resolver_weights);
+            let band = crate::ml::retrieval::classify(&reranked, &banding);
+
+            match band {
+                crate::ml::ConfidenceBand::High { hit } => {
+                    if face_repo
+                        .assign_face_to_cluster(*face_id, hit.cluster_id)
+                        .is_ok()
+                    {
+                        cluster_photo_ids
+                            .entry(hit.cluster_id)
+                            .or_default()
+                            .insert(*photo_id);
+                        assigned += 1;
+                    }
+                }
+                _ => {
+                    // AMBIGUOUS / LOW: leave for end-of-run pipeline.
+                }
+            }
+        }
+
+        Ok(assigned)
     }
 }

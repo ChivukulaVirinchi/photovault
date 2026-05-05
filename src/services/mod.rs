@@ -2,6 +2,7 @@
 
 pub mod album_suggestions;
 pub mod burst_detector;
+pub mod camera_names;
 pub mod document_detector;
 pub mod drive_detector;
 pub mod duplicate_detector;
@@ -12,6 +13,7 @@ pub mod image_io;
 pub mod image_utils;
 pub mod insights;
 pub mod install_method;
+pub mod library_health;
 pub mod map_math;
 pub mod memories;
 pub mod ocr_processor;
@@ -33,6 +35,7 @@ pub use face_processor::{
     FaceProcessingProgress, FaceProcessingResult, FaceProcessingStage, FaceProcessor,
 };
 pub use geocoding::GeocodingService;
+pub use library_health::LibraryHealth;
 pub use memories::MemoryCard;
 pub use ocr_processor::{OcrProcessor, OcrProgress};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};

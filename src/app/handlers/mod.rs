@@ -53,6 +53,24 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
             app.thumbnail_prewarm_cancel = None;
             Task::none()
         }
+        Message::WindowFocused => {
+            // Auto-rescan after focus regain so photos added via the
+            // file manager show up without the user clicking "Check
+            // for new photos". Rate-limited to once per 30 s and
+            // gated on an active drive.
+            if app.selected_drive.is_none() || app.scan_state.is_some() {
+                return Task::none();
+            }
+            let allow = match app.last_focus_rescan_at {
+                None => true,
+                Some(t) => t.elapsed() >= std::time::Duration::from_secs(30),
+            };
+            if !allow {
+                return Task::none();
+            }
+            app.last_focus_rescan_at = Some(std::time::Instant::now());
+            handle(app, Message::CheckForChanges)
+        }
         Message::DrivesDetected(drives) => scanning::drives_detected(app, drives),
         Message::BackToWelcome => scanning::back_to_welcome(app),
         Message::StartScan => scanning::start_scan(app),
@@ -60,6 +78,22 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
         Message::CancelScan => scanning::cancel_scan(app),
         Message::ScanFinished(result) => scanning::scan_finished(app, result),
         Message::ScanComplete => scanning::scan_complete(app),
+        Message::ResetWindowSize => {
+            // Snap back to a known-good default — handy when the user
+            // moves to a bigger monitor and the persisted size feels
+            // tiny. Saves immediately so a crash before next resize
+            // still leaves the new value persisted.
+            app.config.window_width = 1600;
+            app.config.window_height = 1000;
+            app.config.window_maximized = false;
+            if let Err(e) = app.config.save() {
+                tracing::debug!("Failed to persist reset window size: {}", e);
+            }
+            // Issue a runtime resize so the change is visible without
+            // restarting the app.
+            iced::window::get_latest()
+                .and_then(|id| iced::window::resize(id, iced::Size::new(1600.0, 1000.0)))
+        }
         Message::WindowResized { width, height } => {
             app.window_width = width.max(1.0);
             app.window_height = height.max(1.0);
@@ -117,6 +151,41 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
             timeline::toggle_timeline_day_selection(app, day_key)
         }
         Message::TimelinePhotoHover(photo_id) => timeline::timeline_photo_hover(app, photo_id),
+        Message::HoverSettle { photo_id, seq } => timeline::hover_settle(app, photo_id, seq),
+        Message::DropTargetActive(active) => {
+            app.drop_target_active = active;
+            Task::none()
+        }
+        Message::LoadLibraryHealth => {
+            let Some(ref drive) = app.selected_drive else {
+                return Task::none();
+            };
+            app.library_health_loading = true;
+            let drive = drive.clone();
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let db = match crate::db::Database::open_for_drive(&drive) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                tracing::warn!("library_health: open db: {}", e);
+                                return crate::services::LibraryHealth::default();
+                            }
+                        };
+                        crate::services::library_health::compute(&db.conn, &drive)
+                            .unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default()
+                },
+                Message::LibraryHealthLoaded,
+            )
+        }
+        Message::LibraryHealthLoaded(data) => {
+            app.library_health_loading = false;
+            app.library_health = Some(data);
+            Task::none()
+        }
         Message::TimelineDayHover(day_key) => timeline::timeline_day_hover(app, day_key),
         Message::ClearTimelinePhotoSelection => timeline::clear_timeline_photo_selection(app),
         Message::ClosePhotoDetail => timeline::close_photo_detail(app),
@@ -333,6 +402,12 @@ pub(crate) fn handle(app: &mut PhotoVault, message: Message) -> Task<Message> {
             diagnostics,
         } => albums::suggestions_detected_with_diagnostics(app, suggestions, diagnostics),
         Message::SuggestionsLoaded(suggestions) => albums::suggestions_loaded(app, suggestions),
+        Message::PreviewSuggestion(id) => albums::preview_suggestion(app, id),
+        Message::SuggestionPreviewLoaded {
+            suggestion_id,
+            thumbs,
+        } => albums::suggestion_preview_loaded(app, suggestion_id, thumbs),
+        Message::ClosePreviewSuggestion => albums::close_preview_suggestion(app),
         Message::BeginAcceptSuggestion(id) => albums::begin_accept_suggestion(app, id),
         Message::AcceptSuggestionNameChanged(name) => {
             albums::accept_suggestion_name_changed(app, name)

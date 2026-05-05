@@ -251,15 +251,23 @@ impl PhotoDetailView {
             date_loc_items.push(entry.into());
         }
 
-        // Use the pre-resolved location name (from DB or on-demand geocode),
-        // falling back to raw coordinates only as a last resort.
-        let location_text = app.current_photo_location.clone().or_else(|| {
-            if photo.has_location() {
-                Some("Resolving location...".to_string())
-            } else {
-                None
-            }
-        });
+        // Branch on the resolution state machine — three paths:
+        //   - Photo has no GPS → don't render the row.
+        //   - Resolution still in flight → "Looking up where this was taken…"
+        //   - Resolution done with a name → show it.
+        //   - Resolution done without a name → "Place not in our atlas" if
+        //     GeoNames is on, otherwise "Reverse-geocode is off — Settings".
+        let location_text = if !photo.has_location() {
+            None
+        } else if let Some(loc) = app.current_photo_location.clone() {
+            Some(loc)
+        } else if !app.current_photo_location_resolved {
+            Some("Looking up where this was taken…".to_string())
+        } else if crate::bootstrap::geonames_db_exists() {
+            Some("Place not in our atlas".to_string())
+        } else {
+            Some("Place names off — enable in Settings".to_string())
+        };
 
         if let Some(loc) = location_text {
             date_loc_items.push(
@@ -287,7 +295,18 @@ impl PhotoDetailView {
 
         if !people.is_empty() || face_count > 0 {
             let mut people_col: Vec<Element<'static, Message>> = Vec::new();
-            people_col.push(text("PEOPLE").size(9).color(label_color).into());
+            // Section header — warmer when we have a name, neutral otherwise.
+            let people_header = if !people.is_empty() {
+                let n = people.len();
+                if n == 1 {
+                    "SOMEONE YOU KNOW".to_string()
+                } else {
+                    format!("{} PEOPLE YOU KNOW", n)
+                }
+            } else {
+                "FACES".to_string()
+            };
+            people_col.push(text(people_header).size(9).color(label_color).into());
 
             if !people.is_empty() {
                 // Clickable people links that navigate to their cluster detail
@@ -315,18 +334,36 @@ impl PhotoDetailView {
                             .into(),
                     );
                 }
+                // iced 0.13 has no Row::wrap — chunk into rows of N so a
+                // photo with 10 named people doesn't push the camera /
+                // exposure columns off the right edge.
+                const PEOPLE_PER_ROW: usize = 4;
+                let mut chunks: Vec<Element<'static, Message>> = Vec::new();
+                let mut current: Vec<Element<'static, Message>> = Vec::new();
+                for chip in people_row.into_iter() {
+                    current.push(chip);
+                    if current.len() >= PEOPLE_PER_ROW {
+                        chunks.push(
+                            iced::widget::Row::with_children(std::mem::take(&mut current))
+                                .spacing(4)
+                                .into(),
+                        );
+                    }
+                }
+                if !current.is_empty() {
+                    chunks.push(iced::widget::Row::with_children(current).spacing(4).into());
+                }
                 people_col.push(
-                    iced::widget::Row::with_children(people_row)
+                    iced::widget::Column::with_children(chunks)
                         .spacing(4)
-                        .wrap()
                         .into(),
                 );
             } else {
                 people_col.push(
                     text(format!(
-                        "{} face{} detected",
+                        "{} {} we haven't grouped yet",
                         face_count,
-                        if face_count == 1 { "" } else { "s" }
+                        if face_count == 1 { "face" } else { "faces" }
                     ))
                     .size(12)
                     .color(value_color)
@@ -370,10 +407,29 @@ impl PhotoDetailView {
                         .into(),
                 );
             }
+            const ALBUMS_PER_ROW: usize = 4;
+            let mut album_chunks: Vec<Element<'static, Message>> = Vec::new();
+            let mut current_album: Vec<Element<'static, Message>> = Vec::new();
+            for chip in album_row.into_iter() {
+                current_album.push(chip);
+                if current_album.len() >= ALBUMS_PER_ROW {
+                    album_chunks.push(
+                        iced::widget::Row::with_children(std::mem::take(&mut current_album))
+                            .spacing(4)
+                            .into(),
+                    );
+                }
+            }
+            if !current_album.is_empty() {
+                album_chunks.push(
+                    iced::widget::Row::with_children(current_album)
+                        .spacing(4)
+                        .into(),
+                );
+            }
             album_col.push(
-                iced::widget::Row::with_children(album_row)
+                iced::widget::Column::with_children(album_chunks)
                     .spacing(4)
-                    .wrap()
                     .into(),
             );
 
@@ -387,10 +443,10 @@ impl PhotoDetailView {
         // --- Group 2: Camera ---
         let mut camera_items: Vec<Element<'static, Message>> = Vec::new();
 
-        let camera_name = photo
-            .camera_model
-            .clone()
-            .or_else(|| photo.camera_make.clone());
+        let camera_name = crate::services::camera_names::friendly_camera_name(
+            photo.camera_make.as_deref(),
+            photo.camera_model.as_deref(),
+        );
         if let Some(cam) = camera_name {
             camera_items.push(
                 column![
@@ -496,21 +552,33 @@ impl PhotoDetailView {
         }
 
         // Flexible spacer pushes the mini-map to the right edge.
-        if mini_map.is_some() {
+        let mini_map_present = mini_map.is_some();
+        if mini_map_present {
             groups.push(Space::with_width(Length::Fill).into());
         }
         if let Some(mini) = mini_map {
             groups.push(mini);
         }
 
+        let map_present = mini_map_present;
+        let spacing = if map_present { 32 } else { 24 };
         let meta_row = iced::widget::Row::with_children(groups)
-            .spacing(32)
+            .spacing(spacing)
             .align_y(Alignment::Start);
 
         let panel_bg = p.bg_secondary;
         let border_color = p.border_subtle;
 
-        container(meta_row)
+        // Wrap the metadata row in a horizontal scrollable. Narrow windows
+        // used to clip the rightmost column off-screen; now the user can
+        // scroll laterally if it doesn't fit.
+        let scrollable_meta = iced::widget::scrollable(meta_row).direction(
+            iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::new().width(4),
+            ),
+        );
+
+        container(scrollable_meta)
             .width(Length::Fill)
             .padding(Padding::from([12, 24]))
             .style(move |_t: &iced::Theme| container::Style {

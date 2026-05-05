@@ -42,10 +42,18 @@ pub fn view_with_clusters(
 
     let title = text("People").size(28).color(text_primary);
 
-    // Processing status bar with progress bar and a single elapsed +
-    // ETA timer. We deliberately don't surface stage names — the user
-    // doesn't care whether we're detecting vs clustering, only how
-    // long until they get their faces.
+    // Processing status bar. Two-stage honest messaging:
+    //   Detecting  -> "Finding faces — N of M photos · 4 m elapsed · ~2 m left"
+    //                 ETA computed from per-photo throughput.
+    //   Finishing  -> "Grouping new people · 4 m 23 s elapsed
+    //                  (this can take several minutes for first-time
+    //                   libraries — recognized faces are already
+    //                   showing below)"
+    //                 NO bogus ETA: complete-link clustering is
+    //                 effectively a black box from the UI's side, and
+    //                 a fake 5%-of-elapsed countdown looked like a
+    //                 stuck progress bar.
+    //   Done       -> brief tail before the bar disappears.
     let status_bar: Element<'static, Message> = if processing_active {
         let (progress_text, pct) = if let Some(p) = progress {
             let fraction = if p.total > 0 {
@@ -56,7 +64,10 @@ pub fn view_with_clusters(
             let elapsed_str = format_duration(p.elapsed_secs);
             let progress_text = match p.stage {
                 FaceProcessingStage::Finishing => {
-                    format!("Almost done — wrapping up… · {} elapsed", elapsed_str)
+                    format!(
+                        "Recognising people · {} elapsed. Folks we already know are below — new ones land as we find them.",
+                        elapsed_str
+                    )
                 }
                 FaceProcessingStage::Done => {
                     format!("Finishing up · {} elapsed", elapsed_str)
@@ -74,7 +85,14 @@ pub fn view_with_clusters(
                     )
                 }
             };
-            (progress_text, fraction)
+            // During Finishing/Done the bar bias toward 100% but
+            // never 100% so it doesn't look frozen.
+            let visual_pct = match p.stage {
+                FaceProcessingStage::Detecting => fraction,
+                FaceProcessingStage::Finishing => 0.97,
+                FaceProcessingStage::Done => 1.0,
+            };
+            (progress_text, visual_pct)
         } else {
             ("Starting face processing…".to_string(), 0.0)
         };
@@ -280,7 +298,7 @@ pub fn view_with_clusters(
                 container(
                     row![
                         text(format!(
-                            "Select people to merge ({} selected)",
+                            "Choose the same person from these — {} chosen",
                             selected_count
                         ))
                         .size(13)
@@ -305,7 +323,7 @@ pub fn view_with_clusters(
         } else {
             Some(
                 container(
-                    text("Select 2 or more people to merge them")
+                    text("Tap two or more — same person? we'll combine them")
                         .size(13)
                         .color(text_secondary),
                 )
@@ -443,11 +461,11 @@ fn empty_view_with_button(
         column![
             icon(Lucide::Person, 36, text_tertiary),
             Space::with_height(12),
-            text("No people detected yet")
+            text("We haven't met anyone yet")
                 .size(16)
                 .color(text_secondary),
             Space::with_height(8),
-            text("Run face processing to find people in your photos.")
+            text("Start face recognition and we'll find the people in your library.")
                 .size(13)
                 .color(text_tertiary),
             Space::with_height(16),

@@ -124,12 +124,12 @@ impl DuplicatesView {
         let content = column![
             text("Duplicates").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("No duplicates found!")
+            text("No duplicates yet — your library looks clean.")
                 .size(16)
                 .color(p.text_secondary),
             Space::with_height(8),
-            text("Your photo library has no exact duplicate files.")
-                .size(14)
+            text("PhotoVault matches both byte-identical files (SHA-256) and visually similar photos (perceptual hash, Hamming distance ≤ 10). Empty here means your library is clean on both axes — re-edits and quality-adjusted re-saves are detected as near-duplicates.")
+                .size(13)
                 .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)

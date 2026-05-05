@@ -98,6 +98,28 @@ cargo build --release
 ./target/release/photovault
 ```
 
+### HEIC support (optional)
+
+iPhone photos are HEIC. To decode them from a source build, install
+`libheif` and rebuild with the `heic` feature:
+
+```bash
+# Linux (Debian/Ubuntu)
+sudo apt-get install libheif-dev
+
+# macOS
+brew install libheif
+
+# then
+cargo build --release --features heic
+```
+
+Shipped binaries (.deb, AppImage, macOS .tar.gz) include HEIC support
+out of the box. The Windows MSI ships without HEIC for now —
+`libheif` Windows binaries will land in v1.1. Without HEIC enabled,
+PhotoVault still indexes `.heic` files but reports a clear "HEIC
+support not compiled in" error when asked to decode one.
+
 Optional — install the asset pack locally for face recognition + geocoding:
 
 ```bash

@@ -22,14 +22,21 @@ exclude = [
 ]
 
 [features]
-# `heic` decodes HEIC/HEIF photos via libheif. Off by default because
-# libheif is a system C library; turn on once `libheif-dev` (Linux) /
-# `libheif` (macOS) / Windows binaries are available on the build
-# host. The runtime check inside services::image_io falls back to a
-# clear error message when the feature is disabled — no silent
-# corruption either way.
-default = []
+# `heic` decodes HEIC/HEIF photos via libheif. Off by default so a
+# `cargo build` from a fresh checkout doesn't fail on a missing
+# system library. Every release build (.deb, AppImage, macOS .tar.gz)
+# passes `--features heic` explicitly — see .github/workflows/release.yml
+# — so shipped binaries decode iPhone HEIC out of the box. Windows
+# MSI ships without HEIC for now; the libheif Windows build chain
+# is fragile and slated for v1.1.
+#
+# `hnsw_clustering` swaps Stage B agglomerative complete-link for
+# HNSW-based approximate nearest neighbor + union-find. Quadratic
+# cost goes away — clustering scales linearly past the legacy 800-face
+# cap. Default-on; can be disabled to A/B against the original.
+default = ["hnsw_clustering"]
 heic = ["dep:libheif-rs"]
+hnsw_clustering = ["dep:hnsw_rs"]
 
 [dependencies]
 # UI Framework
@@ -67,12 +74,21 @@ imageproc = "0.26"
 # Cargo feature so default builds still work without the system dep.
 libheif-rs = { version = "2", optional = true, default-features = false }
 
+# Approximate nearest-neighbor index for face clustering. Pure Rust,
+# no system deps. Behind `hnsw_clustering` feature (default-on) so we
+# can A/B against the legacy complete-link path during rollout.
+hnsw_rs = { version = "0.3", optional = true }
+
+# Perceptual-hash duplicate detection. 64-bit DCT hash, ~1 ms per
+# image when run against the cached Small thumbnail.
+image_hasher = "3"
+
 # ONNX Runtime for ML inference (face detection/recognition)
 # Using load-dynamic to load libonnxruntime.so at runtime via dlopen.
 # This avoids linking against a prebuilt static lib that requires glibc 2.38+.
 # Place the ONNX Runtime 1.23.x shared library in libs/onnxruntime/ or set ORT_DYLIB_PATH.
 # default-features = false is critical: the default features include download-binaries.
-ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic", "cuda", "directml", "coreml"] }
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic", "cuda", "directml", "coreml"] }
 
 # Linear algebra for face embeddings
 ndarray = "0.16"
@@ -146,7 +162,10 @@ Indexes photos from local drives, detects faces, finds duplicates,
 suggests albums, and provides full-text search -- all without uploading
 anything to the cloud.
 """
-depends = "$auto"
+# `$auto` resolves the dynamic-linking footprint, but `libheif-rs` is
+# loaded via dlopen (not by ld) so cargo-deb can't see it. Pin it as
+# a runtime dep so apt installs libheif1 alongside the .deb.
+depends = "$auto, libheif1"
 section = "graphics"
 priority = "optional"
 assets = [

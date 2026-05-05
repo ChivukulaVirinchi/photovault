@@ -49,6 +49,27 @@ pub enum Message {
     PrewarmThumbnails,
     PrewarmThumbnailsComplete(usize),
 
+    /// Window regained focus. Triggers a rate-limited rescan so
+    /// photos added externally show up without manual intervention.
+    WindowFocused,
+
+    /// Deferred hover commit. Carries the seq number the dispatcher
+    /// captured at scheduling time; if `app.hover_intent_seq` has
+    /// moved on since, this settle is stale and gets dropped — that's
+    /// what coalesces a fast mouse sweep into one hover state change.
+    HoverSettle {
+        photo_id: Option<i64>,
+        seq: u64,
+    },
+
+    /// Drag-over hint. Set true when the OS reports a file is being
+    /// dragged over the window, false on FilesHoveredLeft or Drop.
+    DropTargetActive(bool),
+
+    /// Recompute the Library Health counters and show them.
+    LoadLibraryHealth,
+    LibraryHealthLoaded(crate::services::LibraryHealth),
+
     /// Drives detected
     DrivesDetected(Vec<DriveInfo>),
 
@@ -306,6 +327,10 @@ pub enum Message {
         cleared: usize,
     },
 
+    /// Reset window size to default (1600×1000). Useful when the
+    /// user moves to a new monitor and the persisted size feels off.
+    ResetWindowSize,
+
     /// Re-read EXIF/filename/mtime metadata and refresh photo dates in DB.
     RefreshPhotoDates,
     /// Background photo-date refresh completed.
@@ -468,6 +493,17 @@ pub enum Message {
     /// Pending suggestions loaded from DB
     SuggestionsLoaded(Vec<crate::db::AlbumSuggestionRecord>),
     /// Begin the accept flow: show inline name editor
+    /// Open the suggestion preview modal — loads photo thumbnails so
+    /// the user can see what's in the suggestion before accepting.
+    PreviewSuggestion(i64),
+    /// Modal preview thumbnails finished loading.
+    SuggestionPreviewLoaded {
+        suggestion_id: i64,
+        thumbs: Vec<String>,
+    },
+    /// Close the suggestion preview modal without acting on it.
+    ClosePreviewSuggestion,
+
     BeginAcceptSuggestion(i64),
     /// Name field changed during accept flow
     AcceptSuggestionNameChanged(String),

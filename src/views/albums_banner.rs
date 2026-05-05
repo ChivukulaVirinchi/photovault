@@ -54,7 +54,7 @@ fn suggestion_banner_card(
     let thumb_h: f32 = 100.0;
     let sug_id = sug.id;
 
-    let cover: Element<'static, Message> = match &sug.cover_thumbnail_path {
+    let cover_inner: Element<'static, Message> = match &sug.cover_thumbnail_path {
         Some(path) => iced_image(path.clone())
             .content_fit(ContentFit::Cover)
             .width(Length::Fixed(card_w))
@@ -70,6 +70,13 @@ fn suggestion_banner_card(
                 .into()
         }
     };
+    // Wrap the cover in a button so clicking it opens the preview
+    // modal — accept/dismiss stay as quick actions on the row below.
+    let cover: Element<'static, Message> = button(cover_inner)
+        .padding(0)
+        .style(|_t: &iced::Theme, _s| button::Style::default())
+        .on_press(Message::PreviewSuggestion(sug_id))
+        .into();
 
     let accent = p.accent_primary;
     let tc_sec = p.text_secondary;
@@ -114,9 +121,12 @@ fn suggestion_banner_card(
             cover,
             iced::widget::column![
                 text(sug.title.clone()).size(12).color(p.text_primary),
-                text(format!("{} photos", sug.photo_ids().len()))
-                    .size(10)
-                    .color(tc_sec),
+                text(format!(
+                    "{} photos · tap to peek inside",
+                    sug.photo_ids().len()
+                ))
+                .size(10)
+                .color(tc_sec),
                 row![accept_btn, dismiss_btn].spacing(6),
             ]
             .spacing(4)

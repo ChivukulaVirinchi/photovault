@@ -300,6 +300,7 @@ impl FaceProcessor {
             let faces_dir_buf = faces_dir.clone();
             let chunks_flushed = chunks_flushed.clone();
             let cancel = cancel.clone();
+            let writer_resolver_weights = resolver_weights;
             std::thread::spawn(move || -> Result<(usize, usize), String> {
                 let writer_db = Database::open_for_drive(&drive_path_buf)
                     .map_err(|e| format!("Failed to open writer DB: {}", e))?;
@@ -307,8 +308,14 @@ impl FaceProcessor {
                 let mut photos_processed = 0usize;
                 while let Ok(chunk) = chunk_rx.recv() {
                     let was_cancelled = cancel.load(Ordering::Relaxed);
-                    let (faces_added, photos_added) =
-                        flush_result_chunk(&writer_db, &faces_dir_buf, &chunk, was_cancelled)?;
+                    let (faces_added, photos_added) = flush_result_chunk(
+                        &writer_db,
+                        &faces_dir_buf,
+                        &chunk,
+                        was_cancelled,
+                        clustering_threshold,
+                        writer_resolver_weights,
+                    )?;
                     total_faces += faces_added;
                     photos_processed += photos_added;
                     chunks_flushed.fetch_add(1, Ordering::Relaxed);
@@ -880,6 +887,13 @@ impl FaceProcessor {
 /// On cancellation, photos with `had_error && faces.is_empty()` are
 /// left as `faces_processed=FALSE` so a later run will retry them.
 ///
+/// After the commit, runs an inline Stage A pass: each freshly-inserted
+/// face is matched against existing cluster galleries and assigned a
+/// `cluster_id` if a HIGH-confidence match exists. This is what makes
+/// faces appear in the People view *during* the run — without it,
+/// faces carry `cluster_id = NULL` until end-of-pipeline clustering
+/// and the grid stays empty.
+///
 /// Returns `(faces_added, photos_added)` for stats only — durable state
 /// is the SQL writes.
 fn flush_result_chunk(
@@ -887,6 +901,8 @@ fn flush_result_chunk(
     faces_dir: &Path,
     chunk: &[PhotoFaceResult],
     was_cancelled: bool,
+    clustering_threshold: f32,
+    resolver_weights: crate::ml::ResolverWeights,
 ) -> Result<(usize, usize), String> {
     let mut faces_added = 0usize;
     let mut photos_added = 0usize;
@@ -960,6 +976,20 @@ fn flush_result_chunk(
 
     tx.commit()
         .map_err(|e| format!("Failed to commit chunk: {}", e))?;
+
+    // Per-chunk Stage A: assign HIGH-band gallery matches now so the
+    // user sees faces appear in People mid-run for everyone they've
+    // already named (or who survived a previous run). New people are
+    // still introduced at the end-of-pipeline clustering pass.
+    let face_repo = FaceRepo::new(&db.conn);
+    if let Err(e) = FaceProcessor::stream_assign_existing_clusters(
+        &face_repo,
+        clustering_threshold,
+        resolver_weights,
+    ) {
+        tracing::debug!("Per-chunk Stage A skipped: {}", e);
+    }
+
     Ok((faces_added, photos_added))
 }
 

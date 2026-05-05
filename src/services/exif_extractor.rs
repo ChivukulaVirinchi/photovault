@@ -71,8 +71,6 @@ impl ExifExtractor {
         }
 
         // Filename fallback — runs unless we already have a capture-tag date.
-        // (had_exif_date_field is true only for Original/Digitized, so a
-        // mod-time-only photo still drops here.)
         if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
             if let Some(date) = Self::parse_date_from_filename(path) {
                 metadata.date_taken = Some(date);
@@ -80,11 +78,34 @@ impl ExifExtractor {
             }
         }
 
-        // EXIF DateTime fallback — modification date, weaker than the above.
+        // EXIF DateTime fallback. The modification tag is often stale — we've
+        // seen phones whose firmware clock reset to 2012-01-01 stamp every
+        // photo's `DateTime` tag with that value while mtime / shutter time
+        // is years later. Sanity check against mtime: when the two disagree
+        // by ≥ 2 years, prefer mtime (it's at least the file's real lifetime
+        // on this disk).
         if metadata.date_taken.is_none() {
-            if let Some(date) = datetime_candidate {
-                metadata.date_taken = Some(date);
-                metadata.date_taken_source = Some("file_meta".to_string());
+            if let Some(candidate) = datetime_candidate {
+                let mtime = Self::get_file_mtime(path);
+                let stale = match mtime {
+                    Some(m) => {
+                        use chrono::Datelike;
+                        (candidate.year() - m.year()).abs() >= 2
+                    }
+                    None => false,
+                };
+                if stale {
+                    if let Some(m) = mtime {
+                        metadata.date_taken = Some(m);
+                        metadata.date_taken_source = Some("mtime".to_string());
+                    } else {
+                        metadata.date_taken = Some(candidate);
+                        metadata.date_taken_source = Some("file_meta".to_string());
+                    }
+                } else {
+                    metadata.date_taken = Some(candidate);
+                    metadata.date_taken_source = Some("file_meta".to_string());
+                }
             }
         }
 
@@ -370,14 +391,21 @@ impl ExifExtractor {
                 (Regex::new(r"(\d{8})_(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
                 // 2019-03-15 14.30.22.jpg
                 (Regex::new(r"(\d{4}-\d{2}-\d{2}) (\d{2}\.\d{2}\.\d{2})").unwrap(), "%Y-%m-%d%H.%M.%S"),
-                // Screenshot_20190315-143022.png
-                (Regex::new(r"Screenshot_(\d{8})-(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
+                // Screenshot_20190315-143022.png / Screenshot_20190315_143022.png
+                (Regex::new(r"Screenshot_(\d{8})[-_](\d{6})").unwrap(), "%Y%m%d%H%M%S"),
                 // VID_20190315_143022.mp4
                 (Regex::new(r"VID_(\d{8})_(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
                 // PXL_20190315_143022.jpg (Pixel phones)
                 (Regex::new(r"PXL_(\d{8})_(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
-                // Just date: 20190315.jpg
-                (Regex::new(r"(\d{8})\.").unwrap(), "%Y%m%d"),
+                // WhatsApp: IMG-20190315-WA0001.jpg, VID-20190315-WA0001.mp4
+                (Regex::new(r"(?:IMG|VID)-(\d{8})-WA\d+").unwrap(), "%Y%m%d"),
+                // Snapchat / Android camera apps: 2019-03-15-14-30-22.jpg
+                (Regex::new(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})").unwrap(), "%Y%m%d%H%M%S"),
+                // Generic ISO with separators: 2019-03-15_14-30-22.jpg
+                (Regex::new(r"(\d{4})-(\d{2})-(\d{2})[ _](\d{2})[\.\-_](\d{2})[\.\-_](\d{2})").unwrap(), "%Y%m%d%H%M%S"),
+                // Just date — anchored so an ID like ABCD20120000.jpg can't
+                // hijack the parse. Requires non-digit boundary or start.
+                (Regex::new(r"(?:^|[^\d])(\d{8})\.").unwrap(), "%Y%m%d"),
             ];
         }
 
@@ -477,5 +505,47 @@ mod tests {
         let path = std::path::Path::new("vacation_photo.jpg");
         let date = ExifExtractor::parse_date_from_filename(path);
         assert!(date.is_none());
+    }
+
+    #[test]
+    fn test_whatsapp_filename() {
+        let path = std::path::Path::new("IMG-20260307-WA0001.jpg");
+        let date = ExifExtractor::parse_date_from_filename(path);
+        assert!(date.is_some());
+        let dt = date.unwrap();
+        assert_eq!(dt.year(), 2026);
+        assert_eq!(dt.month(), 3);
+        assert_eq!(dt.day(), 7);
+    }
+
+    #[test]
+    fn test_dashed_iso_filename() {
+        let path = std::path::Path::new("2026-03-07-14-30-22.jpg");
+        let date = ExifExtractor::parse_date_from_filename(path);
+        assert!(date.is_some());
+        let dt = date.unwrap();
+        assert_eq!(dt.year(), 2026);
+        assert_eq!(dt.month(), 3);
+    }
+
+    #[test]
+    fn test_loose_8digit_no_longer_hijacks_id_string() {
+        // ID-only filename with 8 digits embedded — the pattern requires a
+        // non-digit boundary before the 8 digits, so a 10-digit ID like
+        // mmexport1234567890.jpg won't get parsed as 1234-56-78.
+        let path = std::path::Path::new("mmexport1234567890.jpg");
+        let date = ExifExtractor::parse_date_from_filename(path);
+        // Falls through to the loose pattern, but the leading char before
+        // the 8-digit window is a digit, so it should not match.
+        assert!(date.is_none());
+    }
+
+    #[test]
+    fn test_loose_8digit_still_works_with_letter_prefix() {
+        let path = std::path::Path::new("Photo20190315.jpg");
+        let date = ExifExtractor::parse_date_from_filename(path);
+        assert!(date.is_some());
+        let dt = date.unwrap();
+        assert_eq!(dt.year(), 2019);
     }
 }

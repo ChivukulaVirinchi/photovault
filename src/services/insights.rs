@@ -45,6 +45,9 @@ pub struct InsightsData {
     pub album_count: i64,
     pub country_count: i64,
     pub city_count: i64,
+    /// How many photos in scope have GPS coordinates. Lets the view tell
+    /// "no GPS data yet" apart from "GPS data but no geocoder result".
+    pub photos_with_gps: i64,
     pub hero_photo_id: Option<i64>,
     pub hero_thumbnail_path: Option<String>,
     /// Day-level photo counts for the heatmap: "YYYY-MM-DD" -> count.
@@ -85,36 +88,23 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         None => String::new(),
     };
 
-    // 1. Total photos
-    let total_photos: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE{}", yc),
-        [],
-        |row| row.get(0),
-    )?;
-
-    // 2. Date range (MIN / MAX date_taken)
-    let date_range_start: Option<String> = conn
-        .query_row(
+    // 1+2. Total photos + min/max date — collapsed into a single
+    // SELECT. Three round-trips → one. The aggregations all share
+    // the same FROM / WHERE so SQLite can do them in one scan.
+    let (total_photos, date_range_start, date_range_end): (i64, Option<String>, Option<String>) =
+        conn.query_row(
             &format!(
-                "SELECT MIN({}) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
-                dt, yc
+                "SELECT COUNT(*),
+                        MIN(CASE WHEN date_taken IS NOT NULL THEN {dt} END),
+                        MAX(CASE WHEN date_taken IS NOT NULL THEN {dt} END)
+                 FROM photos
+                 WHERE is_trashed = FALSE{yc}",
+                dt = dt,
+                yc = yc
             ),
             [],
-            |row| row.get(0),
-        )
-        .ok()
-        .flatten();
-    let date_range_end: Option<String> = conn
-        .query_row(
-            &format!(
-                "SELECT MAX({}) FROM photos WHERE is_trashed = FALSE AND date_taken IS NOT NULL{}",
-                dt, yc
-            ),
-            [],
-            |row| row.get(0),
-        )
-        .ok()
-        .flatten();
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
 
     // 3. People count — distinct named clusters that have photos in scope
     let people_count: i64 = conn.query_row(
@@ -145,30 +135,21 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         |row| row.get(0),
     )?;
 
-    // 5. Country + city counts
-    let country_count: i64 = conn.query_row(
+    // 5. Country + city counts + GPS-tagged count (one query, three aggs).
+    let (country_count, city_count, photos_with_gps): (i64, i64, i64) = conn.query_row(
         &format!(
-            "SELECT COUNT(DISTINCT location_country)
+            "SELECT
+                COUNT(DISTINCT CASE WHEN location_country IS NOT NULL AND location_country != ''
+                                    THEN location_country END),
+                COUNT(DISTINCT CASE WHEN location_city IS NOT NULL AND location_city != ''
+                                    THEN location_city END),
+                SUM(CASE WHEN gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL THEN 1 ELSE 0 END)
              FROM photos
-             WHERE is_trashed = FALSE
-               AND location_country IS NOT NULL
-               AND location_country != ''{}",
+             WHERE is_trashed = FALSE{}",
             yc
         ),
         [],
-        |row| row.get(0),
-    )?;
-    let city_count: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(DISTINCT location_city)
-             FROM photos
-             WHERE is_trashed = FALSE
-               AND location_city IS NOT NULL
-               AND location_city != ''{}",
-            yc
-        ),
-        [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, Option<i64>>(2)?.unwrap_or(0))),
     )?;
 
     // 6. Hero photo — prefer photos with faces, landscape orientation, newest
@@ -351,6 +332,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         album_count,
         country_count,
         city_count,
+        photos_with_gps,
         hero_photo_id,
         hero_thumbnail_path: None, // resolved by the loader
         heatmap,

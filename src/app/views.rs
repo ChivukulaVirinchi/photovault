@@ -64,6 +64,17 @@ fn apply_global_overlays<'a>(
         base
     };
 
+    let base: Element<'_, Message> = if let Some(modal) =
+        crate::views::album_suggestion_preview::preview_modal(
+            app.previewing_suggestion.as_ref(),
+            &app.previewing_suggestion_thumbs,
+            app.config.theme,
+        ) {
+        iced::widget::stack![base, modal].into()
+    } else {
+        base
+    };
+
     if !app.toasts.is_empty() {
         let toast_overlay = crate::components::toast::toast_stack(&app.toasts, app.config.theme);
         iced::widget::stack![base, toast_overlay].into()
@@ -152,7 +163,10 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
 
     // If no drive selected, show welcome screen
     if app.selected_drive.is_none() {
-        return apply_global_overlays(WelcomeView::view(&app.drives, app.config.theme), app);
+        return apply_global_overlays(
+            WelcomeView::view(&app.drives, app.drop_target_active, app.config.theme),
+            app,
+        );
     }
 
     // Main layout: sidebar (collapsible) + content
@@ -198,7 +212,7 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
     };
 
     let content = match app.current_view {
-        View::Welcome => WelcomeView::view(&app.drives, app.config.theme),
+        View::Welcome => WelcomeView::view(&app.drives, app.drop_target_active, app.config.theme),
         View::Scanning => unreachable!(), // Handled above
         View::Timeline => {
             let mem_banner =
@@ -696,6 +710,11 @@ pub(crate) fn view(app: &PhotoVault) -> Element<'_, Message> {
             app.insights_selected_year,
             app.insights_loading,
             app.spinner_phase,
+            app.config.theme,
+        ),
+        View::LibraryHealth => crate::views::LibraryHealthView::view(
+            app.library_health.as_ref(),
+            app.library_health_loading,
             app.config.theme,
         ),
         View::Albums => crate::views::albums::albums_view(

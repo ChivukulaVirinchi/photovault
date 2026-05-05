@@ -26,6 +26,7 @@ fn view_to_config_string(v: &View) -> Option<&'static str> {
         View::Bursts => "bursts",
         View::Trash => "trash",
         View::Settings => "settings",
+        View::LibraryHealth => "library_health",
         // Detail / transient views: don't persist.
         _ => return None,
     })
@@ -45,6 +46,7 @@ pub(crate) fn config_string_to_view(s: &str) -> Option<View> {
         "bursts" => View::Bursts,
         "trash" => View::Trash,
         "settings" => View::Settings,
+        "library_health" => View::LibraryHealth,
         _ => return None,
     })
 }
@@ -65,6 +67,7 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
         View::Trash => 10,
         View::Documents => 11,
         View::Settings => 12,
+        View::LibraryHealth => 13,
         _ => app.sidebar_highlight_index.unwrap_or(0),
     });
     if view == app.current_view {
@@ -134,6 +137,9 @@ pub(crate) fn navigate_to(app: &mut PhotoVault, view: View) -> Task<Message> {
             Task::none()
         };
         return Task::batch([super::insights::load_insights(app), geocode_task]);
+    } else if view == View::LibraryHealth {
+        app.current_view = view;
+        return super::handle(app, Message::LoadLibraryHealth);
     } else if view == View::Search {
         app.current_view = view;
         if app.recent_searches.is_empty() {
@@ -229,6 +235,27 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 let _ = super::handle(app, Message::RunGeocoding);
             }
 
+            // One-time hint when the GeoNames DB is missing. The geocoder
+            // bails silently in that state, leaving Insights at 0 and the
+            // info panel stuck on "Looking up where this was taken…" — an
+            // explicit toast points users at the setup script before they
+            // hunt for a non-bug.
+            let geonames_hint =
+                if !crate::bootstrap::geonames_db_exists() && !app.config.geonames_warning_seen {
+                    app.config.geonames_warning_seen = true;
+                    if let Err(e) = app.config.save() {
+                        tracing::debug!("Failed to persist geonames_warning_seen: {}", e);
+                    }
+                    super::handle(
+                    app,
+                    Message::ToastShow(crate::components::toast::Toast::info(
+                        "Place names off — run scripts/setup_assets.sh to enable city/country tags",
+                    )),
+                )
+                } else {
+                    Task::none()
+                };
+
             // Kick off the initial Memories generation for today's date.
             let memories_task = if app.memories_enabled {
                 let today = chrono::Local::now().date_naive();
@@ -248,6 +275,28 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 // Existing library: auto-sync incremental changes first.
                 super::handle(app, Message::CheckForChanges)
             };
+
+            // One-shot date refresh after a logic upgrade. Without
+            // this, photos written under the old DateTime-fallback
+            // chain keep their wrong (often "2012") dates forever
+            // until the user notices and clicks Advanced.
+            let date_refresh =
+                if app.config.date_logic_version < crate::config::CURRENT_DATE_LOGIC_VERSION {
+                    let toast = super::handle(
+                        app,
+                        Message::ToastShow(crate::components::toast::Toast::info(
+                            "Refreshing photo dates with improved EXIF detection",
+                        )),
+                    );
+                    let refresh = super::handle(app, Message::RefreshPhotoDates);
+                    app.config.date_logic_version = crate::config::CURRENT_DATE_LOGIC_VERSION;
+                    if let Err(e) = app.config.save() {
+                        tracing::debug!("Failed to persist date_logic_version bump: {}", e);
+                    }
+                    Task::batch(vec![toast, refresh])
+                } else {
+                    Task::none()
+                };
 
             // Restore last-viewed view (if persisted & not Timeline which is default).
             let restore = if let Some(saved) = app
@@ -272,6 +321,8 @@ pub(crate) fn select_drive(app: &mut PhotoVault, path: PathBuf) -> Task<Message>
                 detect_suggestions_task,
                 next,
                 restore,
+                date_refresh,
+                geonames_hint,
             ])
         }
         Err(e) => {
@@ -309,6 +360,9 @@ pub(crate) fn folder_selected(app: &mut PhotoVault, path: Option<PathBuf>) -> Ta
 }
 
 pub(crate) fn folder_dropped(app: &mut PhotoVault, path: PathBuf) -> Task<Message> {
+    // FileHovered → FileDropped doesn't always emit FilesHoveredLeft,
+    // so clear the overlay flag explicitly when the drop completes.
+    app.drop_target_active = false;
     // Files dropped from a manager arrive as either a directory (good)
     // or a file (use its parent so dropping a single photo opens the
     // enclosing folder). Reject if neither resolves to a real dir.

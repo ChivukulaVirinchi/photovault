@@ -303,6 +303,7 @@ impl PhotoVault {
         self.current_photo_people.clear();
         self.current_photo_face_count = 0;
         self.current_photo_location = None;
+        self.current_photo_location_resolved = false;
         self.current_photo_albums.clear();
         if let Some(ref db) = self.database {
             let face_repo = FaceRepo::new(&db.conn);
@@ -326,6 +327,9 @@ impl PhotoVault {
         // Resolve display location: prefer stored city/country, fall back to
         // an on-the-fly geocode lookup from the GeoNames DB.
         self.current_photo_location = photo.location_string();
+        // If the DB already has a name, mark as resolved so the view
+        // doesn't show the "looking up…" copy.
+        self.current_photo_location_resolved = self.current_photo_location.is_some();
 
         // Always prefer original image for full-quality photo detail viewing.
         // Fall back to thumbnail only when the original is unavailable.

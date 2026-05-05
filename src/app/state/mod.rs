@@ -51,6 +51,10 @@ pub enum View {
     Albums,
     AlbumDetail,
     Insights,
+    /// Diagnostics surface — counters for missing thumbs, inaccurate
+    /// dates, undecodable HEIC, etc. Lives under the Library group
+    /// in the sidebar so users have a place to act on data quality.
+    LibraryHealth,
 }
 
 /// Interactive face review deck state.
@@ -402,6 +406,15 @@ pub struct PhotoVault {
     /// when the photo has GPS coordinates but no stored city/country).
     pub(crate) current_photo_location: Option<String>,
 
+    /// True once the resolution attempt has finished (regardless of result).
+    /// Lets the view distinguish "still looking" from "no match found".
+    pub(crate) current_photo_location_resolved: bool,
+
+    /// Album suggestion currently shown in the preview modal.
+    pub(crate) previewing_suggestion: Option<crate::db::AlbumSuggestionRecord>,
+    /// Resolved absolute thumbnail paths for `previewing_suggestion`.
+    pub(crate) previewing_suggestion_thumbs: Vec<String>,
+
     /// Current rotation offset in photo detail (0, 90, 180, 270)
     pub(crate) photo_rotation: i32,
 
@@ -552,6 +565,32 @@ pub struct PhotoVault {
     /// drive deselect or app exit so the worker thread can bail
     /// instead of churning over the disk after the user moved on.
     pub(crate) thumbnail_prewarm_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+
+    /// Last time we kicked off an auto-rescan in response to a
+    /// window-focus event. Rate-limits the on-focus rescan to at
+    /// most once per 30 s so alt-tabbing back and forth doesn't
+    /// thrash the disk.
+    pub(crate) last_focus_rescan_at: Option<std::time::Instant>,
+
+    /// Monotonic counter bumped on every TimelinePhotoHover. The
+    /// debouncer commits a hover only when the deferred HoverSettle
+    /// it scheduled still carries the latest seq — older settles get
+    /// dropped. Net effect: at most one hover state change per ~40 ms
+    /// regardless of mouse speed, with no added latency for slow
+    /// movements.
+    pub(crate) hover_intent_seq: u64,
+
+    /// True while the OS is hovering a draggable file/folder over the
+    /// app window (between FileHovered and FilesHoveredLeft / Drop).
+    /// Drives the dashed-border "Drop a folder here" overlay on
+    /// Welcome so users discover the drag-and-drop affordance.
+    pub(crate) drop_target_active: bool,
+
+    /// Loaded counters for the Library Health view. Populated by
+    /// `Message::LoadLibraryHealth`; `None` while a load is in flight
+    /// or before the user has visited the view.
+    pub(crate) library_health: Option<crate::services::LibraryHealth>,
+    pub(crate) library_health_loading: bool,
 }
 
 /// A pending destructive action awaiting user confirmation.
@@ -758,6 +797,9 @@ impl PhotoVault {
             current_photo_people: Vec::new(),
             current_photo_face_count: 0,
             current_photo_location: None,
+            current_photo_location_resolved: false,
+            previewing_suggestion: None,
+            previewing_suggestion_thumbs: Vec::new(),
             photo_rotation: 0,
             current_display_image: None,
             show_metadata_panel: false,
@@ -815,6 +857,11 @@ impl PhotoVault {
             pending_confirmation: None,
             settings_show_advanced: false,
             thumbnail_prewarm_cancel: None,
+            last_focus_rescan_at: None,
+            hover_intent_seq: 0,
+            drop_target_active: false,
+            library_health: None,
+            library_health_loading: false,
         };
 
         // Detect drives on startup

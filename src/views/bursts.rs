@@ -123,12 +123,16 @@ impl BurstsView {
         let content = column![
             text("Burst Photos").size(28).color(p.text_primary),
             Space::with_height(16),
-            text("No burst photos found!")
+            text("No burst sequences — every shot has its own moment.")
                 .size(16)
                 .color(p.text_secondary),
             Space::with_height(8),
-            text("Bursts are photos taken within 3 seconds of each other.")
-                .size(14)
+            text("A burst is two or more visually similar photos taken within seconds of each other — the kind of thing you get tapping the shutter rapidly. PhotoVault groups them so you can pick the best shot and clear the rest.")
+                .size(13)
+                .color(p.text_tertiary),
+            Space::with_height(8),
+            text("Detection settings: 2+ photos within 10 seconds, 65% visually similar. Tune the window under Settings → Burst Detection.")
+                .size(12)
                 .color(p.text_tertiary),
         ]
         .align_x(Alignment::Start)

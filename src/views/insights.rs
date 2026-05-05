@@ -221,12 +221,47 @@ fn stat_cards(data: &InsightsData, p: &colors::Palette) -> Element<'static, Mess
         _ => "--".to_string(),
     };
 
+    // Status-aware location cards. The bare "0 countries" reads as a
+    // bug; pivot the copy when there's no place data to resolve.
+    let (country_value, country_label, city_value, city_label): (String, &str, String, &str) =
+        if data.country_count == 0 && data.city_count == 0 {
+            if data.photos_with_gps == 0 {
+                (
+                    "—".to_string(),
+                    "No location data",
+                    "—".to_string(),
+                    "Add GPS-tagged photos",
+                )
+            } else if !crate::bootstrap::geonames_db_exists() {
+                (
+                    "—".to_string(),
+                    "Place names off",
+                    "—".to_string(),
+                    "Run setup_assets.sh",
+                )
+            } else {
+                (
+                    format_number(0),
+                    "Places resolving…",
+                    format_number(0),
+                    "Geocoder still working",
+                )
+            }
+        } else {
+            (
+                format_number(data.country_count),
+                "Countries you've roamed",
+                format_number(data.city_count),
+                "Cities you've wandered",
+            )
+        };
+
     let cards = row![
         stat_card(&format_number(data.total_photos), "Memories captured", p),
-        stat_card(&format_number(data.people_count), "People you kept", p),
+        stat_card(&format_number(data.people_count), "People you know", p),
         stat_card(&format_number(data.album_count), "Albums created", p),
-        stat_card(&format_number(data.country_count), "Countries visited", p),
-        stat_card(&format_number(data.city_count), "Cities explored", p),
+        stat_card(&country_value, country_label, p),
+        stat_card(&city_value, city_label, p),
         timeline_stat_card(&date_range, "Your timeline", p),
     ]
     .spacing(12);

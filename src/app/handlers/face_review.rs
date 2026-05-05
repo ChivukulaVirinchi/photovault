@@ -73,6 +73,10 @@ pub(crate) fn same(app: &mut PhotoVault) -> Task<Message> {
         state.undo_stack.push((queue_id, ReviewDecision::Same));
         state.advance();
     }
+    // Optimistic badge update — the background thread above will
+    // resolve the queue row, but the user sees the count drop now
+    // rather than waiting for `finish` to run a recount.
+    app.face_review_pending = (app.face_review_pending - 1).max(0);
     Task::none()
 }
 
@@ -100,6 +104,7 @@ pub(crate) fn different(app: &mut PhotoVault) -> Task<Message> {
         state.undo_stack.push((queue_id, ReviewDecision::Different));
         state.advance();
     }
+    app.face_review_pending = (app.face_review_pending - 1).max(0);
     Task::none()
 }
 
@@ -127,6 +132,7 @@ pub(crate) fn skip(app: &mut PhotoVault) -> Task<Message> {
         state.undo_stack.push((queue_id, ReviewDecision::Skip));
         state.advance();
     }
+    app.face_review_pending = (app.face_review_pending - 1).max(0);
     Task::none()
 }
 
@@ -153,6 +159,9 @@ pub(crate) fn undo(app: &mut PhotoVault) -> Task<Message> {
             tracing::warn!("unresolve_review failed for queue_id={}: {}", queue_id, e);
         }
     });
+    // Mirror the optimistic decrement from same/different/skip —
+    // undo'ing a resolution should bump the badge back up.
+    app.face_review_pending += 1;
 
     Task::none()
 }

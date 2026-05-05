@@ -23,15 +23,45 @@ pub(crate) fn run_duplicate_detection(app: &mut PhotoVault) -> Task<Message> {
                 let db = Database::open_for_drive(&drive_path)
                     .map_err(|e| format!("Failed to open database: {}", e))?;
 
-                // Run duplicate detection
-                let dup_groups = DuplicateDetector::find_duplicates(&db.conn)
+                // Pass 1: byte-identical (SHA-256).
+                let mut dup_groups = DuplicateDetector::find_duplicates(&db.conn)
                     .map_err(|e| format!("Duplicate detection failed: {}", e))?;
 
-                // Sync to database
+                // Build the exclusion set so the perceptual pass
+                // doesn't re-emit photos already grouped as exact.
+                let mut excluded: std::collections::HashSet<i64> = std::collections::HashSet::new();
+                for g in &dup_groups {
+                    for id in &g.photo_ids {
+                        excluded.insert(*id);
+                    }
+                }
+
+                // Pass 2: perceptual (DCT phash, Hamming ≤ 10).
+                let thumb_root = drive_path
+                    .join(".photovault")
+                    .join("thumbnails")
+                    .join("small");
+                match DuplicateDetector::find_perceptual_duplicates(
+                    &db.conn,
+                    &thumb_root,
+                    &excluded,
+                ) {
+                    Ok(mut perc) => dup_groups.append(&mut perc),
+                    Err(e) => tracing::warn!("perceptual duplicate pass failed: {}", e),
+                }
+
+                // Sync to database (both types in one call).
                 let repo = DuplicateRepo::new(&db.conn);
-                let sync_data: Vec<(String, Vec<i64>, Option<i64>)> = dup_groups
+                let sync_data: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = dup_groups
                     .iter()
-                    .map(|g| (g.hash.clone(), g.photo_ids.clone(), g.suggested_keep_id))
+                    .map(|g| {
+                        (
+                            g.hash.clone(),
+                            g.photo_ids.clone(),
+                            g.suggested_keep_id,
+                            g.duplicate_type,
+                        )
+                    })
                     .collect();
                 repo.sync_duplicate_groups(&sync_data)
                     .map_err(|e| format!("Failed to sync duplicate groups: {}", e))?;

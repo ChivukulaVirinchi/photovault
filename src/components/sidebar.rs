@@ -152,6 +152,8 @@ impl Sidebar {
                 app_theme,
                 highlighted_index == Some(11),
             ),
+            // Library Health is reachable from Settings → "Library health".
+            // It's diagnostic noise for the sidebar's main flow.
         ]
         .spacing(2)
         .padding(Padding::from([0, 8]));

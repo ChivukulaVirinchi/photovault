@@ -299,10 +299,16 @@ impl SettingsView {
     fn inference_backend_row(theme: AppTheme) -> Element<'static, Message> {
         let p = colors::palette(theme);
         let provider = crate::ml::runtime::active_execution_provider();
+        // ORT can fall back per-op silently — the probe only tells us
+        // which provider was *available* at session-build time, not
+        // which one actually executes each node. Reflect that
+        // honestly so users on Windows don't think DirectML is
+        // doing all the work when CPU might still be picking up the
+        // unsupported ops.
         let value = if provider == "CPU" {
-            "CPU".to_string()
+            "CPU only — no GPU detected".to_string()
         } else {
-            format!("GPU ({})", provider)
+            format!("prefers {} (CPU fallback per op)", provider)
         };
         Self::setting_row(
             theme,
@@ -467,6 +473,14 @@ impl SettingsView {
             Self::action_button(theme, "Check for New Photos", Message::CheckForChanges),
             Space::with_width(16),
             geocode_button,
+            Space::with_width(16),
+            Self::action_button(
+                theme,
+                "Library Health",
+                Message::NavigateTo(crate::app::state::View::LibraryHealth),
+            ),
+            Space::with_width(16),
+            Self::action_button(theme, "Reset Window Size", Message::ResetWindowSize),
         ];
 
         // Show advanced toggle (low-key text button).

@@ -211,6 +211,7 @@ pub(super) fn photo_location_resolved(
     };
     if photo.id == photo_id {
         app.current_photo_location = location;
+        app.current_photo_location_resolved = true;
     }
     Task::none()
 }

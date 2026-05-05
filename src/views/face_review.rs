@@ -55,12 +55,10 @@ impl FaceReviewView {
                 column![
                     header,
                     Space::with_height(48),
-                    text("All done for this session.")
-                        .size(18)
-                        .color(p.text_secondary),
+                    text("That's it for now.").size(18).color(p.text_secondary),
                     Space::with_height(8),
                     text(format!(
-                        "Confirmed: {} · Rejected: {} · Skipped: {}",
+                        "{} kept · {} hidden · {} skipped",
                         state.confirmed, state.rejected, state.skipped
                     ))
                     .size(13)
@@ -147,15 +145,15 @@ impl FaceReviewView {
         ]
         .align_y(Alignment::Start);
 
-        let same_btn = button(text("Same person  (Y)").size(14).color(p.text_primary))
+        let same_btn = button(text("Yes, same person  (Y)").size(14).color(p.text_primary))
             .on_press(Message::FaceReviewSame)
             .padding(Padding::from([10, 22]));
 
-        let different_btn = button(text("Different  (N)").size(14).color(p.text_primary))
+        let different_btn = button(text("No, someone else  (N)").size(14).color(p.text_primary))
             .on_press(Message::FaceReviewDifferent)
             .padding(Padding::from([10, 22]));
 
-        let skip_btn = button(text("Skip  (S)").size(13).color(p.text_secondary))
+        let skip_btn = button(text("Skip for now  (S)").size(13).color(p.text_secondary))
             .on_press(Message::FaceReviewSkip)
             .padding(Padding::from([10, 18]));
 

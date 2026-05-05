@@ -41,7 +41,7 @@ impl<'a> DuplicateRepo<'a> {
     /// whose hash no longer has duplicates are removed.
     pub fn sync_duplicate_groups(
         &self,
-        groups: &[(String, Vec<i64>, Option<i64>)], // (hash, photo_ids, suggested_keep)
+        groups: &[(String, Vec<i64>, Option<i64>, &'static str)], // (hash, photo_ids, suggested_keep, duplicate_type)
     ) -> SqliteResult<()> {
         use std::collections::{HashMap, HashSet};
 
@@ -64,7 +64,7 @@ impl<'a> DuplicateRepo<'a> {
 
         let mut seen_hashes: HashSet<String> = HashSet::new();
 
-        for (hash, photo_ids, suggested_keep) in groups {
+        for (hash, photo_ids, suggested_keep, dup_type) in groups {
             seen_hashes.insert(hash.clone());
 
             if existing_hashes.contains_key(hash) {
@@ -76,9 +76,9 @@ impl<'a> DuplicateRepo<'a> {
             tx.execute(
                 r#"
                 INSERT INTO duplicate_groups (group_hash, duplicate_type)
-                VALUES (?1, 'exact')
+                VALUES (?1, ?2)
                 "#,
-                params![hash],
+                params![hash, dup_type],
             )?;
 
             let group_id = tx.last_insert_rowid();

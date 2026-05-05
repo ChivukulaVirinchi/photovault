@@ -399,6 +399,106 @@ pub(crate) fn suggestions_detected_with_diagnostics(
     Task::none()
 }
 
+pub(crate) fn preview_suggestion(app: &mut PhotoVault, id: i64) -> Task<Message> {
+    let Some(record) = app.album_suggestions.iter().find(|s| s.id == id).cloned() else {
+        return Task::none();
+    };
+    let Some(drive) = app.selected_drive.clone() else {
+        return Task::none();
+    };
+    let photo_ids = record.photo_ids();
+    app.previewing_suggestion = Some(record);
+    app.previewing_suggestion_thumbs.clear();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let Ok(db) = crate::db::Database::open_for_drive(&drive) else {
+                    return Vec::new();
+                };
+                if photo_ids.is_empty() {
+                    return Vec::new();
+                }
+                let placeholders: Vec<&str> = photo_ids.iter().map(|_| "?").collect();
+                let sql = format!(
+                    "SELECT id, file_hash, thumbnail_path FROM photos WHERE id IN ({}) AND is_trashed = FALSE",
+                    placeholders.join(",")
+                );
+                let mut stmt = match db.conn.prepare(&sql) {
+                    Ok(s) => s,
+                    Err(_) => return Vec::new(),
+                };
+                let params: Vec<rusqlite::types::Value> = photo_ids
+                    .iter()
+                    .map(|i| rusqlite::types::Value::Integer(*i))
+                    .collect();
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+                    .iter()
+                    .map(|v| v as &dyn rusqlite::types::ToSql)
+                    .collect();
+                let mut order = std::collections::HashMap::new();
+                for (i, id) in photo_ids.iter().enumerate() {
+                    order.insert(*id, i);
+                }
+                let mut rows: Vec<(i64, Option<String>)> = stmt
+                    .query_map(&*param_refs, |row| {
+                        let id: i64 = row.get(0)?;
+                        let hash: Option<String> = row.get(1)?;
+                        let thumb: Option<String> = row.get(2)?;
+                        // Prefer cached Small thumb at <hash>.jpg under
+                        // .photovault/thumbnails/small; fall back to the
+                        // legacy thumbnail_path column.
+                        let path = hash
+                            .map(|h| {
+                                drive
+                                    .join(".photovault/thumbnails/small")
+                                    .join(format!("{}.jpg", h))
+                            })
+                            .filter(|p| p.exists())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .or(thumb);
+                        Ok((id, path))
+                    })
+                    .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default();
+                rows.sort_by_key(|(id, _)| order.get(id).copied().unwrap_or(usize::MAX));
+                rows.into_iter()
+                    .filter_map(|(_, p)| p)
+                    .take(40)
+                    .collect()
+            })
+            .await
+            .unwrap_or_default()
+        },
+        move |thumbs| Message::SuggestionPreviewLoaded {
+            suggestion_id: id,
+            thumbs,
+        },
+    )
+}
+
+pub(crate) fn suggestion_preview_loaded(
+    app: &mut PhotoVault,
+    suggestion_id: i64,
+    thumbs: Vec<String>,
+) -> Task<Message> {
+    if app
+        .previewing_suggestion
+        .as_ref()
+        .map(|s| s.id == suggestion_id)
+        .unwrap_or(false)
+    {
+        app.previewing_suggestion_thumbs = thumbs;
+    }
+    Task::none()
+}
+
+pub(crate) fn close_preview_suggestion(app: &mut PhotoVault) -> Task<Message> {
+    app.previewing_suggestion = None;
+    app.previewing_suggestion_thumbs.clear();
+    Task::none()
+}
+
 pub(crate) fn begin_accept_suggestion(app: &mut PhotoVault, id: i64) -> Task<Message> {
     let name = app
         .album_suggestions

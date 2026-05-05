@@ -18,6 +18,10 @@ pub struct AppConfig {
     pub remembered_drives: Vec<PathBuf>,
     pub window_width: u32,
     pub window_height: u32,
+    /// Whether the user's window was maximised when they last closed
+    /// the app. Restored at startup via `iced::window::maximize`.
+    #[serde(default)]
+    pub window_maximized: bool,
     pub sidebar_collapsed: bool,
 
     #[serde(default = "default_map_cache_limit_mb")]
@@ -62,7 +66,38 @@ pub struct AppConfig {
     /// prompt. After that, toggling is done through Settings.
     #[serde(default = "default_show_first_run_update_prompt")]
     pub show_first_run_update_prompt: bool,
+
+    /// Version of the EXIF date-extraction logic the user's library was
+    /// last evaluated against. When the binary's `CURRENT_DATE_LOGIC_VERSION`
+    /// is higher, the app auto-runs `RefreshPhotoDates` once on
+    /// first launch with the upgraded binary so users don't keep
+    /// seeing 2012 ghosts on photos shot in 2026 etc. After the
+    /// refresh runs, this field is bumped to the new version.
+    #[serde(default)]
+    pub date_logic_version: u32,
+
+    /// True once the user has been shown the "Place names off — run
+    /// scripts/setup_assets.sh" toast. Prevents the same toast appearing
+    /// on every drive-select.
+    #[serde(default)]
+    pub geonames_warning_seen: bool,
 }
+
+/// Bumped any time the EXIF date fallback chain changes. Stored in
+/// `AppConfig::date_logic_version`; on launch, if the saved value is
+/// less than this, the app re-extracts dates for every photo so the
+/// new logic actually takes effect against existing rows.
+///
+/// Bump history:
+///   0 — pre-PR6 chain (DateTimeOriginal -> DateTime -> filename -> mtime)
+///   1 — PR6 chain (DateTimeOriginal -> DateTimeDigitized -> filename -> DateTime -> mtime)
+/// V2 (2026-05-05): stale-EXIF defence. When `DateTime` modification
+/// tag would be the source, sanity-check it against mtime — if they
+/// disagree by ≥ 2 years, prefer mtime (handles phones whose firmware
+/// clock reset to 2012-01-01 and now stamp every photo with that).
+/// Also adds WhatsApp/Snapchat/generic filename patterns and tightens
+/// the catch-all 8-digit regex so ID strings can't masquerade as dates.
+pub const CURRENT_DATE_LOGIC_VERSION: u32 = 2;
 
 fn default_show_first_run_update_prompt() -> bool {
     true
@@ -96,8 +131,9 @@ impl Default for AppConfig {
             scan_hidden_folders: false,
             date_format: DateFormat::Locale,
             remembered_drives: Vec::new(),
-            window_width: 1400,
-            window_height: 900,
+            window_width: 1600,
+            window_height: 1000,
+            window_maximized: false,
             sidebar_collapsed: false,
             map_cache_limit_mb: default_map_cache_limit_mb(),
             weight_cooccurrence: default_weight_cooccurrence(),
@@ -108,6 +144,8 @@ impl Default for AppConfig {
             auto_update_check_enabled: false,
             last_update_check_at_unix: None,
             show_first_run_update_prompt: true,
+            date_logic_version: 0,
+            geonames_warning_seen: false,
         }
     }
 }

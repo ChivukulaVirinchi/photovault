@@ -24,16 +24,21 @@ pub(crate) fn run_burst_detection(app: &mut PhotoVault) -> Task<Message> {
                 let db = Database::open_for_drive(&drive_path)
                     .map_err(|e| format!("Failed to open database: {}", e))?;
 
-                // Run burst detection
-                let detector = BurstDetector::new(BurstConfig {
-                    max_gap_seconds: burst_window,
-                    min_photos: 3,
-                    max_burst_span_seconds: (burst_window * 5).max(15),
-                    similarity_threshold: 0.90,
-                    require_same_folder: true,
-                });
-                let burst_groups = detector
-                    .find_bursts(&db.conn, Some(&drive_path))
+                // Run burst detection. Pull every threshold except
+                // the user-tuned `max_gap_seconds` from the loosened
+                // BurstConfig::default() — the previous hard-coded
+                // strict values (3+ photos, 90% similar, same folder
+                // required) matched almost nothing on real-world
+                // libraries and overrode the defaults.
+                let mut cfg = BurstConfig::default();
+                cfg.max_gap_seconds = burst_window;
+                cfg.max_burst_span_seconds = (burst_window * 5).max(cfg.max_burst_span_seconds);
+                let thumb_root = drive_path
+                    .join(".photovault")
+                    .join("thumbnails")
+                    .join("small");
+                let burst_groups = BurstDetector::new(cfg)
+                    .find_bursts(&db.conn, Some(&drive_path), Some(&thumb_root))
                     .map_err(|e| format!("Burst detection failed: {}", e))?;
 
                 // Sync to database

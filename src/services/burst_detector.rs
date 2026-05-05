@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, Utc};
 use image::{imageops::FilterType, DynamicImage};
 use rusqlite::Connection;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A burst group of photos
 #[derive(Debug, Clone)]
@@ -39,12 +39,19 @@ pub struct BurstConfig {
 
 impl Default for BurstConfig {
     fn default() -> Self {
+        // Loosened from "3+ photos in 3s, same folder, 80% similar" to
+        // "2+ photos in 10s anywhere, 65% similar". The strict defaults
+        // matched almost nothing on real-world libraries (one phone
+        // over years, photos organized by month not by burst, varied
+        // subjects). Users who want tighter detection can tune the
+        // window in Settings; require_same_folder is no longer the
+        // default because modern phones group by month, not burst.
         Self {
-            max_gap_seconds: 3,
-            min_photos: 3,
-            max_burst_span_seconds: 30,
-            similarity_threshold: 0.80,
-            require_same_folder: true,
+            max_gap_seconds: 10,
+            min_photos: 2,
+            max_burst_span_seconds: 60,
+            similarity_threshold: 0.65,
+            require_same_folder: false,
         }
     }
 }
@@ -67,24 +74,34 @@ impl BurstDetector {
         Self { config }
     }
 
-    /// Find all burst groups in the database
+    /// Find all burst groups in the database.
+    ///
+    /// `thumb_root` should point at the Small thumbnail directory
+    /// (`<drive>/.photovault/thumbnails/small/`). When supplied, the
+    /// signature pass loads the cached 260px thumbnail by file_hash
+    /// instead of re-decoding the original — turning ~1 minute per
+    /// 1000 photos into seconds. Falls back to the original photo
+    /// when the thumb file isn't on disk yet.
     pub fn find_bursts(
         &self,
         conn: &Connection,
         drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
     ) -> rusqlite::Result<Vec<BurstGroup>> {
         // Get all photos ordered by date_taken
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, date_taken, file_path
+            SELECT id, date_taken, file_path, file_hash
             FROM photos
             WHERE date_taken IS NOT NULL AND is_trashed = FALSE
             ORDER BY date_taken ASC
             "#,
         )?;
 
-        let photos: Vec<(i64, String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        let photos: Vec<(i64, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -95,16 +112,24 @@ impl BurstDetector {
         let mut groups = Vec::new();
         let mut current_group: Vec<BurstPhotoCandidate> = Vec::new();
 
-        for (id, date_str, file_path) in photos {
+        for (id, date_str, file_path, file_hash) in photos {
             let date = match Self::parse_datetime(&date_str) {
                 Some(d) => d,
                 None => continue,
             };
 
-            let signature = drive_root.and_then(|root| {
-                let abs = root.join(&file_path);
-                Self::build_signature(&abs)
-            });
+            // Prefer the cached Small thumb (260px JPEG) — same hash
+            // SCAN-ner uses to name it. Fall back to the original.
+            let signature = thumb_root
+                .map(|root| root.join(format!("{}.jpg", file_hash)))
+                .filter(|p| p.exists())
+                .and_then(|p| Self::build_signature(&p))
+                .or_else(|| {
+                    drive_root.and_then(|root| {
+                        let abs = root.join(&file_path);
+                        Self::build_signature(&abs)
+                    })
+                });
 
             let candidate = BurstPhotoCandidate {
                 id,
@@ -200,8 +225,10 @@ impl BurstDetector {
             .unwrap_or_default()
     }
 
-    fn build_signature(path: &PathBuf) -> Option<Vec<f32>> {
-        let img = image::open(path).ok()?;
+    fn build_signature(path: &Path) -> Option<Vec<f32>> {
+        // Route HEIC/HEIF through libheif when feature on; otherwise
+        // identical to image::open.
+        let img = crate::services::image_io::open_image(path).ok()?;
         Some(Self::signature_from_image(&img))
     }
 

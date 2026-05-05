@@ -127,6 +127,12 @@ impl PhotoVault {
             iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                 Some(Message::FolderDropped(path))
             }
+            iced::Event::Window(iced::window::Event::FileHovered(_)) => {
+                Some(Message::DropTargetActive(true))
+            }
+            iced::Event::Window(iced::window::Event::FilesHoveredLeft) => {
+                Some(Message::DropTargetActive(false))
+            }
             iced::Event::Window(iced::window::Event::Resized(size)) => {
                 // Mirror the keyboard-listener resize so window-size
                 // persistence works even before a drive is chosen.
@@ -136,6 +142,7 @@ impl PhotoVault {
                 })
             }
             iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::AppExiting),
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused),
             _ => None,
         }));
 

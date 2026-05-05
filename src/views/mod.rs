@@ -7,6 +7,7 @@
 //! collapse to a single param. Until then the lint is allowed module-wide.
 #![allow(clippy::too_many_arguments)]
 
+pub mod album_suggestion_preview;
 pub mod albums;
 pub mod albums_banner;
 pub mod albums_picker;
@@ -17,6 +18,7 @@ pub mod duplicates;
 pub mod face_review;
 pub mod insights;
 pub mod insights_sections;
+pub mod library_health;
 pub mod map;
 pub mod memories;
 pub mod people;
@@ -34,6 +36,7 @@ pub use cull::{CullState, CullView};
 pub use documents::DocumentsView;
 pub use duplicates::DuplicatesView;
 pub use face_review::FaceReviewView;
+pub use library_health::LibraryHealthView;
 pub use people::PeopleView;
 pub use photo_detail::PhotoDetailView;
 pub use search::SearchView;

@@ -138,7 +138,26 @@ pub(crate) fn toggle_timeline_day_selection(
 }
 
 pub(crate) fn timeline_photo_hover(app: &mut PhotoVault, photo_id: Option<i64>) -> Task<Message> {
-    app.hovered_timeline_photo_id = photo_id;
+    // Coalesce: bump the intent counter, defer the commit by ~40 ms,
+    // and let HoverSettle drop the message if a newer hover landed
+    // in the meantime. A slow / dwelling mouse pays one tiny delay;
+    // a fast sweep coalesces dozens of enter/exit pairs into one
+    // settle that wins.
+    app.hover_intent_seq = app.hover_intent_seq.wrapping_add(1);
+    let seq = app.hover_intent_seq;
+    Task::perform(
+        async move {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            (photo_id, seq)
+        },
+        |(photo_id, seq)| Message::HoverSettle { photo_id, seq },
+    )
+}
+
+pub(crate) fn hover_settle(app: &mut PhotoVault, photo_id: Option<i64>, seq: u64) -> Task<Message> {
+    if seq == app.hover_intent_seq {
+        app.hovered_timeline_photo_id = photo_id;
+    }
     Task::none()
 }
 
