@@ -30,36 +30,71 @@
   $effect(() => { void id; load(); });
 </script>
 
-<main class="detail">
-  <header>
-    <a href="#/memories">← Memories</a>
-    {#if card}
-      <h2>{card.title}</h2>
-      <span class="muted">{card.photo_count} photos</span>
-      {#if savedAlbumId}
-        <a href="#/album?id={savedAlbumId}">Saved as album →</a>
-      {:else}
-        <button onclick={saveAsAlbum}>Save as album</button>
-      {/if}
+<div class="masthead">
+  <a class="back" href="#/memories">← Memories</a>
+  {#if card}
+    <span class="eyebrow"><span class="num">{card.kind.toUpperCase()}</span><span class="ornament"></span></span>
+    <h1>{card.title}</h1>
+    <p class="subtitle">{card.photo_count} photographs</p>
+    {#if savedAlbumId}
+      <a class="saved" href="#/album?id={savedAlbumId}">Saved as album →</a>
+    {:else}
+      <button class="primary" onclick={saveAsAlbum}>Save as album</button>
     {/if}
-  </header>
-  {#if error}<p class="error">{error}</p>{/if}
-  <div class="grid">
-    {#each photos as p}
-      <a class="cell" href="#/photo?id={p.id}">
-        {#if p.thumbnail_path}
-          <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
-        {/if}
-      </a>
-    {/each}
-  </div>
-</main>
+  {/if}
+</div>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<div class="grid stagger">
+  {#each photos as p, i (p.id)}
+    <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+      {#if p.thumbnail_path}
+        <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+      {/if}
+    </a>
+  {/each}
+</div>
 
 <style>
-  .detail { flex: 1; overflow-y: auto; padding: 20px; }
-  header { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
-  h2 { margin: 0; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
-  .cell { aspect-ratio: 1; background: #131316; border-radius: 4px; overflow: hidden; }
+  .masthead {
+    padding: var(--s-7) var(--s-7) var(--s-5);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    align-items: flex-start;
+  }
+  .back {
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-muted);
+  }
+  h1 { font-size: var(--t-3xl); }
+  .saved {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-base);
+    color: var(--accent);
+  }
+
+  .grid {
+    padding: var(--s-5) var(--s-7) var(--s-7);
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 6px;
+  }
+  .cell {
+    aspect-ratio: 1;
+    background: var(--bg-card);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    transition: transform var(--t-fast) var(--ease);
+  }
+  .cell:hover { transform: scale(1.018); }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
 </style>

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { albums } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -25,68 +24,97 @@
 
   async function rename() {
     if (!album) return;
-    try {
-      album = await albums.rename(id, editName.trim());
-      renaming = false;
-    } catch (e) { error = JSON.stringify(e); }
+    try { album = await albums.rename(id, editName.trim()); renaming = false; }
+    catch (e) { error = JSON.stringify(e); }
   }
 
   async function deleteAlbum() {
     if (!confirm("Delete album? Photos will not be trashed.")) return;
-    try {
-      await albums.delete(id);
-      window.location.hash = "/albums";
-    } catch (e) { error = JSON.stringify(e); }
+    try { await albums.delete(id); window.location.hash = "/albums"; }
+    catch (e) { error = JSON.stringify(e); }
   }
 
   $effect(() => { void id; load(); });
 </script>
 
-<main class="detail">
-  <header>
-    <a href="#/albums">← Albums</a>
-    {#if album}
-      {#if renaming}
-        <input bind:value={editName} />
-        <button onclick={rename}>Save</button>
+<div class="masthead">
+  <a class="back" href="#/albums">← Albums</a>
+  {#if album}
+    <span class="eyebrow">
+      <span class="num">№&nbsp;{String(album.id).padStart(3, "0")}</span>
+      <span class="ornament"></span>
+      <span>ALBUM</span>
+    </span>
+    {#if renaming}
+      <input bind:value={editName} autofocus />
+      <div class="row">
+        <button class="primary" onclick={rename}>Save</button>
         <button class="ghost" onclick={() => (renaming = false)}>Cancel</button>
-      {:else}
-        <h2>{album.name}</h2>
-        <button onclick={() => (renaming = true)}>Rename</button>
-        <button class="danger" onclick={deleteAlbum}>Delete</button>
-      {/if}
-      <span class="muted">{album.photo_count} photos</span>
-    {/if}
-  </header>
-  {#if error}<p class="error">{error}</p>{/if}
-  <div class="grid">
-    {#each photos as p}
-      <a class="cell" href="#/photo?id={p.id}">
-        {#if p.thumbnail_path}
-          <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+      </div>
+    {:else}
+      <h1>{album.name}</h1>
+      <p class="subtitle">
+        {album.photo_count} photos
+        {#if album.date_range_start && album.date_range_end}
+          · <span class="mono">{new Date(album.date_range_start).toLocaleDateString()}
+          → {new Date(album.date_range_end).toLocaleDateString()}</span>
         {/if}
-      </a>
-    {/each}
-  </div>
-</main>
+      </p>
+      <div class="row">
+        <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
+        <button class="danger" onclick={deleteAlbum}>Delete album</button>
+      </div>
+    {/if}
+  {/if}
+</div>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<div class="grid stagger">
+  {#each photos as p, i (p.id)}
+    <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+      {#if p.thumbnail_path}
+        <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+      {/if}
+    </a>
+  {/each}
+</div>
 
 <style>
-  .detail { flex: 1; overflow-y: auto; padding: 20px; }
-  header { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
-  h2 { margin: 0; }
-  input { max-width: 300px; }
-  .ghost { background: transparent; border: 1px solid #2a2a2d; }
-  .danger { background: #2a1414; border: 1px solid #4a2222; color: #f87171; }
+  .masthead {
+    padding: var(--s-7) var(--s-7) var(--s-5);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    align-items: flex-start;
+  }
+  .back {
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-muted);
+  }
+  h1 { font-size: var(--t-3xl); }
+  input { max-width: 360px; font-size: var(--t-xl); font-family: var(--font-display); }
+  .row { display: flex; gap: var(--s-2); }
+
   .grid {
+    padding: var(--s-5) var(--s-7) var(--s-7);
+    flex: 1;
+    overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 6px;
   }
   .cell {
     aspect-ratio: 1;
-    background: #131316;
-    border-radius: 4px;
+    background: var(--bg-card);
+    border-radius: var(--r-sm);
     overflow: hidden;
+    transition: transform var(--t-fast) var(--ease);
   }
+  .cell:hover { transform: scale(1.018); }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
 </style>

@@ -1,14 +1,85 @@
-/* Minimal globals — Tailwind + shadcn land in M3 polish. */
+/* ============================================================
+   PhotoVault — design system
+   Editorial photo journal. Warm, curated, intentional.
+   ============================================================ */
+
 :root {
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* — Type families ——————————————————————————————————————— */
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-body: "Manrope", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* — Type scale (modular, 1.250 minor third) ——————————————— */
+  --t-xs: 0.72rem;     /* 11.5 */
+  --t-sm: 0.84rem;     /* 13.5 */
+  --t-base: 1rem;      /* 16   */
+  --t-lg: 1.18rem;     /* 19   */
+  --t-xl: 1.44rem;     /* 23   */
+  --t-2xl: 1.86rem;    /* 30   */
+  --t-3xl: 2.4rem;     /* 38   */
+  --t-4xl: 3.4rem;     /* 54   */
+  --t-display: 4.6rem; /* 74   */
+
+  /* — Colour: warm near-black + cream ink + terracotta —————— */
+  --bg: #161210;            /* warm coffee-noir */
+  --bg-paper: #1c1714;      /* slightly lifted */
+  --bg-card: #221b16;       /* card surface */
+  --bg-elev: #2a2219;       /* hover / active */
+  --line: #2e251e;          /* hairlines */
+  --line-soft: #271e18;
+  --ink: #ede4d8;           /* primary text */
+  --ink-soft: #c5b8a8;
+  --ink-muted: #8d8278;
+  --ink-faint: #5e544a;
+
+  --accent: #d97a3f;        /* terracotta */
+  --accent-warm: #e89a64;   /* hover lift */
+  --accent-deep: #a8542a;
+  --accent-ghost: #d97a3f1a;
+
+  --danger: #d96c54;
+  --danger-bg: #2c1812;
+  --keep: #b8a169;          /* warm gold for "keep" / "best" markers */
+
+  /* — Space scale (4-based, sympathetic) ——————————————————— */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+
+  /* — Radii / shadow / motion ——————————————————————————————— */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 14px;
+  --r-xl: 22px;
+
+  --shadow-soft: 0 1px 2px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.18);
+  --shadow-lift: 0 2px 4px rgba(0,0,0,0.3), 0 18px 40px rgba(0,0,0,0.32);
+
+  --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 120ms;
+  --t-base-d: 220ms;
+  --t-slow: 420ms;
+
   color-scheme: dark;
-  background: #0b0b0d;
-  color: #e8e8eb;
 }
 
-* {
-  box-sizing: border-box;
+/* ===== reset =============================================== */
+* { box-sizing: border-box; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
 }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
 
 html, body, #app {
   height: 100%;
@@ -16,34 +87,207 @@ html, body, #app {
 }
 
 body {
+  font-family: var(--font-body);
+  font-size: var(--t-base);
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+  position: relative;
+  overflow: hidden;
 }
 
+/* Warm grain texture — subtle, builds atmosphere */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='5'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 0.9 0 0 0 0 0.7 0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* Pump everything above the grain */
+#app { position: relative; z-index: 2; height: 100%; }
+
+/* ===== typography ========================================== */
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-variation-settings: "opsz" 144, "SOFT" 50, "WONK" 0;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  margin: 0;
+  color: var(--ink);
+}
+
+h1 { font-size: var(--t-display); }
+h2 { font-size: var(--t-3xl); letter-spacing: -0.025em; }
+h3 { font-size: var(--t-xl); font-variation-settings: "opsz" 24, "SOFT" 30; }
+h4 { font-size: var(--t-lg); font-weight: 500; }
+
+p { margin: 0; color: var(--ink-soft); }
+a { color: var(--accent); text-decoration: none; transition: color var(--t-fast) var(--ease); }
+a:hover { color: var(--accent-warm); }
+
+strong { font-weight: 600; color: var(--ink); }
+
+.muted { color: var(--ink-muted); }
+.faint { color: var(--ink-faint); }
+.error { color: var(--danger); font-family: var(--font-mono); font-size: var(--t-sm); }
+
+/* The signature eyebrow — every section opens with this */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+.eyebrow .num {
+  color: var(--accent);
+  font-weight: 500;
+}
+.eyebrow .ornament {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 1px;
+  background: var(--ink-faint);
+}
+
+.subtitle {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: "opsz" 14, "SOFT" 80;
+  font-size: var(--t-lg);
+  font-weight: 300;
+  color: var(--ink-soft);
+  letter-spacing: 0;
+  line-height: 1.4;
+  max-width: 56ch;
+}
+
+/* ===== controls ============================================ */
 button {
-  font: inherit;
-  color: inherit;
-  background: #1d1d20;
-  border: 1px solid #2a2a2d;
+  font-family: var(--font-body);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--line);
   padding: 8px 14px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   cursor: pointer;
-  transition: background 80ms;
+  transition: background var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease),
+              transform var(--t-fast) var(--ease);
 }
-button:hover { background: #25252a; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-input {
-  font: inherit;
-  color: inherit;
-  background: #131316;
-  border: 1px solid #2a2a2d;
-  padding: 6px 10px;
-  border-radius: 6px;
+button:hover {
+  background: var(--bg-elev);
+  border-color: var(--ink-faint);
+}
+button:active { transform: translateY(1px); }
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
 }
 
-a { color: #6aa9ff; text-decoration: none; }
-a:hover { text-decoration: underline; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a0e07;
+  font-weight: 600;
+}
+button.primary:hover {
+  background: var(--accent-warm);
+  border-color: var(--accent-warm);
+}
 
-.muted { color: #8c8c93; }
-.error { color: #f87171; }
+button.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+}
+button.ghost:hover {
+  background: var(--bg-paper);
+}
+
+button.danger {
+  background: var(--danger-bg);
+  border-color: #5b2c20;
+  color: var(--danger);
+}
+button.danger:hover {
+  background: #3a1c14;
+}
+
+input, select, textarea {
+  font-family: var(--font-body);
+  font-size: var(--t-base);
+  color: var(--ink);
+  background: var(--bg-paper);
+  border: 1px solid var(--line);
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  transition: border-color var(--t-fast) var(--ease);
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ghost);
+}
+
+/* Readable mono inputs for things that are clearly code-y (cursors, ids) */
+input[type="number"] { font-family: var(--font-mono); }
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink-soft);
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== utility =============================================== */
+.small { font-size: var(--t-xs); }
+.mono { font-family: var(--font-mono); }
+
+/* Stagger reveal — used by grids/lists */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.stagger > * {
+  opacity: 0;
+  animation: rise var(--t-slow) var(--ease-out) forwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+
+/* Print-style horizontal rule */
+.rule {
+  height: 1px;
+  background: var(--line);
+  margin: var(--s-5) 0;
+  border: none;
+}

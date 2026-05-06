@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settings as settingsApi } from "../lib/api/all";
+  import PageHeader from "../lib/components/PageHeader.svelte";
   import type { Settings } from "../lib/api/all";
 
   let s = $state<Settings | null>(null);
@@ -15,26 +16,29 @@
   async function patch(p: Partial<Settings>) {
     if (!s) return;
     saving = true;
-    try {
-      s = await settingsApi.update(p);
-    } catch (e) { error = JSON.stringify(e); }
+    try { s = await settingsApi.update(p); }
+    catch (e) { error = JSON.stringify(e); }
     finally { saving = false; }
   }
 
   onMount(load);
 </script>
 
-<main class="settings">
-  <header>
-    <h2>Settings</h2>
-    {#if saving}<span class="muted small">Saving…</span>{/if}
-  </header>
-  {#if error}<p class="error">{error}</p>{/if}
+<PageHeader
+  num="13"
+  label="SETTINGS"
+  title="Tune the experience."
+  subtitle={saving ? "Saving…" : "All settings live in your config — never sent anywhere."}
+/>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<div class="page">
   {#if s}
     <section>
-      <h3>Appearance</h3>
+      <span class="eyebrow"><span class="ornament"></span>APPEARANCE</span>
       <label>
-        Theme
+        <span class="label-text">Theme</span>
         <select value={s.theme} onchange={(e) => patch({ theme: (e.target as HTMLSelectElement).value })}>
           <option value="dark">Dark</option>
           <option value="light">Light</option>
@@ -42,7 +46,7 @@
         </select>
       </label>
       <label>
-        Date format
+        <span class="label-text">Date format</span>
         <select value={s.date_format} onchange={(e) => patch({ date_format: (e.target as HTMLSelectElement).value })}>
           <option value="locale">Locale</option>
           <option value="iso">ISO</option>
@@ -53,90 +57,93 @@
     </section>
 
     <section>
-      <h3>Library</h3>
+      <span class="eyebrow"><span class="ornament"></span>LIBRARY</span>
       <label>
-        Thumbnail size
-        <input
-          type="number" min="100" max="1000"
-          value={s.thumbnail_size}
-          onchange={(e) => patch({ thumbnail_size: Number((e.target as HTMLInputElement).value) })}
-        />
+        <span class="label-text">Thumbnail size</span>
+        <input type="number" min="100" max="1000" value={s.thumbnail_size}
+          onchange={(e) => patch({ thumbnail_size: Number((e.target as HTMLInputElement).value) })} />
       </label>
       <label class="checkbox">
-        <input
-          type="checkbox" checked={s.scan_hidden_folders}
-          onchange={(e) => patch({ scan_hidden_folders: (e.target as HTMLInputElement).checked })}
-        />
-        Scan hidden folders
+        <input type="checkbox" checked={s.scan_hidden_folders}
+          onchange={(e) => patch({ scan_hidden_folders: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Scan hidden folders</span>
       </label>
       <label>
-        Trash auto-delete (days)
-        <input
-          type="number" min="1" max="365"
-          value={s.trash_auto_delete_days}
-          onchange={(e) => patch({ trash_auto_delete_days: Number((e.target as HTMLInputElement).value) })}
-        />
+        <span class="label-text">Auto-delete from trash after</span>
+        <input type="number" min="1" max="365" value={s.trash_auto_delete_days}
+          onchange={(e) => patch({ trash_auto_delete_days: Number((e.target as HTMLInputElement).value) })} />
+        <span class="hint mono">days</span>
       </label>
     </section>
 
     <section>
-      <h3>Face recognition</h3>
+      <span class="eyebrow"><span class="ornament"></span>FACE RECOGNITION</span>
       <label>
-        Detection confidence
-        <input
-          type="number" min="0.1" max="0.95" step="0.05"
-          value={s.face_detection_confidence}
-          onchange={(e) => patch({ face_detection_confidence: Number((e.target as HTMLInputElement).value) })}
-        />
+        <span class="label-text">Detection confidence</span>
+        <input type="number" min="0.1" max="0.95" step="0.05" value={s.face_detection_confidence}
+          onchange={(e) => patch({ face_detection_confidence: Number((e.target as HTMLInputElement).value) })} />
       </label>
       <label>
-        Clustering threshold
-        <input
-          type="number" min="0.1" max="0.8" step="0.02"
-          value={s.face_clustering_threshold}
-          onchange={(e) => patch({ face_clustering_threshold: Number((e.target as HTMLInputElement).value) })}
-        />
+        <span class="label-text">Clustering threshold</span>
+        <input type="number" min="0.1" max="0.8" step="0.02" value={s.face_clustering_threshold}
+          onchange={(e) => patch({ face_clustering_threshold: Number((e.target as HTMLInputElement).value) })} />
       </label>
     </section>
 
     <section>
-      <h3>Memories</h3>
+      <span class="eyebrow"><span class="ornament"></span>MEMORIES</span>
       <label class="checkbox">
-        <input
-          type="checkbox" checked={s.memories_enabled}
-          onchange={(e) => patch({ memories_enabled: (e.target as HTMLInputElement).checked })}
-        />
-        Enable Memories
+        <input type="checkbox" checked={s.memories_enabled}
+          onchange={(e) => patch({ memories_enabled: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Enable memories</span>
       </label>
       <label>
-        Home city (optional)
-        <input
-          value={s.home_city_override ?? ""}
-          onchange={(e) => patch({ home_city_override: ((e.target as HTMLInputElement).value || null) })}
-        />
+        <span class="label-text">Home city <em class="hint">(optional, for trip detection)</em></span>
+        <input value={s.home_city_override ?? ""}
+          onchange={(e) => patch({ home_city_override: ((e.target as HTMLInputElement).value || null) })} />
       </label>
     </section>
 
     <section>
-      <h3>Updates</h3>
+      <span class="eyebrow"><span class="ornament"></span>UPDATES</span>
       <label class="checkbox">
-        <input
-          type="checkbox" checked={s.auto_update_check_enabled}
-          onchange={(e) => patch({ auto_update_check_enabled: (e.target as HTMLInputElement).checked })}
-        />
-        Check for updates automatically
+        <input type="checkbox" checked={s.auto_update_check_enabled}
+          onchange={(e) => patch({ auto_update_check_enabled: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Check for updates automatically</span>
       </label>
     </section>
   {/if}
-</main>
+</div>
 
 <style>
-  .settings { flex: 1; overflow-y: auto; padding: 20px; max-width: 600px; }
-  header { display: flex; gap: 14px; align-items: baseline; margin-bottom: 20px; }
-  h2 { margin: 0; }
-  section { margin-bottom: 28px; }
-  h3 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #a8a8af; }
-  label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 14px; color: #c8c8cc; }
-  label.checkbox { flex-direction: row; align-items: center; gap: 8px; }
-  input, select { max-width: 220px; }
+  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; max-width: 720px; }
+  section { margin-bottom: var(--s-7); }
+  section .eyebrow { display: inline-flex; margin-bottom: var(--s-4); }
+
+  label {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-3) 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  label.checkbox {
+    grid-template-columns: auto 1fr;
+    cursor: pointer;
+  }
+  .label-text {
+    font-family: var(--font-display);
+    font-size: var(--t-base);
+    font-weight: 400;
+    color: var(--ink);
+    font-variation-settings: "opsz" 24;
+  }
+  .hint {
+    font-style: italic;
+    font-size: var(--t-xs);
+    color: var(--ink-muted);
+  }
+  input, select { max-width: 200px; }
+  input[type="checkbox"] { max-width: none; width: auto; margin-right: 0; }
 </style>

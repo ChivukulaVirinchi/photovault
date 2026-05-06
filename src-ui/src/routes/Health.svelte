@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { health } from "../lib/api/all";
+  import PageHeader from "../lib/components/PageHeader.svelte";
   import type { LibraryHealthData } from "../lib/api/all";
 
   let data = $state<LibraryHealthData | null>(null);
@@ -14,29 +15,76 @@
   onMount(load);
 </script>
 
-<main class="health">
-  <header><h2>Library health</h2></header>
-  {#if error}<p class="error">{error}</p>{/if}
+<PageHeader
+  num="11"
+  label="LIBRARY HEALTH"
+  title="How clean is your library?"
+  subtitle="Counters that help you find photos with weak EXIF, missing thumbnails, or formats this build can't decode."
+/>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<div class="page">
   {#if data}
-    <ul class="counters">
-      <li><strong>{data.total_photos.toLocaleString()}</strong><span class="muted">total photos</span></li>
-      <li><strong>{data.missing_thumbnails.toLocaleString()}</strong><span class="muted">missing thumbnails</span></li>
-      <li><strong>{data.inaccurate_dates.toLocaleString()}</strong><span class="muted">inaccurate dates (mtime fallback)</span></li>
-      <li><strong>{data.missing_dates.toLocaleString()}</strong><span class="muted">no date at all</span></li>
-      <li>
-        <strong>{data.heic_count.toLocaleString()}</strong>
-        <span class="muted">HEIC photos {data.heic_decoder_available ? "(decoder available)" : "(decoder NOT available)"}</span>
-      </li>
-      <li><strong>{data.face_processed_no_faces.toLocaleString()}</strong><span class="muted">processed but found no faces</span></li>
+    <ul class="counters stagger">
+      {#each [
+        { n: data.total_photos, label: "Total photos", tone: "neutral" },
+        { n: data.missing_thumbnails, label: "Missing thumbnails", tone: data.missing_thumbnails > 0 ? "warn" : "ok" },
+        { n: data.inaccurate_dates, label: "Inaccurate dates", tone: data.inaccurate_dates > 0 ? "warn" : "ok", note: "Pulled from mtime — possibly wrong year." },
+        { n: data.missing_dates, label: "No date at all", tone: data.missing_dates > 0 ? "warn" : "ok" },
+        { n: data.heic_count, label: "HEIC photos", tone: data.heic_decoder_available || data.heic_count === 0 ? "ok" : "warn", note: data.heic_decoder_available ? "Decoder available." : "Decoder NOT available — these won't render." },
+        { n: data.face_processed_no_faces, label: "Processed but no faces", tone: "neutral", note: "Likely face-less landscapes; nothing to fix." },
+      ] as stat, i}
+        <li class="counter" data-tone={stat.tone} style="--i: {i}">
+          <strong class="num">{stat.n.toLocaleString()}</strong>
+          <span class="label">{stat.label}</span>
+          {#if stat.note}<span class="note">{stat.note}</span>{/if}
+        </li>
+      {/each}
     </ul>
   {/if}
-</main>
+</div>
 
 <style>
-  .health { flex: 1; overflow-y: auto; padding: 20px; }
-  header { margin-bottom: 16px; }
-  h2 { margin: 0; }
-  .counters { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-  .counters li { background: #131316; padding: 16px; border-radius: 8px; display: flex; flex-direction: column; gap: 4px; }
-  .counters strong { font-size: 22px; }
+  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .counters {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--s-3);
+  }
+  .counter {
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    padding: var(--s-5);
+    border-radius: var(--r-md);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-left-width: 3px;
+  }
+  .counter[data-tone="ok"] { border-left-color: var(--keep); }
+  .counter[data-tone="warn"] { border-left-color: var(--accent); }
+  .counter[data-tone="neutral"] { border-left-color: var(--ink-faint); }
+  .counter .num {
+    font-family: var(--font-display);
+    font-size: var(--t-3xl);
+    font-weight: 500;
+    line-height: 1;
+    font-variation-settings: "opsz" 60, "SOFT" 50;
+  }
+  .counter .label {
+    font-family: var(--font-display);
+    font-size: var(--t-base);
+    color: var(--ink);
+  }
+  .counter .note {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-sm);
+    color: var(--ink-muted);
+    margin-top: 4px;
+  }
 </style>

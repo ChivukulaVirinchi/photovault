@@ -3,6 +3,7 @@
   import { insights } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import PageHeader from "../lib/components/PageHeader.svelte";
   import type { InsightsData } from "../lib/api/all";
 
   let data = $state<InsightsData | null>(null);
@@ -17,35 +18,49 @@
   $effect(() => { void year; load(); });
 </script>
 
-<main class="insights">
-  <header>
-    <h2>Insights</h2>
-    {#if data}
-      <select bind:value={year}>
-        <option value={null}>All time</option>
-        {#each data.available_years as y}
-          <option value={y}>{y}</option>
-        {/each}
-      </select>
-    {/if}
-  </header>
-  {#if error}<p class="error">{error}</p>{/if}
+<PageHeader
+  num="10"
+  label="INSIGHTS"
+  title="A look at the whole."
+  subtitle="The shape of your library — when you shoot, who's in it, where you've been."
+>
   {#if data}
-    <section class="stats">
-      <div class="stat"><strong>{data.total_photos.toLocaleString()}</strong><span class="muted">photos</span></div>
-      <div class="stat"><strong>{data.people_count}</strong><span class="muted">people</span></div>
-      <div class="stat"><strong>{data.album_count}</strong><span class="muted">albums</span></div>
-      <div class="stat"><strong>{data.country_count}</strong><span class="muted">countries</span></div>
-      <div class="stat"><strong>{data.city_count}</strong><span class="muted">cities</span></div>
+    <select bind:value={year}>
+      <option value={null}>All time</option>
+      {#each data.available_years as y}
+        <option value={y}>{y}</option>
+      {/each}
+    </select>
+  {/if}
+</PageHeader>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<div class="page">
+  {#if data}
+    <section class="stats stagger">
+      {#each [
+        { n: data.total_photos, label: "photos" },
+        { n: data.people_count, label: "people" },
+        { n: data.album_count, label: "albums" },
+        { n: data.country_count, label: "countries" },
+        { n: data.city_count, label: "cities" },
+      ] as stat, i}
+        <div class="stat" style="--i: {i}">
+          <strong class="num">{stat.n.toLocaleString()}</strong>
+          <span class="label">{stat.label}</span>
+        </div>
+      {/each}
     </section>
 
     <section>
-      <h3>Monthly</h3>
+      <span class="eyebrow"><span class="ornament"></span>RHYTHM · BY MONTH</span>
       <div class="bars">
         {#each data.monthly_counts as count, i}
           {@const max = Math.max(1, ...data.monthly_counts)}
-          <div class="bar" style="height: {(count / max) * 100}%" title="{count}">
-            <span class="muted small">{["J","F","M","A","M","J","J","A","S","O","N","D"][i]}</span>
+          <div class="bar-col">
+            <div class="bar" style="height: {(count / max) * 100}%" title="{count}"></div>
+            <span class="month mono">{["J","F","M","A","M","J","J","A","S","O","N","D"][i]}</span>
           </div>
         {/each}
       </div>
@@ -53,16 +68,20 @@
 
     {#if data.top_people.length > 0}
       <section>
-        <h3>Top people</h3>
+        <span class="eyebrow"><span class="ornament"></span>FACES YOU SEE OFTEN</span>
         <ul class="row">
           {#each data.top_people as p}
             <li>
               <a href="#/person?id={p.cluster_id}">
                 {#if p.face_crop_path}
                   <img src={thumbUrl(libraryStore.driveRoot, p.face_crop_path) ?? ""} alt="" />
+                {:else}
+                  <span class="placeholder"></span>
                 {/if}
-                <strong>{p.name}</strong>
-                <span class="muted small">{p.photo_count}</span>
+                <span class="info">
+                  <strong>{p.name}</strong>
+                  <span class="muted small mono">{p.photo_count}</span>
+                </span>
               </a>
             </li>
           {/each}
@@ -72,35 +91,109 @@
 
     {#if data.top_locations.length > 0}
       <section>
-        <h3>Top locations</h3>
+        <span class="eyebrow"><span class="ornament"></span>PLACES YOU'VE BEEN</span>
         <ul class="locations">
           {#each data.top_locations as l}
-            <li>{l.city}, {l.country} <span class="muted small">{l.photo_count}</span></li>
+            <li>
+              <span class="city">{l.city}</span>
+              <em class="country">, {l.country}</em>
+              <span class="muted small mono">{l.photo_count}</span>
+            </li>
           {/each}
         </ul>
       </section>
     {/if}
   {/if}
-</main>
+</div>
 
 <style>
-  .insights { flex: 1; overflow-y: auto; padding: 20px; }
-  header { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; }
-  h2 { margin: 0; }
-  section { margin-bottom: 28px; }
-  h3 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #a8a8af; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
-  .stat { background: #131316; padding: 16px 18px; border-radius: 8px; display: flex; flex-direction: column; gap: 4px; }
-  .stat strong { font-size: 22px; }
-  .bars { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding: 8px; background: #0f0f12; border-radius: 6px; }
-  .bar { flex: 1; background: #6aa9ff; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 2px; }
-  .bar .small { font-size: 10px; color: #fff; }
-  .row { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-  .row li { background: #131316; border-radius: 8px; }
-  .row a { display: flex; align-items: center; gap: 10px; padding: 8px 12px; color: inherit; }
-  .row a:hover { text-decoration: none; background: #1a1a1f; }
-  .row img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
-  .locations { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
-  .locations li { padding: 8px 12px; background: #131316; border-radius: 6px; }
-  .small { font-size: 11px; }
+  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--s-3);
+    margin-bottom: var(--s-7);
+  }
+  .stat {
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    padding: var(--s-5);
+    border-radius: var(--r-md);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat .num {
+    font-family: var(--font-display);
+    font-size: var(--t-3xl);
+    font-weight: 500;
+    line-height: 1;
+    font-variation-settings: "opsz" 60, "SOFT" 50;
+  }
+  .stat .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-muted);
+  }
+
+  section { margin-bottom: var(--s-7); }
+  section .eyebrow { display: inline-flex; margin-bottom: var(--s-4); }
+
+  .bars {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    height: 200px;
+    padding: var(--s-3);
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+  }
+  .bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+  }
+  .bar {
+    width: 80%;
+    background: linear-gradient(to top, var(--accent-deep), var(--accent));
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .bar:hover { opacity: 0.85; }
+  .month {
+    font-size: 9px;
+    color: var(--ink-faint);
+    letter-spacing: 0.05em;
+  }
+
+  .row { list-style: none; padding: 0; margin: 0; display: flex; gap: var(--s-2); flex-wrap: wrap; }
+  .row li { background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--r-md); }
+  .row a { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); color: inherit; }
+  .row a:hover { text-decoration: none; background: var(--bg-elev); }
+  .row img, .placeholder { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+  .placeholder { background: var(--bg-elev); }
+  .info { display: flex; flex-direction: column; }
+
+  .locations { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .locations li {
+    padding: var(--s-3) var(--s-4);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+  .city { font-family: var(--font-display); font-size: var(--t-lg); font-weight: 500; }
+  .country { color: var(--ink-muted); font-style: italic; }
+  .locations .muted { margin-left: auto; }
+  .small { font-size: var(--t-xs); }
 </style>
