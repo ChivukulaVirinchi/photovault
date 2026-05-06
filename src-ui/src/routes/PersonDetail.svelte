@@ -1,6 +1,7 @@
 <script lang="ts">
   import { people } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { PersonDto, PhotoSummaryDto } from "../lib/api/types";
@@ -20,6 +21,7 @@
       editName = person.name ?? "";
       const page = await people.photosByPerson(id);
       photos = page.items;
+      browseContext.set(`person:${id}`, photos.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
 

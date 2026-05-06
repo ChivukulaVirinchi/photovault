@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { search } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { SearchResults } from "../lib/api/all";
@@ -18,6 +19,7 @@
     loading = true;
     try {
       results = await search.query(q.trim());
+      if (results) browseContext.set(`search:${q.trim()}`, results.photo_ids);
     } catch (e) { error = JSON.stringify(e); }
     finally { loading = false; }
   }

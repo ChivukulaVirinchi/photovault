@@ -1,6 +1,6 @@
 //! Photos: listing, fetching, lookups.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use photovault::db::album_repo::AlbumRepo;
@@ -52,7 +52,7 @@ pub async fn photos_list(
         .map(|p| PhotoSummaryDto {
             id: p.id,
             thumbnail_path: p.thumbnail_path,
-            date_taken: p.date_taken.map(|d| d.to_rfc3339()),
+            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -287,7 +287,7 @@ where
         .map(|p| PhotoSummaryDto {
             id: p.id,
             thumbnail_path: p.thumbnail_path,
-            date_taken: p.date_taken.map(|d| d.to_rfc3339()),
+            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -300,4 +300,199 @@ where
         has_more,
         total: None,
     })
+}
+
+// ---------- on-demand thumbnail ----------
+//
+// The frontend calls this for cells whose `thumbnail_path` is null (not
+// yet generated). It runs a synchronous generate on a blocking pool —
+// the ThumbnailService's 8-permit limiter caps total concurrency across
+// all in-flight requests.
+//
+// On success the relative path is returned AND written back to the DB,
+// so subsequent list calls return it directly and we don't redo the
+// generation work for photos already paged through.
+
+#[derive(Debug, Serialize)]
+pub struct ThumbnailResultDto {
+    pub thumbnail_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn photos_request_thumbnail(
+    state: State<'_, AppState>,
+    args: PhotosGetArgs,
+) -> CommandResult<ThumbnailResultDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+
+    // Pull what we need to feed the generator without holding the DB lock.
+    let (file_path, file_hash, orientation, existing) = {
+        let db = lib.db.lock().await;
+        let repo = PhotoRepo::new(&db.conn);
+        let p = repo
+            .get_by_id(args.id)?
+            .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+        (p.file_path, p.file_hash, p.orientation, p.thumbnail_path)
+    };
+
+    // Already generated — short-circuit.
+    if let Some(rel) = existing {
+        return Ok(ThumbnailResultDto {
+            thumbnail_path: Some(rel),
+        });
+    }
+
+    let abs = lib.drive_root.join(&file_path);
+    let svc = lib.thumbnails.clone();
+    let hash_for_thread = file_hash.clone();
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        svc.generate_thumbnail(
+            &abs,
+            &hash_for_thread,
+            orientation,
+            photovault::services::thumbnail::ThumbnailSize::Small,
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: e.to_string(),
+    })?;
+
+    let rel = match result {
+        Ok(_) => relative_thumbnail_path(&file_hash),
+        Err(e) => {
+            tracing::debug!("thumbnail gen failed for photo_id={}: {}", args.id, e);
+            return Ok(ThumbnailResultDto {
+                thumbnail_path: None,
+            });
+        }
+    };
+
+    // Write the relative path back into the DB so future list calls
+    // return it. Failures here are non-fatal — we still return the path.
+    {
+        let db = lib.db.lock().await;
+        if let Err(e) = db.conn.execute(
+            "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
+            rusqlite::params![&rel, args.id],
+        ) {
+            tracing::warn!("UPDATE thumbnail_path failed for photo_id={}: {}", args.id, e);
+        }
+    }
+
+    Ok(ThumbnailResultDto {
+        thumbnail_path: Some(rel),
+    })
+}
+
+/// Compute the relative thumbnail path for a given file hash. Mirrors
+/// the layout used by ThumbnailService::thumbnail_path so the path can
+/// be resolved by the frontend's thumbUrl helper without an extra round
+/// trip.
+fn relative_thumbnail_path(file_hash: &str) -> String {
+    let subdir = &file_hash[..2.min(file_hash.len())];
+    format!(
+        ".photovault/thumbnails/small/v2/{}/{}.jpg",
+        subdir, file_hash
+    )
+}
+
+// ---------- EXIF extras (tier 2) ----------
+//
+// Pulled at request time off the actual file rather than stored in DB.
+// These fields are surfaced only in the photo-detail panel, so re-reading
+// the EXIF on each open is acceptable — JPEG header parse is sub-1ms.
+
+#[derive(Debug, Serialize)]
+pub struct ExifExtrasDto {
+    pub software: Option<String>,
+    pub exposure_bias: Option<String>,
+    pub modified_at: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[tauri::command]
+pub async fn photos_exif_extras(
+    state: State<'_, AppState>,
+    args: PhotosGetArgs,
+) -> CommandResult<ExifExtrasDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let abs_path = {
+        let db = lib.db.lock().await;
+        let repo = PhotoRepo::new(&db.conn);
+        let photo = repo
+            .get_by_id(args.id)?
+            .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+        lib.drive_root.join(&photo.file_path)
+    };
+
+    // Run the file IO + EXIF parse on a blocking pool to avoid blocking
+    // the Tauri command dispatcher.
+    let result = tauri::async_runtime::spawn_blocking(move || read_extras(&abs_path))
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: e.to_string(),
+        })?;
+    Ok(result)
+}
+
+fn read_extras(path: &std::path::Path) -> ExifExtrasDto {
+    let mut software: Option<String> = None;
+    let mut exposure_bias: Option<String> = None;
+
+    if let Ok(file) = std::fs::File::open(path) {
+        let mut reader = std::io::BufReader::new(&file);
+        if let Ok(exif) = exif::Reader::new().read_from_container(&mut reader) {
+            // Software tag — text. Strip surrounding quotes that the
+            // display_value form puts on ASCII tags.
+            if let Some(field) = exif.get_field(exif::Tag::Software, exif::In::PRIMARY) {
+                let s = field.display_value().to_string();
+                let clean = s.trim_matches('"').trim().to_string();
+                if !clean.is_empty() {
+                    software = Some(clean);
+                }
+            }
+            // ExposureBiasValue — signed rational, format "+0.3 EV" / "-1.0 EV".
+            if let Some(field) =
+                exif.get_field(exif::Tag::ExposureBiasValue, exif::In::PRIMARY)
+            {
+                if let exif::Value::SRational(ref v) = field.value {
+                    if let Some(r) = v.first() {
+                        let f = r.to_f64();
+                        let sign = if f > 0.0 { "+" } else { "" };
+                        exposure_bias = Some(format!("{}{:.1} EV", sign, f));
+                    }
+                }
+            }
+        }
+    }
+
+    let (modified_at, created_at) = match std::fs::metadata(path) {
+        Ok(m) => {
+            let modified = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string());
+            let created = m
+                .created()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string());
+            (modified, created)
+        }
+        Err(_) => (None, None),
+    };
+
+    ExifExtrasDto {
+        software,
+        exposure_bias,
+        modified_at,
+        created_at,
+    }
 }

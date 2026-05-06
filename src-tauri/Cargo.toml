@@ -46,6 +46,7 @@ rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 tracing = "0.1"
 open = "5"
 async-channel = "2"
+kamadak-exif = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

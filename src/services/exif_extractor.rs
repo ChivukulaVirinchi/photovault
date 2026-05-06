@@ -339,25 +339,31 @@ impl ExifExtractor {
         Some(coord * multiplier)
     }
 
-    /// Parse EXIF date format: "2019:03:15 14:30:22"
+    /// Parse EXIF date format: "2019:03:15 14:30:22".
+    ///
+    /// Strips any trailing timezone suffix (`Z`, `+HH:MM`, `-HH:MM`) and
+    /// keeps the wall-clock numbers the camera recorded. We deliberately
+    /// don't apply the offset: users remember photos by *local* time
+    /// ("dinner at 10pm"), not by the UTC equivalent. The resulting
+    /// `DateTime<Utc>` carries those wall-clock numbers verbatim, and the
+    /// frontend treats the serialized string as local time.
     fn parse_exif_date(date_str: &str) -> Option<DateTime<Utc>> {
-        let mut clean = date_str.trim().trim_matches('"').replace('\0', "");
-        clean = clean.trim().to_string();
+        let mut clean = date_str
+            .trim()
+            .trim_matches('"')
+            .replace('\0', "")
+            .trim()
+            .to_string();
 
-        // Common EXIF forms seen in the wild.
-        let formats = [
-            "%Y:%m:%d %H:%M:%S",
-            "%Y:%m:%d %H:%M:%S%.f",
-            "%Y:%m:%d %H:%M:%S%:z",
-            "%Y:%m:%d %H:%M:%S%.f%:z",
-        ];
+        // Strip trailing TZ suffix, if any. Looks like `Z`, `+05:30`,
+        // `-08:00`, or `+0530`.
+        if let Some(stripped) = strip_tz_suffix(&clean) {
+            clean = stripped;
+        }
 
+        let formats = ["%Y:%m:%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%.f"];
         for fmt in formats {
-            if fmt.contains("%:z") {
-                if let Ok(dt) = chrono::DateTime::parse_from_str(&clean, fmt) {
-                    return Some(dt.with_timezone(&Utc));
-                }
-            } else if let Ok(parsed) = NaiveDateTime::parse_from_str(&clean, fmt) {
+            if let Ok(parsed) = NaiveDateTime::parse_from_str(&clean, fmt) {
                 return Some(Utc.from_utc_datetime(&parsed));
             }
         }
@@ -369,7 +375,7 @@ impl ExifExtractor {
             if bytes.get(4) == Some(&b'-') && bytes.get(7) == Some(&b'-') {
                 normalized.replace_range(4..5, ":");
                 normalized.replace_range(7..8, ":");
-                for fmt in ["%Y:%m:%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%.f"] {
+                for fmt in formats {
                     if let Ok(parsed) = NaiveDateTime::parse_from_str(&normalized, fmt) {
                         return Some(Utc.from_utc_datetime(&parsed));
                     }
@@ -453,10 +459,62 @@ impl ExifExtractor {
     }
 }
 
+/// If `s` ends with a recognisable EXIF timezone suffix (`Z`, `+HH:MM`,
+/// `-HH:MM`, `+HHMM`, `-HHMM`), return `s` with the suffix removed and
+/// any trailing whitespace trimmed. Otherwise returns `None` so the
+/// caller can use the original string.
+fn strip_tz_suffix(s: &str) -> Option<String> {
+    let trimmed = s.trim_end();
+    if let Some(without_z) = trimmed.strip_suffix('Z') {
+        return Some(without_z.trim_end().to_string());
+    }
+    // Look for the last + or - that could plausibly be a TZ marker.
+    // Time portion is at the end (HH:MM:SS), so a TZ marker only makes
+    // sense after position 10 (past the date).
+    let bytes = trimmed.as_bytes();
+    let mut tz_start = None;
+    for (i, &b) in bytes.iter().enumerate().rev() {
+        if i < 10 {
+            break;
+        }
+        if b == b'+' || b == b'-' {
+            // The chars before this position should be ':SS' (i.e.
+            // we're sitting just past the seconds field).
+            if i >= 2
+                && bytes[i - 1].is_ascii_digit()
+                && (bytes[i - 2].is_ascii_digit() || bytes[i - 2] == b':')
+            {
+                tz_start = Some(i);
+                break;
+            }
+        }
+    }
+    let start = tz_start?;
+    let suffix = &trimmed[start..];
+    // Validate suffix looks like ±HH:MM or ±HHMM.
+    let body = &suffix[1..];
+    let valid = match body.len() {
+        4 => body.chars().all(|c| c.is_ascii_digit()),
+        5 => {
+            let b = body.as_bytes();
+            b[0].is_ascii_digit()
+                && b[1].is_ascii_digit()
+                && b[2] == b':'
+                && b[3].is_ascii_digit()
+                && b[4].is_ascii_digit()
+        }
+        _ => false,
+    };
+    if !valid {
+        return None;
+    }
+    Some(trimmed[..start].trim_end().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_filename_date_parsing() {
@@ -538,6 +596,26 @@ mod tests {
         // Falls through to the loose pattern, but the leading char before
         // the 8-digit window is a digit, so it should not match.
         assert!(date.is_none());
+    }
+
+    #[test]
+    fn test_exif_date_strips_tz_offset() {
+        // `+05:30` should be discarded; wall-clock 10:16 must survive.
+        let dt = ExifExtractor::parse_exif_date("2024:01:15 10:16:00+05:30").unwrap();
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 16);
+    }
+
+    #[test]
+    fn test_exif_date_strips_z_suffix() {
+        let dt = ExifExtractor::parse_exif_date("2024:01:15 10:16:00Z").unwrap();
+        assert_eq!(dt.hour(), 10);
+    }
+
+    #[test]
+    fn test_exif_date_strips_compact_tz() {
+        let dt = ExifExtractor::parse_exif_date("2024:01:15 22:16:00-0500").unwrap();
+        assert_eq!(dt.hour(), 22);
     }
 
     #[test]

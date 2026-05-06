@@ -129,7 +129,11 @@ pub async fn library_open(
     };
 
     let mut guard = state.library.write().await;
-    *guard = Some(OpenLibrary::new(drive_root.clone(), database));
+    *guard = Some(
+        OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
+            message: e.to_string(),
+        })?,
+    );
 
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
@@ -246,6 +250,7 @@ pub async fn library_start_scan(
         let mut guard = state.library.write().await;
         let lib = guard.take().ok_or(CommandError::LibraryClosed)?;
         let drive_root = lib.drive_root.clone();
+        let thumbnails = lib.thumbnails.clone();
         // Try to take exclusive ownership of the DB — only possible if
         // no other handler is currently holding it. The Arc must have a
         // refcount of 1.
@@ -257,6 +262,7 @@ pub async fn library_start_scan(
                 *guard = Some(OpenLibrary {
                     drive_root: drive_root.clone(),
                     db: arc,
+                    thumbnails,
                 });
                 jobs::finish_job(&state, &job_id).await;
                 return Err(CommandError::Conflict {
@@ -320,7 +326,12 @@ pub async fn library_start_scan(
         if let Ok(result) = handle.await {
             let st: tauri::State<AppState> = app_clone.state();
             let mut guard = st.library.write().await;
-            *guard = Some(OpenLibrary::new(drive_root_clone, result.database));
+            match OpenLibrary::new(drive_root_clone, result.database) {
+                Ok(lib) => *guard = Some(lib),
+                Err(e) => {
+                    tracing::error!("re-attaching library after scan failed: {}", e);
+                }
+            }
             drop(guard);
             jobs::finish_job(&st, &job_id_clone).await;
         }

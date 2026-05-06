@@ -1,24 +1,30 @@
 <script lang="ts">
+  import {
+    Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon,
+    Copy, Layers, FileText, BarChart2, Activity, Trash2, Settings,
+    ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
+  } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
 
   interface Props { current: string }
   let { current }: Props = $props();
 
-  const items: Array<{ path: string; label: string }> = [
-    { path: "/timeline",   label: "Timeline"  },
-    { path: "/people",     label: "People"    },
-    { path: "/albums",     label: "Albums"    },
-    { path: "/memories",   label: "Memories"  },
-    { path: "/search",     label: "Search"    },
-    { path: "/map",        label: "Map"       },
-    { path: "/duplicates", label: "Duplicates"},
-    { path: "/bursts",     label: "Bursts"    },
-    { path: "/documents",  label: "Documents" },
-    { path: "/insights",   label: "Insights"  },
-    { path: "/health",     label: "Health"    },
-    { path: "/trash",      label: "Trash"     },
-    { path: "/settings",   label: "Settings"  },
+  type Item = { path: string; label: string; icon: typeof IconType };
+  const items: Item[] = [
+    { path: "/timeline",   label: "Timeline",   icon: Clock      },
+    { path: "/people",     label: "People",     icon: Users      },
+    { path: "/albums",     label: "Albums",     icon: FolderOpen },
+    { path: "/memories",   label: "Memories",   icon: Sparkles   },
+    { path: "/search",     label: "Search",     icon: Search     },
+    { path: "/map",        label: "Map",        icon: MapIcon    },
+    { path: "/duplicates", label: "Duplicates", icon: Copy       },
+    { path: "/bursts",     label: "Bursts",     icon: Layers     },
+    { path: "/documents",  label: "Documents",  icon: FileText   },
+    { path: "/insights",   label: "Insights",   icon: BarChart2  },
+    { path: "/health",     label: "Health",     icon: Activity   },
+    { path: "/trash",      label: "Trash",      icon: Trash2     },
+    { path: "/settings",   label: "Settings",   icon: Settings   },
   ];
 
   function isActive(path: string) {
@@ -47,12 +53,8 @@
     settingsStore.update({ theme: next });
   }
 
-  const themeIcon = $derived(
-    theme === "light" ? "sun" : theme === "dark" ? "moon" : "system"
-  );
-  const themeLabel = $derived(
-    theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System"
-  );
+  const ThemeIcon = $derived(theme === "light" ? Sun : theme === "dark" ? Moon : Monitor);
+  const themeLabel = $derived(theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System");
 </script>
 
 <aside class="sidebar" class:collapsed>
@@ -63,13 +65,11 @@
       aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       title={collapsed ? "Expand" : "Collapse"}
     >
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-        {#if collapsed}
-          <path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        {:else}
-          <path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        {/if}
-      </svg>
+      {#if collapsed}
+        <ChevronRight size={14} strokeWidth={1.75} />
+      {:else}
+        <ChevronLeft size={14} strokeWidth={1.75} />
+      {/if}
     </button>
     {#if !collapsed}
       <span class="brand">PhotoVault</span>
@@ -78,12 +78,13 @@
 
   <nav>
     {#each items as item (item.path)}
+      {@const Icon = item.icon}
       <a
         href="#{item.path}"
         class:active={isActive(item.path)}
         title={collapsed ? item.label : ""}
       >
-        <span class="dot" aria-hidden="true"></span>
+        <Icon class="nav-icon" size={16} strokeWidth={1.75} />
         <span class="label">{item.label}</span>
       </a>
     {/each}
@@ -105,21 +106,7 @@
         aria-label="Cycle theme — currently {themeLabel}"
         title="Theme: {themeLabel}"
       >
-        {#if themeIcon === "sun"}
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <circle cx="7" cy="7" r="2.6" stroke="currentColor" stroke-width="1.4"/>
-            <path d="M7 1.2v1.4M7 11.4v1.4M1.2 7h1.4M11.4 7h1.4M2.9 2.9l1 1M10.1 10.1l1 1M2.9 11.1l1-1M10.1 3.9l1-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-          </svg>
-        {:else if themeIcon === "moon"}
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M11.5 8.4A4.6 4.6 0 0 1 5.6 2.5a.4.4 0 0 0-.5-.5 5.5 5.5 0 1 0 6.9 6.9.4.4 0 0 0-.5-.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-          </svg>
-        {:else}
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <rect x="1.5" y="2.4" width="11" height="7.2" rx="0.8" stroke="currentColor" stroke-width="1.3"/>
-            <path d="M5 12h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-        {/if}
+        <ThemeIcon size={14} strokeWidth={1.75} />
       </button>
       {#if !collapsed}
         <button class="ghost switch" onclick={() => libraryStore.close()}>
@@ -148,7 +135,6 @@
     padding: var(--s-4) 6px var(--s-2);
   }
 
-  /* ===== header — wordmark only, no strap line ============ */
   header {
     display: flex;
     align-items: center;
@@ -194,7 +180,6 @@
     line-height: 1;
   }
 
-  /* ===== nav — text-led, ochre indicator on active ======= */
   nav {
     display: flex;
     flex-direction: column;
@@ -214,6 +199,7 @@
     font-size: var(--t-sm);
     font-weight: 500;
     position: relative;
+    text-decoration: none;
     transition: background var(--t-fast) var(--ease),
                 color      var(--t-fast) var(--ease);
   }
@@ -221,6 +207,10 @@
     justify-content: center;
     padding: 9px 0;
     margin-left: 0;
+  }
+  nav a :global(.nav-icon) {
+    flex-shrink: 0;
+    color: currentColor;
   }
   nav a:hover {
     background: var(--bg-card);
@@ -230,8 +220,6 @@
     color: var(--ink);
     font-weight: 600;
   }
-  /* The single signature: 2px ochre indicator on the left edge.
-     Static — no draw-in animation. */
   nav a.active::before {
     content: "";
     position: absolute;
@@ -245,30 +233,10 @@
   .sidebar.collapsed nav a.active::before {
     left: -6px;
   }
-
-  /* In collapsed mode, show a small ochre dot for the active item only */
-  nav a .dot {
-    display: none;
-  }
-  .sidebar.collapsed nav a .dot {
-    display: block;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: currentColor;
-    opacity: 0.45;
-  }
-  .sidebar.collapsed nav a.active .dot {
-    background: var(--accent);
-    opacity: 1;
-    width: 5px;
-    height: 5px;
-  }
   .sidebar.collapsed nav a .label {
     display: none;
   }
 
-  /* ===== footer — drive name + theme toggle + switch ===== */
   footer {
     padding-top: var(--s-2);
     border-top: 1px solid var(--line-soft);

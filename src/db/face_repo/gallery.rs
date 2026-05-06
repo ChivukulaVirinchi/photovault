@@ -232,8 +232,10 @@ impl<'a> FaceRepo<'a> {
 
     /// Populate face thumbnail paths on cluster records.
     ///
-    /// Call this after `get_all_clusters()` with the drive root path so
-    /// each cluster's representative face crop can be resolved to an absolute path.
+    /// Call this after `get_all_clusters()` with the drive root path. The
+    /// path written into each cluster is **relative to drive_root** (e.g.
+    /// `.photovault/faces/42.jpg`) so it round-trips through the same
+    /// frontend `thumbUrl()` helper as `photos.thumbnail_path`.
     pub fn populate_face_thumbnails(
         &self,
         clusters: &mut [FaceClusterRecord],
@@ -246,7 +248,8 @@ impl<'a> FaceRepo<'a> {
             if let Some(face_id) = cluster.representative_face_id {
                 let crop_path = faces_dir.join(format!("{}.jpg", face_id));
                 if crop_path.exists() {
-                    cluster.face_thumbnail_path = Some(crop_path.to_string_lossy().to_string());
+                    cluster.face_thumbnail_path =
+                        Some(format!(".photovault/faces/{}.jpg", face_id));
                     continue;
                 }
             }
@@ -267,7 +270,8 @@ impl<'a> FaceRepo<'a> {
                 let crop_path = faces_dir.join(format!("{}.jpg", face_id));
                 if crop_path.exists() {
                     replacement_face_id = Some(face_id);
-                    cluster.face_thumbnail_path = Some(crop_path.to_string_lossy().to_string());
+                    cluster.face_thumbnail_path =
+                        Some(format!(".photovault/faces/{}.jpg", face_id));
                     break;
                 }
             }

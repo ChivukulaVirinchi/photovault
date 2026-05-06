@@ -27,7 +27,19 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**",
+          "**/.*",
+          "**/.*/**",
+          "$HOME/**",
+          "$HOME/**/.*/**",
+          "/media/**",
+          "/media/**/.*/**",
+          "/mnt/**",
+          "/mnt/**/.*/**",
+          "/run/media/**",
+          "/run/media/**/.*/**"
+        ]
       }
     }
   },

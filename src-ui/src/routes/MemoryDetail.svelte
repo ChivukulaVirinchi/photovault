@@ -1,6 +1,7 @@
 <script lang="ts">
   import { memories } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
@@ -19,6 +20,7 @@
       const r = await memories.detail(id);
       card = r.card;
       photos = r.photos;
+      browseContext.set(`memory:${id}`, photos.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
 

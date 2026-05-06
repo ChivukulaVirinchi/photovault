@@ -3868,6 +3868,7 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "chrono",
+ "kamadak-exif",
  "open",
  "photovault",
  "rusqlite",

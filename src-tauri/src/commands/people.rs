@@ -37,6 +37,7 @@ pub async fn people_list(
     if let Some(min) = args.min_photos {
         clusters.retain(|c| c.photo_count >= min);
     }
+    repo.populate_face_thumbnails(&mut clusters, &lib.drive_root)?;
     Ok(clusters.into_iter().map(Into::into).collect())
 }
 
@@ -54,7 +55,8 @@ pub async fn people_get(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = FaceRepo::new(&db.conn);
-    let clusters = repo.get_all_clusters()?;
+    let mut clusters = repo.get_all_clusters()?;
+    repo.populate_face_thumbnails(&mut clusters, &lib.drive_root)?;
     let c = clusters
         .into_iter()
         .find(|c| c.id == args.id)
@@ -100,8 +102,9 @@ pub async fn people_rename(
     let repo = FaceRepo::new(&db.conn);
     let name = args.name.unwrap_or_default();
     repo.name_cluster(args.id, &name)?;
-    let cluster = repo
-        .get_all_clusters()?
+    let mut clusters = repo.get_all_clusters()?;
+    repo.populate_face_thumbnails(&mut clusters, &lib.drive_root)?;
+    let cluster = clusters
         .into_iter()
         .find(|c| c.id == args.id)
         .ok_or_else(|| CommandError::not_found("person", args.id))?;
@@ -129,8 +132,9 @@ pub async fn people_merge(
     let db = lib.db.lock().await;
     let repo = FaceRepo::new(&db.conn);
     repo.merge_clusters(args.source_id, args.target_id)?;
-    let cluster = repo
-        .get_all_clusters()?
+    let mut clusters = repo.get_all_clusters()?;
+    repo.populate_face_thumbnails(&mut clusters, &lib.drive_root)?;
+    let cluster = clusters
         .into_iter()
         .find(|c| c.id == args.target_id)
         .ok_or_else(|| CommandError::not_found("person", args.target_id))?;

@@ -213,7 +213,7 @@ impl From<Photo> for PhotoDto {
             file_name: p.file_name,
             file_size: p.file_size,
             file_hash: p.file_hash,
-            date_taken: p.date_taken.map(|d| d.to_rfc3339()),
+            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -235,7 +235,7 @@ impl From<&Photo> for PhotoSummaryDto {
         Self {
             id: p.id,
             thumbnail_path: p.thumbnail_path.clone(),
-            date_taken: p.date_taken.map(|d| d.to_rfc3339()),
+            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,

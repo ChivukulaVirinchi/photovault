@@ -1,6 +1,7 @@
 <script lang="ts">
   import { albums } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
@@ -20,6 +21,7 @@
       editName = album.name;
       const page = await albums.photos(id);
       photos = page.items;
+      browseContext.set(`album:${id}`, photos.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
 

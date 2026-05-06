@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
@@ -14,6 +15,7 @@
     try {
       const page = await trash.list(null, 500);
       items = page.items;
+      browseContext.set("trash", items.map((t) => t.photo_id));
       stats = await trash.stats();
     } catch (e) { error = JSON.stringify(e); }
   }

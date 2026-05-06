@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { documents } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
@@ -15,6 +16,7 @@
     try {
       const page = await documents.list(null, null, 200);
       items = page.items;
+      browseContext.set("documents", items.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
 
@@ -23,6 +25,7 @@
     try {
       const page = await documents.search(q.trim());
       items = page.items;
+      browseContext.set("documents:search", items.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
 

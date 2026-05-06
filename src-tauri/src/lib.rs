@@ -53,6 +53,8 @@ pub fn run() {
             commands::photos::photos_list_by_place,
             commands::photos::photos_people_in_photo,
             commands::photos::photos_albums_for_photo,
+            commands::photos::photos_exif_extras,
+            commands::photos::photos_request_thumbnail,
             // people
             commands::people::people_list,
             commands::people::people_get,

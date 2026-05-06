@@ -92,10 +92,12 @@ impl<'a> AlbumRepo<'a> {
             SELECT a.id, a.name, a.cover_photo_id, a.cover_auto_picked,
                    a.photo_count, a.created_at, a.updated_at,
                    MIN(p.date_taken) AS date_range_start,
-                   MAX(p.date_taken) AS date_range_end
+                   MAX(p.date_taken) AS date_range_end,
+                   pcov.thumbnail_path AS cover_thumbnail_path
             FROM albums a
             LEFT JOIN album_photos ap ON a.id = ap.album_id
             LEFT JOIN photos p ON ap.photo_id = p.id
+            LEFT JOIN photos pcov ON pcov.id = a.cover_photo_id
             GROUP BY a.id
             ORDER BY a.updated_at DESC
             "#,
@@ -112,7 +114,7 @@ impl<'a> AlbumRepo<'a> {
                 updated_at: row.get(6)?,
                 date_range_start: row.get(7)?,
                 date_range_end: row.get(8)?,
-                cover_thumbnail_path: None,
+                cover_thumbnail_path: row.get(9)?,
             })
         })?;
 

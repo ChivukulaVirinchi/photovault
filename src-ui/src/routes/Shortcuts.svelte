@@ -2,13 +2,31 @@
   interface Props { onclose: () => void }
   let { onclose }: Props = $props();
 
-  const shortcuts: Array<[string, string]> = [
-    ["?", "Toggle this overlay"],
-    ["/", "Focus search"],
-    ["Esc", "Close overlay / back"],
-    ["I", "Toggle photo details"],
-    ["J / K", "Navigate timeline (coming)"],
-    ["Y / N", "Same / Different (face review, coming)"],
+  type Group = { title: string; rows: Array<[string, string]> };
+
+  const groups: Group[] = [
+    {
+      title: "Photo viewer",
+      rows: [
+        ["←", "Previous photo"],
+        ["→", "Next photo"],
+        ["Esc", "Back to gallery"],
+        ["I", "Toggle info panel"],
+        ["+ / −", "Zoom in / out"],
+        ["0", "Fit to screen"],
+        ["1", "Actual size (1:1)"],
+        ["[ / ]", "Rotate left / right"],
+        ["F", "Toggle fullscreen"],
+      ],
+    },
+    {
+      title: "Anywhere",
+      rows: [
+        ["?", "Toggle this overlay"],
+        ["/", "Focus search"],
+        ["Esc", "Back / close overlay"],
+      ],
+    },
   ];
 
   function onBackdrop(e: KeyboardEvent | MouseEvent) {
@@ -27,14 +45,19 @@
 >
   <div class="card" role="dialog" aria-label="Keyboard shortcuts">
     <h2>Keyboard shortcuts</h2>
-    <ul>
-      {#each shortcuts as [key, label]}
-        <li>
-          <kbd>{key}</kbd>
-          <span>{label}</span>
-        </li>
-      {/each}
-    </ul>
+    {#each groups as group}
+      <section>
+        <h3 class="group-title">{group.title}</h3>
+        <ul>
+          {#each group.rows as [key, label]}
+            <li>
+              <kbd>{key}</kbd>
+              <span>{label}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/each}
     <div class="row">
       <button class="ghost" onclick={onclose}>Close</button>
     </div>
@@ -58,7 +81,7 @@
     border: 1px solid var(--line);
     padding: var(--s-6);
     border-radius: var(--r-md);
-    min-width: 420px;
+    min-width: 460px;
     max-width: 90%;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.40),
                 0 4px 16px rgba(0, 0, 0, 0.30);
@@ -71,17 +94,30 @@
     font-weight: 600;
     margin: 0;
   }
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .group-title {
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0 0 4px;
+  }
   ul {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
   }
   li {
     display: grid;
-    grid-template-columns: 90px 1fr;
+    grid-template-columns: 96px 1fr;
     gap: var(--s-3);
     align-items: center;
   }
