@@ -83,3 +83,77 @@ pub async fn memories_blocked_people(state: State<'_, AppState>) -> CommandResul
         .map(Into::into)
         .collect())
 }
+
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct MemoriesPersonArgs {
+    pub person_id: i64,
+}
+
+#[tauri::command]
+pub async fn memories_block_person(
+    state: State<'_, AppState>,
+    args: MemoriesPersonArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    db.conn.execute(
+        "INSERT OR IGNORE INTO memory_blocks (kind, target_key) VALUES ('person', ?1)",
+        rusqlite::params![args.person_id.to_string()],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn memories_unblock_person(
+    state: State<'_, AppState>,
+    args: MemoriesPersonArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    db.conn.execute(
+        "DELETE FROM memory_blocks WHERE kind = 'person' AND target_key = ?1",
+        rusqlite::params![args.person_id.to_string()],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemoriesSaveAsAlbumArgs {
+    pub memory_id: String,
+    pub name: Option<String>,
+}
+
+#[tauri::command]
+pub async fn memories_save_as_album(
+    state: State<'_, AppState>,
+    args: MemoriesSaveAsAlbumArgs,
+) -> CommandResult<crate::dto::AlbumDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let today = Local::now().date_naive();
+    let cards = photovault::services::memories::generate_for_today(&db.conn, today)
+        .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
+    let card = cards
+        .into_iter()
+        .find(|c| c.id == args.memory_id)
+        .ok_or_else(|| CommandError::not_found("memory", args.memory_id.clone()))?;
+
+    let album_repo = photovault::db::album_repo::AlbumRepo::new(&db.conn);
+    let name = args.name.unwrap_or(card.title.clone());
+    let album_id = album_repo.create(&name)?;
+    if !card.photo_ids.is_empty() {
+        album_repo.add_photos(album_id, &card.photo_ids)?;
+        album_repo.auto_pick_cover(album_id)?;
+    }
+    album_repo
+        .get_all()?
+        .into_iter()
+        .find(|a| a.id == album_id)
+        .map(Into::into)
+        .ok_or_else(|| CommandError::not_found("album", album_id))
+}

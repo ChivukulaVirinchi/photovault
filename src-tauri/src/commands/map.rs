@@ -144,6 +144,47 @@ pub async fn map_tile_cache_stats(state: State<'_, AppState>) -> CommandResult<T
     })
 }
 
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct MapTileCacheSetLimitArgs {
+    pub limit_mb: u32,
+}
+
+#[tauri::command]
+pub async fn map_tile_cache_set_limit(args: MapTileCacheSetLimitArgs) -> CommandResult<()> {
+    let mut cfg = photovault::config::AppConfig::load();
+    cfg.map_cache_limit_mb = args.limit_mb.clamp(50, 10_000);
+    cfg.save().map_err(|e| CommandError::Io {
+        message: e.to_string(),
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MapTileCacheClearedDto {
+    pub freed_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn map_tile_cache_clear(
+    state: State<'_, AppState>,
+) -> CommandResult<MapTileCacheClearedDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let dir = photovault::db::tile_cache_dir(&lib.drive_root);
+    let mut freed: u64 = 0;
+    if dir.exists() {
+        for entry in walk(&dir) {
+            if let Ok(meta) = entry.metadata() {
+                freed += meta.len();
+            }
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(MapTileCacheClearedDto { freed_bytes: freed })
+}
+
 fn walk(dir: &std::path::Path) -> impl Iterator<Item = std::fs::DirEntry> + '_ {
     std::fs::read_dir(dir)
         .into_iter()

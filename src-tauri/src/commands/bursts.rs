@@ -1,12 +1,14 @@
 //! Burst groups (read-only listing).
 
-use serde::Deserialize;
-use tauri::State;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
 
 use photovault::db::burst_repo::BurstRepo;
 
-use crate::dto::{BurstGroupDto, BurstGroupSummaryDto, BurstMemberDto};
-use crate::state::AppState;
+use crate::dto::{BurstGroupDto, BurstGroupSummaryDto, BurstMemberDto, JobIdDto};
+use crate::events::{JobProgress, EV_BURSTS_COMPLETE, EV_BURSTS_PROGRESS};
+use crate::jobs::{self, emit};
+use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
 #[tauri::command]
@@ -40,4 +42,158 @@ pub async fn bursts_get_group(
         id: args.id,
         members: members.into_iter().map(BurstMemberDto::from).collect(),
     })
+}
+
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct BurstsSetBestArgs {
+    pub group_id: i64,
+    pub photo_id: i64,
+}
+
+#[tauri::command]
+pub async fn bursts_set_best(
+    state: State<'_, AppState>,
+    args: BurstsSetBestArgs,
+) -> CommandResult<BurstGroupDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = BurstRepo::new(&db.conn);
+    repo.set_suggested_best(args.group_id, args.photo_id)?;
+    let members = repo.get_group_members(args.group_id)?;
+    Ok(BurstGroupDto {
+        id: args.group_id,
+        members: members.into_iter().map(BurstMemberDto::from).collect(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BurstsGroupActionArgs {
+    pub group_id: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BurstsCountResultDto {
+    pub count: u64,
+}
+
+#[tauri::command]
+pub async fn bursts_trash_non_best(
+    state: State<'_, AppState>,
+    args: BurstsGroupActionArgs,
+) -> CommandResult<BurstsCountResultDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = BurstRepo::new(&db.conn);
+    let to_trash = repo.get_photos_to_trash(args.group_id)?;
+    let trashed =
+        photovault::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
+    repo.delete_group(args.group_id)?;
+    Ok(BurstsCountResultDto { count: trashed })
+}
+
+#[tauri::command]
+pub async fn bursts_dismiss(
+    state: State<'_, AppState>,
+    args: BurstsGroupActionArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    BurstRepo::new(&db.conn).delete_group(args.group_id)?;
+    Ok(())
+}
+
+// ---------- job ----------
+
+#[derive(Debug, Serialize, Clone)]
+pub struct BurstsCompleteDto {
+    pub job_id: String,
+    pub groups_found: u64,
+    pub elapsed_ms: u64,
+}
+
+#[tauri::command]
+pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandResult<JobIdDto> {
+    let job = jobs::start_job(&state, JobKind::Bursts).await?;
+    let job_id = job.id.clone();
+    let started = job.started_at;
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_arc = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.db.clone()
+    };
+
+    emit(
+        &app_clone,
+        EV_BURSTS_PROGRESS,
+        JobProgress {
+            job_id: job_id.clone(),
+            stage: "scan".into(),
+            processed: 0,
+            total: None,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            eta_ms: None,
+            message: Some("detecting burst groups".into()),
+        },
+    );
+
+    let cfg = photovault::config::AppConfig::load();
+    let burst_cfg = photovault::services::burst_detector::BurstConfig {
+        max_gap_seconds: cfg.burst_time_window_seconds,
+        ..Default::default()
+    };
+    let thumbs_root = drive_root.join(".photovault/thumbs");
+
+    tokio::task::spawn_blocking(move || {
+        let db = db_arc.blocking_lock();
+        let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
+        let groups = detector
+            .find_bursts(&db.conn, Some(&drive_root), Some(&thumbs_root))
+            .unwrap_or_default();
+        let count = groups.len();
+        // Persist via burst_repo.
+        let repo = BurstRepo::new(&db.conn);
+        let triples: Vec<(String, String, Vec<i64>)> = groups
+            .into_iter()
+            .map(|g| {
+                (
+                    g.start_time.to_rfc3339(),
+                    g.end_time.to_rfc3339(),
+                    g.photo_ids,
+                )
+            })
+            .collect();
+        let _ = repo.sync_burst_groups(&triples);
+        drop(db);
+
+        emit(
+            &app_clone,
+            EV_BURSTS_COMPLETE,
+            BurstsCompleteDto {
+                job_id: job_id_clone.clone(),
+                groups_found: count as u64,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            },
+        );
+        let rt = tokio::runtime::Handle::current();
+        let app_for_finish = app_clone.clone();
+        rt.spawn(async move {
+            let st: tauri::State<AppState> = app_for_finish.state();
+            jobs::finish_job(&st, &job_id_clone).await;
+        });
+    });
+
+    Ok(JobIdDto { job_id })
 }

@@ -68,3 +68,75 @@ pub async fn trash_stats(state: State<'_, AppState>) -> CommandResult<TrashStats
     let db = lib.db.lock().await;
     Ok(TrashService::get_stats(&db.conn)?.into())
 }
+
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct TrashPhotoIdsArgs {
+    pub photo_ids: Vec<i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TrashCountDto {
+    pub count: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TrashDeleteResultDto {
+    pub files_deleted: u64,
+    pub db_records_deleted: u64,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn trash_trash_photos(
+    state: State<'_, AppState>,
+    args: TrashPhotoIdsArgs,
+) -> CommandResult<TrashCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let n = TrashService::trash_photos(&db.conn, &args.photo_ids)? as u64;
+    Ok(TrashCountDto { count: n })
+}
+
+#[tauri::command]
+pub async fn trash_restore(
+    state: State<'_, AppState>,
+    args: TrashPhotoIdsArgs,
+) -> CommandResult<TrashCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let n = TrashService::restore_photos(&db.conn, &args.photo_ids)? as u64;
+    Ok(TrashCountDto { count: n })
+}
+
+#[tauri::command]
+pub async fn trash_permanent_delete(
+    state: State<'_, AppState>,
+    args: TrashPhotoIdsArgs,
+) -> CommandResult<TrashDeleteResultDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let r = TrashService::permanent_delete(&db.conn, &args.photo_ids, &lib.drive_root)?;
+    Ok(TrashDeleteResultDto {
+        files_deleted: r.files_deleted as u64,
+        db_records_deleted: r.db_records_deleted as u64,
+        errors: r.errors,
+    })
+}
+
+#[tauri::command]
+pub async fn trash_empty(state: State<'_, AppState>) -> CommandResult<TrashDeleteResultDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let r = TrashService::empty_trash(&db.conn, &lib.drive_root)?;
+    Ok(TrashDeleteResultDto {
+        files_deleted: r.files_deleted as u64,
+        db_records_deleted: r.db_records_deleted as u64,
+        errors: r.errors,
+    })
+}

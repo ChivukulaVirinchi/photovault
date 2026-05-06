@@ -48,3 +48,31 @@ pub async fn search_recent_list(
         .map(Into::into)
         .collect())
 }
+
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct SearchRecentRemoveArgs {
+    pub q: String,
+}
+
+#[tauri::command]
+pub async fn search_recent_remove(
+    state: State<'_, AppState>,
+    args: SearchRecentRemoveArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    RecentSearchRepo::new(&db.conn).remove(&args.q)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn search_recent_clear(state: State<'_, AppState>) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    RecentSearchRepo::new(&db.conn).clear()?;
+    Ok(())
+}

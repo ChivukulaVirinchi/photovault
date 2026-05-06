@@ -110,3 +110,24 @@ pub async fn documents_search(
         total: None,
     })
 }
+
+// ---------- mutations ----------
+
+#[derive(Debug, Deserialize)]
+pub struct DocumentsSetCategoryArgs {
+    pub photo_id: i64,
+    pub category: ContentCategoryDto,
+}
+
+#[tauri::command]
+pub async fn documents_set_category(
+    state: State<'_, AppState>,
+    args: DocumentsSetCategoryArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let cat = photovault::models::ContentCategory::from(args.category);
+    DocumentRepo::new(&db.conn).update_content_category(args.photo_id, cat.as_str())?;
+    Ok(())
+}

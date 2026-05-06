@@ -6,9 +6,14 @@
 /src-tauri/gen/
 /src-tauri/target/
 
-# Frontend build artifacts (Vite will own /src-ui/dist after M2)
+# Frontend build artifacts (Vite owns /src-ui/dist; tauri.conf's
+# beforeBuildCommand re-runs `npm run build` before any bundle)
+/src-ui/dist/
 /src-ui/node_modules/
 /src-ui/.svelte-kit/
+
+# Claude Code session state
+/.claude/
 
 # ONNX Runtime shared library (~22MB, downloaded separately)
 /libs/

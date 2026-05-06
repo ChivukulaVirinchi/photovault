@@ -23,3 +23,10 @@ pub async fn insights_compute(
     let data = photovault::services::insights::compute(&db.conn, args.year)?;
     Ok(data.into())
 }
+
+#[tauri::command]
+pub async fn insights_invalidate(_state: State<'_, AppState>) -> CommandResult<()> {
+    // No server-side cache today — handler exists so the frontend can
+    // signal cache-stale events; future caching layer can hook here.
+    Ok(())
+}

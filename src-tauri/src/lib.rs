@@ -10,6 +10,7 @@ pub mod commands;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod jobs;
 pub mod pagination;
 pub mod state;
 
@@ -36,6 +37,12 @@ pub fn run() {
             commands::library::library_current,
             commands::library::library_resolve_path,
             commands::library::library_detect_changes,
+            commands::library::library_open,
+            commands::library::library_close,
+            commands::library::library_apply_changes,
+            commands::library::library_start_scan,
+            commands::library::library_cancel_scan,
+            commands::library::library_regenerate_thumbnails,
             // photos
             commands::photos::photos_list,
             commands::photos::photos_get,
@@ -50,46 +57,87 @@ pub fn run() {
             commands::people::people_list,
             commands::people::people_get,
             commands::people::people_review_queue,
+            commands::people::people_rename,
+            commands::people::people_merge,
+            commands::people::people_review_same,
+            commands::people::people_review_different,
+            commands::people::people_review_skip,
+            commands::people::people_start_processing,
+            commands::people::people_cancel_processing,
             // albums
             commands::albums::albums_list,
             commands::albums::albums_get,
             commands::albums::albums_suggestions_list,
             commands::albums::albums_suggestions_preview,
+            commands::albums::albums_create,
+            commands::albums::albums_rename,
+            commands::albums::albums_delete,
+            commands::albums::albums_add_photos,
+            commands::albums::albums_remove_photos,
+            commands::albums::albums_auto_pick_cover,
+            commands::albums::albums_suggestions_run_detection,
+            commands::albums::albums_suggestions_accept,
+            commands::albums::albums_suggestions_dismiss,
             // search
             commands::search::search_query,
             commands::search::search_recent_list,
+            commands::search::search_recent_remove,
+            commands::search::search_recent_clear,
             // memories
             commands::memories::memories_today,
             commands::memories::memories_detail,
             commands::memories::memories_blocked_people,
+            commands::memories::memories_block_person,
+            commands::memories::memories_unblock_person,
+            commands::memories::memories_save_as_album,
             // duplicates
             commands::duplicates::duplicates_list,
             commands::duplicates::duplicates_get_group,
             commands::duplicates::duplicates_wasted_space,
+            commands::duplicates::duplicates_set_keep,
+            commands::duplicates::duplicates_trash_others,
+            commands::duplicates::duplicates_dismiss,
+            commands::duplicates::duplicates_run,
             // bursts
             commands::bursts::bursts_list,
             commands::bursts::bursts_get_group,
+            commands::bursts::bursts_set_best,
+            commands::bursts::bursts_trash_non_best,
+            commands::bursts::bursts_dismiss,
+            commands::bursts::bursts_run,
             // trash
             commands::trash::trash_list,
             commands::trash::trash_stats,
+            commands::trash::trash_trash_photos,
+            commands::trash::trash_restore,
+            commands::trash::trash_permanent_delete,
+            commands::trash::trash_empty,
             // documents
             commands::documents::documents_list,
             commands::documents::documents_search,
+            commands::documents::documents_set_category,
             // map
             commands::map::map_pins,
             commands::map::map_cluster_filmstrip,
             commands::map::map_tile_cache_stats,
+            commands::map::map_tile_cache_set_limit,
+            commands::map::map_tile_cache_clear,
             // insights
             commands::insights::insights_compute,
+            commands::insights::insights_invalidate,
             // health
             commands::health::health_compute,
             // geocoding
             commands::geocoding::geocoding_resolve_one,
             // settings
             commands::settings::settings_get,
+            commands::settings::settings_update,
             // system
             commands::system::system_asset_health,
             commands::system::system_app_version,
+            commands::system::system_open_in_explorer,
+            commands::system::system_copy_path_to_clipboard,
+            commands::system::system_updates_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
