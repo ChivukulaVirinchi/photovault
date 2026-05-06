@@ -3,6 +3,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod ml;
 pub mod models;
 pub mod search;

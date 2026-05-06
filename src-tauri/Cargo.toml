@@ -1,0 +1,53 @@
+[package]
+name = "photovault-tauri"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Tauri shell for PhotoVault — wraps the photovault library in IPC handlers."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "photovault_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "photovault-tauri"
+path = "src/main.rs"
+
+[[example]]
+name = "smoke"
+path = "examples/smoke.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+photovault = { path = ".." }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-os = "2"
+tauri-plugin-clipboard-manager = "2"
+
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

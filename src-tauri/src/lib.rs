@@ -1,0 +1,96 @@
+//! Tauri shell crate for PhotoVault.
+//!
+//! Wraps the `photovault` library (engine) in IPC handlers. The contract
+//! is documented in `docs/COMMAND_SURFACE.md`. M1 lands the read-only
+//! command surface and the runtime scaffolding; M2 adds mutations and
+//! long-running jobs; M3 reaches view parity with the iced UI and the
+//! iced binary is removed.
+
+pub mod commands;
+pub mod dto;
+pub mod error;
+pub mod events;
+pub mod pagination;
+pub mod state;
+
+pub use error::{CommandError, CommandResult};
+pub use state::AppState;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {
+            // Existing instance: focus the main window. Tauri's plugin
+            // doesn't restore focus by default — explicit show/focus
+            // would go here once we track the window handle.
+        }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(AppState::new())
+        .invoke_handler(tauri::generate_handler![
+            // library
+            commands::library::library_list_drives,
+            commands::library::library_current,
+            commands::library::library_resolve_path,
+            commands::library::library_detect_changes,
+            // photos
+            commands::photos::photos_list,
+            commands::photos::photos_get,
+            commands::photos::photos_get_many,
+            commands::photos::photos_list_by_album,
+            commands::photos::photos_list_by_person,
+            commands::photos::photos_list_by_date,
+            commands::photos::photos_list_by_place,
+            commands::photos::photos_people_in_photo,
+            commands::photos::photos_albums_for_photo,
+            // people
+            commands::people::people_list,
+            commands::people::people_get,
+            commands::people::people_review_queue,
+            // albums
+            commands::albums::albums_list,
+            commands::albums::albums_get,
+            commands::albums::albums_suggestions_list,
+            commands::albums::albums_suggestions_preview,
+            // search
+            commands::search::search_query,
+            commands::search::search_recent_list,
+            // memories
+            commands::memories::memories_today,
+            commands::memories::memories_detail,
+            commands::memories::memories_blocked_people,
+            // duplicates
+            commands::duplicates::duplicates_list,
+            commands::duplicates::duplicates_get_group,
+            commands::duplicates::duplicates_wasted_space,
+            // bursts
+            commands::bursts::bursts_list,
+            commands::bursts::bursts_get_group,
+            // trash
+            commands::trash::trash_list,
+            commands::trash::trash_stats,
+            // documents
+            commands::documents::documents_list,
+            commands::documents::documents_search,
+            // map
+            commands::map::map_pins,
+            commands::map::map_cluster_filmstrip,
+            commands::map::map_tile_cache_stats,
+            // insights
+            commands::insights::insights_compute,
+            // health
+            commands::health::health_compute,
+            // geocoding
+            commands::geocoding::geocoding_resolve_one,
+            // settings
+            commands::settings::settings_get,
+            // system
+            commands::system::system_asset_health,
+            commands::system::system_app_version,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
