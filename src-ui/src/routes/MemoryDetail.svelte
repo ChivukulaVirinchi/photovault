@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { memories } from "../lib/api/all";
+  import { onMount } from "svelte";
+  import { memories, trash } from "../lib/api/all";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
+  import SelectionBar from "../lib/components/SelectionBar.svelte";
+  import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
+  import { Check } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
 
@@ -14,6 +20,50 @@
   let photos = $state<PhotoSummaryDto[]>([]);
   let savedAlbumId = $state<number | null>(null);
   let error = $state<string | null>(null);
+  let showAddDialog = $state(false);
+
+  function onCellClick(e: MouseEvent, photoId: number) {
+    handleCellClick(e, photoId, photos.map((p) => p.id));
+  }
+  async function bulkTrash() {
+    const ids = selection.list();
+    if (ids.length === 0) return;
+    const dropSet = new Set(ids);
+    const snapshot = photos
+      .map((p, idx) => ({ idx, photo: p }))
+      .filter((e) => dropSet.has(e.photo.id));
+    try {
+      await trash.trashPhotos(ids);
+      photos = photos.filter((p) => !dropSet.has(p.id));
+      selection.clear();
+      toasts.undoable(
+        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        async () => {
+          await trash.restore(ids);
+          const next = photos.slice();
+          for (const e of snapshot) {
+            const at = Math.min(e.idx, next.length);
+            next.splice(at, 0, e.photo);
+          }
+          photos = next;
+        },
+      );
+    } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
+  }
+  function onGlobalKey(e: KeyboardEvent) {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (selection.active()) {
+      if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
+      else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
+      else if ((e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey) {
+        showAddDialog = true; e.preventDefault();
+      }
+    }
+  }
+  onMount(() => {
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
+  });
 
   async function load() {
     try {
@@ -57,13 +107,40 @@
 
 <div class="grid">
   {#each photos as p (p.id)}
-    <a class="cell" href="#/photo?id={p.id}">
+    <a
+      class="cell"
+      class:selected={selection.has(p.id)}
+      href="#/photo?id={p.id}"
+      onclick={(e) => onCellClick(e, p.id)}
+    >
       {#if p.thumbnail_path}
         <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+      {/if}
+      {#if selection.has(p.id)}
+        <span class="check" aria-hidden="true">
+          <Check size={14} strokeWidth={2.5} />
+        </span>
       {/if}
     </a>
   {/each}
 </div>
+
+{#if selection.active()}
+  <SelectionBar
+    count={selection.size()}
+    onAddToAlbum={() => (showAddDialog = true)}
+    onTrash={bulkTrash}
+    onCancel={() => selection.clear()}
+  />
+{/if}
+
+{#if showAddDialog}
+  <AddToAlbumDialog
+    photoIds={selection.list()}
+    onclose={() => (showAddDialog = false)}
+    onsuccess={() => selection.clear()}
+  />
+{/if}
 
 <style>
   .kind {
@@ -85,20 +162,39 @@
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 4px;
+    gap: 6px;
   }
   .cell {
     aspect-ratio: 1;
+    min-width: 0;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
+    position: relative;
+    display: block;
     transition: filter var(--t-fast) var(--ease),
                 box-shadow var(--t-fast) var(--ease);
   }
   .cell:hover {
     filter: brightness(1.06);
-    box-shadow: 0 0 0 2px var(--accent-ghost);
-    z-index: 1;
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
-  .cell img { width: 100%; height: 100%; object-fit: cover; }
+  .cell.selected { box-shadow: inset 0 0 0 3px var(--accent); }
+  .cell.selected img { filter: brightness(0.85); }
+  .cell .check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
+  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 </style>

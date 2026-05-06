@@ -89,7 +89,7 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: var(--s-5) var(--s-4);
+    gap: var(--s-6) var(--s-5);
   }
   .card {
     color: inherit;
@@ -101,6 +101,7 @@
   }
   .frame {
     aspect-ratio: 1;
+    min-width: 0;
     background: var(--bg-card);
     border-radius: 50%;
     overflow: hidden;
@@ -114,7 +115,7 @@
   }
   .card:hover .frame {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-ghost);
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
   .frame img {
     width: 100%;

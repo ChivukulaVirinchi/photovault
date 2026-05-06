@@ -29,6 +29,15 @@
     } catch (e) { error = JSON.stringify(e); }
   }
 
+  function onCreateKey(e: KeyboardEvent) {
+    if (e.key === "Enter") { e.preventDefault(); createAlbum(); }
+    else if (e.key === "Escape") {
+      e.preventDefault();
+      newName = "";
+      creating = false;
+    }
+  }
+
   async function runDetection() {
     try { await albums.suggestions.runDetection(); await load(); }
     catch (e) { error = JSON.stringify(e); }
@@ -51,7 +60,8 @@
   <span class="count mono">{list.length}<span class="muted"> albums</span></span>
   <button class="ghost" onclick={runDetection}>Detect</button>
   {#if creating}
-    <input bind:value={newName} placeholder="Album name" />
+    <!-- svelte-ignore a11y_autofocus -->
+    <input bind:value={newName} onkeydown={onCreateKey} placeholder="Album name" autofocus />
     <button class="primary" onclick={createAlbum}>Create</button>
     <button class="ghost" onclick={() => (creating = false)}>Cancel</button>
   {:else}
@@ -202,7 +212,7 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: var(--s-4);
+    gap: var(--s-5) var(--s-4);
   }
   .card {
     color: inherit;
@@ -213,6 +223,7 @@
   }
   .cover {
     aspect-ratio: 4 / 5;
+    min-width: 0;
     background: var(--bg-card);
     border-radius: var(--r-md);
     overflow: hidden;
@@ -226,7 +237,7 @@
   }
   .card:hover .cover {
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-ghost);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
   .cover img { width: 100%; height: 100%; object-fit: cover; }
   .placeholder { color: var(--ink-faint); }

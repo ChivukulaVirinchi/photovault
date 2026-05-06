@@ -118,10 +118,15 @@ impl BurstDetector {
                 None => continue,
             };
 
-            // Prefer the cached Small thumb (260px JPEG) — same hash
-            // SCAN-ner uses to name it. Fall back to the original.
+            // Prefer the cached Small thumb (260px JPEG). The v2 layout
+            // is `<thumb_root>/<2-char hash>/<full hash>.jpg`; fall back
+            // to the original full-resolution image if the thumb is
+            // not yet generated.
             let signature = thumb_root
-                .map(|root| root.join(format!("{}.jpg", file_hash)))
+                .map(|root| {
+                    let subdir = &file_hash[..2.min(file_hash.len())];
+                    root.join(subdir).join(format!("{}.jpg", file_hash))
+                })
                 .filter(|p| p.exists())
                 .and_then(|p| Self::build_signature(&p))
                 .or_else(|| {

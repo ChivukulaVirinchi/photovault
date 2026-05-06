@@ -257,8 +257,28 @@ fn run_scan(
     // ---- Phase 3: Serial geocoding + batched DB insert ----
     let geonames_path = crate::db::geonames::geonames_db_path();
     let geocoder = if geonames_path.exists() {
-        GeocodingService::new(&geonames_path).ok()
+        match GeocodingService::new(&geonames_path) {
+            Ok(g) => {
+                tracing::info!(
+                    "Geocoding enabled (GeoNames at {})",
+                    geonames_path.display()
+                );
+                Some(g)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "GeoNames DB found at {} but failed to load: {} — geocoding disabled for this scan",
+                    geonames_path.display(),
+                    e
+                );
+                None
+            }
+        }
     } else {
+        tracing::warn!(
+            "GeoNames DB missing at {} — photos will not be reverse-geocoded",
+            geonames_path.display()
+        );
         None
     };
 

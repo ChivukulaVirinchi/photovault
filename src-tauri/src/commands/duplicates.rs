@@ -194,14 +194,45 @@ pub async fn duplicates_run(
                 .iter()
                 .flat_map(|g| g.photo_ids.iter().copied())
                 .collect();
-            let thumbs_root = photovault::db::tile_cache_dir(&drive_root)
-                .parent()
-                .map(|p| p.join("thumbs"))
-                .unwrap_or_else(|| drive_root.join(".photovault/thumbs"));
+            // Pass the drive root; `find_perceptual_duplicates` resolves
+            // each photo's small-thumbnail path itself, matching the
+            // ThumbnailService v2 layout.
             if let Ok(perc) =
-                DuplicateDetector::find_perceptual_duplicates(&db.conn, &thumbs_root, &exclude_ids)
+                DuplicateDetector::find_perceptual_duplicates(&db.conn, &drive_root, &exclude_ids)
             {
                 groups_found += perc.len();
+                // Persist both passes' groups so the UI can read them.
+                let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
+                    Vec::with_capacity(exact.len() + perc.len());
+                for g in exact.iter().chain(perc.iter()) {
+                    to_persist.push((
+                        g.hash.clone(),
+                        g.photo_ids.clone(),
+                        g.suggested_keep_id,
+                        g.duplicate_type,
+                    ));
+                }
+                let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+                if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
+                    tracing::warn!("dup persist: {}", e);
+                }
+            }
+        } else {
+            // Even when perceptual is off, persist the exact pass.
+            let to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = exact
+                .iter()
+                .map(|g| {
+                    (
+                        g.hash.clone(),
+                        g.photo_ids.clone(),
+                        g.suggested_keep_id,
+                        g.duplicate_type,
+                    )
+                })
+                .collect();
+            let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+            if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
+                tracing::warn!("dup persist: {}", e);
             }
         }
         drop(db);

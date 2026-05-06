@@ -28,6 +28,8 @@ export const people = {
       source_id: sourceId,
       target_id: targetId,
     }),
+  /// Delete a cluster — "not a real person." Faces become unclustered.
+  delete: (id: number) => call<null>("people_delete", { id }),
   reviewQueue: (limit = 20) =>
     call<ReviewItem[]>("people_review_queue", { limit }),
   reviewSame: (queueId: number) =>
@@ -359,6 +361,8 @@ export interface MapPin {
   lng: number;
   thumbnail_path: string | null;
   count: number;
+  /// Member photo ids when count > 1 (empty for single pins).
+  photo_ids: number[];
 }
 export const map = {
   pins: (
@@ -373,6 +377,23 @@ export const map = {
     }),
   clusterFilmstrip: (photoIds: number[]) =>
     call<PhotoSummaryDto[]>("map_cluster_filmstrip", { photo_ids: photoIds }),
+};
+
+// ---------- geocoding ----------
+export const geocoding = {
+  resolveOne: (lat: number, lng: number) =>
+    call<{ city: string | null; country: string | null } | null>(
+      "geocoding_resolve_one",
+      { lat, lng },
+    ),
+  /// Walk every photo with GPS but no resolved location and fill it in.
+  /// Idempotent — returns counts of photos considered vs updated.
+  backfill: () =>
+    call<{
+      considered: number;
+      updated: number;
+      geonames_db_present: boolean;
+    }>("geocoding_backfill"),
 };
 
 // ---------- system ----------

@@ -154,7 +154,8 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
         max_gap_seconds: cfg.burst_time_window_seconds,
         ..Default::default()
     };
-    let thumbs_root = drive_root.join(".photovault/thumbs");
+    // ThumbnailService v2 layout: <drive>/.photovault/thumbnails/small/v2/<2hash>/<hash>.jpg
+    let thumbs_root = drive_root.join(".photovault/thumbnails/small/v2");
 
     tokio::task::spawn_blocking(move || {
         let db = db_arc.blocking_lock();

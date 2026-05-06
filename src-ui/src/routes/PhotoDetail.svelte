@@ -2,17 +2,20 @@
   import { onMount, onDestroy } from "svelte";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Maximize2,
-    RotateCcw, RotateCw, FolderOpen, X,
+    RotateCcw, RotateCw, FolderOpen, FolderPlus, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras } from "../lib/api/photos";
   import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
+  import { trash } from "../lib/api/all";
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
   import ZoomImage from "../lib/components/ZoomImage.svelte";
+  import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import type { ZoomApi } from "../lib/zoomApi";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -35,6 +38,11 @@
   let tint = $state<RGB | null>(null);
   let manualRotate = $state(0);
   let zoomApi = $state<ZoomApi | undefined>(undefined);
+  let showAddDialog = $state(false);
+  /// Tracks the current zoom mode for the fit toggle. We can't read the
+  /// internal scale of ZoomImage directly, so we mirror the "double-click
+  /// toggles fit ↔ 1:1" intent here. Default is "fit" (image just loaded).
+  let atActual = $state(false);
 
   // Mouse-activity fade for viewer chrome (toolbar, chevrons, position,
   // filename, cursor). Resets on every mousemove inside the viewer; if
@@ -57,9 +65,15 @@
 
   function back() { history.back(); }
 
+  /// Navigate between photos via replaceState so the photo journey
+  /// collapses into a single history entry — pressing X / Esc takes
+  /// the user back to whatever route they came from (Timeline, Album,
+  /// Person, etc.), not stepping back through every photo viewed.
   function gotoId(target: number | null) {
     if (target == null) return;
-    window.location.hash = `/photo?id=${target}`;
+    const url = `#/photo?id=${target}`;
+    history.replaceState({}, "", url);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
   }
 
   const prevId = $derived(photo ? browseContext.prev(photo.id) : null);
@@ -200,6 +214,36 @@
   function rotateCcw() { manualRotate = (manualRotate - 90 + 360) % 360; }
   function rotateCw()  { manualRotate = (manualRotate + 90) % 360; }
 
+  /// Toggle between fit-to-screen and 1:1 actual size. Double-click on
+  /// the image does the same thing under the hood; this just mirrors
+  /// it onto the toolbar so users can find the gesture without trying.
+  function toggleFit() {
+    if (!zoomApi) return;
+    if (atActual) { zoomApi.fit();    atActual = false; }
+    else          { zoomApi.actual(); atActual = true;  }
+  }
+
+  async function trashAndAdvance() {
+    if (!photo) return;
+    const id = photo.id;
+    const advanceTo = nextId ?? prevId ?? null;
+    try {
+      await trash.trashPhotos([id]);
+      toasts.undoable(
+        "Photo moved to trash",
+        async () => {
+          await trash.restore([id]);
+          // Re-load the trashed-then-restored photo back into view.
+          gotoId(id);
+        },
+      );
+      if (advanceTo != null) gotoId(advanceTo);
+      else back();
+    } catch (e) {
+      toasts.error(`Couldn't move to trash: ${e}`);
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     switch (e.key) {
@@ -224,6 +268,11 @@
       case "f": case "F":
         if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleFullscreen(); }
         break;
+      case "Delete": case "Backspace":
+        e.preventDefault(); trashAndAdvance(); break;
+      case "a": case "A":
+        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); showAddDialog = true; }
+        break;
     }
   }
 
@@ -238,7 +287,7 @@
     if (idleTimer) clearTimeout(idleTimer);
   });
 
-  $effect(() => { void id; load(); });
+  $effect(() => { void id; load(); atActual = false; });
 
   $effect(() => {
     const pid = photo?.id;
@@ -307,13 +356,13 @@
           <X size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
-        <button class="tool" onclick={() => zoomApi?.zoomOut()} title="Zoom out (−)" aria-label="Zoom out">
+        <button class="tool" onclick={() => { zoomApi?.zoomOut(); atActual = false; }} title="Zoom out (−)" aria-label="Zoom out">
           <ZoomOut size={16} strokeWidth={1.75} />
         </button>
-        <button class="tool" onclick={() => zoomApi?.fit()} title="Fit (0)" aria-label="Fit">
+        <button class="tool" class:on={atActual} onclick={toggleFit} title={atActual ? "Fit to screen (0)" : "Actual size (1)"} aria-label="Toggle fit / actual size">
           <Maximize2 size={16} strokeWidth={1.75} />
         </button>
-        <button class="tool" onclick={() => zoomApi?.zoomIn()} title="Zoom in (+)" aria-label="Zoom in">
+        <button class="tool" onclick={() => { zoomApi?.zoomIn(); atActual = false; }} title="Zoom in (+)" aria-label="Zoom in">
           <ZoomIn size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
@@ -324,9 +373,16 @@
           <RotateCw size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
+        <button class="tool" onclick={() => (showAddDialog = true)} title="Add to album (A)" aria-label="Add to album">
+          <FolderPlus size={16} strokeWidth={1.75} />
+        </button>
         <button class="tool" onclick={revealInFolder} title="Show in folder" aria-label="Show in folder">
           <FolderOpen size={16} strokeWidth={1.75} />
         </button>
+        <button class="tool danger" onclick={trashAndAdvance} title="Move to trash (Del)" aria-label="Move to trash">
+          <Trash2 size={16} strokeWidth={1.75} />
+        </button>
+        <span class="sep"></span>
         <button class="tool" class:on={metaOpen} onclick={() => (metaOpen = !metaOpen)} title="Toggle info (I)" aria-label="Toggle info">
           <Info size={16} strokeWidth={1.75} />
         </button>
@@ -456,10 +512,18 @@
           <h3 class="section">On the map</h3>
           <div class="mini-wrap">
             <div class="mini" bind:this={miniEl}></div>
-            <div class="coords mono small">
-              <span>{p.gps.lat.toFixed(4)}°, {p.gps.lng.toFixed(4)}°</span>
+            <div class="place-row">
+              {#if p.location?.city || p.location?.country}
+                <span class="place">
+                  {[p.location?.city, p.location?.country].filter(Boolean).join(", ")}
+                </span>
+              {:else}
+                <span class="coords mono small">
+                  {p.gps.lat.toFixed(4)}°, {p.gps.lng.toFixed(4)}°
+                </span>
+              {/if}
               {#if p.gps.altitude != null}
-                <span class="alt">{p.gps.altitude.toFixed(0)} m</span>
+                <span class="alt mono small">{p.gps.altitude.toFixed(0)} m</span>
               {/if}
             </div>
           </div>
@@ -468,6 +532,14 @@
     {/if}
   </section>
 </main>
+
+{#if showAddDialog && photo}
+  <AddToAlbumDialog
+    photoIds={[photo.id]}
+    onclose={() => (showAddDialog = false)}
+    onsuccess={(album, count) => toasts.success(`Added ${count} to ${album.name}`)}
+  />
+{/if}
 
 <style>
   .detail {
@@ -549,6 +621,10 @@
   .tool.on {
     background: var(--accent-ghost);
     color: var(--accent);
+  }
+  .tool.danger:hover {
+    color: var(--danger, #d96363);
+    background: color-mix(in oklab, var(--bg-card) 80%, var(--danger, #d96363));
   }
   .sep {
     width: 1px;
@@ -753,13 +829,22 @@
     box-shadow: 0 0 0 1px var(--accent),
                 0 4px 10px rgba(0, 0, 0, 0.5);
   }
-  .coords {
+  .place-row {
     display: flex;
+    align-items: baseline;
     gap: var(--s-3);
-    color: var(--ink-muted);
-    font-size: 10.5px;
+    flex-wrap: wrap;
   }
-  .coords .alt { color: var(--ink-faint); }
+  .place {
+    font-size: var(--t-sm);
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .coords {
+    color: var(--ink-muted);
+    font-size: 11px;
+  }
+  .alt { color: var(--ink-faint); }
   .small { font-size: var(--t-xs); }
 
   @media (max-width: 920px) {

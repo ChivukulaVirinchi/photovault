@@ -43,6 +43,33 @@ impl<'a> FaceRepo<'a> {
         Ok(())
     }
 
+    /// Delete a face cluster — "this isn't a real person" gesture.
+    ///
+    /// Faces previously assigned to this cluster have their `cluster_id`
+    /// set to NULL so a future re-clustering pass can pick them up
+    /// again. Inferred-identity links and gallery embeddings rooted at
+    /// the cluster cascade away (FK ON DELETE CASCADE in the schema).
+    pub fn delete_cluster(&self, cluster_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE faces SET cluster_id = NULL WHERE cluster_id = ?1",
+            params![cluster_id],
+        )?;
+        tx.execute(
+            "DELETE FROM photo_inferred_identities WHERE cluster_id = ?1",
+            params![cluster_id],
+        )?;
+        tx.execute(
+            "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1",
+            params![cluster_id],
+        )?;
+        tx.execute(
+            "DELETE FROM face_clusters WHERE id = ?1",
+            params![cluster_id],
+        )?;
+        tx.commit()
+    }
+
     /// Assign an existing face to an existing cluster and update cluster metadata.
     pub fn assign_face_to_cluster(&self, face_id: i64, cluster_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;

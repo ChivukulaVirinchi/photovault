@@ -8,49 +8,50 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 /// Resolve GeoNames DB path.
-/// Searches: next to executable, then CWD, then project root.
+///
+/// Searches the same candidate roots as the rest of bootstrap (asset
+/// install dir, $PHOTOVAULT_ASSET_DIR, executable dir, project root,
+/// /usr/lib/photovault) plus the CWD-relative `data/`. The previous
+/// implementation skipped the project-root candidate, so `cargo tauri
+/// dev` runs from a sub-directory couldn't find the dev-tree DB.
 pub fn geonames_db_path() -> PathBuf {
-    let installed = crate::bootstrap::default_asset_install_dir()
-        .join("data")
-        .join("geonames.db");
-    if installed.exists() {
-        return installed;
-    }
-
-    if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
-        let p = PathBuf::from(from_env).join("data").join("geonames.db");
+    // 1. Walk every bootstrap-known asset root.
+    for root in candidate_geonames_roots() {
+        let p = root.join("data").join("geonames.db");
         if p.exists() {
             return p;
         }
     }
-
-    // 1. Next to executable
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("data").join("geonames.db");
-            if p.exists() {
-                return p;
-            }
-
-            // Debian install layout: /usr/bin/photovault -> /usr/lib/photovault/data/geonames.db
-            let deb = dir
-                .join("..")
-                .join("lib")
-                .join("photovault")
-                .join("data")
-                .join("geonames.db");
-            if deb.exists() {
-                return deb;
-            }
-        }
-    }
-    // 2. Relative to CWD
+    // 2. Last-resort: CWD-relative literal "data/geonames.db".
     let cwd = PathBuf::from("data").join("geonames.db");
     if cwd.exists() {
         return cwd;
     }
-    // 3. Fallback (may not exist, caller checks)
-    cwd
+    // 3. Fallback path that may not exist; caller checks.
+    crate::bootstrap::default_asset_install_dir()
+        .join("data")
+        .join("geonames.db")
+}
+
+/// Candidate root directories under which `data/geonames.db` may live.
+/// Mirrors `bootstrap::candidate_asset_roots` but inlined here to avoid
+/// pulling that helper into a public surface.
+fn candidate_geonames_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    roots.push(crate::bootstrap::default_asset_install_dir());
+    if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
+        roots.push(PathBuf::from(from_env));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            // Debian install layout
+            roots.push(dir.join("..").join("lib").join("photovault"));
+        }
+    }
+    roots.push(crate::bootstrap::project_root());
+    roots.push(PathBuf::from("/usr/lib/photovault"));
+    roots
 }
 
 /// Check if bundled GeoNames DB exists.

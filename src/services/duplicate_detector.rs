@@ -24,11 +24,12 @@ pub struct DuplicateGroup {
 }
 
 /// Hamming-distance threshold (out of 64 bits) below which two photos
-/// are considered perceptually similar. 10 bits ≈ 84% bit agreement,
-/// well-known good cutoff for "looks the same to a human" without
-/// false-positives between visually distinct photos that happen to
-/// share rough composition.
-const PHASH_HAMMING_THRESHOLD: u32 = 10;
+/// are considered perceptually similar. 14 bits ≈ 78% bit agreement,
+/// catches re-edits, re-encodes, AND exposure-bracketed sequences
+/// (±1-2 EV typical) without false-positives between visually distinct
+/// photos that happen to share rough composition. Bumped from 10 after
+/// users reported burst/exposure-variant pairs being missed.
+const PHASH_HAMMING_THRESHOLD: u32 = 14;
 
 /// Duplicate detection service
 pub struct DuplicateDetector;
@@ -104,13 +105,13 @@ impl DuplicateDetector {
     /// doesn't show the same pair twice.
     pub fn find_perceptual_duplicates(
         conn: &Connection,
-        thumb_root: &Path,
+        drive_root: &Path,
         exclude_ids: &std::collections::HashSet<i64>,
     ) -> rusqlite::Result<Vec<DuplicateGroup>> {
         // Backfill phash for any non-trashed photo that doesn't yet
         // have one. Cheap when the cached Small thumbnail is on disk;
         // skips the photo silently otherwise (next prewarm warms it).
-        Self::backfill_phashes(conn, thumb_root)?;
+        Self::backfill_phashes(conn, drive_root)?;
 
         // Pull (id, phash, file_path, date_taken, file_size) for
         // photos with non-null phash that aren't already in an exact
@@ -195,7 +196,14 @@ impl DuplicateDetector {
     /// the cached Small thumbnail when available. Photos whose thumb
     /// hasn't been generated yet are skipped silently — the next
     /// prewarm pass will populate them.
-    fn backfill_phashes(conn: &Connection, thumb_root: &Path) -> rusqlite::Result<()> {
+    ///
+    /// The thumbnail layout is
+    /// `<drive>/.photovault/thumbnails/small/v2/<2hash>/<hash>.jpg`,
+    /// matching what `ThumbnailService::thumbnail_path` produces. An
+    /// earlier version of this code looked under `.photovault/thumbs/`
+    /// (the long-removed layout), which silently caused EVERY photo to
+    /// be skipped — and therefore the perceptual pass to find nothing.
+    fn backfill_phashes(conn: &Connection, drive_root: &Path) -> rusqlite::Result<()> {
         let mut stmt = conn.prepare(
             "SELECT id, file_hash FROM photos WHERE is_trashed = FALSE AND phash IS NULL",
         )?;
@@ -212,11 +220,18 @@ impl DuplicateDetector {
             .hash_size(8, 8)
             .to_hasher();
 
+        let small_root = drive_root
+            .join(".photovault")
+            .join("thumbnails")
+            .join("small")
+            .join("v2");
+
         let tx = conn.unchecked_transaction()?;
         let mut update = tx.prepare("UPDATE photos SET phash = ?2 WHERE id = ?1")?;
         let mut written = 0usize;
         for (id, file_hash) in &pending {
-            let thumb_path = thumb_root.join(format!("{}.jpg", file_hash));
+            let subdir = &file_hash[..2.min(file_hash.len())];
+            let thumb_path = small_root.join(subdir).join(format!("{}.jpg", file_hash));
             if !thumb_path.exists() {
                 continue;
             }

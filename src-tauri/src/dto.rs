@@ -213,7 +213,9 @@ impl From<Photo> for PhotoDto {
             file_name: p.file_name,
             file_size: p.file_size,
             file_hash: p.file_hash,
-            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            date_taken: p
+                .date_taken
+                .map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -235,7 +237,9 @@ impl From<&Photo> for PhotoSummaryDto {
         Self {
             id: p.id,
             thumbnail_path: p.thumbnail_path.clone(),
-            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            date_taken: p
+                .date_taken
+                .map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -704,6 +708,11 @@ pub struct MapPinDto {
     pub thumbnail_path: Option<String>,
     /// 1 = single pin, >1 = clustered cluster pin.
     pub count: u32,
+    /// Member photo ids for clusters (populated when count > 1).
+    /// The filmstrip drawer feeds these directly into
+    /// `map_cluster_filmstrip` without needing a re-query.
+    #[serde(default)]
+    pub photo_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

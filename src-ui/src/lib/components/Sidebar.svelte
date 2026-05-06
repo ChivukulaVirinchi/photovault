@@ -55,6 +55,23 @@
 
   const ThemeIcon = $derived(theme === "light" ? Sun : theme === "dark" ? Moon : Monitor);
   const themeLabel = $derived(theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System");
+
+  /// Arrow-key roving focus for nav items. ↑/↓ wrap; Home/End jump to ends.
+  /// Enter on a focused link is handled by the browser (anchor activation).
+  function onNavKey(e: KeyboardEvent) {
+    const nav = e.currentTarget as HTMLElement;
+    const links = Array.from(nav.querySelectorAll<HTMLAnchorElement>("a"));
+    if (links.length === 0) return;
+    const here = links.findIndex((a) => a === document.activeElement);
+    let next = -1;
+    if (e.key === "ArrowDown") next = (here + 1 + links.length) % links.length;
+    else if (e.key === "ArrowUp") next = (here - 1 + links.length) % links.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = links.length - 1;
+    else return;
+    e.preventDefault();
+    links[next]?.focus();
+  }
 </script>
 
 <aside class="sidebar" class:collapsed>
@@ -76,7 +93,8 @@
     {/if}
   </header>
 
-  <nav>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <nav onkeydown={onNavKey}>
     {#each items as item (item.path)}
       {@const Icon = item.icon}
       <a

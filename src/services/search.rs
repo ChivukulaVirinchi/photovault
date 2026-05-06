@@ -2,8 +2,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, params_from_iter, Connection, Result as SqliteResult};
 
+use crate::search::date_parser::{DateParser, DateRange};
 use crate::search::SearchQuery;
 
 /// A single search result row.
@@ -259,14 +260,110 @@ impl SearchService {
             ..Default::default()
         };
 
-        // 4. Photos — use existing parsed query filter
-        let parsed = crate::search::QueryParser::parse(query);
-        let photos = Self::search(conn, &parsed)?;
+        // 4. Photos — splits the query into "date part" (if any) and
+        // "free-text part" (the rest), then runs a single SQL that ANDs
+        // the date filter with an OR-match across location, filename,
+        // OCR text, and any face cluster's name. This means "Goa 2023"
+        // matches photos in 2023 with location LIKE %Goa% — even though
+        // "Goa" isn't in any hardcoded location list.
+        let (text_part, date_part) = Self::split_query(query);
+        let photos = Self::search_unified_photos(conn, text_part.as_deref(), date_part.as_ref())?;
+
         results.photo_ids = photos.iter().map(|r| r.photo_id).collect();
         results.photos_grouped = Self::group_by_date(photos.clone());
         results.photos = photos;
 
         Ok(results)
+    }
+
+    /// Peel a date range off the end (or whole) of `q` and return
+    /// (remaining_text, date_range). Either component may be None.
+    fn split_query(q: &str) -> (Option<String>, Option<DateRange>) {
+        let trimmed = q.trim();
+        if trimmed.is_empty() {
+            return (None, None);
+        }
+        // Whole-string match first — "March 2019" → date only.
+        if let Some(range) = DateParser::parse(trimmed) {
+            return (None, Some(range));
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        // Try last two words as a date — "Goa March 2019".
+        if words.len() >= 2 {
+            let last_two = format!("{} {}", words[words.len() - 2], words[words.len() - 1]);
+            if let Some(range) = DateParser::parse(&last_two) {
+                let rest = words[..words.len() - 2].join(" ");
+                let rest = rest.trim().to_string();
+                return (if rest.is_empty() { None } else { Some(rest) }, Some(range));
+            }
+        }
+        // Try last word — "Goa 2023".
+        if let Some(last) = words.last() {
+            if let Some(range) = DateParser::parse(last) {
+                let rest = words[..words.len() - 1].join(" ");
+                let rest = rest.trim().to_string();
+                return (if rest.is_empty() { None } else { Some(rest) }, Some(range));
+            }
+        }
+        (Some(trimmed.to_string()), None)
+    }
+
+    /// Photos query that ANDs the optional date range with an OR-match
+    /// across location, filename, OCR, and face-cluster name. Either
+    /// part may be empty (in which case it's omitted from the WHERE).
+    fn search_unified_photos(
+        conn: &Connection,
+        text: Option<&str>,
+        date: Option<&DateRange>,
+    ) -> SqliteResult<Vec<SearchResult>> {
+        let mut sql = String::from(
+            "SELECT id, date_taken, location_city, location_country \
+             FROM photos p WHERE is_trashed = FALSE",
+        );
+        let mut bind: Vec<String> = Vec::new();
+
+        if let Some(d) = date {
+            sql.push_str(" AND date_taken >= ? AND date_taken <= ?");
+            bind.push(d.start.to_rfc3339());
+            bind.push(d.end.to_rfc3339());
+        }
+
+        if let Some(t) = text {
+            sql.push_str(
+                " AND ( \
+                    LOWER(file_name)        LIKE LOWER(?) OR \
+                    LOWER(ocr_text)         LIKE LOWER(?) OR \
+                    LOWER(location_city)    LIKE LOWER(?) OR \
+                    LOWER(location_country) LIKE LOWER(?) OR \
+                    EXISTS ( \
+                      SELECT 1 FROM faces f \
+                      JOIN face_clusters fc ON fc.id = f.cluster_id \
+                      WHERE f.photo_id = p.id \
+                        AND fc.name IS NOT NULL \
+                        AND LOWER(fc.name) LIKE LOWER(?) \
+                    ) \
+                  )",
+            );
+            let like = format!("%{}%", t);
+            for _ in 0..5 {
+                bind.push(like.clone());
+            }
+        }
+
+        sql.push_str(" ORDER BY date_taken DESC LIMIT 1000");
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_from_iter(bind.iter()), |row| {
+                Ok(SearchResult {
+                    photo_id: row.get(0)?,
+                    date_taken: row.get(1)?,
+                    location_city: row.get(2)?,
+                    location_country: row.get(3)?,
+                })
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
     }
 
     fn search_people(conn: &Connection, q: &str) -> SqliteResult<Vec<PersonHit>> {

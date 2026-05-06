@@ -61,6 +61,7 @@ pub fn run() {
             commands::people::people_review_queue,
             commands::people::people_rename,
             commands::people::people_merge,
+            commands::people::people_delete,
             commands::people::people_review_same,
             commands::people::people_review_different,
             commands::people::people_review_skip,
@@ -131,6 +132,7 @@ pub fn run() {
             commands::health::health_compute,
             // geocoding
             commands::geocoding::geocoding_resolve_one,
+            commands::geocoding::geocoding_backfill,
             // settings
             commands::settings::settings_get,
             commands::settings::settings_update,

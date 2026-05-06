@@ -52,7 +52,9 @@ pub async fn photos_list(
         .map(|p| PhotoSummaryDto {
             id: p.id,
             thumbnail_path: p.thumbnail_path,
-            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            date_taken: p
+                .date_taken
+                .map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -287,7 +289,9 @@ where
         .map(|p| PhotoSummaryDto {
             id: p.id,
             thumbnail_path: p.thumbnail_path,
-            date_taken: p.date_taken.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            date_taken: p
+                .date_taken
+                .map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
             width: p.width,
             height: p.height,
             orientation: p.orientation,
@@ -378,7 +382,11 @@ pub async fn photos_request_thumbnail(
             "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
             rusqlite::params![&rel, args.id],
         ) {
-            tracing::warn!("UPDATE thumbnail_path failed for photo_id={}: {}", args.id, e);
+            tracing::warn!(
+                "UPDATE thumbnail_path failed for photo_id={}: {}",
+                args.id,
+                e
+            );
         }
     }
 
@@ -456,9 +464,7 @@ fn read_extras(path: &std::path::Path) -> ExifExtrasDto {
                 }
             }
             // ExposureBiasValue — signed rational, format "+0.3 EV" / "-1.0 EV".
-            if let Some(field) =
-                exif.get_field(exif::Tag::ExposureBiasValue, exif::In::PRIMARY)
-            {
+            if let Some(field) = exif.get_field(exif::Tag::ExposureBiasValue, exif::In::PRIMARY) {
                 if let exif::Value::SRational(ref v) = field.value {
                     if let Some(r) = v.first() {
                         let f = r.to_f64();

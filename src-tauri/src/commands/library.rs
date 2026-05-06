@@ -129,11 +129,12 @@ pub async fn library_open(
     };
 
     let mut guard = state.library.write().await;
-    *guard = Some(
-        OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
-            message: e.to_string(),
-        })?,
-    );
+    *guard =
+        Some(
+            OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
+                message: e.to_string(),
+            })?,
+        );
 
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
@@ -326,6 +327,7 @@ pub async fn library_start_scan(
         if let Ok(result) = handle.await {
             let st: tauri::State<AppState> = app_clone.state();
             let mut guard = st.library.write().await;
+            let drive_for_post = drive_root_clone.clone();
             match OpenLibrary::new(drive_root_clone, result.database) {
                 Ok(lib) => *guard = Some(lib),
                 Err(e) => {
@@ -334,6 +336,16 @@ pub async fn library_start_scan(
             }
             drop(guard);
             jobs::finish_job(&st, &job_id_clone).await;
+
+            // Kick off duplicate + burst detection in the background.
+            // Both are idempotent: re-running them just refreshes the
+            // groups in place. We don't await — the user's already
+            // looking at the freshly-scanned timeline; these populate
+            // the Bursts and Duplicates tabs over the next few seconds.
+            let app_for_post = app_clone.clone();
+            tokio::spawn(async move {
+                run_post_scan_detection(app_for_post, drive_for_post).await;
+            });
         }
     });
 
@@ -398,3 +410,85 @@ pub async fn library_regenerate_thumbnails(
 
 // Re-export Arc for the scan job's try_unwrap dance.
 use std::sync::Arc;
+
+/// Run duplicate + burst detection passes after a scan completes. Both
+/// passes are idempotent and persist their groups, so the Bursts and
+/// Duplicates tabs reflect the fresh library state without the user
+/// having to manually click "Scan" inside each tab.
+async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
+    let st: tauri::State<AppState> = app.state();
+    let db_arc = {
+        let guard = st.library.read().await;
+        match guard.as_ref() {
+            Some(lib) => lib.db.clone(),
+            None => return,
+        }
+    };
+
+    let drive_for_dups = drive_root.clone();
+    let db_for_dups = db_arc.clone();
+    let dups = tokio::task::spawn_blocking(move || {
+        let db = db_for_dups.blocking_lock();
+        let exact =
+            photovault::services::duplicate_detector::DuplicateDetector::find_duplicates(&db.conn)
+                .unwrap_or_default();
+        let exclude_ids: std::collections::HashSet<i64> = exact
+            .iter()
+            .flat_map(|g| g.photo_ids.iter().copied())
+            .collect();
+        let perc = photovault::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
+            &db.conn,
+            &drive_for_dups,
+            &exclude_ids,
+        )
+        .unwrap_or_default();
+        let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
+            Vec::with_capacity(exact.len() + perc.len());
+        for g in exact.iter().chain(perc.iter()) {
+            to_persist.push((
+                g.hash.clone(),
+                g.photo_ids.clone(),
+                g.suggested_keep_id,
+                g.duplicate_type,
+            ));
+        }
+        let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+        let _ = repo.sync_duplicate_groups(&to_persist);
+        (exact.len() + perc.len()) as u64
+    })
+    .await
+    .unwrap_or(0);
+    tracing::info!("post-scan: {} duplicate groups", dups);
+
+    let drive_for_bursts = drive_root.clone();
+    let db_for_bursts = db_arc.clone();
+    let bursts = tokio::task::spawn_blocking(move || {
+        let db = db_for_bursts.blocking_lock();
+        let cfg = photovault::config::AppConfig::load();
+        let burst_cfg = photovault::services::burst_detector::BurstConfig {
+            max_gap_seconds: cfg.burst_time_window_seconds,
+            ..Default::default()
+        };
+        let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
+        let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
+        let groups = detector
+            .find_bursts(&db.conn, Some(&drive_for_bursts), Some(&thumbs_root))
+            .unwrap_or_default();
+        let triples: Vec<(String, String, Vec<i64>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.start_time.to_rfc3339(),
+                    g.end_time.to_rfc3339(),
+                    g.photo_ids.clone(),
+                )
+            })
+            .collect();
+        let repo = photovault::db::burst_repo::BurstRepo::new(&db.conn);
+        let _ = repo.sync_burst_groups(&triples);
+        groups.len() as u64
+    })
+    .await
+    .unwrap_or(0);
+    tracing::info!("post-scan: {} burst groups", bursts);
+}

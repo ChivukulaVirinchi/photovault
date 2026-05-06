@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
+  import { geocoding } from "../lib/api/all";
+  import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { Settings } from "../lib/api/all";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
+  let backfilling = $state(false);
 
   onMount(() => { settingsStore.load(); });
 
@@ -17,6 +20,25 @@
     try { await settingsStore.update(p); }
     catch (e) { error = JSON.stringify(e); }
     finally { saving = false; }
+  }
+
+  async function backfillGeocoding() {
+    if (backfilling) return;
+    backfilling = true;
+    try {
+      const r = await geocoding.backfill();
+      if (!r.geonames_db_present) {
+        toasts.error("GeoNames database not found. Run scripts/setup_assets.sh");
+      } else if (r.considered === 0) {
+        toasts.success("No photos need geocoding — all GPS-tagged photos already have place names.");
+      } else {
+        toasts.success(`Resolved ${r.updated} of ${r.considered} GPS-tagged photos.`);
+      }
+    } catch (e) {
+      toasts.error(`Geocoding backfill failed: ${e}`);
+    } finally {
+      backfilling = false;
+    }
   }
 </script>
 
@@ -104,6 +126,19 @@
     </section>
 
     <section>
+      <h3 class="section-title">Places</h3>
+      <p class="hint blurb">
+        Resolves GPS coordinates to city/country using the bundled GeoNames database.
+        Run this once after first setup, or after a scan that ran with the database missing.
+      </p>
+      <div class="action-row">
+        <button class="primary" onclick={backfillGeocoding} disabled={backfilling}>
+          {backfilling ? "Resolving…" : "Fill in place names"}
+        </button>
+      </div>
+    </section>
+
+    <section>
       <h3 class="section-title">Updates</h3>
       <label class="checkbox">
         <input type="checkbox" checked={s.auto_update_check_enabled}
@@ -161,4 +196,11 @@
   .unit { color: var(--ink-muted); font-size: var(--t-xs); }
   input, select { max-width: 200px; }
   input[type="checkbox"] { max-width: none; width: auto; margin-right: 0; }
+  .blurb {
+    color: var(--ink-soft);
+    font-size: var(--t-sm);
+    line-height: 1.5;
+    margin: 0 0 var(--s-3);
+  }
+  .action-row { display: flex; gap: var(--s-2); }
 </style>

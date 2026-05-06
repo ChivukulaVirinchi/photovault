@@ -30,6 +30,10 @@ pub struct Memory {
     pub title: String,
     pub photo_ids: Vec<i64>,
     pub hero_photo_id: i64,
+    /// Relative thumbnail path for the chosen hero (set during hero
+    /// selection). None if the hero photo hasn't had a thumbnail
+    /// generated yet.
+    pub hero_thumbnail_path: Option<String>,
     pub score: f32,
     pub year: i32,
     pub has_faces: bool,
@@ -55,7 +59,7 @@ impl From<Memory> for MemoryCard {
             kind: m.kind,
             title: m.title,
             hero_photo_id: m.hero_photo_id,
-            hero_thumbnail_path: None,
+            hero_thumbnail_path: m.hero_thumbnail_path,
             photo_count: m.photo_ids.len(),
             photo_ids: m.photo_ids,
         }
@@ -201,6 +205,7 @@ fn on_this_day(
                GROUP_CONCAT(id) AS photo_ids
         FROM photos
         WHERE is_trashed = FALSE
+          AND content_category = 'photo'
           AND date_taken IS NOT NULL
           AND strftime('%m-%d', date_taken) = ?1
           AND date_taken < ?2
@@ -230,6 +235,7 @@ fn on_this_day(
             title,
             photo_ids,
             hero_photo_id: 0,
+            hero_thumbnail_path: None,
             score: 0.0,
             year: yr,
             has_faces: false,
@@ -259,6 +265,7 @@ fn fallback_window(
                GROUP_CONCAT(id) AS photo_ids
         FROM photos
         WHERE is_trashed = FALSE
+          AND content_category = 'photo'
           AND date_taken IS NOT NULL
           AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
           AND date_taken < ?8
@@ -289,6 +296,7 @@ fn fallback_window(
             title,
             photo_ids,
             hero_photo_id: 0,
+            hero_thumbnail_path: None,
             score: 0.0,
             year: yr,
             has_faces: false,
@@ -313,6 +321,7 @@ fn seasonal_recap(
                COUNT(*) AS photo_count
         FROM photos
         WHERE is_trashed = FALSE
+          AND content_category = 'photo'
           AND date_taken IS NOT NULL
           AND strftime('%m', date_taken) = ?1
           AND date_taken < ?2
@@ -341,6 +350,7 @@ fn seasonal_recap(
             title: format!("{} {}", month_name, yr),
             photo_ids,
             hero_photo_id: 0,
+            hero_thumbnail_path: None,
             score: 0.0,
             year: yr,
             has_faces: false,
@@ -363,6 +373,7 @@ fn year_recap(
                GROUP_CONCAT(id) AS photo_ids
         FROM photos
         WHERE is_trashed = FALSE
+          AND content_category = 'photo'
           AND date_taken IS NOT NULL
           AND date_taken < ?1
         GROUP BY yr
@@ -396,6 +407,7 @@ fn year_recap(
             title,
             photo_ids,
             hero_photo_id: 0,
+            hero_thumbnail_path: None,
             score: 0.0,
             year: yr,
             has_faces: false,
@@ -474,19 +486,21 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
                COALESCE(p.orientation, 1) AS orientation,
                COALESCE(p.width, 0) AS width,
                COALESCE(p.height, 0) AS height,
-               COALESCE((SELECT COUNT(*) FROM faces WHERE photo_id = p.id), 0) AS face_count
+               COALESCE((SELECT COUNT(*) FROM faces WHERE photo_id = p.id), 0) AS face_count,
+               p.thumbnail_path
         FROM photos p
         WHERE p.id IN ({}) AND p.is_trashed = FALSE
         "#,
         in_clause
     );
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone)]
     struct PhotoMeta {
         orientation: i32,
         width: i32,
         height: i32,
         face_count: i64,
+        thumbnail_path: Option<String>,
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -499,6 +513,7 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
                 width: row.get(2)?,
                 height: row.get(3)?,
                 face_count: row.get(4)?,
+                thumbnail_path: row.get(5)?,
             },
         ))
     })?;
@@ -530,6 +545,12 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
             if m.face_count >= 2 {
                 score += 1.0;
             }
+            // Prefer photos that already have a thumbnail — avoids
+            // an empty card while on-demand generation runs in the
+            // background.
+            if m.thumbnail_path.is_some() {
+                score += 0.5;
+            }
             // Tie-breaker toward smaller id (stable).
             score -= (*pid as f32) * 1e-9;
 
@@ -540,6 +561,7 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
         }
 
         mem.hero_photo_id = best_id;
+        mem.hero_thumbnail_path = meta.get(&best_id).and_then(|m| m.thumbnail_path.clone());
         mem.has_faces = any_faces;
     }
 

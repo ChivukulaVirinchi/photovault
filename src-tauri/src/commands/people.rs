@@ -142,6 +142,23 @@ pub async fn people_merge(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PeopleDeleteArgs {
+    pub id: i64,
+}
+
+#[tauri::command]
+pub async fn people_delete(
+    state: State<'_, AppState>,
+    args: PeopleDeleteArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    FaceRepo::new(&db.conn).delete_cluster(args.id)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PeopleReviewArgs {
     pub queue_id: i64,
 }

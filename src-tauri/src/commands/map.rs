@@ -70,13 +70,15 @@ pub async fn map_pins(
                     lng,
                     thumbnail_path: p.thumbnail_path,
                     count: 1,
+                    photo_ids: Vec::new(),
                 })
             })
             .collect());
     }
 
     // Cluster server-side: snap to grid, keep the newest photo per cell as the
-    // representative, count members.
+    // representative, count members, and remember member ids so the frontend
+    // can render a filmstrip drawer without an extra round-trip.
     let cell = cell_size_deg(args.zoom);
     type Key = (i64, i64);
     let mut cells: HashMap<Key, MapPinDto> = HashMap::new();
@@ -92,13 +94,24 @@ pub async fn map_pins(
             lng,
             thumbnail_path: p.thumbnail_path.clone(),
             count: 0,
+            photo_ids: Vec::new(),
         });
         entry.count += 1;
+        entry.photo_ids.push(p.id);
         // Keep the newest member as representative (raw is already
         // ordered by date_taken DESC, so first-seen is newest).
     }
 
-    Ok(cells.into_values().collect())
+    // Single-photo "clusters" become regular pins (drop the redundant photo_ids list).
+    Ok(cells
+        .into_values()
+        .map(|mut p| {
+            if p.count == 1 {
+                p.photo_ids.clear();
+            }
+            p
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]

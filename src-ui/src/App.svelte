@@ -25,6 +25,7 @@
   import Cull from "./routes/Cull.svelte";
   import Shortcuts from "./routes/Shortcuts.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
+  import ToastHost from "./lib/components/ToastHost.svelte";
 
   let route = $state<{ path: string; params: Record<string, string> }>({
     path: "/timeline",
@@ -121,6 +122,8 @@
 {#if showShortcuts}
   <Shortcuts onclose={() => (showShortcuts = false)} />
 {/if}
+
+<ToastHost />
 
 <style>
   .shell {
