@@ -30,33 +30,31 @@
   onMount(() => inputEl?.focus());
 </script>
 
-<PageHeader
-  num="05"
-  label="SEARCH"
-  title="Find anything."
-  subtitle='Try "Goa 2023", a person you’ve named, or a place you’ve been.'
-/>
+<PageHeader title="Search" />
 
 <div class="search-row">
   <div class="bar">
-    <span class="prompt mono">▸</span>
+    <svg class="lookup" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M9.2 9.2L12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
     <input
       bind:this={inputEl}
       bind:value={q}
       oninput={onInput}
-      placeholder="type to search…"
+      placeholder='Try a name, place, or "Goa 2023"…'
     />
     {#if loading}<span class="loading mono">…</span>{/if}
   </div>
 </div>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if results}
     {#if results.people.length > 0}
       <section>
-        <span class="eyebrow"><span class="ornament"></span>PEOPLE</span>
+        <h3 class="section-title">People</h3>
         <ul class="row">
           {#each results.people as p}
             <li>
@@ -76,7 +74,7 @@
     {/if}
     {#if results.albums.length > 0}
       <section>
-        <span class="eyebrow"><span class="ornament"></span>ALBUMS</span>
+        <h3 class="section-title">Albums</h3>
         <ul class="row">
           {#each results.albums as a}
             <li>
@@ -96,12 +94,12 @@
     {/if}
     {#if results.places.length > 0}
       <section>
-        <span class="eyebrow"><span class="ornament"></span>PLACES</span>
+        <h3 class="section-title">Places</h3>
         <ul class="places">
           {#each results.places as pl}
             <li>
               <span class="city">{pl.city}</span>
-              {#if pl.country}<span class="country"><em>, {pl.country}</em></span>{/if}
+              {#if pl.country}<span class="country">, {pl.country}</span>{/if}
               <span class="muted small mono">{pl.photo_count}</span>
             </li>
           {/each}
@@ -110,10 +108,10 @@
     {/if}
     {#if results.photo_ids.length > 0}
       <section>
-        <span class="eyebrow"><span class="ornament"></span>PHOTOS · {results.photo_ids.length}</span>
-        <div class="grid stagger">
-          {#each results.photo_ids.slice(0, 200) as pid, i}
-            <a class="cell" href="#/photo?id={pid}" style="--i: {Math.min(i, 30)}">
+        <h3 class="section-title">Photos · {results.photo_ids.length}</h3>
+        <div class="grid">
+          {#each results.photo_ids.slice(0, 200) as pid}
+            <a class="cell" href="#/photo?id={pid}">
               <span class="muted small mono">#{pid}</span>
             </a>
           {/each}
@@ -122,26 +120,26 @@
     {/if}
     {#if results.people.length === 0 && results.albums.length === 0 && results.places.length === 0 && results.photo_ids.length === 0}
       <div class="empty">
-        <p class="quiet">Nothing matches that just yet.</p>
+        <p>Nothing matches that yet.</p>
       </div>
     {/if}
   {:else if !loading}
     <div class="empty">
-      <p class="quiet">Quietness lives here until you ask it something.</p>
+      <p>Type to search across people, albums, places, and OCR text.</p>
     </div>
   {/if}
 </div>
 
 <style>
-  .search-row { padding: var(--s-5) var(--s-7) 0; }
+  .search-row { padding: var(--s-4) var(--s-7) 0; }
   .bar {
     display: flex;
     align-items: center;
     gap: var(--s-3);
     background: var(--bg-paper);
     border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r-md);
+    padding: var(--s-2) var(--s-4);
     transition: border-color var(--t-fast) var(--ease),
                 box-shadow var(--t-fast) var(--ease);
   }
@@ -149,69 +147,110 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-ghost);
   }
-  .prompt { color: var(--accent); font-weight: 500; }
+  .lookup { color: var(--ink-muted); flex-shrink: 0; }
   .bar input {
     flex: 1;
     border: none;
     background: transparent;
     padding: 0;
-    font-size: var(--t-xl);
-    font-family: var(--font-display);
-    font-weight: 400;
+    font-size: var(--t-lg);
     color: var(--ink);
   }
   .bar input:focus { outline: none; box-shadow: none; }
   .bar input::placeholder {
     color: var(--ink-faint);
-    font-style: italic;
   }
   .loading { color: var(--ink-muted); }
 
   .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
-  section { margin-bottom: var(--s-7); }
-  section .eyebrow { margin-bottom: var(--s-3); display: inline-flex; }
-
-  .row { list-style: none; padding: 0; margin: 0; display: flex; gap: var(--s-2); flex-wrap: wrap; }
-  .row li { background: var(--bg-card); border-radius: var(--r-md); border: 1px solid var(--line); }
-  .row a {
-    display: flex; align-items: center; gap: var(--s-3);
-    padding: var(--s-2) var(--s-3);
-    color: inherit;
+  section { margin-bottom: var(--s-6); }
+  .section-title {
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0 0 var(--s-3);
   }
-  .row a:hover { text-decoration: none; background: var(--bg-elev); }
-  .row img, .placeholder { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-  .placeholder { background: var(--bg-elev); }
 
-  .places { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--s-1); }
-  .places li {
-    padding: var(--s-3) var(--s-4);
-    background: var(--bg-card);
+  .row {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .row li {
+    background: var(--bg-paper);
     border-radius: var(--r-md);
     border: 1px solid var(--line);
-    display: flex; align-items: baseline; gap: var(--s-2);
+    transition: border-color var(--t-fast) var(--ease);
   }
-  .city { font-family: var(--font-display); font-size: var(--t-lg); font-weight: 500; }
-  .country em { font-style: italic; color: var(--ink-muted); }
+  .row li:hover { border-color: var(--accent); }
+  .row a {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: 6px var(--s-3) 6px 6px;
+    color: inherit;
+    text-decoration: none;
+  }
+  .row img, .placeholder {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .placeholder { background: var(--bg-elev); }
+
+  .places {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .places li {
+    padding: var(--s-3) var(--s-4);
+    background: var(--bg-paper);
+    border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+  .city { font-size: var(--t-base); font-weight: 600; }
+  .country { color: var(--ink-muted); }
   .places .muted { margin-left: auto; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 4px;
+  }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
-    display: flex; align-items: center; justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     color: var(--ink-faint);
+    text-decoration: none;
+    transition: background var(--t-fast) var(--ease);
   }
+  .cell:hover { background: var(--bg-elev); }
 
   .empty {
-    padding: var(--s-9);
+    padding: var(--s-9) var(--s-5);
     text-align: center;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-xl);
+  .empty p {
     color: var(--ink-muted);
+    font-style: italic;
   }
   .small { font-size: var(--t-xs); }
 </style>

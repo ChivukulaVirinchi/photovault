@@ -21,7 +21,7 @@
   let scanJobId = $state<string | null>(null);
 
   const ROW_HEIGHT = 184;
-  const LABEL_HEIGHT = 56;
+  const LABEL_HEIGHT = 48;
   const COLS = 6;
 
   async function loadMore() {
@@ -117,7 +117,6 @@
     return v.attach();
   });
 
-  // When near bottom, request more.
   $effect(() => {
     if (v.last >= rows.length - 4 && hasMore && !loading) {
       loadMore();
@@ -125,12 +124,7 @@
   });
 </script>
 
-<PageHeader
-  num="01"
-  label="TIMELINE"
-  title="Your photographs"
-  subtitle="Newest first. Organised the way you took them — month by month, day by day."
->
+<PageHeader title="Timeline">
   {#if scanJobId}
     <span class="scan-status mono">
       Scanning · {(scanProgress?.files_processed ?? 0).toLocaleString()}
@@ -138,13 +132,13 @@
     </span>
   {:else}
     <span class="count mono">
-      {(total ?? items.length).toLocaleString()} <span class="muted">photos</span>
+      {(total ?? items.length).toLocaleString()}<span class="muted"> photos</span>
     </span>
     <button class="primary" onclick={startScan}>Scan now</button>
   {/if}
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="scroll" bind:this={scrollEl}>
   <div class="inner" style="height: {v.totalHeight}px">
@@ -156,9 +150,7 @@
         style="transform: translateY({v.offsets[i]}px); height: {row.height}px;"
       >
         {#if row.kind === "label"}
-          <div class="month-label">
-            <span class="eyebrow"><span class="ornament"></span><span>{row.month}</span></span>
-          </div>
+          <span class="month">{row.month}</span>
         {:else}
           <div class="photos">
             {#each row.photos as photo (photo.id)}
@@ -184,8 +176,7 @@
   .scroll {
     flex: 1;
     overflow-y: auto;
-    padding: var(--s-3) var(--s-7) var(--s-7);
-    /* Avoid GPU-layer thrashing on the scroll container itself. */
+    padding: var(--s-4) var(--s-7) var(--s-7);
     contain: strict;
     height: 100%;
   }
@@ -201,19 +192,22 @@
     contain: layout style paint;
     will-change: transform;
   }
-  .row.row-label {
+  .row-label {
     display: flex;
     align-items: flex-end;
     padding-bottom: var(--s-2);
   }
-  .month-label .eyebrow {
-    color: var(--ink-soft);
+  .month {
+    font-size: var(--t-sm);
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.005em;
   }
   .photos {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
-    gap: 6px;
-    padding: 3px 0;
+    gap: 4px;
+    padding: 2px 0;
   }
   .cell {
     background: var(--bg-card);
@@ -222,19 +216,29 @@
     display: block;
     aspect-ratio: 1;
     position: relative;
-    transition: transform var(--t-fast) var(--ease);
-  }
-  .cell:hover {
-    transform: scale(1.018);
-    z-index: 1;
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
   .cell::after {
     content: "";
     position: absolute;
     inset: 0;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
     border-radius: inherit;
     pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
+    z-index: 1;
+  }
+  .cell:hover::after { opacity: 1; }
+  .cell:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent);
+    z-index: 1;
   }
   .cell img {
     width: 100%;

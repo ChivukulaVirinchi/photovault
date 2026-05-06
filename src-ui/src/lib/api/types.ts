@@ -76,6 +76,31 @@ export interface JobIdDto {
   job_id: string;
 }
 
+export interface PersonDto {
+  id: number;
+  name: string | null;
+  photo_count: number;
+  face_count: number | null;
+  representative_thumbnail_path: string | null;
+}
+
+export interface AlbumDto {
+  id: number;
+  name: string;
+  photo_count: number;
+  date_range_start: string | null;
+  date_range_end: string | null;
+  cover_thumbnail_path: string | null;
+}
+
+export interface AlbumSuggestionDto {
+  id: number;
+  kind: string;
+  title: string;
+  photo_ids: number[];
+  cover_thumbnail_path: string | null;
+}
+
 export type CommandError =
   | { kind: "not_found"; entity: string; id: string }
   | { kind: "validation"; field: string; reason: string }

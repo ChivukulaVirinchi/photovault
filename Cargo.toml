@@ -79,7 +79,6 @@ sha2 = "0.10"
 
 # Image processing
 image = "0.25"
-imageproc = "0.26"
 
 # Optional HEIC decoder. Requires the `libheif` system library at
 # runtime (apt install libheif-dev / brew install libheif / Windows
@@ -139,8 +138,6 @@ opt-level = 3
 [profile.dev.package.png]
 opt-level = 3
 [profile.dev.package.zune-jpeg]
-opt-level = 3
-[profile.dev.package.imageproc]
 opt-level = 3
 [profile.dev.package.ort]
 opt-level = 3

@@ -2,6 +2,7 @@
   import { people } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { PersonDto, PhotoSummaryDto } from "../lib/api/types";
 
   interface Props { id: number }
@@ -33,42 +34,49 @@
   $effect(() => { void id; load(); });
 </script>
 
-<div class="masthead">
-  <a class="back" href="#/people">← People</a>
-  {#if person}
+{#if person}
+  {@const p = person}
+  <div class="hero">
     <div class="portrait">
-      {#if person.representative_thumbnail_path}
-        <img src={thumbUrl(libraryStore.driveRoot, person.representative_thumbnail_path) ?? ""} alt="" />
+      {#if p.representative_thumbnail_path}
+        <img src={thumbUrl(libraryStore.driveRoot, p.representative_thumbnail_path) ?? ""} alt="" />
       {/if}
     </div>
-    <div class="info">
-      <span class="eyebrow">
-        <span class="num">№&nbsp;{String(person.id).padStart(3, "0")}</span>
-        <span class="ornament"></span>
-        <span>PROFILE</span>
-      </span>
-      {#if editing}
-        <input bind:value={editName} placeholder="Name them" autofocus />
-        <div class="row">
-          <button class="primary" onclick={save}>Save</button>
-          <button class="ghost" onclick={() => (editing = false)}>Cancel</button>
-        </div>
-      {:else}
-        <h1>{person.name ?? "Unnamed"}</h1>
-        <p class="subtitle">
-          {person.photo_count} photos · {person.face_count ?? "?"} faces detected
-          <button class="rename" onclick={() => (editing = true)}>rename</button>
-        </p>
-      {/if}
+    <div class="hero-body">
+      <DetailHeader backHref="#/people" backLabel="People">
+        {#snippet title()}
+          {#if editing}
+            <input bind:value={editName} placeholder="Name them" />
+          {:else}
+            <h1>{p.name ?? "Unnamed"}</h1>
+          {/if}
+        {/snippet}
+        {#snippet subtitle()}
+          <span class="mono">{p.photo_count} photos</span>
+          {#if p.face_count != null}
+            <span class="mono dim">{p.face_count} faces</span>
+          {/if}
+        {/snippet}
+        {#snippet actions()}
+          {#if editing}
+            <button class="primary" onclick={save}>Save</button>
+            <button class="ghost" onclick={() => (editing = false)}>Cancel</button>
+          {:else}
+            <button class="ghost" onclick={() => (editing = true)}>
+              {p.name ? "Rename" : "Name them"}
+            </button>
+          {/if}
+        {/snippet}
+      </DetailHeader>
     </div>
-  {/if}
-</div>
+  </div>
+{/if}
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="grid stagger">
-  {#each photos as p, i (p.id)}
-    <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+<div class="grid">
+  {#each photos as p (p.id)}
+    <a class="cell" href="#/photo?id={p.id}">
       {#if p.thumbnail_path}
         <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
       {/if}
@@ -77,62 +85,57 @@
 </div>
 
 <style>
-  .masthead {
-    padding: var(--s-7) var(--s-7) var(--s-5);
-    border-bottom: 1px solid var(--line-soft);
+  .hero {
     display: grid;
-    grid-template-columns: auto auto 1fr;
-    gap: var(--s-5);
-    align-items: center;
+    grid-template-columns: auto 1fr;
+    align-items: stretch;
+    border-bottom: 1px solid var(--line-soft);
   }
-  .back {
-    font-family: var(--font-mono);
-    font-size: var(--t-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--ink-muted);
-    align-self: flex-start;
-    margin-top: 4px;
+  .hero-body :global(.detail-header) {
+    border-bottom: none;
   }
   .portrait {
-    width: 120px; height: 120px;
+    width: 88px;
+    height: 88px;
     border-radius: 50%;
     overflow: hidden;
     background: var(--bg-card);
-    box-shadow: var(--shadow-lift);
     border: 1px solid var(--line);
+    margin: var(--s-4) 0 var(--s-4) var(--s-7);
+    align-self: center;
+    flex-shrink: 0;
   }
   .portrait img { width: 100%; height: 100%; object-fit: cover; }
-  .info { display: flex; flex-direction: column; gap: var(--s-2); }
-  h1 { font-size: var(--t-3xl); }
-  input { max-width: 360px; }
-  .row { display: flex; gap: var(--s-2); }
-  .rename {
-    background: transparent;
-    border: none;
-    color: var(--accent);
-    padding: 2px 8px;
-    font-size: var(--t-sm);
-    border-bottom: 1px solid transparent;
-    cursor: pointer;
-  }
-  .rename:hover { border-bottom-color: var(--accent); background: transparent; }
 
   .grid {
-    padding: var(--s-5) var(--s-7) var(--s-7);
+    padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 4px;
   }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
-    transition: transform var(--t-fast) var(--ease);
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover { transform: scale(1.018); }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
+    z-index: 1;
+  }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
+  .dim { color: var(--ink-faint); }
+
+  @media (max-width: 720px) {
+    .hero { grid-template-columns: 1fr; }
+    .portrait {
+      margin: var(--s-4) auto 0;
+      width: 72px; height: 72px;
+    }
+  }
 </style>

@@ -2,6 +2,7 @@
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { DupMember } from "../lib/api/all";
 
   interface Props { id: number }
@@ -39,34 +40,37 @@
   }
 </script>
 
-<div class="masthead">
-  <a class="back" href="#/duplicates">← Duplicates</a>
-  <span class="eyebrow">
-    <span class="num">№&nbsp;{String(id).padStart(3, "0")}</span>
-    <span class="ornament"></span>
-    <span>GROUP</span>
-  </span>
-  <h1>The same photograph.</h1>
-  {#if group}
-    <p class="subtitle">{group.members.length} copies. Pick one to keep — trash the rest.</p>
-    <div class="row">
-      <button class="danger" onclick={trashOthers}>Trash {group.members.length - 1} others</button>
+<DetailHeader backHref="#/duplicates" backLabel="Duplicates">
+  {#snippet title()}
+    <h1>The same photograph</h1>
+  {/snippet}
+  {#snippet subtitle()}
+    {#if group}
+      <span class="mono">{group.members.length} copies</span>
+      <span class="hint">Pick one to keep — trash the rest.</span>
+    {/if}
+  {/snippet}
+  {#snippet actions()}
+    {#if group && group.members.length > 1}
       <button class="ghost" onclick={dismiss}>Dismiss</button>
-    </div>
-  {/if}
-</div>
+      <button class="danger" onclick={trashOthers}>
+        Trash {group.members.length - 1} other{group.members.length - 1 === 1 ? "" : "s"}
+      </button>
+    {/if}
+  {/snippet}
+</DetailHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 {#if group}
-  <div class="row stagger">
-    {#each group.members as m, i (m.photo_id)}
-      <div class="card" class:keep={m.is_suggested_keep} style="--i: {i}">
+  <div class="grid">
+    {#each group.members as m (m.photo_id)}
+      <div class="card" class:keep={m.is_suggested_keep}>
         <div class="frame">
           {#if m.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, m.thumbnail_path) ?? ""} alt="" />
           {/if}
-          {#if m.is_suggested_keep}<span class="badge mono">KEEP</span>{/if}
+          {#if m.is_suggested_keep}<span class="badge">Keep</span>{/if}
         </div>
         <dl>
           <dt>Size</dt><dd class="mono">{fmtSize(m.file_size)}</dd>
@@ -74,7 +78,7 @@
           <dt>Path</dt><dd class="mono path" title={m.file_path ?? ""}>{m.file_path ?? "—"}</dd>
         </dl>
         {#if !m.is_suggested_keep}
-          <button class="primary" onclick={() => setKeep(m.photo_id)}>Keep this one</button>
+          <button class="primary keep-btn" onclick={() => setKeep(m.photo_id)}>Keep this one</button>
         {/if}
       </div>
     {/each}
@@ -82,26 +86,12 @@
 {/if}
 
 <style>
-  .masthead {
-    padding: var(--s-7) var(--s-7) var(--s-5);
-    border-bottom: 1px solid var(--line-soft);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    align-items: flex-start;
-  }
-  .back {
-    font-family: var(--font-mono);
-    font-size: var(--t-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
+  .hint {
     color: var(--ink-muted);
+    font-style: italic;
   }
-  h1 { font-size: var(--t-3xl); }
-  .row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
-
-  .row.stagger {
-    padding: var(--s-5) var(--s-7) var(--s-7);
+  .grid {
+    padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
     overflow-y: auto;
     display: grid;
@@ -117,22 +107,25 @@
     flex-direction: column;
     transition: border-color var(--t-fast) var(--ease);
   }
-  .card.keep { border-color: var(--keep); box-shadow: 0 0 0 1px var(--keep) inset; }
+  .card.keep {
+    border-color: var(--keep);
+    box-shadow: 0 0 0 1px var(--keep) inset;
+  }
   .frame {
     aspect-ratio: 1;
-    background: #000;
+    background: var(--bg-elev);
     position: relative;
   }
   .frame img { width: 100%; height: 100%; object-fit: cover; }
   .badge {
     position: absolute;
-    top: var(--s-3); left: var(--s-3);
+    top: var(--s-3);
+    left: var(--s-3);
     background: var(--keep);
-    color: var(--bg);
-    padding: 4px 10px;
+    color: #fff;
+    padding: 3px 10px;
     border-radius: 999px;
-    font-size: 10px;
-    letter-spacing: 0.16em;
+    font-size: var(--t-xs);
     font-weight: 600;
   }
 
@@ -140,19 +133,25 @@
     display: grid;
     grid-template-columns: 60px 1fr;
     gap: 4px var(--s-3);
-    padding: var(--s-4);
+    padding: var(--s-3) var(--s-4);
     margin: 0;
   }
   dt {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--ink-faint);
+    font-size: var(--t-xs);
+    color: var(--ink-muted);
     padding-top: 2px;
   }
-  dd { margin: 0; font-size: var(--t-xs); color: var(--ink-soft); }
-  dd.path { font-size: 10.5px; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  dd {
+    margin: 0;
+    font-size: var(--t-xs);
+    color: var(--ink-soft);
+  }
+  dd.path {
+    color: var(--ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-  .card button { margin: 0 var(--s-4) var(--s-4); }
+  .keep-btn { margin: 0 var(--s-4) var(--s-4); }
 </style>

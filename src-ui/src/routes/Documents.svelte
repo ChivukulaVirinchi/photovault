@@ -34,31 +34,27 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="09"
-  label="DOCUMENTS"
-  title="Receipts, screenshots, business cards."
-  subtitle="Photos that look more like documents than memories. Search the text inside them."
->
+<PageHeader title="Documents">
+  <span class="count mono">{items.length}<span class="muted"> items</span></span>
   <input
     bind:value={q}
     oninput={onInput}
     placeholder="Search OCR text…"
+    class="search"
   />
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if items.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NONE FOUND</span>
-      <p class="quiet">No documents detected yet. Document analysis runs as part of the indexing pipeline.</p>
+      <p>No documents detected yet. Document analysis runs as part of the indexing pipeline.</p>
     </div>
   {:else}
-    <div class="grid stagger">
-      {#each items as p, i (p.id)}
-        <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+    <div class="grid">
+      {#each items as p (p.id)}
+        <a class="cell" href="#/photo?id={p.id}">
           {#if p.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
           {/if}
@@ -69,27 +65,37 @@
 </div>
 
 <style>
-  .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-4) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .count { font-size: var(--t-sm); color: var(--ink); }
+  .search {
+    width: 240px;
+    padding: 6px var(--s-3);
+    font-size: var(--t-sm);
+  }
   .empty {
-    padding: var(--s-9) var(--s-5);
+    padding: var(--s-8) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
-  }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
     max-width: 42ch;
+    margin: 0 auto;
   }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
+  .empty p { color: var(--ink-soft); line-height: 1.55; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
+  }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
-    transition: transform var(--t-fast) var(--ease);
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover { transform: scale(1.018); }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
+    z-index: 1;
+  }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
 </style>

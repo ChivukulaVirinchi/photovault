@@ -26,11 +26,7 @@
   aria-label="Close shortcuts"
 >
   <div class="card" role="dialog" aria-label="Keyboard shortcuts">
-    <span class="eyebrow">
-      <span class="ornament"></span>
-      <span>KEYBOARD</span>
-    </span>
-    <h2>Quick keys.</h2>
+    <h2>Keyboard shortcuts</h2>
     <ul>
       {#each shortcuts as [key, label]}
         <li>
@@ -39,7 +35,9 @@
         </li>
       {/each}
     </ul>
-    <button class="ghost" onclick={onclose}>Close</button>
+    <div class="row">
+      <button class="ghost" onclick={onclose}>Close</button>
+    </div>
   </div>
 </div>
 
@@ -47,34 +45,39 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(10, 7, 5, 0.6);
+    background: color-mix(in oklab, var(--bg) 65%, transparent);
     backdrop-filter: blur(6px);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 50;
-    animation: rise var(--t-base-d) var(--ease-out);
+    animation: fade-in var(--t-base-d) var(--ease-out);
   }
   .card {
     background: var(--bg-paper);
     border: 1px solid var(--line);
-    padding: var(--s-7) var(--s-6);
-    border-radius: var(--r-lg);
-    min-width: 480px;
+    padding: var(--s-6);
+    border-radius: var(--r-md);
+    min-width: 420px;
     max-width: 90%;
-    box-shadow: var(--shadow-lift);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.40),
+                0 4px 16px rgba(0, 0, 0, 0.30);
     display: flex;
     flex-direction: column;
     gap: var(--s-4);
   }
-  h2 { font-size: var(--t-2xl); }
+  h2 {
+    font-size: var(--t-xl);
+    font-weight: 600;
+    margin: 0;
+  }
   ul {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: 6px;
   }
   li {
     display: grid;
@@ -83,8 +86,12 @@
     align-items: center;
   }
   li span {
-    font-family: var(--font-display);
-    font-size: var(--t-base);
+    font-size: var(--t-sm);
     color: var(--ink-soft);
+  }
+  .row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--s-2);
   }
 </style>

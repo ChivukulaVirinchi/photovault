@@ -15,18 +15,13 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="11"
-  label="LIBRARY HEALTH"
-  title="How clean is your library?"
-  subtitle="Counters that help you find photos with weak EXIF, missing thumbnails, or formats this build can't decode."
-/>
+<PageHeader title="Library health" />
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if data}
-    <ul class="counters stagger">
+    <ul class="counters">
       {#each [
         { n: data.total_photos, label: "Total photos", tone: "neutral" },
         { n: data.missing_thumbnails, label: "Missing thumbnails", tone: data.missing_thumbnails > 0 ? "warn" : "ok" },
@@ -34,10 +29,10 @@
         { n: data.missing_dates, label: "No date at all", tone: data.missing_dates > 0 ? "warn" : "ok" },
         { n: data.heic_count, label: "HEIC photos", tone: data.heic_decoder_available || data.heic_count === 0 ? "ok" : "warn", note: data.heic_decoder_available ? "Decoder available." : "Decoder NOT available — these won't render." },
         { n: data.face_processed_no_faces, label: "Processed but no faces", tone: "neutral", note: "Likely face-less landscapes; nothing to fix." },
-      ] as stat, i}
-        <li class="counter" data-tone={stat.tone} style="--i: {i}">
+      ] as stat}
+        <li class="counter" data-tone={stat.tone}>
           <strong class="num">{stat.n.toLocaleString()}</strong>
-          <span class="label">{stat.label}</span>
+          <span class="lbl">{stat.label}</span>
           {#if stat.note}<span class="note">{stat.note}</span>{/if}
         </li>
       {/each}
@@ -46,23 +41,23 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
   .counters {
     list-style: none;
     padding: 0;
     margin: 0;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: var(--s-3);
   }
   .counter {
-    background: var(--bg-card);
+    background: var(--bg-paper);
     border: 1px solid var(--line);
-    padding: var(--s-5);
+    padding: var(--s-4) var(--s-5);
     border-radius: var(--r-md);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     border-left-width: 3px;
   }
   .counter[data-tone="ok"] { border-left-color: var(--keep); }
@@ -73,18 +68,17 @@
     font-size: var(--t-3xl);
     font-weight: 500;
     line-height: 1;
-    font-variation-settings: "opsz" 60, "SOFT" 50;
-  }
-  .counter .label {
-    font-family: var(--font-display);
-    font-size: var(--t-base);
     color: var(--ink);
+    font-variation-settings: "opsz" 48;
+  }
+  .counter .lbl {
+    font-size: var(--t-sm);
+    color: var(--ink);
+    font-weight: 500;
   }
   .counter .note {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-sm);
+    font-size: var(--t-xs);
     color: var(--ink-muted);
-    margin-top: 4px;
+    margin-top: 2px;
   }
 </style>

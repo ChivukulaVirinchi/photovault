@@ -48,42 +48,42 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="12"
-  label="TRASH"
-  title="The forgotten."
-  subtitle={stats
-    ? `${stats.count} items · ${(stats.total_size / 1024 / 1024).toFixed(1)} MB. Restore them, or let them go.`
-    : "Items you've trashed live here until you decide."}
->
+<PageHeader title="Trash">
+  {#if stats}
+    <span class="count mono">
+      {stats.count}<span class="muted"> · {(stats.total_size / 1024 / 1024).toFixed(0)} MB</span>
+    </span>
+  {/if}
   <button onclick={restore} disabled={selected.size === 0}>
     Restore <span class="mono">{selected.size}</span>
   </button>
   <button class="danger" onclick={deleteForever} disabled={selected.size === 0}>Delete forever</button>
-  <button class="danger" onclick={emptyTrash} disabled={items.length === 0}>Empty trash</button>
+  <button class="danger" onclick={emptyTrash} disabled={items.length === 0}>Empty</button>
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if items.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>ALL CLEAR</span>
-      <p class="quiet">Nothing in trash. A clean shelf.</p>
+      <p>Nothing in trash. A clean shelf.</p>
     </div>
   {:else}
-    <div class="grid stagger">
-      {#each items as t, i (t.photo_id)}
+    <div class="grid">
+      {#each items as t (t.photo_id)}
         <button
           class="cell"
           class:sel={selected.has(t.photo_id)}
           onclick={() => toggle(t.photo_id)}
-          style="--i: {Math.min(i, 30)}"
         >
           {#if t.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, t.thumbnail_path) ?? ""} alt="" loading="lazy" />
           {/if}
-          <span class="check" aria-hidden="true">✓</span>
+          <span class="check" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M3 7L6 10L11 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
         </button>
       {/each}
     </div>
@@ -91,22 +91,17 @@
 </div>
 
 <style>
-  .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-4) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .count { font-size: var(--t-sm); color: var(--ink); }
   .empty {
     padding: var(--s-9) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
-  }
+  .empty p { color: var(--ink-muted); font-style: italic; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
   }
   .cell {
     aspect-ratio: 1;
@@ -116,25 +111,36 @@
     padding: 0;
     border: 2px solid transparent;
     position: relative;
+    cursor: pointer;
     transition: border-color var(--t-fast) var(--ease),
-                transform var(--t-fast) var(--ease);
+                filter var(--t-fast) var(--ease);
   }
-  .cell:hover { transform: scale(1.018); }
+  .cell:hover { filter: brightness(1.06); }
   .cell.sel { border-color: var(--accent); }
-  .cell img { width: 100%; height: 100%; object-fit: cover; opacity: 0.65; }
+  .cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.55;
+    transition: opacity var(--t-fast) var(--ease);
+  }
   .cell.sel img { opacity: 1; }
   .check {
     position: absolute;
-    top: 8px; right: 8px;
+    top: 8px;
+    right: 8px;
     background: var(--accent);
-    color: var(--bg);
-    width: 26px; height: 26px;
+    color: #fff;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     opacity: 0;
-    transform: scale(0.6);
-    transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    transform: scale(0.7);
+    transition: opacity var(--t-fast) var(--ease),
+                transform var(--t-fast) var(--ease);
   }
   .cell.sel .check { opacity: 1; transform: scale(1); }
 </style>

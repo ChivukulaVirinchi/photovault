@@ -2,6 +2,7 @@
   import { memories } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
 
@@ -30,25 +31,31 @@
   $effect(() => { void id; load(); });
 </script>
 
-<div class="masthead">
-  <a class="back" href="#/memories">← Memories</a>
-  {#if card}
-    <span class="eyebrow"><span class="num">{card.kind.toUpperCase()}</span><span class="ornament"></span></span>
-    <h1>{card.title}</h1>
-    <p class="subtitle">{card.photo_count} photographs</p>
-    {#if savedAlbumId}
-      <a class="saved" href="#/album?id={savedAlbumId}">Saved as album →</a>
-    {:else}
-      <button class="primary" onclick={saveAsAlbum}>Save as album</button>
-    {/if}
-  {/if}
-</div>
+{#if card}
+  {@const c = card}
+  <DetailHeader backHref="#/memories" backLabel="Memories">
+    {#snippet title()}
+      <h1>{c.title}</h1>
+    {/snippet}
+    {#snippet subtitle()}
+      <span class="mono">{c.photo_count} photos</span>
+      <span class="kind">{c.kind}</span>
+    {/snippet}
+    {#snippet actions()}
+      {#if savedAlbumId}
+        <a class="saved-link" href="#/album?id={savedAlbumId}">Saved as album →</a>
+      {:else}
+        <button class="primary" onclick={saveAsAlbum}>Save as album</button>
+      {/if}
+    {/snippet}
+  </DetailHeader>
+{/if}
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="grid stagger">
-  {#each photos as p, i (p.id)}
-    <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+<div class="grid">
+  {#each photos as p (p.id)}
+    <a class="cell" href="#/photo?id={p.id}">
       {#if p.thumbnail_path}
         <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
       {/if}
@@ -57,44 +64,39 @@
 </div>
 
 <style>
-  .masthead {
-    padding: var(--s-7) var(--s-7) var(--s-5);
-    border-bottom: 1px solid var(--line-soft);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    align-items: flex-start;
+  .kind {
+    text-transform: lowercase;
+    color: var(--ink-faint);
   }
-  .back {
-    font-family: var(--font-mono);
-    font-size: var(--t-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--ink-muted);
-  }
-  h1 { font-size: var(--t-3xl); }
-  .saved {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-base);
+  .saved-link {
+    font-size: var(--t-sm);
     color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--accent-soft);
+    padding-bottom: 2px;
   }
+  .saved-link:hover { border-bottom-color: var(--accent); }
 
   .grid {
-    padding: var(--s-5) var(--s-7) var(--s-7);
+    padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
   }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
-    transition: transform var(--t-fast) var(--ease);
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover { transform: scale(1.018); }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
+    z-index: 1;
+  }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
 </style>

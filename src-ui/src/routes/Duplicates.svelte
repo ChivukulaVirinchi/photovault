@@ -25,36 +25,32 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="07"
-  label="DUPLICATES"
-  title="The same photo, twice."
-  subtitle="Both byte-identical copies and visual near-misses. Pick which to keep — the rest go to trash."
->
+<PageHeader title="Duplicates">
   <span class="waste mono">
-    {(wasted / 1024 / 1024).toFixed(0)} <span class="muted">MB potentially wasted</span>
+    {(wasted / 1024 / 1024).toFixed(0)}<span class="muted"> MB potentially wasted</span>
   </span>
   <button class="primary" onclick={run} disabled={running}>
-    {running ? "Scanning…" : "Scan for duplicates"}
+    {running ? "Scanning…" : "Scan"}
   </button>
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if groups.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NONE FOUND</span>
-      <p class="quiet">No duplicates yet. Press scan to look — it takes a moment for big libraries.</p>
+      <p>No duplicates yet. Press scan — it takes a moment for big libraries.</p>
+      <button class="primary" onclick={run} disabled={running}>
+        {running ? "Scanning…" : "Scan"}
+      </button>
     </div>
   {:else}
-    <ul class="list stagger">
-      {#each groups as g, i (g.id)}
-        <li style="--i: {i}">
+    <ul class="list">
+      {#each groups as g (g.id)}
+        <li>
           <a href="#/duplicate?id={g.id}">
-            <span class="num mono">№&nbsp;{String(g.id).padStart(3, "0")}</span>
             <span class="title">Group of <strong>{g.member_count}</strong></span>
-            <span class="arrow">→</span>
+            <span class="arrow" aria-hidden="true">→</span>
           </a>
         </li>
       {/each}
@@ -63,45 +59,53 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
   .waste {
     font-size: var(--t-sm);
-    color: var(--ink-soft);
+    color: var(--ink);
   }
   .empty {
-    padding: var(--s-9) var(--s-5);
+    padding: var(--s-8) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    align-items: center;
+    max-width: 42ch;
+    margin: 0 auto;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
-    max-width: 38ch;
+  .empty p { color: var(--ink-soft); line-height: 1.55; }
+  .list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 720px;
   }
-  .list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
   .list a {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
+    display: flex;
     align-items: center;
     gap: var(--s-4);
-    padding: var(--s-4) var(--s-5);
-    background: var(--bg-card);
-    border: 1px solid transparent;
+    justify-content: space-between;
+    padding: var(--s-3) var(--s-4);
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
     border-radius: var(--r-md);
     color: inherit;
-    transition: background var(--t-fast) var(--ease),
-                border-color var(--t-fast) var(--ease),
-                transform var(--t-fast) var(--ease);
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease),
+                background var(--t-fast) var(--ease);
   }
   .list a:hover {
-    background: var(--bg-elev);
-    border-color: var(--line);
-    text-decoration: none;
-    transform: translateX(3px);
+    background: var(--bg-card);
+    border-color: var(--accent);
   }
-  .num { font-size: var(--t-xs); color: var(--ink-faint); letter-spacing: 0.06em; }
-  .title { font-family: var(--font-display); font-size: var(--t-lg); }
-  .arrow { color: var(--accent); font-family: var(--font-mono); }
+  .title {
+    font-size: var(--t-base);
+    color: var(--ink);
+  }
+  .title strong { font-weight: 600; }
+  .arrow { color: var(--accent); }
 </style>

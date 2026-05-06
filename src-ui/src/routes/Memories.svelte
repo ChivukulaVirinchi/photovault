@@ -23,33 +23,29 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="04"
-  label="MEMORIES"
-  title="A look back at this day."
-  subtitle="On {todayLabel()}, here's what your past looked like."
-/>
+<PageHeader title="Memories">
+  <span class="when mono">{todayLabel()}</span>
+</PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if cards.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NOTHING TODAY</span>
-      <p class="quiet">
-        Your library may be too young — Memories surface once you have at least three months of photographs.
+      <p>
+        Nothing today. Memories surface once your library has roughly three months of photos to look back on.
       </p>
     </div>
   {:else}
-    <div class="cards stagger">
-      {#each cards as c, i (c.id)}
-        <a class="card" href="#/memory?id={c.id}" style="--i: {i}">
+    <div class="cards">
+      {#each cards as c (c.id)}
+        <a class="card" href="#/memory?id={c.id}">
           {#if c.hero_thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, c.hero_thumbnail_path) ?? ""} alt="" />
           {/if}
           <div class="overlay">
             <div class="caption">
-              <span class="kind mono">{c.kind.replaceAll("_", " ").toUpperCase()}</span>
+              <span class="kind mono">{c.kind.replaceAll("_", " ")}</span>
               <h3>{c.title}</h3>
               <span class="count mono">{c.photo_count} photos</span>
             </div>
@@ -61,42 +57,41 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .when { font-size: var(--t-sm); color: var(--ink-muted); }
   .empty {
-    padding: var(--s-9) var(--s-5);
+    padding: var(--s-8) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
+    max-width: 44ch;
+    margin: 0 auto;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
-    max-width: 42ch;
-  }
+  .empty p { color: var(--ink-soft); line-height: 1.6; }
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--s-4);
   }
   .card {
     aspect-ratio: 3 / 4;
     background: var(--bg-card);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-md);
     overflow: hidden;
     color: inherit;
     position: relative;
-    box-shadow: var(--shadow-soft);
-    transition: transform var(--t-base-d) var(--ease),
-                box-shadow var(--t-base-d) var(--ease);
+    text-decoration: none;
+    transition: box-shadow var(--t-base-d) var(--ease);
+    border: 1px solid var(--line);
   }
   .card:hover {
-    text-decoration: none;
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-lift);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
   }
-  .card img { width: 100%; height: 100%; object-fit: cover; transition: transform var(--t-slow) var(--ease); }
-  .card:hover img { transform: scale(1.04); }
+  .card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform var(--t-slow) var(--ease);
+  }
+  .card:hover img { transform: scale(1.03); }
   .overlay {
     position: absolute;
     inset: 0;
@@ -105,27 +100,35 @@
     padding: var(--s-5);
     background: linear-gradient(
       to top,
-      rgba(0,0,0,0.85) 0%,
-      rgba(0,0,0,0.4) 35%,
-      transparent 70%
+      rgba(0, 0, 0, 0.82) 0%,
+      rgba(0, 0, 0, 0.35) 38%,
+      transparent 72%
     );
   }
-  .caption { display: flex; flex-direction: column; gap: 6px; color: var(--ink); }
+  .caption {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #ebedf0;
+  }
   .kind {
-    font-size: 9px;
-    color: var(--accent-warm);
-    letter-spacing: 0.18em;
+    font-size: var(--t-xs);
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
   }
   h3 {
     font-family: var(--font-display);
     font-size: var(--t-2xl);
     font-weight: 500;
-    color: white;
+    color: #fff;
     line-height: 1.1;
-    font-variation-settings: "opsz" 60, "SOFT" 50;
+    font-variation-settings: "opsz" 60;
+    margin: 0;
   }
   .count {
     font-size: var(--t-xs);
-    color: rgba(255,255,255,0.7);
+    color: rgba(235, 237, 240, 0.7);
   }
 </style>

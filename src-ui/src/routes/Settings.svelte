@@ -7,11 +7,8 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
 
-  // Re-sync from backend when this page mounts (covers settings.json
-  // edits made outside the app).
   onMount(() => { settingsStore.load(); });
 
-  // Read-through to the store so theme toggles apply live across the app.
   const s = $derived(settingsStore.data);
 
   async function patch(p: Partial<Settings>) {
@@ -23,19 +20,18 @@
   }
 </script>
 
-<PageHeader
-  num="13"
-  label="SETTINGS"
-  title="Tune the experience."
-  subtitle={saving ? "Saving…" : "All settings live in your config — never sent anywhere."}
-/>
+<PageHeader title="Settings">
+  {#if saving}
+    <span class="status mono">Saving…</span>
+  {/if}
+</PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if s}
     <section>
-      <span class="eyebrow"><span class="ornament"></span>APPEARANCE</span>
+      <h3 class="section-title">Appearance</h3>
       <label>
         <span class="label-text">Theme</span>
         <select value={s.theme} onchange={(e) => patch({ theme: (e.target as HTMLSelectElement).value })}>
@@ -56,7 +52,7 @@
     </section>
 
     <section>
-      <span class="eyebrow"><span class="ornament"></span>LIBRARY</span>
+      <h3 class="section-title">Library</h3>
       <label>
         <span class="label-text">Thumbnail size</span>
         <input type="number" min="100" max="1000" value={s.thumbnail_size}
@@ -69,14 +65,16 @@
       </label>
       <label>
         <span class="label-text">Auto-delete from trash after</span>
-        <input type="number" min="1" max="365" value={s.trash_auto_delete_days}
-          onchange={(e) => patch({ trash_auto_delete_days: Number((e.target as HTMLInputElement).value) })} />
-        <span class="hint mono">days</span>
+        <span class="number-with-unit">
+          <input type="number" min="1" max="365" value={s.trash_auto_delete_days}
+            onchange={(e) => patch({ trash_auto_delete_days: Number((e.target as HTMLInputElement).value) })} />
+          <span class="unit mono">days</span>
+        </span>
       </label>
     </section>
 
     <section>
-      <span class="eyebrow"><span class="ornament"></span>FACE RECOGNITION</span>
+      <h3 class="section-title">Face recognition</h3>
       <label>
         <span class="label-text">Detection confidence</span>
         <input type="number" min="0.1" max="0.95" step="0.05" value={s.face_detection_confidence}
@@ -90,21 +88,23 @@
     </section>
 
     <section>
-      <span class="eyebrow"><span class="ornament"></span>MEMORIES</span>
+      <h3 class="section-title">Memories</h3>
       <label class="checkbox">
         <input type="checkbox" checked={s.memories_enabled}
           onchange={(e) => patch({ memories_enabled: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Enable memories</span>
       </label>
       <label>
-        <span class="label-text">Home city <em class="hint">(optional, for trip detection)</em></span>
+        <span class="label-text">
+          Home city <span class="hint">(optional, for trip detection)</span>
+        </span>
         <input value={s.home_city_override ?? ""}
           onchange={(e) => patch({ home_city_override: ((e.target as HTMLInputElement).value || null) })} />
       </label>
     </section>
 
     <section>
-      <span class="eyebrow"><span class="ornament"></span>UPDATES</span>
+      <h3 class="section-title">Updates</h3>
       <label class="checkbox">
         <input type="checkbox" checked={s.auto_update_check_enabled}
           onchange={(e) => patch({ auto_update_check_enabled: (e.target as HTMLInputElement).checked })} />
@@ -115,9 +115,22 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; max-width: 720px; }
-  section { margin-bottom: var(--s-7); }
-  section .eyebrow { display: inline-flex; margin-bottom: var(--s-4); }
+  .page {
+    padding: var(--s-5) var(--s-7) var(--s-7);
+    flex: 1;
+    overflow-y: auto;
+    max-width: 680px;
+  }
+  .status { font-size: var(--t-sm); color: var(--accent); }
+  section { margin-bottom: var(--s-6); }
+  .section-title {
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0 0 var(--s-3);
+  }
 
   label {
     display: grid;
@@ -132,17 +145,20 @@
     cursor: pointer;
   }
   .label-text {
-    font-family: var(--font-display);
     font-size: var(--t-base);
-    font-weight: 400;
     color: var(--ink);
-    font-variation-settings: "opsz" 24;
   }
   .hint {
-    font-style: italic;
     font-size: var(--t-xs);
     color: var(--ink-muted);
+    font-style: italic;
   }
+  .number-with-unit {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .unit { color: var(--ink-muted); font-size: var(--t-xs); }
   input, select { max-width: 200px; }
   input[type="checkbox"] { max-width: none; width: auto; margin-right: 0; }
 </style>

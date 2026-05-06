@@ -24,34 +24,32 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="02"
-  label="PEOPLE"
-  title="The faces in your life."
-  subtitle="Faces are detected on-device, never sent anywhere. Name them and they'll find each other."
->
+<PageHeader title="People">
+  <span class="count mono">{clusters.length}<span class="muted"> people</span></span>
   <button class="primary" onclick={startFaceProcessing} disabled={processing}>
     {processing ? "Processing…" : "Find faces"}
   </button>
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if clusters.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NO FACES YET</span>
-      <p class="quiet">Run face detection to start finding the people in your library.</p>
+      <p>No faces yet. Run face detection to start finding the people in your library.</p>
+      <button class="primary" onclick={startFaceProcessing} disabled={processing}>
+        {processing ? "Processing…" : "Find faces"}
+      </button>
     </div>
   {:else}
-    <div class="grid stagger">
-      {#each clusters as c, i (c.id)}
-        <a class="card" href="#/person?id={c.id}" style="--i: {i}">
+    <div class="grid">
+      {#each clusters as c (c.id)}
+        <a class="card" href="#/person?id={c.id}">
           <div class="frame">
             {#if c.representative_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, c.representative_thumbnail_path) ?? ""} alt="" />
             {:else}
-              <span class="muted small">no face</span>
+              <span class="placeholder small">no face</span>
             {/if}
           </div>
           <div class="caption">
@@ -65,61 +63,84 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page {
+    padding: var(--s-5) var(--s-7) var(--s-7);
+    flex: 1;
+    overflow-y: auto;
+  }
+  .count {
+    font-size: var(--t-sm);
+    color: var(--ink);
+  }
   .empty {
     padding: var(--s-9) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    align-items: center;
+    max-width: 42ch;
+    margin: 0 auto;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
+  .empty p {
     color: var(--ink-soft);
-    max-width: 38ch;
+    line-height: 1.55;
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: var(--s-5);
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: var(--s-5) var(--s-4);
   }
   .card {
     color: inherit;
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
-    transition: transform var(--t-base-d) var(--ease);
+    gap: var(--s-2);
+    text-align: center;
+    text-decoration: none;
   }
-  .card:hover { text-decoration: none; transform: translateY(-3px); }
   .frame {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: 50%;
     overflow: hidden;
-    box-shadow: var(--shadow-soft);
     position: relative;
-    display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .frame::after {
-    content: "";
-    position: absolute; inset: 0;
-    border-radius: inherit;
-    box-shadow: inset 0 0 0 4px var(--bg-paper), inset 0 0 0 5px var(--line);
-    pointer-events: none;
+  .card:hover .frame {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ghost);
   }
-  .frame img { width: 100%; height: 100%; object-fit: cover; }
+  .frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .placeholder {
+    color: var(--ink-faint);
+  }
   .caption {
-    text-align: center;
-    display: flex; flex-direction: column; gap: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 var(--s-1);
   }
   .name {
     font-family: var(--font-display);
-    font-size: var(--t-lg);
+    font-size: var(--t-base);
     font-weight: 500;
-    font-variation-settings: "opsz" 24;
+    font-variation-settings: "opsz" 18;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .count {
+  .caption .count {
     font-size: var(--t-xs);
     color: var(--ink-muted);
   }

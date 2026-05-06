@@ -2,6 +2,7 @@
   import { albums } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
 
   interface Props { id: number }
@@ -34,45 +35,47 @@
     catch (e) { error = JSON.stringify(e); }
   }
 
+  function fmtRange(s: string | null, e: string | null): string {
+    if (!s || !e) return "";
+    return `${new Date(s).toLocaleDateString()} → ${new Date(e).toLocaleDateString()}`;
+  }
+
   $effect(() => { void id; load(); });
 </script>
 
-<div class="masthead">
-  <a class="back" href="#/albums">← Albums</a>
-  {#if album}
-    <span class="eyebrow">
-      <span class="num">№&nbsp;{String(album.id).padStart(3, "0")}</span>
-      <span class="ornament"></span>
-      <span>ALBUM</span>
-    </span>
-    {#if renaming}
-      <input bind:value={editName} autofocus />
-      <div class="row">
+{#if album}
+  {@const a = album}
+  <DetailHeader backHref="#/albums" backLabel="Albums">
+    {#snippet title()}
+      {#if renaming}
+        <input bind:value={editName} placeholder="Album name" />
+      {:else}
+        <h1>{a.name}</h1>
+      {/if}
+    {/snippet}
+    {#snippet subtitle()}
+      <span class="mono">{a.photo_count} photos</span>
+      {#if a.date_range_start && a.date_range_end}
+        <span class="mono dim">{fmtRange(a.date_range_start, a.date_range_end)}</span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if renaming}
         <button class="primary" onclick={rename}>Save</button>
         <button class="ghost" onclick={() => (renaming = false)}>Cancel</button>
-      </div>
-    {:else}
-      <h1>{album.name}</h1>
-      <p class="subtitle">
-        {album.photo_count} photos
-        {#if album.date_range_start && album.date_range_end}
-          · <span class="mono">{new Date(album.date_range_start).toLocaleDateString()}
-          → {new Date(album.date_range_end).toLocaleDateString()}</span>
-        {/if}
-      </p>
-      <div class="row">
+      {:else}
         <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
-        <button class="danger" onclick={deleteAlbum}>Delete album</button>
-      </div>
-    {/if}
-  {/if}
-</div>
+        <button class="danger" onclick={deleteAlbum}>Delete</button>
+      {/if}
+    {/snippet}
+  </DetailHeader>
+{/if}
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="grid stagger">
-  {#each photos as p, i (p.id)}
-    <a class="cell" href="#/photo?id={p.id}" style="--i: {Math.min(i, 30)}">
+<div class="grid">
+  {#each photos as p (p.id)}
+    <a class="cell" href="#/photo?id={p.id}">
       {#if p.thumbnail_path}
         <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
       {/if}
@@ -81,40 +84,27 @@
 </div>
 
 <style>
-  .masthead {
-    padding: var(--s-7) var(--s-7) var(--s-5);
-    border-bottom: 1px solid var(--line-soft);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    align-items: flex-start;
-  }
-  .back {
-    font-family: var(--font-mono);
-    font-size: var(--t-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--ink-muted);
-  }
-  h1 { font-size: var(--t-3xl); }
-  input { max-width: 360px; font-size: var(--t-xl); font-family: var(--font-display); }
-  .row { display: flex; gap: var(--s-2); }
-
   .grid {
-    padding: var(--s-5) var(--s-7) var(--s-7);
+    padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
   }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
-    transition: transform var(--t-fast) var(--ease);
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover { transform: scale(1.018); }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
+    z-index: 1;
+  }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
+  .dim { color: var(--ink-faint); }
 </style>

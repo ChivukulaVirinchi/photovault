@@ -5,6 +5,7 @@
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { extractDominantColor, type RGB } from "../lib/dominantColor";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import maplibregl, { type Map as MapInstance } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
@@ -19,6 +20,7 @@
   let albums = $state<AlbumDto[]>([]);
   let error = $state<string | null>(null);
   let metaOpen = $state(true);
+  let tint = $state<RGB | null>(null);
 
   let miniEl: HTMLDivElement | undefined = $state();
   let miniMap: MapInstance | null = null;
@@ -30,25 +32,21 @@
     imageUrl = null;
     people = [];
     albums = [];
+    tint = null;
     destroyMini();
     try {
       photo = await photos.get(id);
-      // Resolve absolute path for the full-res image. If asset protocol is on,
-      // convertFileSrc gives us a fetchable URL.
       try {
         const { absolute_path } = await library.resolvePath(id);
         imageUrl = convertFileSrc(absolute_path);
       } catch {}
-      // People + albums in parallel — both are cheap.
       try {
         people = await call<PersonDto[]>("photos_people_in_photo", { photo_id: id });
       } catch {}
       try {
         albums = await call<AlbumDto[]>("photos_albums_for_photo", { photo_id: id });
       } catch {}
-      // Minimap if we have GPS.
       if (photo?.gps && metaOpen) {
-        // Defer to next tick so miniEl is bound after render.
         setTimeout(initMini, 0);
       }
     } catch (e) { error = JSON.stringify(e); }
@@ -115,8 +113,23 @@
     load();
   });
 
+  // Extract dominant color from the cached thumbnail. Keyed only on
+  // photo.id (not imageUrl) — load() reassigns imageUrl a tick after
+  // photo, and we don't want to extract twice.
   $effect(() => {
-    // Re-init mini when toggling open with GPS data already loaded.
+    const pid = photo?.id;
+    const tpath = photo?.thumbnail_path;
+    if (!pid || !tpath) return;
+    const url = thumbUrl(libraryStore.driveRoot, tpath);
+    if (!url) return;
+    let cancelled = false;
+    extractDominantColor(url).then((rgb) => {
+      if (!cancelled && photo?.id === pid) tint = rgb;
+    });
+    return () => { cancelled = true; };
+  });
+
+  $effect(() => {
     if (metaOpen && photo?.gps && !miniMap) setTimeout(initMini, 50);
     if (!metaOpen) destroyMini();
   });
@@ -132,11 +145,20 @@
   function fmtSize(b: number): string {
     return (b / 1024 / 1024).toFixed(1) + " MB";
   }
+
+  const tintStyle = $derived(
+    tint ? `--photo-tint: rgb(${tint[0]}, ${tint[1]}, ${tint[2]})` : ""
+  );
 </script>
 
 <main class="detail" class:meta-closed={!metaOpen}>
   <header class="bar">
-    <button class="ghost" onclick={back}>← Back</button>
+    <button class="ghost back" onclick={back} aria-label="Back">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span>Back</span>
+    </button>
     <span class="filename mono">{photo?.file_name ?? ""}</span>
     <button
       class="ghost"
@@ -144,12 +166,12 @@
       title="Toggle details (I)"
     >
       {metaOpen ? "Hide details" : "Show details"}
-      <span class="kbd-hint mono">I</span>
+      <kbd>I</kbd>
     </button>
   </header>
 
   <section class="viewer-row">
-    <div class="viewer">
+    <div class="viewer" style={tintStyle}>
       {#if error}
         <p class="error">{error}</p>
       {:else if photo && imageUrl}
@@ -173,23 +195,17 @@
 
     {#if metaOpen && photo}
       <aside class="meta">
-        <span class="eyebrow">
-          <span class="num">№&nbsp;{String(photo.id).padStart(4, "0")}</span>
-          <span class="ornament"></span>
-          <span>DETAILS</span>
-        </span>
-
-        <h2 class="when">{fmtDate(photo.date_taken)}</h2>
+        <h2 class="when display">{fmtDate(photo.date_taken)}</h2>
 
         {#if photo.location}
           <p class="where">
-            {photo.location.city ?? "Unknown"}{#if photo.location.country}, <em>{photo.location.country}</em>{/if}
+            {photo.location.city ?? "Unknown"}{#if photo.location.country}, {photo.location.country}{/if}
           </p>
         {/if}
 
         {#if people.length > 0}
-          <hr class="rule" />
-          <span class="eyebrow"><span class="ornament"></span><span>PEOPLE</span></span>
+          <hr class="hairline" />
+          <h3 class="section">People</h3>
           <ul class="chips">
             {#each people as p (p.id)}
               <li>
@@ -203,8 +219,8 @@
         {/if}
 
         {#if albums.length > 0}
-          <hr class="rule" />
-          <span class="eyebrow"><span class="ornament"></span><span>IN ALBUMS</span></span>
+          <hr class="hairline" />
+          <h3 class="section">In albums</h3>
           <ul class="chips">
             {#each albums as a (a.id)}
               <li>
@@ -215,8 +231,8 @@
         {/if}
 
         {#if photo.gps}
-          <hr class="rule" />
-          <span class="eyebrow"><span class="ornament"></span><span>ON THE MAP</span></span>
+          <hr class="hairline" />
+          <h3 class="section">On the map</h3>
           <div class="mini-wrap">
             <div class="mini" bind:this={miniEl}></div>
             <span class="coords mono small">
@@ -225,8 +241,8 @@
           </div>
         {/if}
 
-        <hr class="rule" />
-        <span class="eyebrow"><span class="ornament"></span><span>TECHNICAL</span></span>
+        <hr class="hairline" />
+        <h3 class="section">Technical</h3>
 
         <dl class="specs">
           {#if photo.camera}
@@ -249,8 +265,8 @@
         </dl>
 
         {#if photo.ocr}
-          <hr class="rule" />
-          <span class="eyebrow"><span class="ornament"></span><span>TRANSCRIBED TEXT</span></span>
+          <hr class="hairline" />
+          <h3 class="section">Transcribed text</h3>
           <p class="ocr">{photo.ocr.text}</p>
         {/if}
       </aside>
@@ -270,22 +286,26 @@
     grid-template-columns: auto 1fr auto;
     gap: var(--s-4);
     align-items: center;
-    padding: var(--s-3) var(--s-5);
+    padding: 0 var(--s-5);
+    height: 44px;
     border-bottom: 1px solid var(--line-soft);
-    background: var(--bg-paper);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    font-size: var(--t-sm);
   }
   .filename {
     text-align: center;
-    font-size: var(--t-sm);
-    color: var(--ink-soft);
-  }
-  .kbd-hint {
-    margin-left: var(--s-2);
-    font-size: 9px;
-    background: var(--bg-card);
-    padding: 1px 6px;
-    border-radius: 3px;
-    color: var(--ink-faint);
+    font-size: var(--t-xs);
+    color: var(--ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .viewer-row {
@@ -297,38 +317,42 @@
   }
   .meta-closed .viewer-row { grid-template-columns: 1fr 0px; }
 
+  /* The signature: gallery wall picks up the photo's dominant color at
+     ~7% in the OKLab-mixed space, so the chrome is authored by the photo
+     itself rather than by us. */
   .viewer {
-    background: var(--bg);
-    background-image: radial-gradient(
-      ellipse at center,
-      transparent 0%,
-      rgba(0, 0, 0, 0.4) 100%
-    );
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: var(--s-5);
     overflow: hidden;
-    position: relative;
+    background-color: color-mix(in oklab, var(--bg) 93%, var(--photo-tint, transparent));
+    background-image: radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      color-mix(in oklab, transparent 75%, black) 100%
+    );
+    transition: background-color 280ms var(--ease);
   }
   .viewer img {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
-    box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
-    animation: rise var(--t-slow) var(--ease-out);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45),
+                0 4px 16px rgba(0, 0, 0, 0.30);
+    animation: fade-in var(--t-slow) var(--ease-out);
   }
-
   .floating-toggle {
     position: absolute;
     top: var(--s-4);
     right: var(--s-4);
-    width: 36px;
-    height: 36px;
+    width: 34px;
+    height: 34px;
     padding: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: color-mix(in oklab, var(--bg) 70%, transparent);
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--line);
     color: var(--ink);
     border-radius: 50%;
     display: flex;
@@ -337,7 +361,9 @@
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
   }
-  .floating-toggle:hover { background: rgba(0, 0, 0, 0.75); }
+  .floating-toggle:hover {
+    background: var(--bg-card);
+  }
 
   .meta {
     background: var(--bg-paper);
@@ -350,20 +376,29 @@
     gap: var(--s-3);
   }
   .when {
-    font-size: var(--t-2xl);
-    margin-top: var(--s-2);
-    line-height: 1.1;
+    font-size: var(--t-xl);
+    line-height: 1.2;
+    margin-top: var(--s-1);
+    font-weight: 500;
+    font-variation-settings: "opsz" 28, "wdth" 100;
+    color: var(--ink);
   }
   .where {
-    font-family: var(--font-display);
     font-size: var(--t-base);
-    font-weight: 400;
     color: var(--ink-soft);
-    font-variation-settings: "opsz" 14;
+    margin-top: -2px;
   }
-  .where em {
-    font-style: italic;
-    color: var(--accent);
+  .section {
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+    color: var(--ink-muted);
+    margin: 0;
+  }
+
+  .hairline {
+    margin: var(--s-2) 0;
   }
 
   .chips {
@@ -384,10 +419,12 @@
     border-radius: 999px;
     font-size: var(--t-xs);
     color: var(--ink);
-    transition: background var(--t-fast) var(--ease);
+    transition: background var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
   }
   .chip:hover {
     background: var(--bg-elev);
+    border-color: var(--ink-faint);
     text-decoration: none;
   }
   .person-chip .dot {
@@ -411,12 +448,13 @@
     border: 1px solid var(--line);
   }
   :global(.mini-pin) {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--accent);
     border: 2px solid var(--bg-paper);
-    box-shadow: 0 0 0 2px var(--accent), 0 4px 10px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 0 1px var(--accent),
+                0 4px 10px rgba(0, 0, 0, 0.5);
   }
   .coords {
     color: var(--ink-muted);
@@ -426,15 +464,12 @@
   .specs {
     display: grid;
     grid-template-columns: 90px 1fr;
-    gap: 8px var(--s-4);
+    gap: 6px var(--s-4);
     margin: 0;
   }
   .specs dt {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--ink-faint);
+    font-size: var(--t-xs);
+    color: var(--ink-muted);
     padding-top: 2px;
   }
   .specs dd {
@@ -446,12 +481,10 @@
   .specs dd.path { font-size: 11px; color: var(--ink-muted); }
 
   .ocr {
-    font-family: var(--font-display);
     font-style: italic;
-    font-variation-settings: "opsz" 14;
     font-size: var(--t-sm);
     background: var(--bg-card);
-    padding: var(--s-4);
+    padding: var(--s-3) var(--s-4);
     border-radius: var(--r-sm);
     border-left: 2px solid var(--accent);
     color: var(--ink-soft);
@@ -465,7 +498,14 @@
   .small { font-size: var(--t-xs); }
 
   @media (max-width: 920px) {
-    .viewer-row { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-    .meta { border-left: none; border-top: 1px solid var(--line-soft); max-height: 40vh; }
+    .viewer-row {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr auto;
+    }
+    .meta {
+      border-left: none;
+      border-top: 1px solid var(--line-soft);
+      max-height: 40vh;
+    }
   }
 </style>

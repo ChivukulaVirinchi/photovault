@@ -47,15 +47,11 @@
   onMount(load);
 </script>
 
-<PageHeader
-  num="03"
-  label="ALBUMS"
-  title="Your collections."
-  subtitle="Handpicked or auto-found from trips and events."
->
-  <button class="ghost" onclick={runDetection}>Detect suggestions</button>
+<PageHeader title="Albums">
+  <span class="count mono">{list.length}<span class="muted"> albums</span></span>
+  <button class="ghost" onclick={runDetection}>Detect</button>
   {#if creating}
-    <input bind:value={newName} placeholder="Album name" autofocus />
+    <input bind:value={newName} placeholder="Album name" />
     <button class="primary" onclick={createAlbum}>Create</button>
     <button class="ghost" onclick={() => (creating = false)}>Cancel</button>
   {:else}
@@ -63,21 +59,23 @@
   {/if}
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if suggestions.length > 0}
     <section class="suggestions">
-      <span class="eyebrow"><span class="ornament"></span>SUGGESTIONS · {suggestions.length}</span>
-      <p class="muted">Patterns we noticed — accept to save, dismiss to ignore.</p>
-      <div class="suggest-grid stagger">
-        {#each suggestions as s, i (s.id)}
-          <article class="suggestion" style="--i: {i}">
+      <div class="section-head">
+        <h3 class="section-title">Suggestions</h3>
+        <span class="hint">Patterns we noticed — accept to save, dismiss to ignore.</span>
+      </div>
+      <div class="suggest-grid">
+        {#each suggestions as s (s.id)}
+          <article class="suggestion">
             {#if s.cover_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, s.cover_thumbnail_path) ?? ""} alt="" />
             {/if}
             <div class="body">
-              <span class="kind mono">{s.kind.toUpperCase()}</span>
+              <span class="kind mono">{s.kind}</span>
               <strong class="title">{s.title}</strong>
               <span class="muted small">{s.photo_ids.length} photos</span>
               <div class="row">
@@ -89,29 +87,32 @@
         {/each}
       </div>
     </section>
-    <hr class="rule" />
+    {#if list.length > 0}<hr class="hairline" />{/if}
   {/if}
 
   {#if list.length === 0 && suggestions.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NO ALBUMS YET</span>
-      <p class="quiet">Make one, or run detection to find what already groups itself.</p>
+      <p>Make one, or run detection to find what already groups itself.</p>
+      <div class="row">
+        <button class="primary" onclick={() => (creating = true)}>New album</button>
+        <button class="ghost" onclick={runDetection}>Detect</button>
+      </div>
     </div>
-  {:else}
-    <div class="grid stagger">
-      {#each list as a, i (a.id)}
-        <a class="card" href="#/album?id={a.id}" style="--i: {i}">
+  {:else if list.length > 0}
+    <div class="grid">
+      {#each list as a (a.id)}
+        <a class="card" href="#/album?id={a.id}">
           <div class="cover">
             {#if a.cover_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, a.cover_thumbnail_path) ?? ""} alt="" />
             {:else}
-              <span class="muted small">empty</span>
+              <span class="placeholder small">empty</span>
             {/if}
             <span class="meta-chip mono">{a.photo_count}</span>
           </div>
           <strong class="title">{a.name}</strong>
           {#if a.date_range_start && a.date_range_end}
-            <span class="dates mono small muted">
+            <span class="dates mono small">
               {new Date(a.date_range_start).toLocaleDateString()}
               — {new Date(a.date_range_end).toLocaleDateString()}
             </span>
@@ -123,26 +124,47 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .count { font-size: var(--t-sm); color: var(--ink); }
+
   .empty {
-    padding: var(--s-9) var(--s-5);
+    padding: var(--s-8) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    align-items: center;
+    max-width: 42ch;
+    margin: 0 auto;
   }
-  .quiet {
-    font-family: var(--font-display);
+  .empty p { color: var(--ink-soft); line-height: 1.55; }
+  .empty .row { display: flex; gap: var(--s-2); }
+
+  .suggestions { margin-bottom: var(--s-4); }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-3);
+    margin-bottom: var(--s-3);
+  }
+  .section-title {
+    font-size: var(--t-sm);
+    font-weight: 600;
+    color: var(--ink);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0;
+  }
+  .hint {
+    font-size: var(--t-sm);
+    color: var(--ink-muted);
     font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
-    max-width: 38ch;
   }
 
-  .suggestions { margin-bottom: var(--s-5); }
-  .suggestions p { margin-top: var(--s-2); margin-bottom: var(--s-4); }
   .suggest-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: var(--s-4);
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--s-3);
   }
   .suggestion {
     background: var(--bg-card);
@@ -159,63 +181,75 @@
     display: block;
   }
   .suggestion .body {
-    padding: var(--s-4);
+    padding: var(--s-3) var(--s-4) var(--s-4);
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
   }
   .suggestion .kind {
-    font-size: 9px;
+    font-size: var(--t-xs);
     color: var(--accent);
-    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
   }
   .suggestion .title {
-    font-family: var(--font-display);
-    font-size: var(--t-lg);
-    font-weight: 500;
+    font-size: var(--t-base);
+    font-weight: 600;
   }
   .suggestion .row { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: var(--s-5);
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--s-4);
   }
   .card {
     color: inherit;
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
-    transition: transform var(--t-base-d) var(--ease);
+    gap: 6px;
+    text-decoration: none;
   }
-  .card:hover { text-decoration: none; transform: translateY(-3px); }
   .cover {
     aspect-ratio: 4 / 5;
     background: var(--bg-card);
     border-radius: var(--r-md);
     overflow: hidden;
-    box-shadow: var(--shadow-soft);
     position: relative;
-    display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
+  }
+  .card:hover .cover {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ghost);
   }
   .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .placeholder { color: var(--ink-faint); }
   .meta-chip {
     position: absolute;
-    bottom: var(--s-3); right: var(--s-3);
-    background: rgba(0,0,0,0.5);
-    backdrop-filter: blur(8px);
-    padding: 4px 10px;
+    bottom: var(--s-2);
+    right: var(--s-2);
+    background: color-mix(in oklab, var(--bg) 72%, transparent);
+    backdrop-filter: blur(6px);
+    padding: 3px 9px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: var(--t-xs);
     color: var(--ink);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--line);
   }
   .title {
-    font-family: var(--font-display);
-    font-size: var(--t-lg);
-    font-weight: 500;
-    font-variation-settings: "opsz" 24;
+    font-size: var(--t-base);
+    font-weight: 600;
+    color: var(--ink);
+    margin-top: 4px;
+  }
+  .dates {
+    color: var(--ink-faint);
   }
   .small { font-size: var(--t-xs); }
 </style>

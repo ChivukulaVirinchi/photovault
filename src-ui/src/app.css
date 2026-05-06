@@ -1,28 +1,36 @@
 /* ============================================================
-   PhotoVault — design system
-   "Gallery": chrome disappears, photos are the only colour.
-   Bold via typography + structure, never via colour.
-   Supports dark (default) and light themes.
+   PhotoVault — Quiet Studio
+   Chrome recedes. Photos are the art on the wall.
+   Cool neutral palette — near-monochrome with a single
+   moonlight-blue accent used sparingly. Photos provide the
+   color (per-photo tint on the detail viewer).
    ============================================================ */
 
+/* ===== fonts (self-hosted via @fontsource imports in main.ts) ===== */
+
+/* ===== custom properties =================================== */
 :root {
-  /* — Type families ——————————————————————————————————————— */
-  --font-display: "Bricolage Grotesque", "Helvetica Neue", system-ui, sans-serif;
-  --font-body: "Manrope", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  /* Type families — display is reserved for hero moments only */
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque",
+                  "Times New Roman", serif;
+  --font-body:    -apple-system, BlinkMacSystemFont,
+                  "Segoe UI Variable", "Segoe UI",
+                  system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono",
+                  Menlo, Consolas, monospace;
 
-  /* — Type scale ——————————————————————————————————————————— */
-  --t-xs: 0.72rem;
-  --t-sm: 0.84rem;
-  --t-base: 1rem;
-  --t-lg: 1.18rem;
-  --t-xl: 1.44rem;
-  --t-2xl: 1.86rem;
-  --t-3xl: 2.4rem;
-  --t-4xl: 3.4rem;
-  --t-display: 4.6rem;
+  /* Type scale */
+  --t-xs:      0.72rem;
+  --t-sm:      0.84rem;
+  --t-base:    0.94rem;
+  --t-lg:      1.08rem;
+  --t-xl:      1.28rem;
+  --t-2xl:     1.6rem;
+  --t-3xl:     2.1rem;
+  --t-4xl:     3rem;
+  --t-display: 4.4rem;
 
-  /* — Space scale ——————————————————————————————————————————— */
+  /* Space scale */
   --s-1: 4px;
   --s-2: 8px;
   --s-3: 12px;
@@ -33,88 +41,100 @@
   --s-8: 64px;
   --s-9: 96px;
 
-  /* — Radii (sharp, editorial — not rounded "Apple" curves) ——— */
+  /* Radii — soft but not "Apple round". 2/4/8/12. */
   --r-sm: 2px;
   --r-md: 4px;
   --r-lg: 8px;
-  --r-xl: 14px;
+  --r-xl: 12px;
 
-  /* — Motion ——————————————————————————————————————————————— */
-  --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
+  /* Motion */
+  --ease:     cubic-bezier(0.32, 0.72, 0.24, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --t-fast: 120ms;
+  --t-fast:   120ms;
   --t-base-d: 220ms;
-  --t-slow: 460ms;
+  --t-slow:   460ms;
+
+  /* Photo-tint signature — set per-photo on the .viewer element only.
+     Defaults to transparent so the gallery wall shows through. */
+  --photo-tint: transparent;
 }
 
 /* ============================================================
-   DARK theme — the default. Cool deep neutrals.
+   DARK — cool deep charcoal. Near-black with a faint blue
+   undertone — never warm, never brown.
    ============================================================ */
 :root,
 :root[data-theme="dark"] {
-  --bg:        #0e0e10;
-  --bg-paper:  #15151a;
-  --bg-card:   #1c1c22;
-  --bg-elev:   #25252c;
-  --line:      #2d2d35;
-  --line-soft: #232228;
+  --bg:        #0f1015;
+  --bg-paper:  #161821;
+  --bg-card:   #1d1f29;
+  --bg-elev:   #262932;
+  --line:      #2a2e38;
+  --line-soft: #1e2129;
 
-  --ink:       #ebeaee;
-  --ink-soft:  #a4a3ab;
-  --ink-muted: #707078;
-  --ink-faint: #3f3f47;
+  --ink:       #e7eaf0;
+  --ink-soft:  #aeb3bf;
+  --ink-muted: #80858f;
+  --ink-faint: #4d525c;
 
-  /* Primary "accent" is just ink — actives are weight/underline, never colour */
-  --accent: var(--ink);
-  --accent-ghost: rgba(235, 234, 238, 0.08);
+  /* Single understated accent — cool moonlight blue.
+     Used only for active nav, focus rings, link underline,
+     subtle highlights. Never as a fill. */
+  --accent:        #9eb3d4;
+  --accent-ghost:  rgba(158, 179, 212, 0.10);
+  --accent-soft:   rgba(158, 179, 212, 0.18);
 
-  /* Inverted contrast — primary buttons are paper-on-ink */
-  --invert-bg: #f5f4f0;
-  --invert-ink: #0e0e10;
+  /* Primary buttons: paper-on-ink inversion (no colour). */
+  --invert-bg:  #ebecf0;
+  --invert-ink: #0f1015;
 
-  /* Semantic colours, used very sparingly */
-  --keep:      #7fb88a;   /* muted sage — "keep" / "best" markers */
-  --hot:       #d97070;   /* muted brick — danger / delete-forever */
-  --danger-bg: #2a1818;
+  /* Semantic — used very sparingly */
+  --keep:      #7ea291;
+  --hot:       #c47373;
+  --danger-bg: #281a1a;
 
-  --grain-opacity: 0.03;
+  /* Cool film-grain on the wall — neutral, never warms */
+  --grain-opacity: 0.020;
   color-scheme: dark;
 }
 
 /* ============================================================
-   LIGHT theme — warm paper neutrals. Photos pop on cream.
+   LIGHT — cool off-white. A neutral paper, not a yellow cream.
    ============================================================ */
 :root[data-theme="light"] {
-  --bg:        #f7f6f0;
-  --bg-paper:  #fafaf4;
-  --bg-card:   #f0efe8;
-  --bg-elev:   #e6e5dc;
-  --line:      #d4d3c9;
-  --line-soft: #e3e1d6;
+  --bg:        #f4f5f3;
+  --bg-paper:  #fafaf8;
+  --bg-card:   #ebeceb;
+  --bg-elev:   #dee0dd;
+  --line:      #d2d4d2;
+  --line-soft: #e1e3e0;
 
-  --ink:       #16161a;
-  --ink-soft:  #3a3a40;
-  --ink-muted: #797982;
-  --ink-faint: #b0b0b6;
+  --ink:       #15171c;
+  --ink-soft:  #3a3d44;
+  --ink-muted: #797d85;
+  --ink-faint: #adb0b8;
 
-  --accent: var(--ink);
-  --accent-ghost: rgba(22, 22, 26, 0.07);
+  /* Same blue, deeper — readable on light paper. */
+  --accent:        #466996;
+  --accent-ghost:  rgba(70, 105, 150, 0.09);
+  --accent-soft:   rgba(70, 105, 150, 0.16);
 
-  --invert-bg: #16161a;
-  --invert-ink: #fafaf4;
+  --invert-bg:  #15171c;
+  --invert-ink: #fafaf8;
 
-  --keep:      #2f7a3d;
-  --hot:       #a23838;
-  --danger-bg: #f5e3e0;
+  --keep:      #3a6e4a;
+  --hot:       #9a3838;
+  --danger-bg: #f3e1de;
 
-  --grain-opacity: 0.018;
+  --grain-opacity: 0.012;
   color-scheme: light;
 }
 
 /* ===== reset =============================================== */
 * { box-sizing: border-box; }
-*::-webkit-scrollbar { width: 10px; height: 10px; }
-*::-webkit-scrollbar-track { background: transparent; }
+
+*::-webkit-scrollbar         { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track   { background: transparent; }
 *::-webkit-scrollbar-thumb {
   background: var(--line);
   border-radius: 999px;
@@ -130,19 +150,18 @@ html, body, #app {
 body {
   font-family: var(--font-body);
   font-size: var(--t-base);
-  line-height: 1.55;
+  line-height: 1.5;
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "ss01", "cv11";
   position: relative;
   overflow: hidden;
   transition: background var(--t-base-d) var(--ease),
-              color var(--t-base-d) var(--ease);
+              color      var(--t-base-d) var(--ease);
 }
 
-/* Subtle blue-grey grain — never warms the canvas. Lighter in light mode. */
+/* Quiet warm grain on the wall — never tints colour, only texture. */
 body::before {
   content: "";
   position: fixed;
@@ -151,27 +170,39 @@ body::before {
   z-index: 1;
   opacity: var(--grain-opacity);
   mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.92' numOctaves='2' seed='7'/><feColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.58 0 0 0 0 0.62 0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.88' numOctaves='2' seed='9'/><feColorMatrix values='0 0 0 0 0.50 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.85 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
 #app { position: relative; z-index: 2; height: 100%; }
 
-/* ===== typography ========================================== */
+/* ===== typography ==========================================
+   By default headings use the body font — the display family is
+   opt-in via .display, <PageHero>, or specific component styles.
+   This is intentional: the editorial moment must be earned. */
 h1, h2, h3, h4 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.2;
+}
+h1 { font-size: var(--t-3xl); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: var(--t-xl); }
+h3 { font-size: var(--t-lg); }
+h4 { font-size: var(--t-base); font-weight: 600; }
+
+/* When you explicitly want the editorial display face. */
+.display, h1.display, h2.display {
   font-family: var(--font-display);
   font-weight: 500;
   font-variation-settings: "opsz" 96, "wdth" 100;
   letter-spacing: -0.025em;
   line-height: 1.02;
-  margin: 0;
-  color: var(--ink);
 }
-h1 { font-size: var(--t-display); font-weight: 700; }
-h2 { font-size: var(--t-3xl); font-weight: 600; }
-h3 { font-size: var(--t-xl); font-weight: 500; }
-h4 { font-size: var(--t-lg); font-weight: 500; }
 
 p { margin: 0; color: var(--ink-soft); }
+
 a {
   color: var(--ink);
   text-decoration: underline;
@@ -180,8 +211,9 @@ a {
   text-decoration-thickness: 1px;
   transition: text-decoration-color var(--t-fast) var(--ease);
 }
-a:hover { text-decoration-color: var(--ink); }
-a.no-underline, nav a { text-decoration: none; }
+a:hover            { text-decoration-color: var(--ink); }
+a.no-underline,
+nav a              { text-decoration: none; }
 
 strong { font-weight: 600; color: var(--ink); }
 
@@ -189,25 +221,15 @@ strong { font-weight: 600; color: var(--ink); }
 .faint { color: var(--ink-faint); }
 .error { color: var(--hot); font-family: var(--font-mono); font-size: var(--t-sm); }
 
-/* The signature page-eyebrow: editorial section number + label, mono. */
-.eyebrow {
+/* Small-caps mono label — used quietly for counts, dates, paths.
+   Replaces the old eyebrow/ornament pattern. */
+.label {
   font-family: var(--font-mono);
   font-size: var(--t-xs);
   text-transform: uppercase;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.12em;
   color: var(--ink-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-3);
   font-weight: 500;
-}
-.eyebrow .num { color: var(--ink); font-weight: 600; }
-.eyebrow .ornament {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 1px;
-  background: currentColor;
-  opacity: 0.4;
 }
 
 .subtitle {
@@ -215,7 +237,6 @@ strong { font-weight: 600; color: var(--ink); }
   font-size: var(--t-base);
   font-weight: 400;
   color: var(--ink-soft);
-  letter-spacing: 0;
   line-height: 1.5;
   max-width: 60ch;
 }
@@ -225,55 +246,53 @@ button {
   font-family: var(--font-body);
   font-size: var(--t-sm);
   font-weight: 500;
-  letter-spacing: 0;
   color: var(--ink);
   background: transparent;
   border: 1px solid var(--line);
   padding: 7px 14px;
   border-radius: var(--r-md);
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease),
-              border-color var(--t-fast) var(--ease),
-              color var(--t-fast) var(--ease),
-              transform var(--t-fast) var(--ease);
+  transition: background    var(--t-fast) var(--ease),
+              border-color  var(--t-fast) var(--ease),
+              color         var(--t-fast) var(--ease),
+              transform     var(--t-fast) var(--ease);
 }
 button:hover {
   background: var(--bg-card);
   border-color: var(--ink-faint);
 }
-button:active { transform: translateY(1px); }
+button:active   { transform: translateY(1px); }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
 }
+button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ghost);
+}
 
-/* The signature primary: inverted contrast (ink-on-paper inverted).
-   Black button in light mode, white button in dark mode. Brutally clear. */
+/* Primary — bone-on-charcoal in dark, ink-on-cream in light. */
 button.primary {
-  background: var(--invert-bg);
-  border-color: var(--invert-bg);
-  color: var(--invert-ink);
+  background:    var(--invert-bg);
+  border-color:  var(--invert-bg);
+  color:         var(--invert-ink);
   font-weight: 600;
 }
-button.primary:hover {
-  background: var(--invert-bg);
-  filter: brightness(0.92);
-}
-button.ghost {
-  background: transparent;
-  border: 1px solid var(--line);
-}
-button.ghost:hover { background: var(--bg-paper); }
+button.primary:hover  { filter: brightness(0.94); }
+
+button.ghost          { background: transparent; }
+button.ghost:hover    { background: var(--bg-paper); }
 
 button.danger {
-  background: transparent;
-  border-color: var(--hot);
-  color: var(--hot);
+  background:    transparent;
+  border-color:  var(--hot);
+  color:         var(--hot);
 }
 button.danger:hover {
-  background: var(--danger-bg);
-  border-color: var(--hot);
+  background:    var(--danger-bg);
+  border-color:  var(--hot);
 }
 
 input, select, textarea {
@@ -285,12 +304,12 @@ input, select, textarea {
   padding: 9px 12px;
   border-radius: var(--r-md);
   transition: border-color var(--t-fast) var(--ease),
-              box-shadow var(--t-fast) var(--ease);
+              box-shadow   var(--t-fast) var(--ease);
 }
 input:focus, select:focus, textarea:focus {
   outline: none;
-  border-color: var(--ink);
-  box-shadow: 0 0 0 2px var(--accent-ghost);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ghost);
 }
 
 input[type="number"] { font-family: var(--font-mono); }
@@ -304,7 +323,7 @@ kbd {
   padding: 2px 8px;
   border-radius: var(--r-sm);
   color: var(--ink-soft);
-  min-width: 28px;
+  min-width: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -312,27 +331,41 @@ kbd {
 
 /* ===== utility =============================================== */
 .small { font-size: var(--t-xs); }
-.mono { font-family: var(--font-mono); }
+.mono  { font-family: var(--font-mono); }
 
+.hairline {
+  height: 1px;
+  background: var(--line-soft);
+  border: none;
+  margin: var(--s-4) 0;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 @keyframes rise {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Stagger reserved for first-paint of hero grids only.
+   Cap effective items via inline --i in markup; we cut off after 8. */
 .stagger > * {
   opacity: 0;
-  animation: rise var(--t-slow) var(--ease-out) forwards;
-  animation-delay: calc(var(--i, 0) * 28ms);
+  animation: rise 360ms var(--ease-out) forwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 32ms);
 }
 
-/* The animated draw-in rule used under page headers and active nav */
-@keyframes draw-in {
-  from { transform: scaleX(0); }
-  to   { transform: scaleX(1); }
-}
-
-.rule {
-  height: 1px;
-  background: var(--line);
-  margin: var(--s-5) 0;
-  border: none;
+/* ===== reduced motion — honour the OS ====================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration:   0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration:  0.001ms !important;
+    scroll-behavior:      auto !important;
+  }
+  .stagger > * { opacity: 1; transform: none; }
 }

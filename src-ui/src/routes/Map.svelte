@@ -9,7 +9,6 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { MapPin } from "../lib/api/all";
 
-  // One-time install. Idempotent.
   installTileCache();
 
   let containerEl: HTMLDivElement | undefined = $state();
@@ -30,7 +29,6 @@
       el.setAttribute("aria-label", `${pin.count} photos here`);
       const inner = document.createElement("span");
       inner.className = "pv-pin-count";
-      // Render scientific-ish: 1.2k for 1234
       inner.textContent =
         pin.count >= 1000
           ? (pin.count / 1000).toFixed(pin.count >= 10000 ? 0 : 1) + "k"
@@ -48,7 +46,6 @@
       };
       return el;
     }
-    // Single pin: thumbnail medallion that links to photo detail.
     const el = document.createElement("a");
     el.className = "pv-pin pv-pin-single";
     el.href = `#/photo?id=${pin.photo_id}`;
@@ -77,7 +74,6 @@
         Math.round(map.getZoom()),
         800,
       );
-      // Drop existing markers, build new ones.
       for (const m of markers) m.remove();
       markers = pins.map((pin) => {
         const el = buildMarkerElement(pin);
@@ -88,7 +84,6 @@
       pinCount = pins.reduce((acc, p) => acc + p.count, 0);
       if (firstLoad) {
         firstLoad = false;
-        // Compute first total from a world-bounds fetch as a baseline.
         if (totalGeotagged === null) totalGeotagged = pinCount;
       }
       error = null;
@@ -130,11 +125,7 @@
           },
         },
         layers: [
-          {
-            id: "osm",
-            type: "raster",
-            source: "osm",
-          },
+          { id: "osm", type: "raster", source: "osm" },
         ],
       },
       center: [0, 20],
@@ -155,20 +146,15 @@
   });
 </script>
 
-<PageHeader
-  num="06"
-  label="MAP"
-  title="Where the world's been."
-  subtitle="Pan and zoom — the pins know how to find each other."
->
+<PageHeader title="Map">
   <span class="visible-count mono">
-    {pinCount.toLocaleString()} <span class="muted">visible</span>
+    {pinCount.toLocaleString()}<span class="muted"> visible</span>
   </span>
   {#if loading}<span class="loading mono">⋯</span>{/if}
-  <button class="ghost" onclick={fitToContent}>Reset view</button>
+  <button class="ghost" onclick={fitToContent}>Reset</button>
 </PageHeader>
 
-{#if error}<p class="error map-error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="map-wrap">
   <div class="canvas" bind:this={containerEl}></div>
@@ -178,16 +164,15 @@
 <style>
   .visible-count, .loading {
     font-size: var(--t-sm);
-    color: var(--ink-soft);
+    color: var(--ink);
   }
-  .loading { color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .loading {
+    color: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
   @keyframes pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 1; }
-  }
-
-  .map-error {
-    margin: var(--s-3) var(--s-7);
   }
 
   .map-wrap {
@@ -199,34 +184,32 @@
   .canvas {
     position: absolute;
     inset: 0;
-    /* Signature warm filter — the map echoes the editorial palette
-       instead of looking like every other slick blue web map. */
-    filter: sepia(0.22) hue-rotate(-8deg) saturate(0.85) contrast(0.95)
-      brightness(0.9);
+    /* A whisper of warmth on the tiles so the map echoes the gallery
+       palette instead of the standard cold web blue. */
+    filter: sepia(0.16) saturate(0.9) contrast(0.97);
   }
-  /* A subtle vignette that frames the canvas like a magazine spread. */
   .vignette {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    box-shadow: inset 0 0 80px rgba(22, 18, 16, 0.55);
+    box-shadow: inset 0 0 80px color-mix(in oklab, var(--bg) 70%, transparent);
     z-index: 1;
   }
 
   /* Pins use :global() because MapLibre owns the marker DOM. */
   :global(.pv-pin) {
     display: block;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     cursor: pointer;
     transform-origin: center;
     transition: transform 140ms cubic-bezier(0.32, 0.72, 0.24, 1);
   }
-  :global(.pv-pin:hover) { transform: scale(1.15); z-index: 2; }
+  :global(.pv-pin:hover) { transform: scale(1.12); z-index: 2; }
   :global(.pv-pin:focus-visible) {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(217, 122, 63, 0.45);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
   :global(.pv-pin-single) {
@@ -236,13 +219,13 @@
     border: 2px solid var(--bg-paper);
     box-shadow:
       0 1px 3px rgba(0, 0, 0, 0.4),
-      0 6px 16px rgba(0, 0, 0, 0.3),
+      0 6px 14px rgba(0, 0, 0, 0.28),
       0 0 0 1px var(--accent) inset;
   }
 
   :global(.pv-pin-cluster) {
     background: var(--accent);
-    color: var(--bg);
+    color: #fff;
     border: 2px solid var(--bg-paper);
     font-family: "JetBrains Mono", monospace;
     font-weight: 600;
@@ -252,22 +235,22 @@
     align-items: center;
     justify-content: center;
     box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.4),
-      0 8px 20px rgba(217, 122, 63, 0.35);
+      0 1px 3px rgba(0, 0, 0, 0.35),
+      0 8px 18px var(--accent-soft);
   }
   :global(.pv-pin-cluster:hover) {
-    background: #e89a64; /* var(--accent-warm) */
+    filter: brightness(1.08);
   }
   :global(.pv-pin-count) {
     line-height: 1;
     letter-spacing: -0.02em;
   }
 
-  /* MapLibre control overrides — match editorial dark palette */
+  /* MapLibre control overrides — match Quiet Gallery palette. */
   :global(.maplibregl-ctrl-group) {
     background: var(--bg-paper) !important;
     border: 1px solid var(--line) !important;
-    box-shadow: var(--shadow-soft) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18) !important;
     border-radius: var(--r-md) !important;
     overflow: hidden;
   }
@@ -283,11 +266,11 @@
     border-top: 1px solid var(--line) !important;
   }
   :global(.maplibregl-ctrl-attrib) {
-    background: rgba(28, 23, 20, 0.85) !important;
+    background: color-mix(in oklab, var(--bg-paper) 88%, transparent) !important;
     backdrop-filter: blur(6px);
-    border-radius: var(--r-md) 0 0 0 !important;
+    border-radius: var(--r-sm) 0 0 0 !important;
     font-family: var(--font-mono) !important;
-    font-size: 9.5px !important;
+    font-size: 10px !important;
   }
   :global(.maplibregl-ctrl-attrib a) { color: var(--accent) !important; }
   :global(.maplibregl-ctrl-attrib-button) {

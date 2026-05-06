@@ -29,33 +29,31 @@
   }
 </script>
 
-<PageHeader
-  num="08"
-  label="BURSTS"
-  title="Rapid-fire moments."
-  subtitle="Series of nearly-identical photos taken seconds apart. Keep the sharpest, let the rest go."
->
+<PageHeader title="Bursts">
+  <span class="count mono">{groups.length}<span class="muted"> groups</span></span>
   <button class="primary" onclick={run} disabled={running}>
     {running ? "Detecting…" : "Detect bursts"}
   </button>
 </PageHeader>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
   {#if groups.length === 0}
     <div class="empty">
-      <span class="eyebrow"><span class="ornament"></span>NONE DETECTED</span>
-      <p class="quiet">No burst groups yet. Run detection — it'll look for shots taken in quick succession.</p>
+      <p>No burst groups yet. Run detection — it'll look for shots taken in quick succession.</p>
+      <button class="primary" onclick={run} disabled={running}>
+        {running ? "Detecting…" : "Detect bursts"}
+      </button>
     </div>
   {:else}
-    <ul class="list stagger">
-      {#each groups as g, i (g.id)}
-        <li style="--i: {i}">
+    <ul class="list">
+      {#each groups as g (g.id)}
+        <li>
           <a href="#/burst?id={g.id}">
             <span class="when">{fmtTime(g.start_time)}</span>
             <span class="size mono">{g.photo_count} shots</span>
-            <span class="arrow">→</span>
+            <span class="arrow" aria-hidden="true">→</span>
           </a>
         </li>
       {/each}
@@ -64,44 +62,52 @@
 </div>
 
 <style>
-  .page { padding: var(--s-6) var(--s-7); flex: 1; overflow-y: auto; }
+  .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .count { font-size: var(--t-sm); color: var(--ink); }
   .empty {
-    padding: var(--s-9) var(--s-5);
+    padding: var(--s-8) var(--s-5);
     text-align: center;
-    display: flex; flex-direction: column; gap: var(--s-3); align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    align-items: center;
+    max-width: 42ch;
+    margin: 0 auto;
   }
-  .quiet {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: var(--t-lg);
-    color: var(--ink-soft);
-    max-width: 38ch;
+  .empty p { color: var(--ink-soft); line-height: 1.55; }
+
+  .list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 720px;
   }
-  .list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
   .list a {
     display: grid;
     grid-template-columns: 1fr auto auto;
     align-items: center;
     gap: var(--s-4);
-    padding: var(--s-4) var(--s-5);
-    background: var(--bg-card);
-    border: 1px solid transparent;
+    padding: var(--s-3) var(--s-4);
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
     border-radius: var(--r-md);
     color: inherit;
-    transition: background var(--t-fast) var(--ease),
-                transform var(--t-fast) var(--ease);
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease),
+                background var(--t-fast) var(--ease);
   }
   .list a:hover {
-    background: var(--bg-elev);
-    border-color: var(--line);
-    text-decoration: none;
-    transform: translateX(3px);
+    background: var(--bg-card);
+    border-color: var(--accent);
   }
   .when {
-    font-family: var(--font-display);
     font-size: var(--t-base);
     font-weight: 500;
+    color: var(--ink);
   }
   .size { font-size: var(--t-xs); color: var(--ink-muted); }
-  .arrow { color: var(--accent); }
+  .arrow { color: var(--accent); font-size: var(--t-base); }
 </style>
