@@ -50,10 +50,11 @@ default = ["hnsw_clustering"]
 heic = ["dep:libheif-rs"]
 hnsw_clustering = ["dep:hnsw_rs"]
 
-[dependencies]
-# UI Framework
-iced = { version = "0.13", features = ["image", "svg", "tokio", "advanced", "canvas"] }
+[lib]
+# Library-only crate. The bin lives in src-tauri/.
+name = "photovault"
 
+[dependencies]
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 
@@ -119,17 +120,12 @@ lru = "0.16"
 regex = "1"
 lazy_static = "1.4"
 
-# Native file dialogs
-rfd = "0.17"
-
 # Error handling
 thiserror = "2"
 anyhow = "1"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-fs2 = "0.4"
 
 # Update mechanism (Phase 3)
 semver = { version = "1", features = ["serde"] }
@@ -139,8 +135,6 @@ open = "5"
 
 # Optimize key deps even in debug mode — image decoding is unusable without this
 [profile.dev.package.image]
-opt-level = 3
-[profile.dev.package.jpeg-decoder]
 opt-level = 3
 [profile.dev.package.png]
 opt-level = 3
@@ -164,43 +158,8 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-[package.metadata.deb]
-maintainer = "Virinchi Chivukula, Chekka Umesh Kumar"
-copyright = "2026, Virinchi Chivukula"
-license-file = ["LICENSE", "0"]
-extended-description = """\
-PhotoVault is an offline-first desktop photo library manager.
-Indexes photos from local drives, detects faces, finds duplicates,
-suggests albums, and provides full-text search -- all without uploading
-anything to the cloud.
-"""
-# `$auto` resolves the dynamic-linking footprint, but `libheif-rs` is
-# loaded via dlopen (not by ld) so cargo-deb can't see it. Pin it as
-# a runtime dep so apt installs libheif1 alongside the .deb.
-depends = "$auto, libheif1"
-section = "graphics"
-priority = "optional"
-assets = [
-    ["target/release/photovault", "usr/bin/", "755"],
-    ["packaging/photovault.desktop", "usr/share/applications/", "644"],
-    ["packaging/photovault.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
-    ["README.md", "usr/share/doc/photovault/README", "644"],
-]
-
-[package.metadata.bundle]
-name = "PhotoVault"
-identifier = "com.chivukulavirinchi.photovault"
-icon = ["packaging/photovault.icns"]
-version = "0.2.0"
-copyright = "2026, Virinchi Chivukula"
-category = "public.app-category.photography"
-short_description = "Offline-first photo library manager"
-long_description = """
-PhotoVault organizes your photos locally, with face recognition,
-smart albums, and full-text search -- without uploading anything.
-"""
-resources = []
-osx_minimum_system_version = "10.13"
+# Bundle configuration moved to src-tauri/tauri.conf.json — Tauri's
+# bundler owns .deb, AppImage, .msi, and .dmg packaging now.
 
 [dev-dependencies]
 tempfile = "3"

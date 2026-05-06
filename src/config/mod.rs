@@ -19,7 +19,7 @@ pub struct AppConfig {
     pub window_width: u32,
     pub window_height: u32,
     /// Whether the user's window was maximised when they last closed
-    /// the app. Restored at startup via `iced::window::maximize`.
+    /// the app. Restored at startup by the Tauri shell.
     #[serde(default)]
     pub window_maximized: bool,
     pub sidebar_collapsed: bool,

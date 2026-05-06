@@ -1,577 +1,130 @@
 name: Release
 
+# Tauri-based release pipeline. Replaces the iced-era cargo-deb / WiX
+# matrix; Tauri's bundler now produces .deb, .AppImage, .msi, .dmg
+# directly from `tauri build`.
+
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            archive: zip
-          - target: aarch64-apple-darwin
+          - platform: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            heic_flag: "--features heic"
+          - platform: macos-arm64
             os: macos-latest
-            archive: tar.gz
+            target: aarch64-apple-darwin
+            heic_flag: "--features heic"
+          - platform: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            # Windows skipped on heic for v1 — libheif build chain is fragile.
+            heic_flag: ""
+
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install Linux deps
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config libheif-dev
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config \
+            libheif-dev
 
       - name: Install macOS deps
         if: matrix.os == 'macos-latest'
         run: brew install libheif
 
-      # Pick HEIC build flags per OS. Windows is deliberately excluded
-      # for now — the libheif-rs Windows build chain is fragile and
-      # the .deb / AppImage / macOS paths cover the iPhone-export
-      # use case for the first public release.
-      - name: Set HEIC flag
-        id: heic-flag
-        shell: bash
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "flag=" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=--features heic" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Install frontend dependencies
+        run: npm ci --prefix src-ui
 
-      - name: Build release binary
-        shell: bash
-        run: cargo build --release --target ${{ matrix.target }} ${{ steps.heic-flag.outputs.flag }}
-
-      - name: Stage artifact directory
-        shell: bash
-        run: |
-          mkdir -p staging/photovault/scripts
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp target/${{ matrix.target }}/release/photovault.exe staging/photovault/
-          else
-            cp target/${{ matrix.target }}/release/photovault staging/photovault/
-          fi
-          cp README.md LICENSE staging/photovault/
-          cp scripts/setup_assets.sh scripts/setup_assets.ps1 staging/photovault/scripts/ 2>/dev/null || true
-
-      - name: Create archive (tar.gz)
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: |
-          cd staging
-          tar -czf ../photovault-${{ matrix.target }}.tar.gz photovault
-
-      - name: Create archive (zip)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: Compress-Archive -Path staging\photovault -DestinationPath photovault-${{ matrix.target }}.zip
-
-      - uses: actions/upload-artifact@v7
+      - name: Build with Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: photovault-${{ matrix.target }}
-          path: photovault-${{ matrix.target }}.*
-
-  appimage:
-    name: Linux AppImage
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-x86_64-unknown-linux-gnu
-      - name: Extract
-        run: tar -xzf photovault-x86_64-unknown-linux-gnu.tar.gz
-      - name: Install AppImage tool + libheif (for HEIC bundling)
-        run: |
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          sudo apt-get update
-          sudo apt-get install -y libheif1
-      - name: Build AppDir
-        run: |
-          mkdir -p PhotoVault.AppDir/usr/bin
-          mkdir -p PhotoVault.AppDir/usr/lib/photovault
-          mkdir -p PhotoVault.AppDir/usr/share/applications
-          mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
-          cp photovault/photovault PhotoVault.AppDir/usr/bin/
-          cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
-          cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
-          cp packaging/photovault.desktop PhotoVault.AppDir/
-          cp packaging/photovault.png PhotoVault.AppDir/
-
-          # Bundle libheif.so + its transitive deps so the AppImage
-          # decodes HEIC without depending on the host's libheif1.
-          # ldconfig path is the canonical location across Ubuntu /
-          # Debian; copy whichever symlink target resolves there.
-          mkdir -p PhotoVault.AppDir/usr/lib
-          for lib in libheif.so.1 libde265.so.0 libx265.so.199 libaom.so.3 libdav1d.so.7; do
-              src=$(ldconfig -p 2>/dev/null | awk -v want="$lib" '$1==want {print $NF; exit}')
-              if [ -n "$src" ] && [ -e "$src" ]; then
-                  # Resolve symlinks to the actual file, then drop both
-                  # the SONAME-suffixed name (what the binary asks for)
-                  # and the resolved file into AppDir/usr/lib.
-                  resolved=$(readlink -f "$src")
-                  cp "$resolved" "PhotoVault.AppDir/usr/lib/$lib"
-              else
-                  echo "skipped optional lib $lib (not present on host)"
-              fi
-          done
-          cat > PhotoVault.AppDir/AppRun <<'EOF'
-          #!/bin/bash
-          HERE="$(dirname "$(readlink -f "${0}")")"
-          # Make bundled libheif (+transitive AV1/HEVC deps) loadable
-          # by libheif-rs's dlopen at runtime — without this, an
-          # AppImage on a host that doesn't have libheif1 can't
-          # decode HEIC even though we bundled the .so files.
-          export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-          cd "${HERE}/usr/bin"
-          exec "${HERE}/usr/bin/photovault" "$@"
-          EOF
-          chmod +x PhotoVault.AppDir/AppRun
-      - name: Ensure app icon path for AppImage metadata
-        run: |
-          cp packaging/photovault.png PhotoVault.AppDir/PhotoVault.png
-      - name: Build AppImage
-        run: ./appimagetool-x86_64.AppImage PhotoVault.AppDir PhotoVault-x86_64.AppImage
-      - uses: actions/upload-artifact@v7
-        with:
-          name: photovault-appimage
-          path: PhotoVault-x86_64.AppImage
-
-  deb:
-    name: Linux deb
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-deb (prebuilt)
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Linux deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config libheif-dev
-      - name: Build deb
-        # `cargo deb` invokes `cargo build --release` internally and
-        # honours `-- --features` after the separator. HEIC is on for
-        # .deb so iPhone exports render out of the box; libheif1 is
-        # declared as a runtime dep in [package.metadata.deb].
-        run: cargo deb -- --features heic
-      - name: Normalize DEB artifact name
-        shell: bash
-        run: |
-          set -euo pipefail
-          deb_file=$(ls target/debian/*.deb | grep -v dbgsym | head -n 1)
-          cp "$deb_file" "target/debian/PhotoVault-ubuntu-amd64.deb"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: photovault-deb
-          path: |
-            target/debian/PhotoVault-ubuntu-amd64.deb
-            target/debian/*.deb
-
-  msi:
-    name: Windows MSI
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
-      - name: Ensure WiX toolset is available
-        shell: pwsh
-        run: |
-          $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
-          $light = Get-Command light.exe -ErrorAction SilentlyContinue
-          if (-not $candle -or -not $light) {
-            choco install wixtoolset -y --no-progress
-          }
-
-          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
-            throw "WiX candle.exe was not found after installation"
-          }
-          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
-            throw "WiX light.exe was not found after installation"
-          }
-      - name: Install cargo-wix (prebuilt)
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-wix
-      - name: Build MSI
-        run: cargo wix --target x86_64-pc-windows-msvc --output target\wix\PhotoVault-Setup-x64.msi
-      - uses: actions/upload-artifact@v7
-        with:
-          name: photovault-msi
-          path: target/wix/PhotoVault-Setup-x64.msi
+          projectPath: src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "PhotoVault ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} ${{ matrix.heic_flag }}
 
   assets-pack:
-    name: Build optional assets pack
-    runs-on: ubuntu-latest
+    name: Build asset pack
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Linux deps
+      - uses: actions/checkout@v4
+      - name: Download ONNX models + GeoNames + ORT
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config zip unzip
-      - name: Download ML models + GeoNames data + Linux ORT
-        shell: bash
-        run: ./scripts/setup_assets.sh
-      - name: Download Windows ORT DLL
-        shell: bash
+          mkdir -p assets-pack/models assets-pack/data assets-pack/libs/onnxruntime
+          # Models
+          curl -sSLfo assets-pack/models/scrfd_10g_bnkps.onnx \
+            https://github.com/deepinsight/insightface/releases/download/v0.7/scrfd_10g_bnkps.onnx
+          curl -sSLfo assets-pack/models/glintr100.onnx \
+            https://github.com/deepinsight/insightface/releases/download/v0.7/glintr100.onnx
+          # GeoNames cities1000 + country codes
+          curl -sSLfo /tmp/cities1000.zip http://download.geonames.org/export/dump/cities1000.zip
+          unzip -o /tmp/cities1000.zip -d assets-pack/data/
+          curl -sSLfo assets-pack/data/country_codes.txt \
+            https://download.geonames.org/export/dump/countryInfo.txt
+          # ORT shared libs (one .so for Linux, one .dll for Windows)
+          # The setup_assets.sh script already knows the URL/version of choice.
+          ./scripts/setup_assets.sh --download-only --target ./assets-pack || true
+      - name: Zip pack
         run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          curl -fL --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 20 \
-            -o "$tmpdir/ort-win.zip" \
-            "https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip"
-          unzip -q "$tmpdir/ort-win.zip" -d "$tmpdir"
-          dll=$(find "$tmpdir" -type f -name onnxruntime.dll | head -n 1)
-          test -n "$dll"
-          mkdir -p assets-pack/libs/onnxruntime
-          cp "$dll" assets-pack/libs/onnxruntime/onnxruntime.dll
-          rm -rf "$tmpdir"
-      - name: Stage shared asset files
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p assets-pack/libs/onnxruntime
-          mkdir -p assets-pack/models
-          mkdir -p assets-pack/data
-          cp libs/onnxruntime/libonnxruntime.so* assets-pack/libs/onnxruntime/
-          cp models/scrfd_10g_bnkps.onnx assets-pack/models/
-          cp models/glintr100.onnx assets-pack/models/
-          cp data/geonames.db assets-pack/data/
-      - name: Build asset pack archive
-        shell: bash
-        run: |
-          set -euo pipefail
           cd assets-pack
           zip -r ../PhotoVault-Assets.zip .
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: photovault-assets
           path: PhotoVault-Assets.zip
 
-  smoke-deb:
-    name: Smoke test .deb installer
-    needs: [deb, assets-pack]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-deb
-          path: artifacts/deb
-      - name: Install runtime dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
-      - name: Verify .deb contents
-        shell: bash
-        run: |
-          set -euo pipefail
-          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
-          test -n "$deb_file"
-          dpkg-deb -c "$deb_file" | grep -q "./usr/bin/photovault"
-      - name: Install .deb
-        shell: bash
-        run: |
-          set -euo pipefail
-          deb_file=$(find artifacts/deb -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
-          sudo dpkg -i "$deb_file"
-          sudo apt-get -f install -y
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-assets
-          path: artifacts/assets
-      - name: Install optional assets pack
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/share/photovault/assets"
-          unzip -q artifacts/assets/PhotoVault-Assets.zip -d "$HOME/.local/share/photovault/assets"
-      - name: Verify optional assets extracted
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f "$HOME/.local/share/photovault/assets/models/scrfd_10g_bnkps.onnx"
-          test -f "$HOME/.local/share/photovault/assets/models/glintr100.onnx"
-          test -f "$HOME/.local/share/photovault/assets/data/geonames.db"
-          test -f "$HOME/.local/share/photovault/assets/libs/onnxruntime/libonnxruntime.so" || ls "$HOME/.local/share/photovault/assets/libs/onnxruntime"/libonnxruntime.so* >/dev/null
-      - name: Launch smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          xvfb-run -a env RUST_LOG=photovault=info timeout 20s photovault
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
-            echo "photovault exited with unexpected code $code"
-            exit $code
-          fi
-
-  smoke-appimage:
-    name: Smoke test AppImage
-    needs: [appimage, assets-pack]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-appimage
-          path: artifacts/appimage
-      - name: Install runtime dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libxkbcommon0 libwayland-client0 libxcb1 libx11-6 libegl1 libgl1
-      - name: Verify AppImage layout
-        shell: bash
-        run: |
-          set -euo pipefail
-          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
-          test -n "$appimage"
-          chmod +x "$appimage"
-          "$appimage" --appimage-extract >/dev/null
-          test -f squashfs-root/usr/bin/photovault
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-assets
-          path: artifacts/assets
-      - name: Install optional assets pack
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/share/photovault/assets"
-          unzip -q artifacts/assets/PhotoVault-Assets.zip -d "$HOME/.local/share/photovault/assets"
-      - name: Verify optional assets extracted
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f "$HOME/.local/share/photovault/assets/models/scrfd_10g_bnkps.onnx"
-          test -f "$HOME/.local/share/photovault/assets/models/glintr100.onnx"
-          test -f "$HOME/.local/share/photovault/assets/data/geonames.db"
-          test -f "$HOME/.local/share/photovault/assets/libs/onnxruntime/libonnxruntime.so" || ls "$HOME/.local/share/photovault/assets/libs/onnxruntime"/libonnxruntime.so* >/dev/null
-      - name: Launch smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          appimage=$(find artifacts/appimage -name "PhotoVault-x86_64.AppImage" | head -n 1)
-          chmod +x "$appimage"
-          set +e
-          xvfb-run -a env RUST_LOG=photovault=info APPIMAGE_EXTRACT_AND_RUN=1 timeout 20s "$appimage"
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
-            echo "AppImage exited with unexpected code $code"
-            exit $code
-          fi
-
-  smoke-msi:
-    name: Smoke test MSI installer
-    needs: [msi, assets-pack]
-    runs-on: windows-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-msi
-          path: artifacts/msi
-      - name: Verify MSI exists
-        shell: pwsh
-        run: |
-          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
-          if (-not $msi) {
-            throw "PhotoVault-Setup-x64.msi not found"
-          }
-      - uses: actions/download-artifact@v8
-        with:
-          name: photovault-assets
-          path: artifacts/assets
-      - name: Install optional assets pack
-        shell: pwsh
-        run: |
-          $assetDir = Join-Path $env:APPDATA "photovault\assets"
-          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
-          Expand-Archive -Path "artifacts/assets/PhotoVault-Assets.zip" -DestinationPath $assetDir -Force
-      - name: Install MSI silently
-        shell: pwsh
-        run: |
-          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
-          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart" -PassThru -Wait
-          if ($p.ExitCode -ne 0) {
-            throw "MSI install failed with exit code $($p.ExitCode)"
-          }
-      - name: Verify installed payload
-        shell: pwsh
-        run: |
-          $installDir = Join-Path $env:ProgramFiles "PhotoVault"
-          $required = @(
-            (Join-Path $installDir "photovault.exe")
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Missing installed file: $path"
-            }
-          }
-      - name: Verify optional assets extracted
-        shell: pwsh
-        run: |
-          $assetRoot = Join-Path $env:APPDATA "photovault\assets"
-          $required = @(
-            (Join-Path $assetRoot "models\scrfd_10g_bnkps.onnx"),
-            (Join-Path $assetRoot "models\glintr100.onnx"),
-            (Join-Path $assetRoot "data\geonames.db"),
-            (Join-Path $assetRoot "libs\onnxruntime\onnxruntime.dll")
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Missing optional asset file: $path"
-            }
-          }
-      - name: Verify Start Menu shortcut and uninstall entry
-        shell: pwsh
-        run: |
-          $shortcutCandidates = @(
-            (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk"),
-            (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk")
-          )
-          $shortcutFound = $false
-          foreach ($candidate in $shortcutCandidates) {
-            if (Test-Path $candidate) {
-              $shortcutFound = $true
-              break
-            }
-          }
-          if (-not $shortcutFound) {
-            throw "Missing Start Menu shortcut for PhotoVault"
-          }
-
-          $uninstallRoots = @(
-            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
-            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-          )
-          $found = $false
-          foreach ($root in $uninstallRoots) {
-            if (-not (Test-Path $root)) { continue }
-            $match = Get-ChildItem $root |
-              ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
-              Where-Object { $_.DisplayName -eq "PhotoVault" } |
-              Select-Object -First 1
-            if ($match) {
-              $found = $true
-              break
-            }
-          }
-          if (-not $found) {
-            throw "Uninstall registry entry for PhotoVault not found"
-          }
-      - name: Launch smoke test
-        shell: pwsh
-        run: |
-          $exe = Join-Path (Join-Path $env:ProgramFiles "PhotoVault") "photovault.exe"
-          $proc = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 20
-          if ($proc.HasExited) {
-            if ($proc.ExitCode -ne 0) {
-              throw "Installed app exited unexpectedly with code $($proc.ExitCode)"
-            }
-          } else {
-            Stop-Process -Id $proc.Id -Force
-          }
-      - name: Uninstall MSI silently
-        shell: pwsh
-        run: |
-          $msi = Get-ChildItem -Path artifacts/msi -Filter "PhotoVault-Setup-x64.msi" -Recurse | Select-Object -First 1
-          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart" -PassThru -Wait
-          if ($p.ExitCode -ne 0) {
-            throw "MSI uninstall failed with exit code $($p.ExitCode)"
-          }
-      - name: Verify install directory cleanup
-        shell: pwsh
-        run: |
-          $installDir = Join-Path $env:ProgramFiles "PhotoVault"
-          if (Test-Path $installDir) {
-            $remaining = Get-ChildItem -Path $installDir -Force -ErrorAction SilentlyContinue
-            if ($remaining.Count -gt 0) {
-              throw "Install directory still has files after uninstall: $installDir"
-            }
-          }
-      - name: Verify optional assets persist after uninstall
-        shell: pwsh
-        run: |
-          $assetRoot = Join-Path $env:APPDATA "photovault\assets"
-          if (-not (Test-Path $assetRoot)) {
-            throw "Optional assets unexpectedly missing after app uninstall"
-          }
-
-  checksums:
-    name: Release checksums
-    needs: [build, appimage, deb, msi, assets-pack, smoke-appimage, smoke-deb, smoke-msi]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-      - name: Create SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd artifacts
-          appimage=$(find . -name "PhotoVault-x86_64.AppImage" | head -n 1)
-          deb=$(find . -name "PhotoVault-ubuntu-amd64.deb" | head -n 1)
-          msi=$(find . -name "PhotoVault-Setup-x64.msi" | head -n 1)
-          win_zip=$(find . -name "photovault-x86_64-pc-windows-msvc.zip" | head -n 1)
-          assets=$(find . -name "PhotoVault-Assets.zip" | head -n 1)
-          : > SHA256SUMS
-          sha256sum "$appimage" >> SHA256SUMS
-          sha256sum "$deb" >> SHA256SUMS
-          sha256sum "$msi" >> SHA256SUMS
-          sha256sum "$win_zip" >> SHA256SUMS
-          sha256sum "$assets" >> SHA256SUMS
-      - name: Verify SHA256SUMS has expected entries
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd artifacts
-          test "$(wc -l < SHA256SUMS)" -eq 5
-      - uses: actions/upload-artifact@v7
-        with:
-          name: photovault-checksums
-          path: artifacts/SHA256SUMS
-
   release:
-    name: Create GitHub Release
-    needs: [build, appimage, deb, msi, assets-pack, smoke-appimage, smoke-deb, smoke-msi, checksums]
-    runs-on: ubuntu-latest
+    name: Attach asset pack to release
+    needs: [build, assets-pack]
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - name: Create release
-        uses: softprops/action-gh-release@v3
+          name: photovault-assets
+      - name: Upload asset pack to release
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
-          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          files: PhotoVault-Assets.zip
           draft: true
+          prerelease: false

@@ -2,7 +2,15 @@
 
 ## What is this?
 
-An offline-first desktop photo library manager built in Rust with `iced` (GUI), `rusqlite` (SQLite), and `ort` (ONNX Runtime for face detection/recognition). It indexes photos from external drives, extracts EXIF metadata, detects faces, clusters them, finds duplicates/bursts, and provides geocoding.
+An offline-first desktop photo library manager. Rust engine (services, DB, ML) wrapped in a Tauri 2 shell with a Svelte 5 frontend. Uses `rusqlite` (SQLite) and `ort` (ONNX Runtime for face detection/recognition). Indexes photos from external drives, extracts EXIF metadata, detects faces, clusters them, finds duplicates/bursts, and provides geocoding.
+
+## Architecture
+
+- **`src/`** — pure Rust library: services, DB, ML, models, search, scoring, config. No UI. Re-exported via `src/lib.rs`.
+- **`src-tauri/`** — Tauri 2 bin crate. Wraps the engine in `#[tauri::command]` handlers per the contract in `docs/COMMAND_SURFACE.md`.
+- **`src-ui/`** — Vite + Svelte 5 frontend. Talks to the backend via Tauri IPC.
+
+The iced UI was removed in 2026-05; the engine is the same.
 
 ## Cross-Platform Development (WSL + Windows)
 
@@ -99,20 +107,26 @@ Both are idempotent — skip files that already exist.
 ## Build & Run
 
 ```bash
-# Debug
-cargo build
-RUST_LOG=photovault=debug cargo run
+# Engine + Tauri shell (debug)
+cargo build -p photovault -p photovault-tauri
 
-# Release
-cargo build --release
-./target/release/photovault       # Linux
-.\target\release\photovault.exe   # Windows
+# Frontend (one-time + on every change for production builds)
+cd src-ui && npm install && npm run build && cd ..
+
+# Run dev (opens native window with HMR via Vite)
+cargo install tauri-cli --version "^2" --locked   # one-time
+cargo tauri dev
+
+# Production bundle (.deb/AppImage on Linux, .msi on Windows, .dmg on macOS)
+cargo tauri build
 
 # Tests
-cargo test
+cargo test -p photovault
+cargo test -p photovault-tauri
 
 # Lint gate (required before any push)
-cargo clippy --all-targets
+cargo clippy --all-targets -p photovault -p photovault-tauri
+cd src-ui && npm run check && npm run build
 ```
 
 ## Push gate (mandatory)
@@ -128,9 +142,7 @@ Do not push if any of these fail.
 ## Project Structure
 
 ```
-src/
-  main.rs              Entry point, single-instance lock
-  app.rs               Main state machine (all views + message handling)
+src/                   Rust engine (lib-only after iced removal)
   bootstrap.rs         Runtime asset checks
   config/              Settings (theme, thumbnail size, confidence thresholds)
   db/                  SQLite layer (schema, repos, migrations)
@@ -139,24 +151,33 @@ src/
   scoring/             Image quality (blur, sharpness)
   search/              Query parsing
   services/            Business logic (scanner, thumbnails, faces, duplicates, bursts, geocoding)
-  theme/               UI colors
-  views/               UI screens (timeline, people, duplicates, bursts, cull, trash, settings)
-  components/          Reusable UI widgets
-  bin/build_geonames.rs  CLI tool to build GeoNames SQLite DB
+src-tauri/             Tauri shell — IPC handlers + state + DTOs
+  src/commands/        One file per domain (photos, people, albums, ...)
+  src/dto.rs           Wire-format types + From<engine type> impls
+  src/state.rs         AppState (open library, job registry)
+  src/jobs.rs          Long-running job helpers
+src-ui/                Vite + Svelte 5 frontend
+  src/routes/          One Svelte component per view
+  src/lib/api/         Typed Tauri client (mirrors COMMAND_SURFACE.md)
+  src/lib/stores/      Runes-based stores (library, settings)
+  src/lib/components/  Shared UI (Sidebar, PageHeader)
+docs/COMMAND_SURFACE.md  The IPC contract — frontend implements against it
+src/bin/build_geonames.rs  CLI tool to build GeoNames SQLite DB
 
-scripts/               Setup scripts (Linux + Windows)
+scripts/               Setup scripts (Linux + Windows) for ONNX runtime + models + GeoNames
 models/                ONNX model files (gitignored)
 libs/                  ONNX Runtime shared libs (gitignored)
 data/                  GeoNames database (gitignored)
-docs/                  Phase documentation
 ```
 
 ## Key Dependencies
 
-- **iced 0.13** — GUI (Elm-style, cross-platform via wgpu)
 - **rusqlite 0.32** — SQLite (bundled)
 - **ort 2.0.0-rc.11** — ONNX Runtime (load-dynamic)
 - **tokio 1** — async runtime
-- **image 0.25** / **imageproc 0.24** — image processing
-- **rfd 0.15** — native file dialogs
+- **image 0.25** / **imageproc 0.26** — image processing
 - **rayon 1.10** — parallel processing
+- **tauri 2** — desktop shell (IPC, asset protocol, native windowing)
+- **svelte 5** + **vite 5** — frontend
+- **maplibre-gl 4** — map view + photo-detail minimap
+- **@tanstack/svelte-virtual** — kept as dep but unused; custom virtualizer in `src-ui/src/lib/virtualizer.svelte.ts`

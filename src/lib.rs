@@ -8,4 +8,3 @@ pub mod ml;
 pub mod models;
 pub mod search;
 pub mod services;
-pub mod theme;
