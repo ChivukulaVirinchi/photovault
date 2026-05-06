@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { libraryStore } from "./lib/stores/library.svelte";
+  import { settingsStore } from "./lib/stores/settings.svelte";
   import Welcome from "./routes/Welcome.svelte";
   import Timeline from "./routes/Timeline.svelte";
   import PhotoDetail from "./routes/PhotoDetail.svelte";
@@ -58,6 +59,7 @@
     window.addEventListener("hashchange", parseHash);
     window.addEventListener("keydown", onKey);
     libraryStore.refresh();
+    settingsStore.load();
     return () => {
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);

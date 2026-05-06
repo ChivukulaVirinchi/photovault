@@ -1,27 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { settings as settingsApi } from "../lib/api/all";
+  import { settingsStore } from "../lib/stores/settings.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { Settings } from "../lib/api/all";
 
-  let s = $state<Settings | null>(null);
   let saving = $state(false);
   let error = $state<string | null>(null);
 
-  async function load() {
-    try { s = await settingsApi.get(); }
-    catch (e) { error = JSON.stringify(e); }
-  }
+  // Re-sync from backend when this page mounts (covers settings.json
+  // edits made outside the app).
+  onMount(() => { settingsStore.load(); });
+
+  // Read-through to the store so theme toggles apply live across the app.
+  const s = $derived(settingsStore.data);
 
   async function patch(p: Partial<Settings>) {
     if (!s) return;
     saving = true;
-    try { s = await settingsApi.update(p); }
+    try { await settingsStore.update(p); }
     catch (e) { error = JSON.stringify(e); }
     finally { saving = false; }
   }
-
-  onMount(load);
 </script>
 
 <PageHeader

@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createVirtualizer } from "@tanstack/svelte-virtual";
   import { photos } from "../lib/api/photos";
   import { events, type ScanProgress } from "../lib/api/events";
   import { library } from "../lib/api/library";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { createVirtualScroll } from "../lib/virtualizer.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
 
@@ -20,9 +20,9 @@
   let scanProgress = $state<ScanProgress | null>(null);
   let scanJobId = $state<string | null>(null);
 
-  const ROW_HEIGHT = 196;
+  const ROW_HEIGHT = 184;
+  const LABEL_HEIGHT = 56;
   const COLS = 6;
-  const GAP = 6;
 
   async function loadMore() {
     if (loading || !hasMore) return;
@@ -45,10 +45,11 @@
     try {
       const r = await library.startScan(false);
       scanJobId = r.job_id;
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      error = JSON.stringify(e);
+    }
   }
 
-  // Group photos by month for editorial section labels.
   function monthLabel(iso: string | null): string {
     if (!iso) return "Without date";
     const d = new Date(iso);
@@ -58,32 +59,38 @@
   onMount(() => {
     loadMore();
     let unlistens: Array<() => void> = [];
-    events.onScanProgress((p) => {
-      if (p.job_id === scanJobId) scanProgress = p;
-    }).then((u) => unlistens.push(u));
-    events.onScanComplete((p) => {
-      if (p.job_id === scanJobId) {
-        scanProgress = p;
-        scanJobId = null;
-        items = []; nextCursor = null; hasMore = true;
-        loadMore();
-      }
-    }).then((u) => unlistens.push(u));
+    events
+      .onScanProgress((p) => {
+        if (p.job_id === scanJobId) scanProgress = p;
+      })
+      .then((u) => unlistens.push(u));
+    events
+      .onScanComplete((p) => {
+        if (p.job_id === scanJobId) {
+          scanProgress = p;
+          scanJobId = null;
+          items = [];
+          nextCursor = null;
+          hasMore = true;
+          loadMore();
+        }
+      })
+      .then((u) => unlistens.push(u));
     return () => unlistens.forEach((u) => u());
   });
 
-  // Build rows of [photo, photo, ...] groups of COLS for the virtualizer.
-  // Inject month-header rows when month changes.
+  // Build rows: month-label rows interleaved with photo rows.
   type Row =
-    | { kind: "label"; month: string }
-    | { kind: "photos"; photos: PhotoSummaryDto[] };
+    | { kind: "label"; height: number; month: string }
+    | { kind: "photos"; height: number; photos: PhotoSummaryDto[] };
+
   const rows = $derived.by((): Row[] => {
     const out: Row[] = [];
     let lastMonth = "";
     let bucket: PhotoSummaryDto[] = [];
     const flush = () => {
       while (bucket.length > 0) {
-        out.push({ kind: "photos", photos: bucket.slice(0, COLS) });
+        out.push({ kind: "photos", height: ROW_HEIGHT, photos: bucket.slice(0, COLS) });
         bucket = bucket.slice(COLS);
       }
     };
@@ -91,7 +98,7 @@
       const m = monthLabel(p.date_taken);
       if (m !== lastMonth) {
         flush();
-        out.push({ kind: "label", month: m });
+        out.push({ kind: "label", height: LABEL_HEIGHT, month: m });
         lastMonth = m;
       }
       bucket.push(p);
@@ -100,23 +107,21 @@
     return out;
   });
 
-  const virtualizer = $derived(
-    scrollEl
-      ? createVirtualizer<HTMLDivElement, HTMLDivElement>({
-          count: rows.length,
-          getScrollElement: () => scrollEl ?? null,
-          estimateSize: (i) => (rows[i]?.kind === "label" ? 64 : ROW_HEIGHT),
-          overscan: 6,
-        })
-      : null,
-  );
+  const v = createVirtualScroll<Row>({
+    rows: () => rows,
+    scrollEl: () => scrollEl,
+    overscan: 6,
+  });
 
   $effect(() => {
-    if (!virtualizer || !$virtualizer) return;
-    const v = $virtualizer;
-    const last = v.getVirtualItems().at(-1);
-    if (!last) return;
-    if (last.index >= rows.length - 4 && hasMore && !loading) loadMore();
+    return v.attach();
+  });
+
+  // When near bottom, request more.
+  $effect(() => {
+    if (v.last >= rows.length - 4 && hasMore && !loading) {
+      loadMore();
+    }
   });
 </script>
 
@@ -142,51 +147,37 @@
 {#if error}<p class="error">{error}</p>{/if}
 
 <div class="scroll" bind:this={scrollEl}>
-  {#if $virtualizer}
-    <div class="inner" style="height: {$virtualizer.getTotalSize()}px;">
-      {#each $virtualizer.getVirtualItems() as virtual (virtual.key)}
-        {@const row = rows[virtual.index]}
-        <div
-          class="row"
-          class:row-label={row?.kind === "label"}
-          style="
-            transform: translateY({virtual.start}px);
-            height: {row?.kind === 'label' ? 64 : ROW_HEIGHT}px;
-          "
-        >
-          {#if row?.kind === "label"}
-            <div class="month-label">
-              <span class="eyebrow">
-                <span class="ornament"></span>
-                <span>{row.month}</span>
-              </span>
-            </div>
-          {:else if row?.kind === "photos"}
-            <div class="photos">
-              {#each row.photos as photo, i}
-                <a
-                  class="cell"
-                  href="#/photo?id={photo.id}"
-                  style="--i: {i}"
-                  title="#{photo.id}"
-                >
-                  {#if photo.thumbnail_path}
-                    <img
-                      src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""}
-                      alt=""
-                      loading="lazy"
-                    />
-                  {:else}
-                    <span class="muted small mono">no thumb</span>
-                  {/if}
-                </a>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <div class="inner" style="height: {v.totalHeight}px">
+    {#each rows.slice(v.first, v.last) as row, idx (v.first + idx)}
+      {@const i = v.first + idx}
+      <div
+        class="row"
+        class:row-label={row.kind === "label"}
+        style="transform: translateY({v.offsets[i]}px); height: {row.height}px;"
+      >
+        {#if row.kind === "label"}
+          <div class="month-label">
+            <span class="eyebrow"><span class="ornament"></span><span>{row.month}</span></span>
+          </div>
+        {:else}
+          <div class="photos">
+            {#each row.photos as photo (photo.id)}
+              <a class="cell" href="#/photo?id={photo.id}" title="#{photo.id}">
+                {#if photo.thumbnail_path}
+                  <img
+                    src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
+                {/if}
+              </a>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -194,6 +185,9 @@
     flex: 1;
     overflow-y: auto;
     padding: var(--s-3) var(--s-7) var(--s-7);
+    /* Avoid GPU-layer thrashing on the scroll container itself. */
+    contain: strict;
+    height: 100%;
   }
   .inner {
     position: relative;
@@ -201,14 +195,16 @@
   }
   .row {
     position: absolute;
-    top: 0; left: 0; right: 0;
-    padding: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    contain: layout style paint;
+    will-change: transform;
   }
   .row.row-label {
     display: flex;
     align-items: flex-end;
-    padding-bottom: var(--s-3);
-    padding-top: var(--s-4);
+    padding-bottom: var(--s-2);
   }
   .month-label .eyebrow {
     color: var(--ink-soft);
@@ -226,30 +222,32 @@
     display: block;
     aspect-ratio: 1;
     position: relative;
-    transition: transform var(--t-fast) var(--ease),
-                box-shadow var(--t-base-d) var(--ease);
+    transition: transform var(--t-fast) var(--ease);
   }
   .cell:hover {
     transform: scale(1.018);
-    box-shadow: var(--shadow-lift);
     z-index: 1;
   }
   .cell::after {
     content: "";
-    position: absolute; inset: 0;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     border-radius: inherit;
     pointer-events: none;
   }
   .cell img {
-    width: 100%; height: 100%;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
     display: block;
   }
-  .scan-status, .count {
+  .scan-status,
+  .count {
     font-size: var(--t-sm);
     color: var(--ink-soft);
   }
-  .scan-status { color: var(--accent); }
-  .small { font-size: var(--t-xs); }
+  .scan-status {
+    color: var(--accent);
+  }
 </style>

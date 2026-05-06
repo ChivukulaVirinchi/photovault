@@ -10,13 +10,14 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@tanstack/svelte-virtual": "^3",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-os": "^2",
     "@tauri-apps/plugin-shell": "^2",
-    "@tanstack/svelte-virtual": "^3"
+    "maplibre-gl": "^4.7.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4",
