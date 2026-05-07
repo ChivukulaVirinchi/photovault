@@ -108,7 +108,7 @@ jobs:
         run: |
           cd assets-pack
           zip -r ../Smriti-Assets.zip .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: smriti-assets
           path: Smriti-Assets.zip
