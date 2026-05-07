@@ -31,11 +31,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install Linux deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      # Compile-only smoke test. Actually running the benches needs
-      # warmup iterations that, combined with the heavy release
-      # profile, push past the free-tier runner time budget.
-      - run: cargo bench --workspace --no-run
+      # Benches live in the engine crate (`smriti`), which has no
+      # webkit / gtk / frontend dependency. Pin to `-p smriti` so
+      # `smriti-tauri` (and its tauri-build / frontend-dist contract)
+      # doesn't get pulled in here. Compile-only smoke test —
+      # actually running the benches needs warmup iterations that,
+      # combined with the heavy release profile, push past the
+      # free-tier runner time budget.
+      - run: cargo bench -p smriti --no-run

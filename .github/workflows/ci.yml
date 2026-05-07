@@ -47,15 +47,43 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+
+      # Tauri 2 system deps. Linux needs WebKit + GTK + libsoup; macOS
+      # gets WebKit through Xcode (preinstalled on macos-latest); Windows
+      # uses the preinstalled WebView2 runtime, so no apt-equivalent
+      # step is needed there.
       - name: Install Linux deps
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      - run: cargo clippy --all-targets -- -D warnings
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config
+
+      # Frontend dist must exist before any Rust build of `smriti-tauri`
+      # — `tauri::generate_context!` reads it at compile time and the
+      # build aborts if the path is missing.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src-ui/package-lock.json
+      - name: Install frontend deps
+        run: npm ci --prefix src-ui
+      - name: Frontend type check
+        run: npm run check --prefix src-ui
+      - name: Build frontend
+        run: npm run build --prefix src-ui
+
+      - run: cargo clippy --all-targets -p smriti -p smriti-tauri -- -D warnings
       # `cargo test` already builds before running, so a separate
       # `--no-run` step would just duplicate the compile.
-      - run: cargo test
+      - run: cargo test -p smriti -p smriti-tauri
 
   msrv:
     name: MSRV (1.85)
@@ -67,8 +95,22 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      - run: cargo check --all-targets
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src-ui/package-lock.json
+      - run: npm ci --prefix src-ui
+      - run: npm run build --prefix src-ui
+      - run: cargo check --all-targets -p smriti -p smriti-tauri
 
   supply-chain:
     name: Supply chain (audit + deny)

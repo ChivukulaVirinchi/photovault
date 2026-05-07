@@ -11,7 +11,7 @@ use rusqlite::Connection;
 /// Result of duplicate detection
 #[derive(Debug, Clone)]
 pub struct DuplicateGroup {
-    /// Unique group identifier (SHA hash for exact, "phash:<hex>" for perceptual).
+    /// Unique group identifier (SHA hash for exact, `phash:<hex>` for perceptual).
     pub hash: String,
 
     /// Photo IDs in this group

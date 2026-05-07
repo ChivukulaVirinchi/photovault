@@ -20,7 +20,11 @@ jobs:
       matrix:
         include:
           - platform: linux-x64
-            os: ubuntu-22.04
+            # ubuntu-24.04 carries libheif 1.17+, which is the API
+            # version our `libheif-rs` pins to via the `v1_17` feature.
+            # ubuntu-22.04 only ships libheif 1.12 and would fail to
+            # link the heic build path.
+            os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             heic_flag: "--features heic"
           - platform: macos-arm64
@@ -51,7 +55,7 @@ jobs:
           node-version: "20"
 
       - name: Install Linux deps
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -85,7 +89,7 @@ jobs:
 
   assets-pack:
     name: Build asset pack
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Download ONNX models + GeoNames + ORT
@@ -116,7 +120,7 @@ jobs:
   release:
     name: Attach asset pack to release
     needs: [build, assets-pack]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:

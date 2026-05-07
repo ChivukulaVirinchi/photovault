@@ -84,7 +84,15 @@ image = "0.25"
 # runtime (apt install libheif-dev / brew install libheif / Windows
 # binaries shipped with the asset pack). Gated behind the `heic`
 # Cargo feature so default builds still work without the system dep.
-libheif-rs = { version = "2", optional = true, default-features = false }
+#
+# `default-features = false` skips libheif-rs's `latest` feature
+# (which assumes libheif 1.21+) and the optional `image` glue (we
+# have our own pipeline). The `v1_17` feature pins the API surface
+# to libheif 1.17 — the version on Ubuntu 24.04 LTS, macOS Homebrew,
+# and the Smriti-Assets Windows asset pack. Without one of
+# `v1_17`..`v1_21`, `libheif-sys` refuses to build with
+# "you MUST enable one of the crate features".
+libheif-rs = { version = "2", optional = true, default-features = false, features = ["v1_17"] }
 
 # Approximate nearest-neighbor index for face clustering. Pure Rust,
 # no system deps. Behind `hnsw_clustering` feature (default-on) so we

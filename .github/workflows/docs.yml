@@ -31,10 +31,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      # The rustdoc step only documents the engine crate (`-p smriti`),
+      # which is pure Rust with no webkit / gtk / frontend coupling.
+      # That lets us skip the Tauri apt deps + Node + frontend build
+      # that the CI workflow needs.
 
       - name: Install mdBook
         uses: peaceiris/actions-mdbook@v2
@@ -44,8 +44,15 @@ jobs:
       - name: Build user + contributor docs (mdBook)
         run: mdbook build
 
+      # Only document the engine — `smriti-tauri` would drag in
+      # `tauri::generate_context!` (which reads the frontend dist) and
+      # webkit-dependent build deps. The /api/ landing redirects into
+      # /api/smriti/ either way, so this is the docs surface readers
+      # actually want. `--all-features` is intentionally omitted: the
+      # `heic` feature pins to `libheif-rs` which needs a system
+      # libheif we'd otherwise have to install for a docs-only run.
       - name: Build API docs (rustdoc)
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps -p smriti --features hnsw_clustering
         env:
           RUSTDOCFLAGS: '-D warnings'
 

@@ -24,7 +24,7 @@ pub struct AlbumSuggestionRecord {
 }
 
 impl AlbumSuggestionRecord {
-    /// Deserialise the photo_ids JSON into a Vec<i64>.
+    /// Deserialise the photo_ids JSON into a `Vec<i64>`.
     pub fn photo_ids(&self) -> Vec<i64> {
         serde_json::from_str(&self.photo_ids_json).unwrap_or_default()
     }

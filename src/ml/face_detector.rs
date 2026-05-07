@@ -4,9 +4,11 @@
 //! Uses the SCRFD-10GF model via ONNX Runtime.
 //!
 //! SCRFD outputs 9 tensors (3 strides x 3 types):
+//! ```text
 //!   Stride 8:  scores[12800,1], bboxes[12800,4], landmarks[12800,10]
 //!   Stride 16: scores[3200,1],  bboxes[3200,4],  landmarks[3200,10]
 //!   Stride 32: scores[800,1],   bboxes[800,4],   landmarks[800,10]
+//! ```
 //!
 //! Bboxes are anchor-distance format (left, top, right, bottom distances from anchor center).
 //! Landmarks are (dx, dy) offsets from anchor center for 5 keypoints.
