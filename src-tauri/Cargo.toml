@@ -42,7 +42,7 @@ anyhow.workspace = true
 
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+rusqlite = { version = "0.39", features = ["bundled", "blob"] }
 tracing = "0.1"
 open = "5"
 async-channel = "2"
