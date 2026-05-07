@@ -3,98 +3,118 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PhotoVault - Offline-first photo library manager</title>
-  <meta name="description" content="PhotoVault is an offline-first desktop photo library manager with local indexing, face recognition, map exploration, and smart cleanup." />
-  <meta property="og:title" content="PhotoVault" />
-  <meta property="og:description" content="Your photos, organized. On your machine." />
+  <title>Smriti — that which is remembered</title>
+  <meta name="description" content="Smriti is an offline-first desktop photo library manager with on-device face recognition, smart albums, geographic exploration, and full-text search. No cloud. No accounts. No telemetry." />
+  <meta property="og:title" content="Smriti" />
+  <meta property="og:description" content="Your photo library, organized — on your machine." />
   <meta property="og:image" content="./og.png" />
   <meta property="og:url" content="https://chivukulavirinchi.github.io/photovault/" />
   <meta name="twitter:card" content="summary_large_image" />
-  <link rel="icon" type="image/png" href="./photovault.png" />
+  <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600;700;800&display=swap');
-
     :root {
-      --bg: #f5f4ef;
+      --bg: #f6f1e8;
       --bg-elev: #ffffff;
-      --text: #1a1a17;
-      --text-muted: #5f625e;
-      --accent: #0a7c74;
-      --accent-2: #c67332;
-      --line: #ddd9cf;
-      --hero-overlay: rgba(255, 255, 255, 0.68);
-      --shadow: 0 22px 60px rgba(25, 28, 29, 0.12);
+      --ink: #2a2622;
+      --ink-muted: #6a635c;
+      --ink-faint: #9c958d;
+      --accent: #c89968;
+      --accent-deep: #a37642;
+      --line: #e2dccf;
+      --line-soft: #ece6d8;
+      --shadow: 0 30px 60px rgba(54, 42, 30, 0.10);
     }
 
     html[data-theme="dark"] {
-      --bg: #111615;
-      --bg-elev: #18201f;
-      --text: #f2f5ef;
-      --text-muted: #a4aea2;
-      --accent: #66dfd2;
-      --accent-2: #f1a970;
-      --line: #2a3534;
-      --hero-overlay: rgba(17, 22, 21, 0.7);
-      --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+      --bg: #15110d;
+      --bg-elev: #1d1812;
+      --ink: #f1ebde;
+      --ink-muted: #b3a99a;
+      --ink-faint: #74695d;
+      --accent: #d8a978;
+      --accent-deep: #b88656;
+      --line: #2c2620;
+      --line-soft: #221d18;
+      --shadow: 0 30px 60px rgba(0, 0, 0, 0.45);
     }
 
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
-      font-family: "Outfit", "Segoe UI", sans-serif;
-      background: radial-gradient(circle at 20% 5%, rgba(10,124,116,0.2), transparent 45%),
-                  radial-gradient(circle at 85% 8%, rgba(198,115,50,0.18), transparent 52%),
-                  var(--bg);
-      color: var(--text);
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
       min-height: 100vh;
+      font-feature-settings: "ss01", "cv11";
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
     }
 
     a { color: inherit; text-decoration: none; }
-    .container { width: min(1140px, calc(100% - 2.4rem)); margin: 0 auto; }
+    a:hover { color: var(--accent-deep); }
 
+    .container {
+      width: min(1100px, calc(100% - 2.6rem));
+      margin: 0 auto;
+    }
+
+    /* ---- Top bar ----------------------------------------------------- */
     .topbar {
       position: sticky;
       top: 0;
       z-index: 30;
-      backdrop-filter: blur(12px);
-      background: color-mix(in oklab, var(--bg), transparent 15%);
-      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      background: color-mix(in oklab, var(--bg), transparent 18%);
+      border-bottom: 1px solid var(--line-soft);
     }
 
     .topbar-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      min-height: 72px;
-      gap: 1rem;
+      min-height: 76px;
+      gap: 1.2rem;
     }
 
     .brand {
       display: flex;
-      align-items: center;
-      gap: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.01em;
+      align-items: baseline;
+      gap: 0.55rem;
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-weight: 500;
+      font-size: 1.65rem;
+      letter-spacing: 0.005em;
+      position: relative;
     }
 
-    .brand-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      box-shadow: 0 0 0 5px color-mix(in oklab, var(--accent), transparent 84%);
+    .brand::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      align-self: center;
+      margin-bottom: 0.7rem;
+      margin-left: -0.5rem;
     }
 
     .nav-links {
       display: flex;
-      gap: 1.2rem;
-      font-size: 0.94rem;
-      color: var(--text-muted);
+      gap: 1.6rem;
+      font-size: 0.92rem;
+      color: var(--ink-muted);
       flex-wrap: wrap;
       justify-content: flex-end;
     }
 
-    .nav-links a:hover { color: var(--text); }
+    .nav-links a {
+      transition: color 0.18s ease;
+    }
 
     .btn {
       display: inline-flex;
@@ -103,10 +123,10 @@
       gap: 0.4rem;
       border: 1px solid transparent;
       border-radius: 999px;
-      font-size: 0.92rem;
-      font-weight: 600;
-      padding: 0.58rem 1.1rem;
-      transition: all 0.18s ease;
+      font-size: 0.91rem;
+      font-weight: 500;
+      padding: 0.62rem 1.15rem;
+      transition: all 0.2s ease;
       cursor: pointer;
       font-family: inherit;
       background: none;
@@ -114,61 +134,85 @@
     }
 
     .btn-primary {
-      background: linear-gradient(110deg, var(--accent), color-mix(in oklab, var(--accent), white 9%));
-      color: white;
-      box-shadow: 0 8px 18px color-mix(in oklab, var(--accent), transparent 66%);
+      background: var(--accent);
+      color: #1a140d;
+      border-color: var(--accent);
     }
-    .btn-primary:hover { transform: translateY(-1px); }
+    .btn-primary:hover {
+      background: var(--accent-deep);
+      border-color: var(--accent-deep);
+      color: #fff;
+      transform: translateY(-1px);
+    }
 
-    .btn-ghost { border-color: var(--line); color: var(--text-muted); }
-    .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+    .btn-ghost { border-color: var(--line); color: var(--ink-muted); }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--ink); }
 
+    /* ---- Hero -------------------------------------------------------- */
     .hero {
-      padding: 4.2rem 0 2.2rem;
+      padding: 5.5rem 0 3.5rem;
       display: grid;
-      gap: 1.6rem;
+      gap: 3rem;
       grid-template-columns: 1.05fr 1fr;
       align-items: center;
     }
 
     .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: var(--text-muted);
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 0.33rem 0.72rem;
+      display: inline-block;
+      color: var(--ink-faint);
       font-size: 0.78rem;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
-      margin-bottom: 0.95rem;
+      margin-bottom: 1.4rem;
+      font-weight: 500;
     }
 
-    h1 {
+    h1.display {
       margin: 0;
-      font-family: "DM Serif Display", Georgia, serif;
-      font-size: clamp(2.2rem, 4.9vw, 4.5rem);
-      line-height: 0.95;
-      letter-spacing: -0.02em;
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-weight: 400;
+      font-size: clamp(2.6rem, 5.8vw, 4.6rem);
+      line-height: 1.05;
+      letter-spacing: -0.012em;
+      color: var(--ink);
+    }
+    h1.display em {
+      font-style: italic;
+      color: var(--accent-deep);
+    }
+
+    .sanskrit {
+      margin-top: 1.4rem;
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-size: 1.15rem;
+      color: var(--ink-muted);
+      letter-spacing: 0.01em;
     }
 
     .lead {
-      margin-top: 1rem;
-      margin-bottom: 1.4rem;
-      color: var(--text-muted);
-      line-height: 1.6;
-      font-size: clamp(1rem, 1.6vw, 1.13rem);
-      max-width: 44ch;
+      margin-top: 1.6rem;
+      margin-bottom: 1.8rem;
+      color: var(--ink-muted);
+      line-height: 1.7;
+      font-size: 1.05rem;
+      max-width: 48ch;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 0.7rem;
+      flex-wrap: wrap;
     }
 
     .hero-card {
       position: relative;
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 8px;
       overflow: hidden;
       box-shadow: var(--shadow);
-      min-height: 320px;
+      aspect-ratio: 4 / 3;
+      background: var(--bg-elev);
     }
 
     .hero-card img {
@@ -178,117 +222,166 @@
       display: block;
     }
 
-    .hero-card-overlay {
-      position: absolute;
-      inset: auto 0 0 0;
-      padding: 1rem 1.1rem;
-      background: linear-gradient(180deg, transparent, var(--hero-overlay));
-      display: flex;
-      justify-content: space-between;
-      align-items: end;
-      gap: 1rem;
+    /* ---- Sections ---------------------------------------------------- */
+    .section {
+      padding: 3.5rem 0;
+      border-top: 1px solid var(--line-soft);
     }
 
-    .section { padding: 2.1rem 0; }
+    .section-title {
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-weight: 500;
+      font-size: clamp(1.6rem, 2.6vw, 2.1rem);
+      margin: 0 0 0.3rem;
+      letter-spacing: 0.005em;
+    }
 
-    .split {
+    .section-sub {
+      color: var(--ink-muted);
+      margin: 0 0 2rem;
+      font-size: 0.98rem;
+    }
+
+    /* ---- Features ---------------------------------------------------- */
+    .features {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      align-items: stretch;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.6rem;
     }
 
-    .panel {
-      background: var(--bg-elev);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 1.2rem;
-      box-shadow: 0 8px 20px color-mix(in oklab, var(--bg), black 8%);
+    .feature {
+      padding: 0;
     }
 
-    .panel h2,
-    .panel h3 {
+    .feature h3 {
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-size: 1.35rem;
+      font-weight: 500;
+      margin: 0 0 0.45rem;
+      color: var(--ink);
+    }
+
+    .feature p {
       margin: 0;
-      font-size: 1.1rem;
-      font-weight: 700;
+      color: var(--ink-muted);
+      font-size: 0.93rem;
+      line-height: 1.65;
     }
 
-    .muted { color: var(--text-muted); }
-
-    .kpis {
-      margin-top: 0.9rem;
+    /* ---- Downloads --------------------------------------------------- */
+    .downloads {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.65rem;
-    }
-
-    .kpi {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 0.7rem;
-    }
-    .kpi b { display: block; font-size: 1.15rem; }
-    .kpi span { color: var(--text-muted); font-size: 0.82rem; }
-
-    .download-grid {
-      margin-top: 1rem;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.75rem;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.95rem;
     }
 
     .download-card {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 0.95rem;
+      border-radius: 8px;
+      padding: 1.2rem 1.25rem;
       display: flex;
       flex-direction: column;
       gap: 0.32rem;
-      transition: border-color 0.2s ease, transform 0.2s ease;
-      background: color-mix(in oklab, var(--bg-elev), var(--accent) 2%);
+      background: var(--bg-elev);
+      transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
     }
 
     .download-card:hover {
       border-color: var(--accent);
-      transform: translateY(-1px);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(54, 42, 30, 0.07);
     }
 
-    .download-card strong { font-size: 0.98rem; }
-    .download-card small { color: var(--text-muted); }
+    .download-card .platform {
+      font-size: 0.78rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 0.2rem;
+    }
 
-    .docs-nav {
-      margin-top: 0.9rem;
+    .download-card strong {
+      font-size: 1.02rem;
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .download-card small {
+      color: var(--ink-muted);
+      font-size: 0.85rem;
+    }
+
+    .assets-note {
+      grid-column: 1 / -1;
+      padding: 1.1rem 1.25rem;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      color: var(--ink-muted);
+      font-size: 0.9rem;
+      background: var(--line-soft);
+    }
+
+    .assets-note a {
+      color: var(--accent-deep);
+      font-weight: 500;
+    }
+
+    /* ---- Docs / Footer ---------------------------------------------- */
+    .docs-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.58rem;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.85rem;
     }
 
     .docs-link {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 0.6rem 0.72rem;
-      color: var(--text-muted);
-      font-size: 0.88rem;
-      background: color-mix(in oklab, var(--bg-elev), var(--text) 1%);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      color: var(--ink-muted);
+      font-size: 0.93rem;
+      background: var(--bg-elev);
+      transition: all 0.2s ease;
     }
 
-    .docs-link:hover { color: var(--text); border-color: var(--accent); }
+    .docs-link:hover {
+      color: var(--ink);
+      border-color: var(--accent);
+    }
+
+    .docs-link strong {
+      display: block;
+      color: var(--ink);
+      font-weight: 500;
+      margin-bottom: 0.15rem;
+      font-size: 0.95rem;
+    }
 
     .footer {
-      border-top: 1px solid var(--line);
-      margin-top: 2rem;
-      padding: 1rem 0 2rem;
-      color: var(--text-muted);
+      border-top: 1px solid var(--line-soft);
+      margin-top: 3rem;
+      padding: 2rem 0 3rem;
+      color: var(--ink-faint);
       display: flex;
       justify-content: space-between;
       gap: 1rem;
-      font-size: 0.85rem;
+      font-size: 0.86rem;
       flex-wrap: wrap;
     }
 
-    @media (max-width: 980px) {
-      .hero, .split { grid-template-columns: 1fr; }
-      .download-grid, .docs-nav, .kpis { grid-template-columns: 1fr; }
+    .footer-links {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a:hover { color: var(--ink); }
+    .footer-links span.dot { color: var(--ink-faint); }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; padding: 3.5rem 0 2rem; }
+      .features, .downloads, .docs-grid { grid-template-columns: 1fr; }
       .nav-links { display: none; }
     }
   </style>
@@ -296,120 +389,201 @@
 <body>
   <header class="topbar">
     <div class="container topbar-inner">
-      <a class="brand" href="./">
-        <span class="brand-dot"></span>
-        <span>PhotoVault</span>
+      <a class="brand" href="./" aria-label="Smriti">
+        smriti
       </a>
       <nav class="nav-links" aria-label="Primary navigation">
-        <a href="#downloads">Downloads</a>
+        <a href="#downloads">Download</a>
+        <a href="#features">Features</a>
         <a href="./docs/">Docs</a>
         <a href="./api/">API</a>
         <a href="https://github.com/ChivukulaVirinchi/photovault">GitHub</a>
       </nav>
       <div style="display:flex; gap:0.5rem; align-items:center;">
         <button class="btn btn-ghost" id="theme-toggle" type="button" aria-label="Toggle theme">Theme</button>
-        <a class="btn btn-primary" href="#downloads">Get PhotoVault</a>
+        <a class="btn btn-primary" href="#downloads">Get Smriti</a>
       </div>
     </div>
   </header>
 
   <main class="container">
+    <!-- HERO -->
     <section class="hero">
       <div>
-        <div class="eyebrow">Offline first • Local AI • Open source</div>
-        <h1>Your photos, organized.<br/>On your machine.</h1>
+        <div class="eyebrow">Offline · Local · Open Source</div>
+        <h1 class="display">
+          Your photo library,<br/>
+          <em>quietly remembered.</em>
+        </h1>
+        <p class="sanskrit">स्मृति — that which is remembered.</p>
         <p class="lead">
-          PhotoVault indexes local drives, groups people with on-device face recognition,
-          helps clean duplicates, and keeps your photo life private by default.
+          Smriti indexes photos from any drive, recognises faces on-device,
+          surfaces memories, and maps where you've been — without ever
+          leaving your machine. No accounts. No cloud. No telemetry.
         </p>
-        <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
-          <a class="btn btn-primary" href="#downloads">Download</a>
-          <a class="btn btn-ghost" href="./docs/">Read docs</a>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#downloads">Download free</a>
+          <a class="btn btn-ghost" href="./docs/">Read the manual</a>
         </div>
       </div>
-      <article class="hero-card" aria-label="PhotoVault timeline preview">
-        <img src="./hero-screenshot.png" alt="PhotoVault timeline screenshot" />
-        <div class="hero-card-overlay">
-          <div>
-            <strong>Desktop-first workflow</strong><br/>
-            <small class="muted">No account, no cloud lock-in.</small>
-          </div>
-          <small class="muted">v0.2.0</small>
-        </div>
+      <article class="hero-card" aria-label="Smriti gallery preview">
+        <img src="./hero-screenshot.png" alt="Smriti timeline screenshot" />
       </article>
     </section>
 
-    <section class="section split" id="downloads">
-      <article class="panel">
-        <h2>Downloads</h2>
-        <p class="muted">Install core app first, then optional asset pack for face recognition + geocoding.</p>
-        <div class="download-grid">
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi">
-            <strong>Windows MSI</strong>
-            <small>Recommended installer</small>
-          </a>
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip">
-            <strong>Windows ZIP</strong>
-            <small>Portable fallback</small>
-          </a>
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb">
-            <strong>Ubuntu / Debian .deb</strong>
-            <small>System installer</small>
-          </a>
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage">
-            <strong>Linux AppImage</strong>
-            <small>Portable app</small>
-          </a>
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip">
-            <strong>Optional asset pack</strong>
-            <small>ONNX runtime + models + geonames DB</small>
-          </a>
-          <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
-            <strong>All release assets</strong>
-            <small>macOS archives and checksums</small>
-          </a>
+    <!-- FEATURES -->
+    <section class="section" id="features">
+      <h2 class="section-title">What it does</h2>
+      <p class="section-sub">Small features, deeply considered. Nothing speculative.</p>
+      <div class="features">
+        <div class="feature">
+          <h3>Faces</h3>
+          <p>On-device recognition with InsightFace models. Group photos by person, name them once, browse a face's history.</p>
         </div>
-        <p class="muted" style="margin-top:0.9rem; font-size:0.82rem;">
-          PhotoVault can notify you when a new release is out — opt-in
-          on first run, disabled by default, documented in
-          <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/PRIVACY.md">PRIVACY.md</a>.
-          Nothing but a version check leaves your machine.
-        </p>
-      </article>
+        <div class="feature">
+          <h3>Albums</h3>
+          <p>Suggested automatically for trips and events from time and place clusters. Accept, edit, ignore.</p>
+        </div>
+        <div class="feature">
+          <h3>Memories</h3>
+          <p>"This day, three years ago." A quiet rediscovery surface that never asks for your data in exchange.</p>
+        </div>
+        <div class="feature">
+          <h3>Map</h3>
+          <p>Every geotagged photo, plotted. Click a cluster to drill into a place; tiles cached per-drive.</p>
+        </div>
+        <div class="feature">
+          <h3>Insights</h3>
+          <p>Shooting heatmap, top people, top locations, monthly cadence. Click any cell to see the photos behind it.</p>
+        </div>
+        <div class="feature">
+          <h3>Search</h3>
+          <p>Unified across people, albums, places, and photos. Date filters. Per-place / per-person scopes. Fast on hundreds of thousands of photos.</p>
+        </div>
+      </div>
+    </section>
 
-      <article class="panel" id="docs">
-        <h3>Documentation</h3>
-        <p class="muted">Unified docs with practical guides for users and contributors.</p>
-        <div class="docs-nav">
-          <a class="docs-link" href="./docs/user-guide/getting-started.html">Getting started</a>
-          <a class="docs-link" href="./docs/BUILD.html">Build from source</a>
-          <a class="docs-link" href="./docs/architecture/overview.html">Architecture</a>
-          <a class="docs-link" href="./docs/user-guide/troubleshooting.html">Troubleshooting</a>
-          <a class="docs-link" href="./docs/RELEASE_LINUX.html">Release process</a>
-          <a class="docs-link" href="./api/">API reference</a>
+    <!-- DOWNLOADS -->
+    <section class="section" id="downloads">
+      <h2 class="section-title">Download</h2>
+      <p class="section-sub">Apache-2.0 licensed. Always free.</p>
+      <div class="downloads">
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Setup-x64.msi">
+          <span class="platform">Windows</span>
+          <strong>Smriti-Setup-x64.msi</strong>
+          <small>Recommended installer</small>
+        </a>
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-ubuntu-amd64.deb">
+          <span class="platform">Debian / Ubuntu</span>
+          <strong>Smriti-ubuntu-amd64.deb</strong>
+          <small>System installer</small>
+        </a>
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-x86_64.AppImage">
+          <span class="platform">Linux (other)</span>
+          <strong>Smriti-x86_64.AppImage</strong>
+          <small>Portable, runs anywhere</small>
+        </a>
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
+          <span class="platform">macOS</span>
+          <strong>From the releases page</strong>
+          <small>.dmg / tar.gz</small>
+        </a>
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/smriti-x86_64-pc-windows-msvc.zip">
+          <span class="platform">Windows (portable)</span>
+          <strong>smriti-x86_64-pc-windows-msvc.zip</strong>
+          <small>Unzip and run</small>
+        </a>
+        <a class="download-card" href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
+          <span class="platform">Source</span>
+          <strong>Build from source</strong>
+          <small>cargo build --release</small>
+        </a>
+        <div class="assets-note">
+          <strong>Optional:</strong> For face recognition + offline geocoding, also grab
+          <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip">Smriti-Assets.zip</a>
+          (ONNX runtime + face models + GeoNames database). Smriti runs without it; the asset pack just unlocks those two features. The app prompts you on first launch.
         </div>
-        <div class="kpis">
-          <div class="kpi"><b>100%</b><span>offline-first</span></div>
-          <div class="kpi"><b>0</b><span>mandatory cloud APIs</span></div>
-          <div class="kpi"><b>1-click</b><span>optional asset install</span></div>
+      </div>
+    </section>
+
+    <!-- DOCS -->
+    <section class="section" id="docs">
+      <h2 class="section-title">Manual</h2>
+      <p class="section-sub">User guide and contributor docs.</p>
+      <div class="docs-grid">
+        <a class="docs-link" href="./docs/user-guide/getting-started.html">
+          <strong>Getting Started</strong>
+          First run, picking a library drive, what to expect.
+        </a>
+        <a class="docs-link" href="./docs/user-guide/indexing.html">
+          <strong>Indexing</strong>
+          How scanning, EXIF, and reindex work.
+        </a>
+        <a class="docs-link" href="./docs/user-guide/people.html">
+          <strong>People &amp; Faces</strong>
+          Naming, merging, and cleanup workflows.
+        </a>
+        <a class="docs-link" href="./docs/user-guide/settings.html">
+          <strong>Settings</strong>
+          Thresholds, theme, auto-update.
+        </a>
+        <a class="docs-link" href="./docs/user-guide/faq.html">
+          <strong>FAQ</strong>
+          Common questions and gotchas.
+        </a>
+        <a class="docs-link" href="./docs/BUILD.html">
+          <strong>Build from source</strong>
+          Linux + Windows + macOS toolchains.
+        </a>
+        <a class="docs-link" href="./docs/architecture/overview.html">
+          <strong>Architecture</strong>
+          Engine, Tauri shell, Svelte frontend.
+        </a>
+        <a class="docs-link" href="./docs/COMMAND_SURFACE.html">
+          <strong>IPC contract</strong>
+          The Tauri command surface, end-to-end.
+        </a>
+        <a class="docs-link" href="./api/">
+          <strong>API reference</strong>
+          Rustdoc for the engine library.
+        </a>
+      </div>
+    </section>
+
+    <!-- PHILOSOPHY -->
+    <section class="section">
+      <h2 class="section-title">Why offline?</h2>
+      <p class="section-sub">Your photos are personal. Smriti keeps them that way.</p>
+      <div class="features">
+        <div class="feature">
+          <h3>No upload</h3>
+          <p>Photos stay on your drive. Smriti never copies, syncs, or transmits image data — anywhere, ever.</p>
         </div>
-      </article>
+        <div class="feature">
+          <h3>No account</h3>
+          <p>No sign-up, no login, no email. Open the app, point it at a folder, done.</p>
+        </div>
+        <div class="feature">
+          <h3>No telemetry</h3>
+          <p>No analytics, no crash reporting, no "anonymous usage statistics." The only optional outbound call is a once-a-day version check, and it's off by default.</p>
+        </div>
+      </div>
     </section>
   </main>
 
   <footer class="container footer">
-    <span>PhotoVault • Apache-2.0 • Offline-first photo management</span>
-    <span>
+    <span>Smriti · Apache-2.0 · Made with care</span>
+    <span class="footer-links">
       <a href="https://github.com/ChivukulaVirinchi/photovault">GitHub</a>
-      •
-      <a href="./docs/">Docs</a>
-      •
+      <span class="dot">·</span>
+      <a href="./docs/">Manual</a>
+      <span class="dot">·</span>
       <a href="./api/">API</a>
-      •
+      <span class="dot">·</span>
       <a href="https://github.com/ChivukulaVirinchi/photovault/discussions">Discussions</a>
-      •
+      <span class="dot">·</span>
       <a href="https://github.com/ChivukulaVirinchi/photovault/issues">Issues</a>
-      •
+      <span class="dot">·</span>
       <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/PRIVACY.md">Privacy</a>
     </span>
   </footer>
@@ -417,7 +591,7 @@
   <script>
     (function () {
       const root = document.documentElement;
-      const key = "photovault-theme";
+      const key = "smriti-theme";
       const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
       const saved = localStorage.getItem(key);
       if (saved === "dark" || saved === "light") {

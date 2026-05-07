@@ -53,14 +53,14 @@ Debug build:
 
 ```bash
 cargo build
-RUST_LOG=photovault=debug cargo run
+RUST_LOG=smriti=debug cargo run
 ```
 
 Release build:
 
 ```bash
 cargo build --release
-./target/release/photovault
+./target/release/smriti
 ```
 
 Windows release binary:
@@ -95,13 +95,13 @@ Install test:
 
 ```bash
 sudo dpkg -i target/debian/*.deb
-photovault
+smriti
 ```
 
 Uninstall test:
 
 ```bash
-sudo apt remove photovault
+sudo apt remove smriti
 ```
 
 ### Linux AppImage

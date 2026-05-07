@@ -65,10 +65,10 @@ jobs:
           cat > dist/api/index.html <<'EOF'
           <!DOCTYPE html>
           <meta charset="utf-8">
-          <title>PhotoVault API</title>
-          <meta http-equiv="refresh" content="0; url=./photovault/">
-          <link rel="canonical" href="./photovault/">
-          <p>Redirecting to <a href="./photovault/">photovault crate docs</a>&hellip;</p>
+          <title>Smriti API</title>
+          <meta http-equiv="refresh" content="0; url=./smriti/">
+          <link rel="canonical" href="./smriti/">
+          <p>Redirecting to <a href="./smriti/">smriti crate docs</a>&hellip;</p>
           EOF
 
       - uses: actions/configure-pages@v6

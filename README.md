@@ -63,7 +63,7 @@ and the AppImage in CI before publishing.
 
 ### Windows
 - **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Setup-x64.msi)
-- **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip)
+- **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/smriti-x86_64-pc-windows-msvc.zip)
 - **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
 
 > Smriti's installer is not code-signed. Windows SmartScreen
@@ -96,7 +96,7 @@ for your platform rather than self-replacing the binary.
 git clone https://github.com/ChivukulaVirinchi/photovault.git
 cd photovault
 cargo build --release
-./target/release/photovault
+./target/release/smriti
 ```
 
 ### HEIC support (optional)

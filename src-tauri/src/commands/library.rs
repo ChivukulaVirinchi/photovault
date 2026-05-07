@@ -229,7 +229,7 @@ pub struct ScanProgressDto {
 /// Start a scan job. Returns the job_id immediately; progress streams on
 /// `scan:progress`, completion on `scan:complete`.
 ///
-/// Caveat: the photovault scanner takes ownership of the Database
+/// Caveat: the engine's scanner takes ownership of the Database
 /// (moves it into a spawn_blocking thread). We work around that by
 /// extracting the database from AppState, running the scan, then
 /// putting it back. While the scan runs the library is "borrowed" —
@@ -280,7 +280,7 @@ pub async fn library_start_scan(
     let job_id_clone = job_id.clone();
 
     tokio::spawn(async move {
-        // Bridge the photovault scanner channel → Tauri events.
+        // Bridge the engine's scanner channel → Tauri events.
         let (rx, scanner_cancel, handle) = smriti::services::scanner::start_scan(
             drive_root_clone.clone(),
             database,

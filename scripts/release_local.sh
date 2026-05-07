@@ -33,39 +33,39 @@ case "$TARGET" in
       exit 1
     fi
     cargo build --release --target x86_64-unknown-linux-gnu
-    rm -rf staging-local PhotoVault.AppDir appimagetool-x86_64.AppImage
-    mkdir -p staging-local/photovault
-    cp target/x86_64-unknown-linux-gnu/release/photovault staging-local/photovault/
-    mkdir -p PhotoVault.AppDir/usr/bin
-    mkdir -p PhotoVault.AppDir/usr/share/applications
-    mkdir -p PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps
-    cp staging-local/photovault/photovault PhotoVault.AppDir/usr/bin/
-    cp packaging/photovault.desktop PhotoVault.AppDir/usr/share/applications/
-    cp packaging/photovault.png PhotoVault.AppDir/usr/share/icons/hicolor/256x256/apps/
-    cp packaging/photovault.desktop PhotoVault.AppDir/
-    cp packaging/photovault.png PhotoVault.AppDir/
-    cat > PhotoVault.AppDir/AppRun <<'EOF'
+    rm -rf staging-local Smriti.AppDir appimagetool-x86_64.AppImage
+    mkdir -p staging-local/smriti
+    cp target/x86_64-unknown-linux-gnu/release/smriti staging-local/smriti/
+    mkdir -p Smriti.AppDir/usr/bin
+    mkdir -p Smriti.AppDir/usr/share/applications
+    mkdir -p Smriti.AppDir/usr/share/icons/hicolor/256x256/apps
+    cp staging-local/smriti/smriti Smriti.AppDir/usr/bin/
+    cp packaging/smriti.desktop Smriti.AppDir/usr/share/applications/
+    cp packaging/smriti.png Smriti.AppDir/usr/share/icons/hicolor/256x256/apps/
+    cp packaging/smriti.desktop Smriti.AppDir/
+    cp packaging/smriti.png Smriti.AppDir/
+    cat > Smriti.AppDir/AppRun <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 cd "${HERE}/usr/bin"
-exec "${HERE}/usr/bin/photovault" "$@"
+exec "${HERE}/usr/bin/smriti" "$@"
 EOF
-    chmod +x PhotoVault.AppDir/AppRun
+    chmod +x Smriti.AppDir/AppRun
     wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
     chmod +x appimagetool-x86_64.AppImage
-    ./appimagetool-x86_64.AppImage PhotoVault.AppDir PhotoVault-x86_64.AppImage
-    echo "Built AppImage: PhotoVault-x86_64.AppImage"
+    ./appimagetool-x86_64.AppImage Smriti.AppDir Smriti-x86_64.AppImage
+    echo "Built AppImage: Smriti-x86_64.AppImage"
     ;;
   assets-pack)
     ./scripts/setup_assets.sh
-    rm -rf assets-pack-local PhotoVault-Assets-local.zip
+    rm -rf assets-pack-local Smriti-Assets-local.zip
     mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
     cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ || true
     cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
     cp models/glintr100.onnx assets-pack-local/models/
     cp data/geonames.db assets-pack-local/data/
-    (cd assets-pack-local && zip -r ../PhotoVault-Assets-local.zip .)
-    echo "Built optional asset pack: PhotoVault-Assets-local.zip"
+    (cd assets-pack-local && zip -r ../Smriti-Assets-local.zip .)
+    echo "Built optional asset pack: Smriti-Assets-local.zip"
     ;;
   verify)
     ./scripts/verify_installers_local.sh

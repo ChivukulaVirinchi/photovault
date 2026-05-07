@@ -1,4 +1,4 @@
-//! Shared utility functions for PhotoVault
+//! Shared utility functions for Smriti
 
 /// Format bytes as human-readable size
 pub fn format_bytes(bytes: u64) -> String {

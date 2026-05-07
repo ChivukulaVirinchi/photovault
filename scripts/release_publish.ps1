@@ -96,7 +96,7 @@ if ($LASTEXITCODE -eq 0) {
     throw "Tag already exists on origin: $Version"
 }
 
-& git tag -a $Version -m "PhotoVault $Version"
+& git tag -a $Version -m "Smriti $Version"
 
 try {
     & git push origin $Version
@@ -112,11 +112,11 @@ try {
         & gh run watch $runId --exit-status
 
         $required = @(
-            "PhotoVault-Setup-x64.msi",
-            "photovault-x86_64-pc-windows-msvc.zip",
-            "PhotoVault-ubuntu-amd64.deb",
-            "PhotoVault-x86_64.AppImage",
-            "PhotoVault-Assets.zip"
+            "Smriti-Setup-x64.msi",
+            "smriti-x86_64-pc-windows-msvc.zip",
+            "Smriti-ubuntu-amd64.deb",
+            "Smriti-x86_64.AppImage",
+            "Smriti-Assets.zip"
         )
         if (-not $SkipChecksumsVerification) {
             $required += "SHA256SUMS"

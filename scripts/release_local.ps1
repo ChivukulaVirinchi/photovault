@@ -16,10 +16,10 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $RepoRoot
 
 $ArtifactsDir = Join-Path $RepoRoot "artifacts\local"
-$WixWorkDir = Join-Path $env:TEMP "photovault-localwix"
-$MsiPath = Join-Path $ArtifactsDir "PhotoVault-Setup-x64.msi"
-$ZipPath = Join-Path $ArtifactsDir "photovault-x86_64-pc-windows-msvc.zip"
-$AssetPackPath = Join-Path $ArtifactsDir "PhotoVault-Assets.zip"
+$WixWorkDir = Join-Path $env:TEMP "smriti-localwix"
+$MsiPath = Join-Path $ArtifactsDir "Smriti-Setup-x64.msi"
+$ZipPath = Join-Path $ArtifactsDir "smriti-x86_64-pc-windows-msvc.zip"
+$AssetPackPath = Join-Path $ArtifactsDir "Smriti-Assets.zip"
 
 $results = [System.Collections.Generic.List[object]]::new()
 $installedMsi = $false
@@ -99,7 +99,7 @@ function Build-AssetPack([string]$OutputZip) {
 }
 
 try {
-    Write-Host "PhotoVault local release verification"
+    Write-Host "Smriti local release verification"
     Write-Host "===================================="
 
     Invoke-Step "validate-toolchain" {
@@ -118,7 +118,7 @@ try {
 
     Invoke-Step "build-windows-release" {
         & cargo build --release --target x86_64-pc-windows-msvc --target-dir $TargetDir | Out-Null
-        $exe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\photovault.exe"
+        $exe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe"
         if (-not (Test-Path $exe)) {
             throw "Expected executable missing: $exe"
         }
@@ -132,16 +132,16 @@ try {
     }
 
     Invoke-Step "build-portable-zip" {
-        $stage = Join-Path $ArtifactsDir "zip-stage\photovault"
+        $stage = Join-Path $ArtifactsDir "zip-stage\smriti"
         Remove-PathSafe (Join-Path $ArtifactsDir "zip-stage")
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
-        Copy-Item "$TargetDir\x86_64-pc-windows-msvc\release\photovault.exe" "$stage\photovault.exe" -Force
+        Copy-Item "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe" "$stage\smriti.exe" -Force
         Copy-Item "README.md" "$stage\README.md" -Force
         Copy-Item "LICENSE" "$stage\LICENSE" -Force
         if (Test-Path $ZipPath) {
             Remove-Item $ZipPath -Force
         }
-        Compress-Archive -Path "$($ArtifactsDir)\zip-stage\photovault" -DestinationPath $ZipPath -Force
+        Compress-Archive -Path "$($ArtifactsDir)\zip-stage\smriti" -DestinationPath $ZipPath -Force
         Remove-PathSafe (Join-Path $ArtifactsDir "zip-stage")
         if (-not (Test-Path $ZipPath)) {
             throw "ZIP output missing: $ZipPath"
@@ -172,16 +172,16 @@ try {
 
         Invoke-RobocopyMirror $RepoRoot $WixWorkDir @('.git', 'target', 'target-win', '.github', 'website', '.cache', 'libs', 'models', 'data', 'artifacts')
 
-        $srcExe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\photovault.exe"
+        $srcExe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe"
         $dstBinDir = Join-Path $WixWorkDir "target-win\x86_64-pc-windows-msvc\release"
         New-Item -ItemType Directory -Path $dstBinDir -Force | Out-Null
-        Copy-Item $srcExe (Join-Path $dstBinDir "photovault.exe") -Force
+        Copy-Item $srcExe (Join-Path $dstBinDir "smriti.exe") -Force
 
         Push-Location $WixWorkDir
         try {
-            & cargo wix --no-build --target x86_64-pc-windows-msvc --target-bin-dir "$dstBinDir" --bin-path "$WixBinPath" --output target\wix\PhotoVault-Setup-x64.msi | Out-Null
+            & cargo wix --no-build --target x86_64-pc-windows-msvc --target-bin-dir "$dstBinDir" --bin-path "$WixBinPath" --output target\wix\Smriti-Setup-x64.msi | Out-Null
             New-Item -ItemType Directory -Path (Split-Path $MsiPath -Parent) -Force | Out-Null
-            Copy-Item ".\target\wix\PhotoVault-Setup-x64.msi" $MsiPath -Force
+            Copy-Item ".\target\wix\Smriti-Setup-x64.msi" $MsiPath -Force
         } finally {
             Pop-Location
         }
@@ -207,7 +207,7 @@ try {
                 }
                 $installedMsi = $true
 
-                $installedExe = Join-Path $env:ProgramFiles "PhotoVault\photovault.exe"
+                $installedExe = Join-Path $env:ProgramFiles "Smriti\smriti.exe"
                 if (-not (Test-Path $installedExe)) {
                     throw "Installed exe missing: $installedExe"
                 }

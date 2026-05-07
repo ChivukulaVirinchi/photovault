@@ -78,7 +78,7 @@ jobs:
         with:
           projectPath: src-tauri
           tagName: ${{ github.ref_name }}
-          releaseName: "PhotoVault ${{ github.ref_name }}"
+          releaseName: "Smriti ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} ${{ matrix.heic_flag }}
@@ -107,11 +107,11 @@ jobs:
       - name: Zip pack
         run: |
           cd assets-pack
-          zip -r ../PhotoVault-Assets.zip .
+          zip -r ../Smriti-Assets.zip .
       - uses: actions/upload-artifact@v4
         with:
-          name: photovault-assets
-          path: PhotoVault-Assets.zip
+          name: smriti-assets
+          path: Smriti-Assets.zip
 
   release:
     name: Attach asset pack to release
@@ -120,11 +120,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: photovault-assets
+          name: smriti-assets
       - name: Upload asset pack to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: PhotoVault-Assets.zip
+          files: Smriti-Assets.zip
           draft: true
           prerelease: false

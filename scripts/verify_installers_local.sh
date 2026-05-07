@@ -41,8 +41,8 @@ check_deb() {
 }
 
 check_appimage() {
-  if ./scripts/release_local.sh linux-appimage >/dev/null 2>&1 && [[ -f PhotoVault-x86_64.AppImage ]]; then
-    status_line "linux appimage" "PASS (PhotoVault-x86_64.AppImage)"
+  if ./scripts/release_local.sh linux-appimage >/dev/null 2>&1 && [[ -f Smriti-x86_64.AppImage ]]; then
+    status_line "linux appimage" "PASS (Smriti-x86_64.AppImage)"
   else
     status_line "linux appimage" "FAIL"
     fail=1
@@ -50,22 +50,22 @@ check_appimage() {
 }
 
 check_assets_pack() {
-  rm -rf assets-pack-local PhotoVault-Assets-local.zip
+  rm -rf assets-pack-local Smriti-Assets-local.zip
   mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
   if [[ -f libs/onnxruntime/libonnxruntime.so ]] && [[ -f models/scrfd_10g_bnkps.onnx ]] && [[ -f models/glintr100.onnx ]] && [[ -f data/geonames.db ]]; then
     cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ 2>/dev/null || true
     cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
     cp models/glintr100.onnx assets-pack-local/models/
     cp data/geonames.db assets-pack-local/data/
-    (cd assets-pack-local && zip -r ../PhotoVault-Assets-local.zip . >/dev/null)
-    status_line "assets pack (linux)" "PASS (PhotoVault-Assets-local.zip)"
+    (cd assets-pack-local && zip -r ../Smriti-Assets-local.zip . >/dev/null)
+    status_line "assets pack (linux)" "PASS (Smriti-Assets-local.zip)"
   else
     status_line "assets pack (linux)" "FAIL (missing source assets; run setup_assets.sh)"
     fail=1
   fi
 }
 
-echo "PhotoVault local installer verification"
+echo "Smriti local installer verification"
 echo "====================================="
 
 check_core_build

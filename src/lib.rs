@@ -1,4 +1,4 @@
-//! PhotoVault library — public API for integration tests and external consumers.
+//! Smriti library — public API for integration tests and external consumers.
 
 pub mod bootstrap;
 pub mod config;

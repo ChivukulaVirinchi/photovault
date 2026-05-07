@@ -8,10 +8,6 @@ use std::sync::Arc;
 
 use crate::db::Database;
 use crate::db::DocumentRepo;
-#[allow(unused_imports)]
-use crate::services::image_utils::apply_exif_orientation;
-#[allow(unused_imports)]
-use crate::services::DocumentDetector;
 
 #[derive(Debug, Clone)]
 pub struct OcrProgress {
@@ -23,62 +19,12 @@ pub struct OcrProgress {
 pub struct OcrProcessor;
 
 impl OcrProcessor {
-    #[allow(dead_code)]
-    fn lightweight_text_hints(image: &image::DynamicImage) -> Option<String> {
-        let gray = image
-            .resize(720, 720, image::imageops::FilterType::Triangle)
-            .to_luma8();
-        let (w, h) = gray.dimensions();
-        if w == 0 || h == 0 {
-            return None;
-        }
-
-        let mut bright = 0u64;
-        let mut dark = 0u64;
-        let mut transitions = 0u64;
-
-        for y in 0..h {
-            let mut prev = gray.get_pixel(0, y)[0];
-            for x in 0..w {
-                let v = gray.get_pixel(x, y)[0];
-                if v > 220 {
-                    bright += 1;
-                }
-                if v < 80 {
-                    dark += 1;
-                }
-                if (v as i16 - prev as i16).abs() > 24 {
-                    transitions += 1;
-                }
-                prev = v;
-            }
-        }
-
-        let total = (w as u64) * (h as u64);
-        if total == 0 {
-            return None;
-        }
-
-        let bright_ratio = bright as f32 / total as f32;
-        let dark_ratio = dark as f32 / total as f32;
-        let trans_ratio = transitions as f32 / total as f32;
-
-        let mut hints = Vec::new();
-        if bright_ratio > 0.55 && dark_ratio > 0.04 && trans_ratio > 0.20 {
-            hints.push("email");
-            hints.push("phone");
-        }
-        if trans_ratio > 0.32 {
-            hints.extend(["-", "-", "-", "-"]);
-        }
-
-        if hints.is_empty() {
-            None
-        } else {
-            Some(hints.join("\n"))
-        }
-    }
-
+    /// Mark every unprocessed photo as `Photo` and tick the
+    /// content-categorisation flag. The earlier heuristic classifier
+    /// (edge density + aspect ratio + filename keywords) produced too
+    /// many false positives and was retired; this scaffolding stays so
+    /// a learned classifier can be plugged in later without re-piping
+    /// the progress / cancellation channels.
     pub fn process_stage1_heuristics(
         drive_path: &std::path::Path,
         progress_tx: Option<async_channel::Sender<OcrProgress>>,
@@ -97,60 +43,26 @@ impl OcrProcessor {
             return Ok(0);
         }
 
-        let mut documents_found = 0usize;
-        for (idx, (photo_id, rel_path, _orientation)) in targets.iter().enumerate() {
+        for (idx, (photo_id, _rel_path, _orientation)) in targets.iter().enumerate() {
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::Relaxed) {
-                    return Ok(documents_found);
+                    return Ok(0);
                 }
             }
 
-            let full_path = drive_path.join(rel_path);
-            // Document classification temporarily disabled: the heuristics
-            // (edge density + aspect ratio + filename keywords) were too
-            // noisy. Revisit with a learned classifier later.
-            // let (category, ocr_text, ocr_confidence) = match image::open(&full_path) {
-            //     Ok(img) => {
-            //         let img = apply_exif_orientation(img, *orientation);
-            //         let rough = DocumentDetector::classify(&img, rel_path);
-            //         let text_hint = if rough != crate::models::ContentCategory::Photo {
-            //             Self::lightweight_text_hints(&img)
-            //         } else {
-            //             None
-            //         };
-            //         let final_cat = DocumentDetector::classify_with_text_hints(
-            //             &img,
-            //             rel_path,
-            //             text_hint.as_deref(),
-            //         );
-            //         let conf = text_hint.as_ref().map(|_| 0.55f32);
-            //         (final_cat, text_hint, conf)
-            //     }
-            //     Err(_) => (crate::models::ContentCategory::Photo, None, None),
-            // };
-            let _ = &full_path;
-            let (category, ocr_text, ocr_confidence) = (
-                crate::models::ContentCategory::Photo,
-                None::<String>,
-                None::<f32>,
-            );
-
-            if category != crate::models::ContentCategory::Photo {
-                documents_found += 1;
-            }
-
-            let _ = repo.update_content_category(*photo_id, category.as_str());
-            let _ = repo.update_ocr_metadata(*photo_id, ocr_text.as_deref(), ocr_confidence, true);
+            let _ = repo
+                .update_content_category(*photo_id, crate::models::ContentCategory::Photo.as_str());
+            let _ = repo.update_ocr_metadata(*photo_id, None, None, true);
 
             if let Some(ref tx) = progress_tx {
                 let _ = tx.try_send(OcrProgress {
                     processed: idx + 1,
                     total,
-                    documents_found,
+                    documents_found: 0,
                 });
             }
         }
 
-        Ok(documents_found)
+        Ok(0)
     }
 }

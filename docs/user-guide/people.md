@@ -1,6 +1,6 @@
 # People and Faces
 
-PhotoVault detects faces during scanning, groups them into clusters
+Smriti detects faces during scanning, groups them into clusters
 (one cluster per person), and lets you name, merge, and review those
 clusters in the **People** view.
 

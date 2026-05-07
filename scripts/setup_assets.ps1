@@ -1,4 +1,4 @@
-# PhotoVault asset setup for Windows
+# Smriti asset setup for Windows
 # Downloads ONNX Runtime (Windows), face models, and GeoNames data.
 # Idempotent: skips files that already exist.
 

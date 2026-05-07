@@ -1,4 +1,4 @@
-//! Detect *how* PhotoVault was installed, so the update UI can take
+//! Detect *how* Smriti was installed, so the update UI can take
 //! the right action when the user clicks "Download".
 //!
 //! We deliberately avoid self-replacing package-manager-managed
@@ -16,7 +16,7 @@ use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
-/// How PhotoVault was installed on this machine.
+/// How Smriti was installed on this machine.
 ///
 /// Several variants are only constructed on specific target OSes
 /// (`MsiInstaller` on Windows, `MacOsApp` on macOS); allow dead-code
@@ -68,7 +68,7 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
     let path_str = exe.to_string_lossy();
     let lower = path_str.to_lowercase();
 
-    // --- source build is checked first so `target/release/photovault`
+    // --- source build is checked first so `target/release/smriti`
     //     on a Windows box doesn't get mis-bucketed as portable.
     if lower.contains("/target/debug/") || lower.contains("/target/release/") {
         return InstallMethod::SourceBuild;
@@ -86,20 +86,20 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
         if lower.contains("/var/lib/flatpak/") || lower.starts_with("/app/bin/") {
             return InstallMethod::PackageManager {
                 name: "flatpak".into(),
-                upgrade_cmd: "flatpak update com.chivukulavirinchi.photovault".into(),
+                upgrade_cmd: "flatpak update in.smriti.app".into(),
             };
         }
         if lower.starts_with("/snap/") {
             return InstallMethod::PackageManager {
                 name: "snap".into(),
-                upgrade_cmd: "snap refresh photovault".into(),
+                upgrade_cmd: "snap refresh smriti".into(),
             };
         }
-        // Default apt/.deb layout: binary at /usr/bin, resources under /usr/lib/photovault.
-        if path_str == "/usr/bin/photovault" && PathBuf::from("/usr/lib/photovault").exists() {
+        // Default apt/.deb layout: binary at /usr/bin, resources under /usr/lib/smriti.
+        if path_str == "/usr/bin/smriti" && PathBuf::from("/usr/lib/smriti").exists() {
             return InstallMethod::PackageManager {
                 name: "apt".into(),
-                upgrade_cmd: "sudo apt update && sudo apt install --only-upgrade photovault".into(),
+                upgrade_cmd: "sudo apt update && sudo apt install --only-upgrade smriti".into(),
             };
         }
     }
@@ -110,7 +110,7 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
         if lower.contains("/opt/homebrew/") || lower.contains("/usr/local/cellar/") {
             return InstallMethod::PackageManager {
                 name: "brew".into(),
-                upgrade_cmd: "brew update && brew upgrade --cask photovault".into(),
+                upgrade_cmd: "brew update && brew upgrade --cask smriti".into(),
             };
         }
         if lower.contains(".app/contents/macos/")
@@ -138,7 +138,7 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
         if lower.contains("\\scoop\\apps\\") {
             return InstallMethod::PackageManager {
                 name: "scoop".into(),
-                upgrade_cmd: "scoop update photovault".into(),
+                upgrade_cmd: "scoop update smriti".into(),
             };
         }
         // Everything else on Windows: portable zip extracted somewhere.
@@ -160,33 +160,35 @@ mod tests {
 
     #[test]
     fn source_build_detected_unix() {
-        let p = PathBuf::from("/home/user/code/photovault/target/release/photovault");
+        let p = PathBuf::from("/home/user/code/smriti/target/release/smriti");
         assert_eq!(classify_path(&p), InstallMethod::SourceBuild);
     }
 
     #[test]
     fn source_build_detected_debug() {
-        let p = PathBuf::from("/home/user/code/photovault/target/debug/photovault");
+        let p = PathBuf::from("/home/user/code/smriti/target/debug/smriti");
         assert_eq!(classify_path(&p), InstallMethod::SourceBuild);
     }
 
     #[test]
     fn source_build_detected_windows() {
-        let p = PathBuf::from("C:\\Users\\foo\\photovault\\target\\release\\photovault.exe");
+        let p = PathBuf::from("C:\\Users\\foo\\smriti\\target\\release\\smriti.exe");
         assert_eq!(classify_path(&p), InstallMethod::SourceBuild);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn appimage_detected() {
-        let p = PathBuf::from("/home/user/Applications/PhotoVault-x86_64.AppImage");
+        let p = PathBuf::from("/home/user/Applications/Smriti-x86_64.AppImage");
         assert_eq!(classify_path(&p), InstallMethod::Portable);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn flatpak_detected() {
-        let p = PathBuf::from("/var/lib/flatpak/app/com.chivukulavirinchi.photovault/x86_64/stable/current/files/bin/photovault");
+        let p = PathBuf::from(
+            "/var/lib/flatpak/app/in.smriti.app/x86_64/stable/current/files/bin/smriti",
+        );
         match classify_path(&p) {
             InstallMethod::PackageManager { name, .. } => assert_eq!(name, "flatpak"),
             other => panic!("expected flatpak, got {:?}", other),
@@ -196,7 +198,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn snap_detected() {
-        let p = PathBuf::from("/snap/photovault/current/usr/bin/photovault");
+        let p = PathBuf::from("/snap/smriti/current/usr/bin/smriti");
         match classify_path(&p) {
             InstallMethod::PackageManager { name, .. } => assert_eq!(name, "snap"),
             other => panic!("expected snap, got {:?}", other),
@@ -206,14 +208,14 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn msi_installer_detected() {
-        let p = PathBuf::from("C:\\Program Files\\PhotoVault\\photovault.exe");
+        let p = PathBuf::from("C:\\Program Files\\Smriti\\smriti.exe");
         assert_eq!(classify_path(&p), InstallMethod::MsiInstaller);
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn scoop_detected() {
-        let p = PathBuf::from("C:\\Users\\user\\scoop\\apps\\photovault\\current\\photovault.exe");
+        let p = PathBuf::from("C:\\Users\\user\\scoop\\apps\\smriti\\current\\smriti.exe");
         match classify_path(&p) {
             InstallMethod::PackageManager { name, .. } => assert_eq!(name, "scoop"),
             other => panic!("expected scoop, got {:?}", other),
@@ -223,14 +225,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_app_bundle_detected() {
-        let p = PathBuf::from("/Applications/PhotoVault.app/Contents/MacOS/photovault");
+        let p = PathBuf::from("/Applications/Smriti.app/Contents/MacOS/smriti");
         assert_eq!(classify_path(&p), InstallMethod::MacOsApp);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn homebrew_cask_detected() {
-        let p = PathBuf::from("/opt/homebrew/Caskroom/photovault/1.0.0/photovault");
+        let p = PathBuf::from("/opt/homebrew/Caskroom/smriti/1.0.0/smriti");
         match classify_path(&p) {
             InstallMethod::PackageManager { name, .. } => assert_eq!(name, "brew"),
             other => panic!("expected brew, got {:?}", other),

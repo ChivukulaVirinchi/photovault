@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main PhotoVault window",
+  "description": "Capability for the main Smriti window",
   "windows": ["main"],
   "permissions": [
     "core:default",

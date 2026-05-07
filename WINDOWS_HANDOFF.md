@@ -131,7 +131,7 @@ Important: run WiX packaging from a local NTFS folder, not directly from UNC rep
 cargo install cargo-wix --locked
 
 $RepoUNC = "\\wsl.localhost\Ubuntu-24.04\home\virinchi\code\rust\photovault"
-$LocalRepo = Join-Path $env:TEMP "photovault-localwix"
+$LocalRepo = Join-Path $env:TEMP "smriti-localwix"
 
 if (Test-Path $LocalRepo) { Remove-Item $LocalRepo -Recurse -Force }
 New-Item -ItemType Directory -Path $LocalRepo | Out-Null

@@ -30,7 +30,7 @@ What actually happened.
 ## Environment
 
 - **OS:** (e.g. Ubuntu 24.04, Windows 11 23H2, macOS 14.5)
-- **PhotoVault version:** (Settings → About, or `photovault --version`)
+- **Smriti version:** (Settings → About, or `smriti --version`)
 - **Install method:** (MSI / AppImage / deb / Homebrew / built from source)
 - **Library size:** (approximately how many photos)
 
@@ -38,9 +38,9 @@ What actually happened.
 
 Relevant log entries. Paths by OS:
 
-- Linux: `~/.config/photovault/photovault.log`
-- Windows: `%APPDATA%\photovault\photovault.log`
-- macOS: `~/Library/Application Support/photovault/photovault.log`
+- Linux: `~/.config/smriti/smriti.log`
+- Windows: `%APPDATA%\smriti\smriti.log`
+- macOS: `~/Library/Application Support/smriti/smriti.log`
 
 ## Screenshots
 

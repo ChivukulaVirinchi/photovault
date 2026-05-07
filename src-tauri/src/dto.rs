@@ -2,10 +2,10 @@
 //!
 //! Every type that crosses the IPC boundary lives here. DTOs are
 //! serde-only — they are NEVER reused as DB rows or service-internal
-//! types. `From` impls translate one-way from photovault's internal
+//! types. `From` impls translate one-way from the engine's internal
 //! types into DTOs at handler boundaries.
 //!
-//! Field names use snake_case to match the photovault backend; the
+//! Field names use snake_case to match the smriti backend; the
 //! Svelte client treats them as opaque keys.
 
 use chrono::{DateTime, Utc};

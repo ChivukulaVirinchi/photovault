@@ -1,9 +1,8 @@
-//! GitHub Releases API client — "is a newer PhotoVault out?"
+//! GitHub Releases API client — "is a newer Smriti out?"
 //!
-//! Lives under `services` so the handler layer (`app/handlers/updates.rs`)
-//! stays thin: this module owns the HTTP call, JSON parsing, semver
-//! comparison, and all the error cases that come with talking to a
-//! remote API. The handler just turns the result into a Message.
+//! This module owns the HTTP call, JSON parsing, semver comparison,
+//! and all the error cases that come with talking to a remote API.
+//! The Tauri command handler just turns the result into a DTO.
 //!
 //! Everything here is opt-in — the call only runs when the user has
 //! enabled "Automatically check for updates" in Settings or explicitly
@@ -13,8 +12,9 @@ use semver::Version;
 use serde::Deserialize;
 use std::time::Duration;
 
-/// Where GitHub's API lives. Overridable via `PHOTOVAULT_GITHUB_API_URL`
-/// for integration tests without hitting the real API.
+/// Where GitHub's API lives. Overridable via `SMRITI_GITHUB_API_URL`
+/// (legacy `PHOTOVAULT_GITHUB_API_URL` still honoured) for integration
+/// tests without hitting the real API.
 const DEFAULT_API_URL: &str =
     "https://api.github.com/repos/ChivukulaVirinchi/photovault/releases/latest";
 
@@ -85,22 +85,24 @@ pub enum UpdateCheckError {
     #[error("couldn't parse the release's tag as a semver: {0}")]
     InvalidTag(String),
 
-    #[error("couldn't parse PhotoVault's own version as a semver: {0}")]
+    #[error("couldn't parse Smriti's own version as a semver: {0}")]
     InvalidSelfVersion(String),
 }
 
 /// Check whether a newer release is available.
 ///
 /// Hits `api.github.com/repos/ChivukulaVirinchi/photovault/releases/latest`
-/// by default. Set `PHOTOVAULT_GITHUB_API_URL` to override (used by
-/// integration tests to point at a local mock).
+/// by default. Set `SMRITI_GITHUB_API_URL` (or the legacy
+/// `PHOTOVAULT_GITHUB_API_URL`) to override — used by integration
+/// tests to point at a local mock.
 pub async fn check_for_updates() -> Result<UpdateStatus, UpdateCheckError> {
-    let url =
-        std::env::var("PHOTOVAULT_GITHUB_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string());
+    let url = std::env::var("SMRITI_GITHUB_API_URL")
+        .or_else(|_| std::env::var("PHOTOVAULT_GITHUB_API_URL"))
+        .unwrap_or_else(|_| DEFAULT_API_URL.to_string());
 
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent(format!("photovault/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("smriti/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| UpdateCheckError::Network(e.to_string()))?;
 

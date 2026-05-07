@@ -32,9 +32,12 @@ impl Drop for Database {
     }
 }
 
-/// Returns the `.photovault` metadata directory for a drive root.
-pub fn photovault_dir(drive_root: &Path) -> PathBuf {
-    drive_root.join(".photovault")
+/// Returns the on-drive metadata directory.
+///
+/// The folder name is `.photovault` for backwards compatibility with
+/// libraries indexed before the rename — see `LIBRARY_METADATA_DIR`.
+pub fn library_metadata_dir(drive_root: &Path) -> PathBuf {
+    drive_root.join(super::LIBRARY_METADATA_DIR)
 }
 
 /// Returns the SQLite database file path for a drive root.
@@ -45,15 +48,15 @@ pub fn photovault_dir(drive_root: &Path) -> PathBuf {
 /// `Arc<Mutex<Database>>` for a lock. SQLite WAL handles the
 /// concurrent reader/writer.
 pub fn db_path_for(drive_root: &Path) -> PathBuf {
-    photovault_dir(drive_root).join("photovault.db")
+    library_metadata_dir(drive_root).join("photovault.db")
 }
 
 /// Returns the map tile cache directory for a drive root.
 pub fn tile_cache_dir(drive_root: &Path) -> PathBuf {
-    photovault_dir(drive_root).join("tile_cache")
+    library_metadata_dir(drive_root).join("tile_cache")
 }
 
-/// Open a fresh connection to an existing PhotoVault database.
+/// Open a fresh connection to an existing Smriti database.
 ///
 /// Configures the same WAL / cache pragmas as `open_for_drive` so
 /// background detection tasks see the same performance profile.
@@ -79,14 +82,13 @@ impl Database {
             return Err(DatabaseError::PathNotFound(drive_root));
         }
 
-        // Create .photovault directory if it doesn't exist
-        let photovault_dir = photovault_dir(&drive_root);
-        if !photovault_dir.exists() {
-            std::fs::create_dir_all(&photovault_dir)
+        let metadata_dir = library_metadata_dir(&drive_root);
+        if !metadata_dir.exists() {
+            std::fs::create_dir_all(&metadata_dir)
                 .map_err(DatabaseError::DirectoryCreationError)?;
         }
 
-        let db_path = photovault_dir.join("photovault.db");
+        let db_path = metadata_dir.join("photovault.db");
         let conn = Connection::open(&db_path)?;
 
         // Configure SQLite for optimal performance
@@ -191,7 +193,7 @@ impl Database {
     ///
     /// Copies the DB to `<db_path>.backup`. Keeps up to `max_backups` copies.
     pub fn backup(drive_root: &Path, max_backups: usize) -> std::io::Result<PathBuf> {
-        let db_path = photovault_dir(drive_root).join("photovault.db");
+        let db_path = library_metadata_dir(drive_root).join("photovault.db");
         if !db_path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -199,7 +201,7 @@ impl Database {
             ));
         }
 
-        let backup_dir = photovault_dir(drive_root).join("backups");
+        let backup_dir = library_metadata_dir(drive_root).join("backups");
         std::fs::create_dir_all(&backup_dir)?;
 
         // Name with timestamp

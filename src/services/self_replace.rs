@@ -178,7 +178,7 @@ async fn download_and_verify(
 ) -> Result<PathBuf, UpdateError> {
     let expected_hash = fetch_expected_hash(all_assets, &asset.name).await?;
 
-    let temp_path = std::env::temp_dir().join(format!("photovault-update-{}", asset.name));
+    let temp_path = std::env::temp_dir().join(format!("smriti-update-{}", asset.name));
     let client = build_client()?;
 
     let response = client
@@ -276,7 +276,7 @@ pub(crate) fn parse_sha256sums(body: &str, want: &str) -> Option<String> {
 fn build_client() -> Result<reqwest::Client, UpdateError> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        .user_agent(format!("photovault/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("smriti/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| UpdateError::Network(e.to_string()))
 }
@@ -360,15 +360,15 @@ mod tests {
     #[test]
     fn sha256sums_parse_plain_format() {
         let body = "\
-abc123  PhotoVault-x86_64.AppImage
-def456  PhotoVault-Setup-x64.msi
+abc123  Smriti-x86_64.AppImage
+def456  Smriti-Setup-x64.msi
 ";
         assert_eq!(
-            parse_sha256sums(body, "PhotoVault-x86_64.AppImage"),
+            parse_sha256sums(body, "Smriti-x86_64.AppImage"),
             Some("abc123".to_string())
         );
         assert_eq!(
-            parse_sha256sums(body, "PhotoVault-Setup-x64.msi"),
+            parse_sha256sums(body, "Smriti-Setup-x64.msi"),
             Some("def456".to_string())
         );
     }
@@ -376,9 +376,9 @@ def456  PhotoVault-Setup-x64.msi
     #[test]
     fn sha256sums_parse_binary_star_format() {
         // Some sha256sum implementations use `*` to mark binary mode.
-        let body = "abc123 *PhotoVault-x86_64.AppImage\n";
+        let body = "abc123 *Smriti-x86_64.AppImage\n";
         assert_eq!(
-            parse_sha256sums(body, "PhotoVault-x86_64.AppImage"),
+            parse_sha256sums(body, "Smriti-x86_64.AppImage"),
             Some("abc123".to_string())
         );
     }
@@ -386,14 +386,14 @@ def456  PhotoVault-Setup-x64.msi
     #[test]
     fn sha256sums_returns_none_when_missing() {
         let body = "abc123  other-file\n";
-        assert!(parse_sha256sums(body, "PhotoVault-x86_64.AppImage").is_none());
+        assert!(parse_sha256sums(body, "Smriti-x86_64.AppImage").is_none());
     }
 
     #[test]
     fn sha256sums_skips_blank_lines() {
-        let body = "\n\nabc123  PhotoVault-x86_64.AppImage\n\n";
+        let body = "\n\nabc123  Smriti-x86_64.AppImage\n\n";
         assert_eq!(
-            parse_sha256sums(body, "PhotoVault-x86_64.AppImage"),
+            parse_sha256sums(body, "Smriti-x86_64.AppImage"),
             Some("abc123".to_string())
         );
     }

@@ -54,7 +54,7 @@ See the [People and Faces](people.md) guide for the full pipeline.
 
 ## Updates
 
-- **Automatically check for updates** — when enabled, PhotoVault
+- **Automatically check for updates** — when enabled, Smriti
   queries `api.github.com` at most once every 24 hours to see if a
   new release has been published. This is **opt-in** and off by
   default. See [PRIVACY.md](../../PRIVACY.md) for the full
@@ -64,27 +64,27 @@ See the [People and Faces](people.md) guide for the full pipeline.
 
 When an update is available, a banner appears at the top of the app
 with a **Download** button. What the button does depends on how you
-installed PhotoVault:
+installed Smriti:
 
 - **AppImage, portable Windows zip** — downloads the new artifact,
   verifies its SHA256 against the published `SHA256SUMS`, and
   atomically replaces the running binary. You'll be prompted to
   relaunch.
 - **Windows MSI** — downloads the new MSI, triggers the Windows
-  installer with a UAC prompt. PhotoVault exits; relaunch from the
+  installer with a UAC prompt. Smriti exits; relaunch from the
   Start menu when the install completes.
 - **macOS .dmg** — downloads the new .dmg and opens it. Drag the
   new `.app` into `/Applications` as you did for the first install.
 - **System package manager (apt, brew, flatpak, winget)** — the
   banner shows the matching upgrade command instead of
-  self-replacing. PhotoVault won't interfere with your package
+  self-replacing. Smriti won't interfere with your package
   manager.
 - **Source build** — the banner suggests `git pull && cargo build
   --release`.
 
 ## Maintenance actions
 
-These are one-shot operations — PhotoVault doesn't run them on a
+These are one-shot operations — Smriti doesn't run them on a
 schedule.
 
 - **Rescan Library** — re-walk the drive and pick up newly added,

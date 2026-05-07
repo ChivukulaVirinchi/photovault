@@ -307,19 +307,11 @@ pub(crate) fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
 
 /// Cursor-based pagination methods used by the Tauri command surface.
 ///
-/// Older offset/limit methods (`get_all_by_date`, `get_by_ids`, ...) stay
-/// in place for the iced UI; these additive variants tiebreak `(date_taken
-/// DESC, id DESC)` with explicit `IS NULL` ordering so a stable cursor
-/// can be carried across page boundaries.
+/// A short descriptor for a photo that's enough to render a grid cell or
+/// a map pin, without paying the cost of a full Photo materialisation.
 ///
-/// `#[allow(dead_code)]` is needed during the iced↔Tauri coexistence:
-/// the iced binary doesn't reach these, only `src-tauri/` does, and
-/// clippy lints "unused" when checking the iced binary in isolation.
-/// Drops naturally when iced is removed in M3.
-///
-/// A short descriptor for a photo that's enough to render a grid cell or a
-/// map pin, without paying the cost of a full Photo materialisation.
-#[allow(dead_code)]
+/// Cursor-paginated reads use `(date_taken DESC, id DESC)` with explicit
+/// `IS NULL` ordering so a stable cursor can be carried across pages.
 #[derive(Debug, Clone)]
 pub struct PhotoLite {
     pub id: i64,
@@ -350,14 +342,12 @@ fn row_to_photo_lite(row: &rusqlite::Row) -> SqliteResult<PhotoLite> {
     })
 }
 
-#[allow(dead_code)]
 const PHOTO_LITE_COLUMNS: &str = r#"
     id, date_taken, thumbnail_path,
     width, height, orientation, is_trashed,
     gps_latitude, gps_longitude
 "#;
 
-#[allow(dead_code)]
 impl<'a> PhotoRepo<'a> {
     /// Cursor-paginated timeline list. Cursor key is `(date_taken, id)`
     /// descending. NULL date_taken sorts last via SQLite's `IS NULL`.

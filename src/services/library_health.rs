@@ -30,7 +30,7 @@ pub struct LibraryHealth {
     pub heic_count: i64,
     /// True when this binary was compiled with the `heic` Cargo
     /// feature (libheif). When false and `heic_count > 0`, the user
-    /// has photos PhotoVault can't decode.
+    /// has photos Smriti can't decode.
     pub heic_decoder_available: bool,
     /// Photos marked `faces_processed = TRUE` but have zero rows in
     /// `faces`. Heuristic: face pipeline finished but found nothing

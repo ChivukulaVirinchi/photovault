@@ -7,7 +7,7 @@ labels: type/feature, status/needs-review
 ## Pre-flight
 
 - [ ] I searched [existing issues](https://github.com/ChivukulaVirinchi/photovault/issues?q=is%3Aissue) and [Discussions](https://github.com/ChivukulaVirinchi/photovault/discussions) for the same idea.
-- [ ] The feature fits PhotoVault's offline-first scope (no cloud dependency).
+- [ ] The feature fits Smriti's offline-first scope (no cloud dependency).
 
 ## What problem does this solve?
 

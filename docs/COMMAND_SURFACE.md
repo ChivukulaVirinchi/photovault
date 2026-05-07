@@ -19,11 +19,11 @@ This document is the contract: what commands exist, what they accept, what they 
 ## Where this work lands
 
 ```
-photovault/
+smriti/
 ├── docs/
 │   └── COMMAND_SURFACE.md        ← this doc
-├── src-tauri/                    ← NEW — thin handler crate
-│   ├── Cargo.toml                ← depends on photovault as a path dep
+├── src-tauri/                    ← thin Tauri handler crate
+│   ├── Cargo.toml                ← depends on `smriti` as a path dep
 │   ├── tauri.conf.json
 │   └── src/
 │       ├── main.rs               ← #[tauri::command] handlers (one file per domain)

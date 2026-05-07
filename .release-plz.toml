@@ -5,7 +5,7 @@
 # owns building + uploading release artifacts, so:
 #   * `git_release_enable = false`   → don't create a GitHub Release
 #   * `publish = false`              → don't push to crates.io
-#     (PhotoVault is a GUI binary; crates.io publish is not useful)
+#     (Smriti is a GUI binary; crates.io publish is not useful)
 #   * `git_tag_enable = true`        → DO create the `vX.Y.Z` tag, which
 #     is what release.yml triggers on.
 

@@ -160,7 +160,7 @@ setup_onnxruntime() {
 }
 
 main() {
-  echo "PhotoVault asset setup"
+  echo "Smriti asset setup"
   echo "Root: $ROOT_DIR"
 
   setup_geonames

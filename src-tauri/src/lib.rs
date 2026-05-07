@@ -1,10 +1,7 @@
-//! Tauri shell crate for PhotoVault.
+//! Tauri shell crate for Smriti.
 //!
-//! Wraps the `photovault` library (engine) in IPC handlers. The contract
-//! is documented in `docs/COMMAND_SURFACE.md`. M1 lands the read-only
-//! command surface and the runtime scaffolding; M2 adds mutations and
-//! long-running jobs; M3 reaches view parity with the iced UI and the
-//! iced binary is removed.
+//! Wraps the `smriti` library (engine) in IPC handlers. The contract
+//! is documented in `docs/COMMAND_SURFACE.md`.
 
 pub mod commands;
 pub mod dto;

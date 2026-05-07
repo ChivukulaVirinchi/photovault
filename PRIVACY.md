@@ -52,7 +52,7 @@ What a single update check sends:
 
 - A GET request to
   `https://api.github.com/repos/ChivukulaVirinchi/photovault/releases/latest`.
-- Headers: `User-Agent: photovault/{version}` (GitHub requires a
+- Headers: `User-Agent: smriti/{version}` (GitHub requires a
   User-Agent on all API requests) and an `Accept: application/vnd.github+json`.
 - Your IP address, as with any HTTP request. GitHub logs this per
   [GitHub's own privacy policy](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
@@ -83,12 +83,13 @@ instead of self-replacing. No download happens in that path.
 ## Where your data lives
 
 - **Photo database** — `.photovault/photovault.db` on the indexed
-  drive itself.
+  drive itself. (The on-drive folder is named `.photovault/` for
+  backwards compatibility with libraries indexed before the rename.)
 - **Thumbnails** — `.photovault/thumbnails/` on the indexed drive.
 - **Application config** — OS user config directory:
-  - Linux: `~/.config/photovault/`
-  - macOS: `~/Library/Application Support/photovault/`
-  - Windows: `%APPDATA%\photovault\`
+  - Linux: `~/.config/smriti/`
+  - macOS: `~/Library/Application Support/smriti/`
+  - Windows: `%APPDATA%\smriti\`
 - **Map tile cache** — OS user cache directory.
 - **Logs (if any)** — OS user data directory.
 

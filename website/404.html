@@ -3,34 +3,71 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PhotoVault - Page Not Found</title>
+  <title>Smriti — Page not found</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,400;1,500&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     body {
       margin: 0;
-      font-family: "Segoe UI", sans-serif;
-      background: #111615;
-      color: #eef3ef;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: #f6f1e8;
+      color: #2a2622;
       display: grid;
       place-items: center;
       min-height: 100vh;
-      padding: 1.2rem;
+      padding: 2rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #15110d; color: #f1ebde; }
+      .muted { color: #b3a99a !important; }
+      a { color: #d8a978 !important; }
     }
     .card {
-      max-width: 520px;
-      border: 1px solid #2d3937;
-      border-radius: 14px;
-      padding: 1.1rem 1.2rem;
-      background: #17211f;
+      max-width: 480px;
+      text-align: center;
     }
-    a { color: #66dfd2; text-decoration: none; }
+    .brand {
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-weight: 500;
+      font-size: 2.4rem;
+      position: relative;
+      display: inline-block;
+      margin-bottom: 1.2rem;
+    }
+    .brand::after {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #c89968;
+      position: absolute;
+      top: 0.55rem;
+      right: -0.55rem;
+    }
+    h1 {
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-style: italic;
+      font-weight: 400;
+      font-size: 1.6rem;
+      margin: 0 0 0.6rem;
+    }
+    p.muted { color: #6a635c; line-height: 1.65; margin: 0.4rem 0; }
+    a { color: #a37642; font-weight: 500; text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <article class="card">
-    <h1>Page not found</h1>
-    <p>This page may have moved during the docs/website migration.</p>
-    <p><a href="./index.html">Go to PhotoVault home</a></p>
-    <p><a href="./docs/getting-started.html">Open docs</a></p>
+    <div class="brand">smriti</div>
+    <h1>That page is forgotten.</h1>
+    <p class="muted">The link may have moved — or never existed.</p>
+    <p style="margin-top:1.4rem;">
+      <a href="./index.html">Return home</a>
+      &nbsp;·&nbsp;
+      <a href="./docs/">Read the manual</a>
+    </p>
   </article>
 </body>
 </html>

@@ -10,10 +10,9 @@ use rusqlite::Connection;
 /// Resolve GeoNames DB path.
 ///
 /// Searches the same candidate roots as the rest of bootstrap (asset
-/// install dir, $PHOTOVAULT_ASSET_DIR, executable dir, project root,
-/// /usr/lib/photovault) plus the CWD-relative `data/`. The previous
-/// implementation skipped the project-root candidate, so `cargo tauri
-/// dev` runs from a sub-directory couldn't find the dev-tree DB.
+/// install dir, $SMRITI_ASSET_DIR / legacy $PHOTOVAULT_ASSET_DIR,
+/// executable dir, project root, /usr/lib/smriti, /usr/lib/photovault)
+/// plus the CWD-relative `data/`.
 pub fn geonames_db_path() -> PathBuf {
     // 1. Walk every bootstrap-known asset root.
     for root in candidate_geonames_roots() {
@@ -39,13 +38,17 @@ pub fn geonames_db_path() -> PathBuf {
 fn candidate_geonames_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     roots.push(crate::bootstrap::default_asset_install_dir());
+    if let Ok(from_env) = std::env::var("SMRITI_ASSET_DIR") {
+        roots.push(PathBuf::from(from_env));
+    }
     if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
         roots.push(PathBuf::from(from_env));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());
-            // Debian install layout
+            // Debian install layout (smriti primary, legacy photovault fallback)
+            roots.push(dir.join("..").join("lib").join("smriti"));
             roots.push(dir.join("..").join("lib").join("photovault"));
             // target/debug/<binary> → walk up to workspace root
             roots.push(dir.join("..").join(".."));
@@ -62,6 +65,7 @@ fn candidate_geonames_roots() -> Vec<PathBuf> {
         }
     }
     roots.push(cwd);
+    roots.push(PathBuf::from("/usr/lib/smriti"));
     roots.push(PathBuf::from("/usr/lib/photovault"));
     roots
 }

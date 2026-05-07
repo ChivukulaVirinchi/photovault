@@ -37,9 +37,9 @@ impl std::fmt::Display for SchemaTooNewError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Library was created by a newer version of PhotoVault \
+            "Library was created by a newer version of Smriti \
              (schema v{}). This build only supports up to v{}. \
-             Please update PhotoVault to open this library.",
+             Please update Smriti to open this library.",
             self.db_version, self.max_supported
         )
     }

@@ -2,8 +2,8 @@
 authors = ["Virinchi Chivukula"]
 language = "en"
 src = "docs"
-title = "PhotoVault Documentation"
-description = "Offline-first photo library manager -- user guide and contributor docs"
+title = "Smriti Documentation"
+description = "Offline-first photo library manager — user guide and contributor docs"
 
 [output.html]
 default-theme = "navy"

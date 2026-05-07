@@ -8,7 +8,7 @@
 
 import maplibregl from "maplibre-gl";
 
-const CACHE_NAME = "photovault-tiles-v1";
+const CACHE_NAME = "smriti-tiles-v1";
 const SCHEME = "cached://";
 
 /// Stale-after duration: 30 days. OSM is allowed to be stale for a while;

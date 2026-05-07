@@ -1,12 +1,8 @@
 //! IPC command handlers, grouped by domain.
 //!
 //! Each handler is a thin wrapper: lock the library, call the existing
-//! `photovault` service or repo, transform via DTO. Anything more
-//! complex than ~15 lines is a service-layer change, not a handler
-//! change.
-//!
-//! M1 lands all read-only commands. M2 adds mutations + long-running
-//! jobs.
+//! `smriti` service or repo, transform via DTO. Anything more complex
+//! than ~15 lines is a service-layer change, not a handler change.
 
 pub mod albums;
 pub mod bursts;

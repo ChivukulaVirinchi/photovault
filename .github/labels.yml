@@ -1,7 +1,6 @@
-# Label taxonomy for PhotoVault issues and PRs.
+# Label taxonomy for Smriti issues and PRs.
 #
 # Applied by .github/workflows/setup-labels.yml on workflow_dispatch.
-# Run the workflow from the Actions tab once after merging Phase 3.
 #
 # Color scheme (hex, no leading #):
 #   type/*      blue   0052cc / 1d76db / 006b75
@@ -47,7 +46,7 @@
   description: Face detection, clustering, people view
 - name: area/ui
   color: bfd4f2
-  description: iced views, components, interactions
+  description: Svelte views, components, interactions
 - name: area/ml
   color: bfd4f2
   description: ONNX runtime, models, embeddings

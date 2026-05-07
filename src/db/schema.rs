@@ -1,6 +1,6 @@
 //! Database schema creation
 //!
-//! Creates all tables needed for PhotoVault. The schema is designed to:
+//! Creates all tables needed for Smriti. The schema is designed to:
 //! - Support all Phase 1 features
 //! - Be extensible for Phase 2
 //! - Allow efficient queries with proper indexes

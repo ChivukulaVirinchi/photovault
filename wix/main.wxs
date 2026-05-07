@@ -8,7 +8,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product
       Id="*"
-      Name="PhotoVault"
+      Name="Smriti"
       UpgradeCode="4A77AF0F-EF2D-4A25-9DAA-FA5C4F3BEA11"
       Manufacturer="Virinchi Chivukula"
       Language="1033"
@@ -31,29 +31,29 @@
         DowngradeErrorMessage="A newer version of [ProductName] is already installed. Setup will now exit." />
 
     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes" DiskPrompt="CD-ROM #1" />
-    <Property Id="DiskPrompt" Value="PhotoVault Installation" />
+    <Property Id="DiskPrompt" Value="Smriti Installation" />
     <Property Id="ARPHELPLINK" Value="https://github.com/ChivukulaVirinchi/photovault/issues" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/ChivukulaVirinchi/photovault" />
 
-    <Icon Id="ProductICO" SourceFile="packaging\photovault.ico" />
+    <Icon Id="ProductICO" SourceFile="packaging\smriti.ico" />
     <Property Id="ARPPRODUCTICON" Value="ProductICO" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="$(var.PlatformProgramFilesFolder)">
-        <Directory Id="INSTALLFOLDER" Name="PhotoVault" />
+        <Directory Id="INSTALLFOLDER" Name="Smriti" />
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ProgramMenuDir" Name="PhotoVault" />
+        <Directory Id="ProgramMenuDir" Name="Smriti" />
       </Directory>
     </Directory>
 
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="MainExe" Guid="*">
         <File
-            Id="PhotoVaultExe"
-            Name="photovault.exe"
-            Source="$(var.CargoTargetBinDir)\photovault.exe"
+            Id="SmritiExe"
+            Name="smriti.exe"
+            Source="$(var.CargoTargetBinDir)\smriti.exe"
             KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -62,14 +62,14 @@
       <Component Id="StartMenuShortcut" Guid="*">
         <Shortcut
             Id="ApplicationStartMenuShortcut"
-            Name="PhotoVault"
+            Name="Smriti"
             Description="Offline-first photo library manager"
-            Target="[INSTALLFOLDER]photovault.exe"
+            Target="[INSTALLFOLDER]smriti.exe"
             WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
         <RegistryValue
             Root="HKCU"
-            Key="Software\PhotoVault"
+            Key="Software\Smriti"
             Name="installed"
             Type="integer"
             Value="1"
@@ -79,8 +79,8 @@
 
     <Feature
         Id="MainFeature"
-        Title="PhotoVault"
-        Description="Core PhotoVault application files"
+        Title="Smriti"
+        Description="Core Smriti application files"
         Level="1"
         ConfigurableDirectory="INSTALLFOLDER"
         AllowAdvertise="no"

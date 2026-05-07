@@ -1,7 +1,7 @@
 //! Error type for IPC commands.
 //!
 //! `CommandError` is the only error shape that crosses the Tauri boundary.
-//! Internal errors from the `photovault` library are mapped here once via
+//! Internal errors from the `smriti` library are mapped here once via
 //! `From` impls; handler bodies stay free of error chain massaging.
 
 use serde::Serialize;

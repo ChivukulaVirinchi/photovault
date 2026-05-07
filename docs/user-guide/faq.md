@@ -1,8 +1,8 @@
 # FAQ
 
-## Does PhotoVault upload my photos?
+## Does Smriti upload my photos?
 
-No. PhotoVault is offline-first and processes media locally. The
+No. Smriti is offline-first and processes media locally. The
 app never sends your photos, thumbnails, EXIF data, face embeddings,
 or anything derived from them to a server. The only network
 touchpoints are:
@@ -20,9 +20,9 @@ See [PRIVACY.md](../../PRIVACY.md) for the full disclosure.
 
 On the indexed drive inside `.photovault/photovault.db`. That keeps
 the library fully portable — unplug the drive, plug it into another
-machine, and PhotoVault can resume.
+machine, and Smriti can resume.
 
-## Can I use PhotoVault without internet?
+## Can I use Smriti without internet?
 
 Yes, after the optional assets are installed. Once the asset pack
 is in place, everything — scanning, face recognition, clustering,
@@ -30,15 +30,15 @@ search, map (for previously-cached tiles), insights — works offline.
 
 ## How do updates work?
 
-PhotoVault can check for new releases automatically, but the check
+Smriti can check for new releases automatically, but the check
 is **opt-in** — disabled by default. On first run a prompt asks
 whether you want it; you can change the answer later in **Settings
 → Advanced**.
 
 When an update is available and you click **Download** in the
-banner, what happens depends on how you installed PhotoVault:
+banner, what happens depends on how you installed Smriti:
 
-- **AppImage** or **portable Windows zip** — PhotoVault downloads
+- **AppImage** or **portable Windows zip** — Smriti downloads
   the new artifact, verifies its SHA256 checksum, and atomically
   replaces the running binary. You'll be prompted to relaunch.
 - **Windows MSI** — triggers the Windows installer with a UAC
@@ -47,7 +47,7 @@ banner, what happens depends on how you installed PhotoVault:
   into `/Applications` as you did for the first install.
 - **Package manager (apt, brew, flatpak, winget)** — the banner
   shows the matching upgrade command instead of self-replacing.
-  PhotoVault won't interfere with your package manager.
+  Smriti won't interfere with your package manager.
 
 No photo data or telemetry leaves your machine during the check —
 only a standard User-Agent and your IP, which are implicit in any
@@ -70,7 +70,7 @@ to stay under the cap.
 
 ## I built from source — is auto-update still safe?
 
-PhotoVault detects source builds by looking at the executable path
+Smriti detects source builds by looking at the executable path
 (anything under a `target/debug` or `target/release` directory).
 For source builds, the update banner won't try to self-replace the
 binary; it just suggests `git pull && cargo build --release`.

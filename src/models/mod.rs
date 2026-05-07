@@ -1,4 +1,4 @@
-//! Data models for PhotoVault
+//! Data models for Smriti
 
 pub mod photo;
 pub mod timeline_group;

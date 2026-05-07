@@ -13,7 +13,11 @@ use crate::db;
 use super::map_math::TileId;
 
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
-pub const USER_AGENT: &str = "PhotoVault/0.1 (https://github.com/photovault)";
+pub const USER_AGENT: &str = concat!(
+    "Smriti/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/ChivukulaVirinchi/photovault)"
+);
 
 const MAX_CONCURRENT_FETCHES: usize = 6;
 const FETCH_TIMEOUT_SECS: u64 = 8;

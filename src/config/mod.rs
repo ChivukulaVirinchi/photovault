@@ -50,7 +50,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub last_view: Option<String>,
 
-    /// Opt-in: whether PhotoVault should query GitHub Releases once
+    /// Opt-in: whether Smriti should query GitHub Releases once
     /// every 24 hours to see if a new version is available. Off by
     /// default — the first-run prompt flips it on if the user agrees.
     /// See PRIVACY.md.
@@ -166,23 +166,32 @@ impl AppConfig {
     /// Load config from disk. Falls back to defaults on any failure.
     pub fn load() -> Self {
         let path = Self::config_path();
-        if !path.exists() {
-            return Self::default();
-        }
+        // If the new path is empty but a pre-rename config exists,
+        // pick that up once so upgrading users don't lose their settings.
+        let read_path = if path.exists() {
+            path
+        } else {
+            let legacy = Self::legacy_config_path();
+            if legacy.exists() {
+                legacy
+            } else {
+                return Self::default();
+            }
+        };
 
-        match std::fs::read_to_string(&path) {
+        match std::fs::read_to_string(&read_path) {
             Ok(content) => match serde_json::from_str::<Self>(&content) {
                 Ok(mut cfg) => {
                     cfg.validate();
                     cfg
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to parse config {}: {}", path.display(), e);
+                    tracing::warn!("Failed to parse config {}: {}", read_path.display(), e);
                     Self::default()
                 }
             },
             Err(e) => {
-                tracing::warn!("Failed to read config {}: {}", path.display(), e);
+                tracing::warn!("Failed to read config {}: {}", read_path.display(), e);
                 Self::default()
             }
         }
@@ -215,6 +224,16 @@ impl AppConfig {
 
     /// Config file path.
     pub fn config_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("smriti")
+            .join("config.json")
+    }
+
+    /// Pre-rename config path. Read-only fallback so users upgrading
+    /// from PhotoVault keep their settings on first launch — once we
+    /// save, the new path takes over.
+    fn legacy_config_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("photovault")

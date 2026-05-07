@@ -46,7 +46,7 @@ Install test:
 
 ```bash
 sudo dpkg -i target/debian/*.deb
-photovault
+smriti
 ```
 
 ### 2.2 Build AppImage
@@ -107,5 +107,6 @@ Validate website links:
 
 If app starts but models/GeoNames are not found:
 - verify assets are inside package/AppImage
-- verify `PHOTOVAULT_ASSET_DIR` is set in AppImage AppRun
-- verify runtime path resolution handles `/usr/lib/photovault`
+- verify `SMRITI_ASSET_DIR` is set in AppImage AppRun
+- verify runtime path resolution handles `/usr/lib/smriti` (and the
+  legacy `/usr/lib/photovault` fallback for upgrading users)
