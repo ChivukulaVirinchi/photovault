@@ -542,6 +542,8 @@ pub struct DuplicateGroupSummaryDto {
     pub id: i64,
     pub member_count: i64,
     pub cover_thumbnail_path: Option<String>,
+    pub cover_photo_id: Option<i64>,
+    pub member_photo_ids: Vec<i64>,
 }
 
 impl From<DuplicateGroupRecord> for DuplicateGroupSummaryDto {
@@ -550,6 +552,8 @@ impl From<DuplicateGroupRecord> for DuplicateGroupSummaryDto {
             id: g.id,
             member_count: g.member_count,
             cover_thumbnail_path: g.cover_thumbnail_path,
+            cover_photo_id: g.cover_photo_id,
+            member_photo_ids: g.member_photo_ids,
         }
     }
 }
@@ -610,6 +614,9 @@ pub struct BurstGroupSummaryDto {
     pub start_time: String,
     pub end_time: String,
     pub photo_count: i64,
+    pub cover_thumbnail_paths: Vec<String>,
+    pub cover_photo_ids: Vec<i64>,
+    pub member_photo_ids: Vec<i64>,
 }
 
 impl From<BurstGroupRecord> for BurstGroupSummaryDto {
@@ -619,6 +626,9 @@ impl From<BurstGroupRecord> for BurstGroupSummaryDto {
             start_time: g.start_time,
             end_time: g.end_time,
             photo_count: g.photo_count,
+            cover_thumbnail_paths: g.cover_thumbnail_paths,
+            cover_photo_ids: g.cover_photo_ids,
+            member_photo_ids: g.member_photo_ids,
         }
     }
 }

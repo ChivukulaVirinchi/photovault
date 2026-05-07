@@ -50,6 +50,37 @@
       );
     } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
   }
+
+  /// Remove the selected photos from THIS album only — doesn't trash
+  /// them, doesn't touch other albums they're in. Undoable: the toast
+  /// re-adds them and restores the original index ordering.
+  async function removeFromAlbum() {
+    const ids = selection.list();
+    if (ids.length === 0) return;
+    const dropSet = new Set(ids);
+    const snapshot = photos
+      .map((p, idx) => ({ idx, photo: p }))
+      .filter((e) => dropSet.has(e.photo.id));
+    try {
+      await albums.removePhotos(id, ids);
+      photos = photos.filter((p) => !dropSet.has(p.id));
+      selection.clear();
+      toasts.undoable(
+        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} removed from album`,
+        async () => {
+          await albums.addPhotos(id, ids);
+          const next = photos.slice();
+          for (const e of snapshot) {
+            const at = Math.min(e.idx, next.length);
+            next.splice(at, 0, e.photo);
+          }
+          photos = next;
+        },
+      );
+    } catch (e) {
+      toasts.error(`Couldn't remove from album: ${e}`);
+    }
+  }
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (selection.active()) {
@@ -135,30 +166,33 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="grid">
-  {#each photos as p (p.id)}
-    <a
-      class="cell"
-      class:selected={selection.has(p.id)}
-      href="#/photo?id={p.id}"
-      onclick={(e) => onCellClick(e, p.id)}
-    >
-      {#if p.thumbnail_path}
-        <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
-      {/if}
-      {#if selection.has(p.id)}
-        <span class="check" aria-hidden="true">
-          <Check size={14} strokeWidth={2.5} />
-        </span>
-      {/if}
-    </a>
-  {/each}
+<div class="page-scroll">
+  <div class="pv-photo-grid">
+    {#each photos as p (p.id)}
+      <a
+        class="pv-photo-cell"
+        class:selected={selection.has(p.id)}
+        href="#/photo?id={p.id}"
+        onclick={(e) => onCellClick(e, p.id)}
+      >
+        {#if p.thumbnail_path}
+          <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+        {/if}
+        {#if selection.has(p.id)}
+          <span class="check" aria-hidden="true">
+            <Check size={14} strokeWidth={2.5} />
+          </span>
+        {/if}
+      </a>
+    {/each}
+  </div>
 </div>
 
 {#if selection.active()}
   <SelectionBar
     count={selection.size()}
     onAddToAlbum={() => (showAddDialog = true)}
+    onRemoveFromAlbum={removeFromAlbum}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
   />
@@ -173,32 +207,12 @@
 {/if}
 
 <style>
-  .grid {
-    padding: var(--s-4) var(--s-7) var(--s-7);
+  .page-scroll {
     flex: 1;
     overflow-y: auto;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 6px;
+    padding: var(--s-4) var(--s-7) var(--s-7);
   }
-  .cell {
-    aspect-ratio: 1;
-    min-width: 0;
-    background: var(--bg-card);
-    border-radius: var(--r-sm);
-    overflow: hidden;
-    position: relative;
-    display: block;
-    transition: filter var(--t-fast) var(--ease),
-                box-shadow var(--t-fast) var(--ease);
-  }
-  .cell:hover {
-    filter: brightness(1.06);
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-  .cell.selected { box-shadow: inset 0 0 0 3px var(--accent); }
-  .cell.selected img { filter: brightness(0.85); }
-  .cell .check {
+  .pv-photo-cell .check {
     position: absolute;
     top: 6px;
     left: 6px;
@@ -213,6 +227,5 @@
     box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     pointer-events: none;
   }
-  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .dim { color: var(--ink-faint); }
 </style>

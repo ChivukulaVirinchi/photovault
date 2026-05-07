@@ -1,6 +1,9 @@
 <script lang="ts">
   import { insights } from "../lib/api/all";
+  import { photos } from "../lib/api/photos";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { InsightsData } from "../lib/api/all";
@@ -94,6 +97,37 @@
     hoverDay = { x: r.left + r.width / 2, y: r.top - 6, date, count };
   }
   function clearDayHover() { hoverDay = null; }
+
+  /// Open the photo viewer at the first photo of `date`, with prev/next
+  /// scoped to that day. Backend `photos_list_by_date` takes a half-open
+  /// [start, end) range — we pass the day and the next day to get every
+  /// photo whose `date_taken` falls inside the calendar day.
+  let openingDay = $state(false);
+  async function openDay(date: string, count: number) {
+    if (count === 0 || openingDay) return;
+    openingDay = true;
+    try {
+      const start = `${date}T00:00:00Z`;
+      const next = new Date(`${date}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + 1);
+      const y = next.getUTCFullYear();
+      const m = pad(next.getUTCMonth() + 1);
+      const d = pad(next.getUTCDate());
+      const end = `${y}-${m}-${d}T00:00:00Z`;
+      const page = await photos.listByDate(start, end, null, 500);
+      if (page.items.length === 0) {
+        toasts.success("No photos found for this day.");
+        return;
+      }
+      const ids = page.items.map((p) => p.id);
+      browseContext.set(`day:${date}`, ids);
+      window.location.hash = `/photo?id=${ids[0]}`;
+    } catch (e) {
+      toasts.error(`Couldn't load day: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      openingDay = false;
+    }
+  }
 </script>
 
 <PageHeader title="Insights">
@@ -152,13 +186,19 @@
         <div class="heatmap" role="presentation">
           <div class="heat-grid">
             {#each cells as c (c.date)}
-              <span
+              <button
+                type="button"
                 class="heat-cell {intensityClass(c.count, hMax)}"
                 class:out={!c.inYear}
+                class:clickable={c.count > 0}
+                disabled={c.count === 0}
                 onmouseenter={(e) => onCellHover(e, c.date, c.count)}
                 onmouseleave={clearDayHover}
-                role="presentation"
-              ></span>
+                onclick={() => openDay(c.date, c.count)}
+                aria-label={c.count > 0
+                  ? `${c.count} photo${c.count === 1 ? "" : "s"} on ${c.date} — click to open`
+                  : `${c.date} — no photos`}
+              ></button>
             {/each}
           </div>
           <div class="heat-legend mono">
@@ -377,9 +417,25 @@
     border-radius: 2px;
     cursor: default;
     background: var(--bg-card);
-    transition: filter var(--t-fast) var(--ease);
+    border: 0;
+    padding: 0;
+    transition: filter var(--t-fast) var(--ease),
+                outline var(--t-fast) var(--ease),
+                transform var(--t-fast) var(--ease);
   }
-  .heat-cell:hover { filter: brightness(1.3); outline: 1px solid var(--ink-faint); }
+  .heat-cell.clickable { cursor: pointer; }
+  .heat-cell.clickable:hover {
+    filter: brightness(1.3);
+    outline: 2px solid var(--accent);
+    transform: scale(1.4);
+    z-index: 2;
+    position: relative;
+  }
+  .heat-cell:disabled { cursor: default; }
+  .heat-cell:hover:not(.clickable):not(:disabled) {
+    filter: brightness(1.3);
+    outline: 1px solid var(--ink-faint);
+  }
   .heat-cell.out { opacity: 0.25; }
   .heat-cell.h0 { background: color-mix(in oklab, var(--bg) 90%, var(--accent)); }
   .heat-cell.h1 { background: color-mix(in oklab, var(--bg) 70%, var(--accent)); }

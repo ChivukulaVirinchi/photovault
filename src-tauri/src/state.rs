@@ -105,4 +105,8 @@ pub enum JobKind {
     Thumbnails,
     AssetInstall,
     UpdateDownload,
+    /// Trip / event detection over photo metadata. Long enough on
+    /// large libraries to deserve background-job tracking so the user
+    /// can navigate freely while it runs.
+    AlbumSuggestions,
 }

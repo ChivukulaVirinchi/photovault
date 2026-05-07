@@ -2,44 +2,123 @@
   import { onMount } from "svelte";
   import { people } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { jobs } from "../lib/stores/jobs.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { PersonDto } from "../lib/api/types";
 
   let clusters = $state<PersonDto[]>([]);
-  let processing = $state(false);
   let error = $state<string | null>(null);
+  // Engine emits a `chunks_flushed` counter that bumps every time the
+  // writer thread commits a batch to disk. We track the last value the
+  // page reloaded against and refetch whenever it advances — that's how
+  // newly-found faces stream into the grid mid-run.
+  let lastSeenChunks = $state(0);
+
+  // Live state from the global jobs store. The job runs in tokio::spawn
+  // and is independent of this component's lifecycle, so reading from
+  // the store is the only way to know what's actually happening.
+  const facesJob = $derived(jobs.byKind("faces"));
+  const running = $derived(jobs.isRunning("faces"));
+  const progressPct = $derived.by(() => {
+    const j = facesJob;
+    if (!j || !j.total || j.total <= 0) return null;
+    return Math.min(100, Math.round((j.processed / j.total) * 100));
+  });
 
   async function load() {
-    try { clusters = await people.list({ minPhotos: 2 }); }
-    catch (e) { error = JSON.stringify(e); }
+    try {
+      clusters = await people.list({ minPhotos: 2 });
+    } catch (e) {
+      error = JSON.stringify(e);
+    }
   }
 
   async function startFaceProcessing() {
-    processing = true;
-    try { await people.startProcessing(); }
-    catch (e) { error = JSON.stringify(e); processing = false; }
+    if (running) return;
+    // Optimistic placeholder so the user sees the click registered
+    // even on a cold-started ONNX worker (which can take 2-3 s before
+    // the first real progress event lands). Replaced with the real
+    // job-id as soon as the IPC returns.
+    const placeholderId = `pending-faces-${Date.now()}`;
+    jobs.register(placeholderId, "faces");
+    toasts.success("Looking for faces — feel free to navigate away.");
+    try {
+      const r = await people.startProcessing();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "faces");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      error = msg;
+      toasts.error(`Couldn't start face detection: ${msg}`);
+    }
   }
+
+  $effect(() => {
+    const c = facesJob?.chunks_flushed ?? 0;
+    if (c > lastSeenChunks) {
+      lastSeenChunks = c;
+      load();
+    }
+  });
+
+  // When a faces job finishes, refetch to pick up the final cluster
+  // set, AND surface the engine's result message as a toast so a fast
+  // run (e.g., "0 photos to process" or "model not found") isn't
+  // visually silent. We track ids we've already toasted so we don't
+  // re-toast on every reactivity tick after completion.
+  let toastedJobIds = new Set<string>();
+  $effect(() => {
+    if (!facesJob) return;
+    if (facesJob.status === "complete" && !toastedJobIds.has(facesJob.id)) {
+      toastedJobIds.add(facesJob.id);
+      load();
+      const msg = facesJob.message || "Face detection finished.";
+      if (facesJob.message?.toLowerCase().startsWith("face detection failed")) {
+        toasts.error(msg);
+      } else {
+        toasts.success(msg);
+      }
+    }
+  });
 
   onMount(load);
 </script>
 
 <PageHeader title="People">
   <span class="count mono">{clusters.length}<span class="muted"> people</span></span>
-  <button class="primary" onclick={startFaceProcessing} disabled={processing}>
-    {processing ? "Processing…" : "Find faces"}
-  </button>
+  {#if running && facesJob}
+    <span class="run-status mono">
+      {facesJob.processed.toLocaleString()}{facesJob.total ? ` / ${facesJob.total.toLocaleString()}` : ""}
+      <span class="muted">·</span>
+      {(facesJob.faces_found ?? 0).toLocaleString()} face{(facesJob.faces_found ?? 0) === 1 ? "" : "s"}
+    </span>
+    <button class="ghost" disabled>Finding…</button>
+  {:else}
+    <a class="ghost review-link" href="#/people/review">Review faces</a>
+    <button class="primary" onclick={startFaceProcessing}>Find faces</button>
+  {/if}
 </PageHeader>
+
+{#if running && facesJob && progressPct != null}
+  <div class="progress" aria-label="Face detection progress">
+    <div class="bar"><div class="fill" style="width: {progressPct}%"></div></div>
+  </div>
+{/if}
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
-  {#if clusters.length === 0}
+  {#if clusters.length === 0 && !running}
     <div class="empty">
       <p>No faces yet. Run face detection to start finding the people in your library.</p>
-      <button class="primary" onclick={startFaceProcessing} disabled={processing}>
-        {processing ? "Processing…" : "Find faces"}
-      </button>
+      <button class="primary" onclick={startFaceProcessing}>Find faces</button>
+    </div>
+  {:else if clusters.length === 0 && running}
+    <div class="empty">
+      <p class="working">Looking through your photos. Faces will appear here as they're found — feel free to navigate away.</p>
     </div>
   {:else}
     <div class="grid">
@@ -72,6 +151,29 @@
     font-size: var(--t-sm);
     color: var(--ink);
   }
+  .run-status {
+    font-size: var(--t-sm);
+    color: var(--ink-soft);
+  }
+  .review-link {
+    text-decoration: none;
+    font-size: var(--t-sm);
+    padding: 6px 14px;
+  }
+  .progress {
+    padding: 0 var(--s-7);
+  }
+  .bar {
+    height: 3px;
+    background: var(--bg-card);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar .fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
   .empty {
     padding: var(--s-9) var(--s-5);
     text-align: center;
@@ -86,10 +188,11 @@
     color: var(--ink-soft);
     line-height: 1.55;
   }
+  .empty p.working { color: var(--ink); }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: var(--s-6) var(--s-5);
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: var(--s-5) var(--s-3);
   }
   .card {
     color: inherit;

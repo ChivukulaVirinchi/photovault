@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon,
-    Copy, Layers, FileText, BarChart2, Trash2, Settings,
+    Copy, Layers, /* FileText (Documents deferred) */ BarChart2, Trash2, Settings,
     ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
@@ -20,7 +20,11 @@
     { path: "/map",        label: "Map",        icon: MapIcon    },
     { path: "/duplicates", label: "Duplicates", icon: Copy       },
     { path: "/bursts",     label: "Bursts",     icon: Layers     },
-    { path: "/documents",  label: "Documents",  icon: FileText   },
+    // Documents tab deferred — the category badge in the timeline
+    // already surfaces the "this is a receipt / business card / etc"
+    // signal. A standalone Documents view is scope creep against the
+    // photos-central brief; revisit when there's a real need.
+    // { path: "/documents",  label: "Documents",  icon: FileText   },
     { path: "/insights",   label: "Insights",   icon: BarChart2  },
     { path: "/trash",      label: "Trash",      icon: Trash2     },
     { path: "/settings",   label: "Settings",   icon: Settings   },

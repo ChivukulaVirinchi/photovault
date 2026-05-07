@@ -31,4 +31,11 @@ export const photos = {
   /// missing, decode error). Concurrency is capped server-side at 8.
   requestThumbnail: (id: number) =>
     call<ThumbnailResult>("photos_request_thumbnail", { id }),
+  listByDate: (start: string, end: string, cursor: string | null = null, limit = 500) =>
+    call<Page<PhotoSummaryDto>>("photos_list_by_date", {
+      start,
+      end,
+      cursor,
+      limit,
+    }),
 };

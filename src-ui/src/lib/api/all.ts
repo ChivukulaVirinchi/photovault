@@ -41,6 +41,18 @@ export const people = {
   startProcessing: () => call<JobIdDto>("people_start_processing"),
   cancelProcessing: (jobId: string) =>
     call<null>("people_cancel_processing", { job_id: jobId }),
+  resetAll: () =>
+    call<{
+      photos_reflagged: number;
+      clusters_dropped: number;
+      faces_dropped: number;
+    }>("people_reset_all"),
+  resetClusters: () =>
+    call<{
+      photos_reflagged: number;
+      clusters_dropped: number;
+      faces_dropped: number;
+    }>("people_reset_clusters"),
   photosByPerson: (personId: number, cursor: string | null = null, limit = 200) =>
     call<Page<PhotoSummaryDto>>("photos_list_by_person", {
       person_id: personId,
@@ -88,14 +100,7 @@ export const albums = {
     list: () =>
       call<AlbumSuggestionDto[]>("albums_suggestions_list"),
     runDetection: (homeCity?: string) =>
-      call<{
-        total_photos_with_date: number;
-        photos_with_city: number;
-        home_city: string | null;
-        trip_candidates_passed: number;
-        event_windows: number;
-        created: number;
-      }>("albums_suggestions_run_detection", {
+      call<JobIdDto>("albums_suggestions_run_detection", {
         home_city_override: homeCity ?? null,
       }),
     preview: (id: number, limit = 60) =>
@@ -107,6 +112,8 @@ export const albums = {
       }),
     dismiss: (id: number) =>
       call<null>("albums_suggestions_dismiss", { id }),
+    resetAll: () =>
+      call<{ dropped: number }>("albums_suggestions_reset_all"),
   },
 };
 
@@ -184,6 +191,8 @@ export interface DupGroupSummary {
   id: number;
   member_count: number;
   cover_thumbnail_path: string | null;
+  cover_photo_id: number | null;
+  member_photo_ids: number[];
 }
 export interface DupMember {
   photo_id: number;
@@ -219,6 +228,9 @@ export interface BurstGroupSummary {
   start_time: string;
   end_time: string;
   photo_count: number;
+  cover_thumbnail_paths: string[];
+  cover_photo_ids: number[];
+  member_photo_ids: number[];
 }
 export interface BurstMember {
   photo_id: number;
@@ -272,21 +284,17 @@ export const trash = {
 };
 
 // ---------- documents ----------
-export const documents = {
-  list: (categories: string[] | null = null, cursor: string | null = null, limit = 200) =>
-    call<Page<PhotoSummaryDto>>("documents_list", {
-      categories,
-      cursor,
-      limit,
-    }),
-  search: (q: string, cursor: string | null = null, limit = 200) =>
-    call<Page<PhotoSummaryDto>>("documents_search", { q, cursor, limit }),
-  setCategory: (photoId: number, category: string) =>
-    call<null>("documents_set_category", {
-      photo_id: photoId,
-      category,
-    }),
-};
+// Documents feature deferred — the engine still classifies content
+// categories silently for the timeline badge, but there's no Documents
+// tab in the UI. Keep the wrapper commented for the day it returns.
+// export const documents = {
+//   list: (categories: string[] | null = null, cursor: string | null = null, limit = 200) =>
+//     call<Page<PhotoSummaryDto>>("documents_list", { categories, cursor, limit }),
+//   search: (q: string, cursor: string | null = null, limit = 200) =>
+//     call<Page<PhotoSummaryDto>>("documents_search", { q, cursor, limit }),
+//   setCategory: (photoId: number, category: string) =>
+//     call<null>("documents_set_category", { photo_id: photoId, category }),
+// };
 
 // ---------- insights ----------
 export interface InsightsData {
@@ -397,12 +405,7 @@ export const geocoding = {
   /// clears entries that no longer match (used to flush stale data
   /// after geocoder rules change).
   backfill: (forceRefresh = false) =>
-    call<{
-      considered: number;
-      updated: number;
-      cleared: number;
-      geonames_db_present: boolean;
-    }>("geocoding_backfill", { force_refresh: forceRefresh }),
+    call<JobIdDto>("geocoding_backfill", { force_refresh: forceRefresh }),
 };
 
 // ---------- system ----------

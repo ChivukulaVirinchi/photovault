@@ -357,6 +357,55 @@ kbd {
   animation-delay: calc(min(var(--i, 0), 8) * 32ms);
 }
 
+/* ===== shared grid primitives ==============================
+   `.pv-photo-grid` / `.pv-photo-cell` — the canonical photo-tile grid.
+   Every route that shows a list of photos (MemoryDetail, AlbumDetail,
+   PersonDetail, Trash, Search, Cull, …) inherits these so the visual
+   density matches the Timeline grid. Tweak in one place, not ten.
+
+   `.pv-card-grid` — group / cover cards (Bursts listing, Duplicates
+   listing, Memories listing, Albums listing). Wider tiles for content
+   that needs more room than a square thumbnail.
+   ============================================================ */
+.pv-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 4px;
+}
+.pv-photo-cell {
+  aspect-ratio: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  position: relative;
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: filter var(--t-fast) var(--ease),
+              box-shadow var(--t-fast) var(--ease);
+}
+.pv-photo-cell:hover {
+  filter: brightness(1.06);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.pv-photo-cell.selected {
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+.pv-photo-cell.selected img { filter: brightness(0.85); }
+.pv-photo-cell > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pv-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--s-3);
+}
+
 /* ===== reduced motion — honour the OS ====================== */
 @media (prefers-reduced-motion: reduce) {
   *,

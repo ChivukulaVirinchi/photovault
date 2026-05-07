@@ -1,15 +1,45 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
-  import { albums, geocoding, health } from "../lib/api/all";
+  import { albums, geocoding, health, people } from "../lib/api/all";
+  import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { LibraryHealthData, Settings } from "../lib/api/all";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
-  let backfilling = $state(false);
   let healthData = $state<LibraryHealthData | null>(null);
+  let acting = $state(false);
+  // Backfill state derived from the global jobs store so progress
+  // survives navigation (a 50k-photo backfill is a multi-second job).
+  const backfilling = $derived(jobs.isRunning("geocoding"));
+  const geocodingJob = $derived(jobs.byKind("geocoding"));
+
+  // React to backfill completion via the global store. Same reasoning
+  // as Albums.svelte: a per-page Tauri `listen()` races with fast
+  // events on small libraries. The store is filled by the app-boot
+  // subscription and survives navigation.
+  let toastedGeoIds = new Set<string>();
+  $effect(() => {
+    if (!geocodingJob) return;
+    if (geocodingJob.status === "complete" && !toastedGeoIds.has(geocodingJob.id)) {
+      toastedGeoIds.add(geocodingJob.id);
+      const msg = geocodingJob.message || "Geocoding finished.";
+      const isError =
+        msg.toLowerCase().startsWith("geocoding failed") ||
+        msg.toLowerCase().startsWith("geonames database not found");
+      if (isError) toasts.error(msg);
+      else toasts.success(msg);
+      // If the backfill actually populated rows, kick album-suggestion
+      // detection — those depend on location data being present.
+      // Couldn't tell from the message alone; only fire when the
+      // success branch indicates resolved counts.
+      if (!isError && msg.startsWith("Resolved ")) {
+        albums.suggestions.runDetection().catch(() => {});
+      }
+    }
+  });
 
   onMount(() => {
     settingsStore.load();
@@ -28,34 +58,105 @@
 
   async function backfillGeocoding(force = false) {
     if (backfilling) return;
-    backfilling = true;
+    const placeholderId = `pending-geocoding-${Date.now()}`;
+    jobs.register(placeholderId, "geocoding");
+    toasts.success(force ? "Refreshing all place names…" : "Filling in place names…");
     try {
       const r = await geocoding.backfill(force);
-      if (!r.geonames_db_present) {
-        toasts.error("GeoNames database not found. Run scripts/setup_assets.sh");
-      } else if (r.considered === 0) {
-        toasts.success("No photos need geocoding — all GPS-tagged photos already have place names.");
-      } else if (r.cleared > 0) {
-        toasts.success(`Resolved ${r.updated}, cleared ${r.cleared} stale match${r.cleared === 1 ? "" : "es"}.`);
-      } else {
-        toasts.success(`Resolved ${r.updated} of ${r.considered} GPS-tagged photos.`);
-      }
-      // Album suggestions (trip / event detection) need location data
-      // to fire — so re-run detection now that the place names are
-      // populated. Failure is non-fatal: the user can re-run from the
-      // Albums tab.
-      if (r.geonames_db_present && r.updated > 0) {
-        try {
-          const det = await albums.suggestions.runDetection();
-          if (det.created > 0) {
-            toasts.info(`Found ${det.created} new album suggestion${det.created === 1 ? "" : "s"}.`);
-          }
-        } catch {}
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "geocoding");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
+  // ----- destructive actions -------------------------------------------
+  // Each goes through `confirm()` and a toast on outcome. The reset
+  // commands run synchronously on the backend (small, atomic SQL).
+
+  async function runFacesFromScratch() {
+    if (acting) return;
+    if (
+      !confirm(
+        "Wipe every detected face, every cluster, and every face crop on disk, then re-run face detection?\n\nThis is irreversible. Names you've assigned to clusters will be lost.",
+      )
+    )
+      return;
+    acting = true;
+    try {
+      const r = await people.resetAll();
+      toasts.success(
+        `Reset ${r.faces_dropped.toLocaleString()} faces and ${r.clusters_dropped.toLocaleString()} clusters. Starting fresh detection…`,
+      );
+      // Kick the engine — registered as a regular faces job so the
+      // global indicator shows progress.
+      const placeholderId = `pending-faces-${Date.now()}`;
+      jobs.register(placeholderId, "faces");
+      try {
+        const j = await people.startProcessing();
+        jobs.dismiss(placeholderId);
+        jobs.register(j.job_id, "faces");
+      } catch (e) {
+        jobs.dismiss(placeholderId);
+        toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
       }
     } catch (e) {
-      toasts.error(`Geocoding backfill failed: ${e}`);
+      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     } finally {
-      backfilling = false;
+      acting = false;
+    }
+  }
+
+  async function resetFaceClusters() {
+    if (acting) return;
+    if (
+      !confirm(
+        "Drop every cluster and re-cluster from existing face embeddings?\n\nThis keeps the detected faces themselves but throws away grouping decisions and any names you've assigned. Useful when you've changed the clustering threshold.",
+      )
+    )
+      return;
+    acting = true;
+    try {
+      const r = await people.resetClusters();
+      toasts.success(
+        `Cleared ${r.clusters_dropped.toLocaleString()} cluster${r.clusters_dropped === 1 ? "" : "s"}. Re-clustering…`,
+      );
+      const placeholderId = `pending-faces-${Date.now()}`;
+      jobs.register(placeholderId, "faces");
+      try {
+        const j = await people.startProcessing();
+        jobs.dismiss(placeholderId);
+        jobs.register(j.job_id, "faces");
+      } catch (e) {
+        jobs.dismiss(placeholderId);
+        toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      }
+    } catch (e) {
+      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      acting = false;
+    }
+  }
+
+  async function resetSuggestions() {
+    if (acting) return;
+    if (
+      !confirm(
+        "Wipe every album suggestion, including ones you've already dismissed?\n\nUseful if you reflexively dismissed everything early on.",
+      )
+    )
+      return;
+    acting = true;
+    try {
+      const r = await albums.suggestions.resetAll();
+      toasts.success(
+        `Cleared ${r.dropped.toLocaleString()} suggestion${r.dropped === 1 ? "" : "s"}. Run Detect in Albums to repopulate.`,
+      );
+    } catch (e) {
+      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      acting = false;
     }
   }
 </script>
@@ -132,7 +233,7 @@
     </section>
 
     <section>
-      <h3 class="section-title">Face recognition</h3>
+      <h3 class="section-title">Faces &amp; people</h3>
       <label>
         <span class="label-text">Detection confidence</span>
         <input type="number" min="0.1" max="0.95" step="0.05" value={s.face_detection_confidence}
@@ -143,10 +244,51 @@
         <input type="number" min="0.1" max="0.8" step="0.02" value={s.face_clustering_threshold}
           onchange={(e) => patch({ face_clustering_threshold: Number((e.target as HTMLInputElement).value) })} />
       </label>
+      <p class="hint blurb">
+        Tighter clustering threshold = more "different" decisions; looser = more "same".
+        Adjust then use Reset clusters below to re-group existing faces.
+      </p>
+      <div class="action-row">
+        <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting}>
+          Reset face clusters only
+        </button>
+        <button class="ghost danger" onclick={runFacesFromScratch} disabled={acting}>
+          Run faces from scratch
+        </button>
+      </div>
     </section>
 
     <section>
-      <h3 class="section-title">Memories</h3>
+      <h3 class="section-title">Bursts</h3>
+      <label>
+        <span class="label-text">
+          Burst time window
+          <span class="hint">(photos taken within this window are grouped)</span>
+        </span>
+        <span class="number-with-unit">
+          <input
+            type="number"
+            min="1"
+            max="30"
+            value={s.burst_time_window_seconds}
+            onchange={(e) =>
+              patch({
+                burst_time_window_seconds: Number((e.target as HTMLInputElement).value),
+              })}
+          />
+          <span class="unit mono">seconds</span>
+        </span>
+      </label>
+      <p class="hint blurb">
+        Tighter window = only true rapid-fire bursts get grouped.
+        Looser window pulls in slower handheld sequences. Default 3 s
+        matches typical phone burst-mode timing. Re-run "Detect bursts"
+        on the Bursts page after a change.
+      </p>
+    </section>
+
+    <section>
+      <h3 class="section-title">Memories &amp; suggestions</h3>
       <label class="checkbox">
         <input type="checkbox" checked={s.memories_enabled}
           onchange={(e) => patch({ memories_enabled: (e.target as HTMLInputElement).checked })} />
@@ -159,6 +301,15 @@
         <input value={s.home_city_override ?? ""}
           onchange={(e) => patch({ home_city_override: ((e.target as HTMLInputElement).value || null) })} />
       </label>
+      <div class="action-row">
+        <button class="ghost danger-soft" onclick={resetSuggestions} disabled={acting}>
+          Reset all suggestions
+        </button>
+      </div>
+      <p class="hint blurb">
+        "Reset all suggestions" wipes both pending and dismissed suggestion records.
+        Use it after detector improvements so previously-dismissed runs can return.
+      </p>
     </section>
 
     <section>
@@ -171,7 +322,7 @@
         <button class="primary" onclick={() => backfillGeocoding(false)} disabled={backfilling}>
           {backfilling ? "Resolving…" : "Fill in place names"}
         </button>
-        <button class="ghost" onclick={() => backfillGeocoding(true)} disabled={backfilling}
+        <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling}
           title="Re-resolve every GPS-tagged photo, overwriting stale matches">
           Refresh all
         </button>
@@ -180,7 +331,7 @@
 
     {#if healthData}
       {@const h = healthData}
-      <section>
+      <section class="full-width">
         <h3 class="section-title">Library health</h3>
         <ul class="counters">
           {#each [
@@ -217,8 +368,15 @@
     padding: var(--s-5) var(--s-7) var(--s-7);
     flex: 1;
     overflow-y: auto;
-    max-width: 680px;
   }
+  /* Cap individual sections at a readable width while letting the
+     scroll surface fill the window. Lines of body text shouldn't run
+     edge-to-edge on a 4K screen, but the scroll area should — that's
+     why this is on `section`, not `.page`. */
+  section { max-width: 720px; }
+  /* Library health counters benefit from more horizontal room — they
+     are tiles, not prose. */
+  section.full-width { max-width: none; }
   .status { font-size: var(--t-sm); color: var(--accent); }
   section { margin-bottom: var(--s-6); }
   .section-title {
@@ -265,7 +423,25 @@
     line-height: 1.5;
     margin: 0 0 var(--s-3);
   }
-  .action-row { display: flex; gap: var(--s-2); }
+  .action-row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+  /* Destructive-action affordances. `.danger-soft` reads as "careful"
+     but doesn't shout; `.danger` warns hot. */
+  button.danger-soft {
+    color: var(--ink-soft);
+    border-color: var(--line);
+  }
+  button.danger-soft:hover:not(:disabled) {
+    color: var(--hot, #d05a4a);
+    border-color: var(--hot, #d05a4a);
+  }
+  button.danger {
+    color: var(--hot, #d05a4a);
+    border-color: color-mix(in oklab, var(--hot, #d05a4a) 60%, var(--line));
+  }
+  button.danger:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--hot, #d05a4a) 8%, transparent);
+    border-color: var(--hot, #d05a4a);
+  }
 
   /* Library health counters — moved here from the dedicated /health route. */
   .counters {

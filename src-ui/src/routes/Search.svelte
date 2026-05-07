@@ -124,9 +124,9 @@
     {#if results.photos.length > 0}
       <section>
         <h3 class="section-title">Photos · {results.photos.length}</h3>
-        <div class="grid">
+        <div class="pv-photo-grid">
           {#each results.photos.slice(0, 200) as p (p.photo_id)}
-            <a class="cell" href="#/photo?id={p.photo_id}" title="#{p.photo_id}">
+            <a class="pv-photo-cell" href="#/photo?id={p.photo_id}" title="#{p.photo_id}">
               {#if p.thumbnail_path}
                 <img
                   src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""}
@@ -255,28 +255,6 @@
   .city { font-size: var(--t-base); font-weight: 600; }
   .country { color: var(--ink-muted); }
   .places .muted { margin-left: auto; }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 6px;
-  }
-  .cell {
-    aspect-ratio: 1;
-    min-width: 0;
-    background: var(--bg-card);
-    border-radius: var(--r-sm);
-    overflow: hidden;
-    position: relative;
-    display: block;
-    transition: filter var(--t-fast) var(--ease),
-                box-shadow var(--t-fast) var(--ease);
-  }
-  .cell:hover {
-    filter: brightness(1.06);
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
   .empty {
     padding: var(--s-9) var(--s-5);

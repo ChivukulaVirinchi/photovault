@@ -71,10 +71,10 @@
       <p>Nothing in trash. A clean shelf.</p>
     </div>
   {:else}
-    <div class="grid">
+    <div class="pv-photo-grid">
       {#each items as t (t.photo_id)}
         <button
-          class="cell"
+          class="pv-photo-cell trash-cell"
           class:sel={selected.has(t.photo_id)}
           onclick={() => toggle(t.photo_id)}
         >
@@ -100,33 +100,14 @@
     text-align: center;
   }
   .empty p { color: var(--ink-muted); font-style: italic; }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 4px;
-  }
-  .cell {
-    aspect-ratio: 1;
-    background: var(--bg-card);
-    border-radius: var(--r-sm);
-    overflow: hidden;
+  .trash-cell {
     padding: 0;
-    border: 2px solid transparent;
-    position: relative;
+    border: 0;
     cursor: pointer;
-    transition: border-color var(--t-fast) var(--ease),
-                filter var(--t-fast) var(--ease);
   }
-  .cell:hover { filter: brightness(1.06); }
-  .cell.sel { border-color: var(--accent); }
-  .cell img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    opacity: 0.55;
-    transition: opacity var(--t-fast) var(--ease);
-  }
-  .cell.sel img { opacity: 1; }
+  .trash-cell.sel { box-shadow: inset 0 0 0 3px var(--accent); }
+  .trash-cell > img { opacity: 0.55; transition: opacity var(--t-fast) var(--ease); }
+  .trash-cell.sel > img { opacity: 1; }
   .check {
     position: absolute;
     top: 8px;
@@ -144,5 +125,5 @@
     transition: opacity var(--t-fast) var(--ease),
                 transform var(--t-fast) var(--ease);
   }
-  .cell.sel .check { opacity: 1; transform: scale(1); }
+  .trash-cell.sel .check { opacity: 1; transform: scale(1); }
 </style>

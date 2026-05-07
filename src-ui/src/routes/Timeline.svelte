@@ -3,7 +3,7 @@
   import { photos } from "../lib/api/photos";
   import { memories, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
-  import { events, type ScanProgress } from "../lib/api/events";
+  import { jobs } from "../lib/stores/jobs.svelte";
   import { library } from "../lib/api/library";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -43,8 +43,12 @@
   let containerH = $state(0);
   let zoom = $state<ZoomLevel>("day");
 
-  let scanProgress = $state<ScanProgress | null>(null);
-  let scanJobId = $state<string | null>(null);
+  // Scan state derived from the global jobs store so it survives
+  // page navigation. Earlier this lived in component-local $state and
+  // reset on remount, making the scan look "lost" if the user moved
+  // away and came back.
+  const scanJob = $derived(jobs.byKind("scan"));
+  const scanRunning = $derived(jobs.isRunning("scan"));
 
   // Today's memories — surfaced as a horizontal strip above the
   // timeline. Hidden when the library has no qualifying memories.
@@ -116,9 +120,33 @@
   }
 
   async function startScan() {
-    try { scanJobId = (await library.startScan(false)).job_id; }
-    catch (e) { error = JSON.stringify(e); }
+    if (scanRunning) return;
+    const placeholderId = `pending-scan-${Date.now()}`;
+    jobs.register(placeholderId, "scan");
+    toasts.success("Scanning library — feel free to navigate away.");
+    try {
+      const r = await library.startScan(false);
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "scan");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      error = msg;
+      toasts.error(`Couldn't start scan: ${msg}`);
+    }
   }
+  // When a scan completes, refresh the photo list so the user sees
+  // the new arrivals without having to reload manually.
+  let lastScanCompleteId = $state<string | null>(null);
+  $effect(() => {
+    if (scanJob && scanJob.status === "complete" && scanJob.id !== lastScanCompleteId) {
+      lastScanCompleteId = scanJob.id;
+      items = [];
+      nextCursor = null;
+      hasMore = true;
+      loadMore();
+    }
+  });
 
   function pad2(n: number) { return n < 10 ? `0${n}` : `${n}`; }
 
@@ -267,30 +295,30 @@
   onMount(() => {
     loadMore();
     memories.today().then((c) => (memoryCards = c)).catch(() => {});
-    let unlistens: Array<() => void> = [];
-    events
-      .onScanProgress((p) => { if (p.job_id === scanJobId) scanProgress = p; })
-      .then((u) => unlistens.push(u));
-    events
-      .onScanComplete((p) => {
-        if (p.job_id === scanJobId) {
-          scanProgress = p;
-          scanJobId = null;
-          items = [];
-          nextCursor = null;
-          hasMore = true;
-          loadMore();
-        }
-      })
-      .then((u) => unlistens.push(u));
+    // Scan progress + the post-scan reload now happen via the global
+    // jobs store and the $effect above. No local listeners needed.
     window.addEventListener("keydown", onGlobalKey);
     return () => {
-      unlistens.forEach((u) => u());
       window.removeEventListener("keydown", onGlobalKey);
     };
   });
 
-  function setZoom(z: ZoomLevel) { zoom = z; }
+  /// Direction of the most-recent zoom change. Drives the cell
+  /// keyframe animation: zooming IN (more detail, smaller buckets →
+  /// larger tiles) lets cells appear to grow into place; zooming OUT
+  /// makes them fade-shrink. The class lives on `.scroll` for ~280 ms,
+  /// long enough for a 240 ms keyframe to play out.
+  let zoomDir = $state<"in" | "out" | null>(null);
+  let zoomTimer: ReturnType<typeof setTimeout> | null = null;
+  function setZoom(z: ZoomLevel) {
+    if (z === zoom) return;
+    const oldIdx = ZOOM_ORDER.indexOf(zoom);
+    const newIdx = ZOOM_ORDER.indexOf(z);
+    zoomDir = newIdx > oldIdx ? "in" : "out";
+    zoom = z;
+    if (zoomTimer) clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => (zoomDir = null), 320);
+  }
 
   // ----------- selection -----------
   function onCellClick(e: MouseEvent, photo: PhotoSummaryDto) {
@@ -473,7 +501,7 @@
     const dir = e.deltaY < 0 ? 1 : -1; // wheel up = zoom in (more detail)
     const i = ZOOM_ORDER.indexOf(zoom);
     const next = Math.max(0, Math.min(ZOOM_ORDER.length - 1, i + dir));
-    zoom = ZOOM_ORDER[next];
+    setZoom(ZOOM_ORDER[next]);
   }
 
   // ----------- on-demand thumbnail generation -----------
@@ -601,10 +629,10 @@
     <button class:on={zoom === "month"} onclick={() => setZoom("month")} aria-label="Months">Month</button>
     <button class:on={zoom === "day"}   onclick={() => setZoom("day")}   aria-label="Days">Day</button>
   </div>
-  {#if scanJobId}
+  {#if scanRunning && scanJob}
     <span class="scan-status mono">
-      Scanning · {(scanProgress?.files_processed ?? 0).toLocaleString()}
-      / {scanProgress?.files_found?.toLocaleString() ?? "?"}
+      Scanning · {scanJob.processed.toLocaleString()}
+      / {scanJob.total != null ? scanJob.total.toLocaleString() : "?"}
     </span>
   {:else}
     <span class="count mono">
@@ -620,6 +648,8 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="scroll"
+    class:zoom-in={zoomDir === "in"}
+    class:zoom-out={zoomDir === "out"}
     bind:this={scrollEl}
     onwheel={onWheel}
     onpointerdown={onScrollPointerDown}
@@ -914,6 +944,32 @@
   .cell.focused {
     box-shadow: 0 0 0 2px var(--accent);
     z-index: 1;
+  }
+  /* Cinematic zoom: cells appear to grow when the user zooms in
+     (more detail, larger tiles) and shrink-fade when zooming out. The
+     scale is intentionally subtle — the grid is virtualized and the
+     visible row count actually changes, so a big scale would look
+     glitchy. The 0.04 delta + the existing transform/height/gap
+     transitions on .row and .photos combine into a coherent feel. */
+  @keyframes pv-zoom-in-cell {
+    from { transform: scale(0.92); opacity: 0.55; }
+    to   { transform: scale(1);    opacity: 1;    }
+  }
+  @keyframes pv-zoom-out-cell {
+    from { transform: scale(1.08); opacity: 0.55; }
+    to   { transform: scale(1);    opacity: 1;    }
+  }
+  .scroll.zoom-in .cell {
+    animation: pv-zoom-in-cell 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    transform-origin: center center;
+  }
+  .scroll.zoom-out .cell {
+    animation: pv-zoom-out-cell 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    transform-origin: center center;
+  }
+  .scroll.zoom-in .label,
+  .scroll.zoom-out .label {
+    animation: pv-zoom-in-cell 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
   }
   .cell .check {
     position: absolute;

@@ -1,13 +1,15 @@
 //! Albums + AI suggestions (read-only commands for M1).
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use photovault::db::album_repo::AlbumRepo;
 use photovault::db::album_suggestion_repo::AlbumSuggestionRepo;
 
-use crate::dto::{AlbumDto, AlbumSuggestionDto, PhotoSummaryDto};
-use crate::state::AppState;
+use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
+use crate::events::{JobProgress, EV_ALBUM_SUGGESTIONS_COMPLETE, EV_ALBUM_SUGGESTIONS_PROGRESS};
+use crate::jobs::{self, emit};
+use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
 fn fetch_album(repo: &AlbumRepo, id: i64) -> CommandResult<AlbumDto> {
@@ -244,27 +246,182 @@ pub struct SuggestionDiagnosticsDto {
     pub created: usize,
 }
 
+/// Suggestion-detection complete payload — same fields as the legacy
+/// synchronous return value, now delivered via the
+/// `album_suggestions:complete` event so callers can fire-and-forget.
+#[derive(Debug, Serialize, Clone)]
+pub struct AlbumSuggestionsCompleteDto {
+    pub job_id: String,
+    pub total_photos_with_date: i64,
+    pub photos_with_city: i64,
+    pub photos_with_gps: i64,
+    pub home_city: Option<String>,
+    pub trip_candidates_passed: usize,
+    pub event_windows: usize,
+    pub created: usize,
+    pub elapsed_ms: u64,
+    /// Pre-formatted summary the UI surfaces as a toast. Computing it
+    /// in the backend means the frontend doesn't need a one-shot
+    /// `listen()` subscription on the page (which races with the event
+    /// arrival on fast detections); the global jobs store picks the
+    /// message up via the standard `message` field on `JobProgress`-
+    /// shaped payloads.
+    pub message: String,
+}
+
+/// Kick off trip / event suggestion detection in the background.
+///
+/// Detection used to run synchronously inside the IPC handler and held
+/// the DB lock for the full duration — on libraries with thousands of
+/// dated photos this blocked the foreground for many seconds with no
+/// feedback. Now: the handler returns a job_id immediately, the work
+/// runs against a secondary SQLite connection, and progress + the
+/// final diagnostics flow through the standard
+/// `album_suggestions:progress|complete` event channels.
 #[tauri::command]
 pub async fn albums_suggestions_run_detection(
+    app: AppHandle,
     state: State<'_, AppState>,
     args: AlbumsSuggestionsRunDetectionArgs,
-) -> CommandResult<SuggestionDiagnosticsDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let (suggestions, diag) =
-        photovault::services::album_suggestions::detect_suggestions_with_diagnostics(
-            &db.conn,
-            args.home_city_override.as_deref(),
+) -> CommandResult<JobIdDto> {
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+
+    let job = jobs::start_job(&state, JobKind::AlbumSuggestions).await?;
+    let job_id = job.id.clone();
+    let started = job.started_at;
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    let home_override = args.home_city_override.clone();
+
+    tokio::task::spawn_blocking(move || {
+        // Up-front "starting" tick so the UI's progress chip shows a
+        // running job before the SQL work even begins.
+        emit(
+            &app_clone,
+            EV_ALBUM_SUGGESTIONS_PROGRESS,
+            JobProgress {
+                job_id: job_id_clone.clone(),
+                stage: "scanning".into(),
+                processed: 0,
+                total: None,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some("Scanning photo metadata…".into()),
+            },
         );
-    Ok(SuggestionDiagnosticsDto {
-        total_photos_with_date: diag.total_photos_with_date,
-        photos_with_city: diag.photos_with_city,
-        home_city: diag.home_city,
-        trip_candidates_passed: diag.trip_candidates_passed,
-        event_windows: diag.event_windows,
-        created: suggestions.len(),
-    })
+
+        let db_path = photovault::db::db_path_for(&drive_root);
+        let conn = match photovault::db::open_secondary(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("album suggestions: failed to open secondary db: {}", e);
+                emit(
+                    &app_clone,
+                    EV_ALBUM_SUGGESTIONS_COMPLETE,
+                    AlbumSuggestionsCompleteDto {
+                        job_id: job_id_clone.clone(),
+                        total_photos_with_date: 0,
+                        photos_with_city: 0,
+                        photos_with_gps: 0,
+                        home_city: None,
+                        trip_candidates_passed: 0,
+                        event_windows: 0,
+                        created: 0,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        message: format!("Couldn't open library: {}", e),
+                    },
+                );
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    let app_for_finish = app_clone.clone();
+                    let job_id = job_id_clone.clone();
+                    handle.spawn(async move {
+                        let st: tauri::State<AppState> = app_for_finish.state();
+                        jobs::finish_job(&st, &job_id).await;
+                    });
+                }
+                return;
+            }
+        };
+
+        emit(
+            &app_clone,
+            EV_ALBUM_SUGGESTIONS_PROGRESS,
+            JobProgress {
+                job_id: job_id_clone.clone(),
+                stage: "detecting".into(),
+                processed: 0,
+                total: None,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some("Looking for trips and events…".into()),
+            },
+        );
+
+        let (suggestions, diag) =
+            photovault::services::album_suggestions::detect_suggestions_with_diagnostics(
+                &conn,
+                home_override.as_deref(),
+            );
+
+        // Friendly, context-aware summary so the user understands why
+        // a run found nothing on a metadata-poor library instead of
+        // staring at a silent indicator. Order matters — more specific
+        // diagnoses first.
+        let message = if !suggestions.is_empty() {
+            format!(
+                "{} suggestion{} ready to review.",
+                suggestions.len(),
+                if suggestions.len() == 1 { "" } else { "s" }
+            )
+        } else if diag.total_photos_with_date < 20 {
+            // Trip detection needs at least ~20 dated photos to find
+            // anything worth surfacing.
+            "Need more dated photos for trip detection (about 20+).".to_string()
+        } else if diag.photos_with_gps == 0 {
+            // Honest answer for old / DSLR libraries: no GPS to work
+            // with, and "Fill in place names" can't synthesise GPS
+            // where none exists.
+            "These photos have no GPS metadata, so trip detection can't run on this library."
+                .to_string()
+        } else if diag.photos_with_city == 0 {
+            "Photos have GPS coordinates but no place names. Run ‘Fill in place names’ in Settings to unlock trip suggestions.".to_string()
+        } else {
+            "No new patterns this round.".to_string()
+        };
+
+        emit(
+            &app_clone,
+            EV_ALBUM_SUGGESTIONS_COMPLETE,
+            AlbumSuggestionsCompleteDto {
+                job_id: job_id_clone.clone(),
+                total_photos_with_date: diag.total_photos_with_date,
+                photos_with_city: diag.photos_with_city,
+                photos_with_gps: diag.photos_with_gps,
+                home_city: diag.home_city,
+                trip_candidates_passed: diag.trip_candidates_passed,
+                event_windows: diag.event_windows,
+                created: suggestions.len(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                message,
+            },
+        );
+
+        // Bridge back to the async runtime to release the registry slot.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let app_for_finish = app_clone.clone();
+            let job_id = job_id_clone.clone();
+            handle.spawn(async move {
+                let st: tauri::State<AppState> = app_for_finish.state();
+                jobs::finish_job(&st, &job_id).await;
+            });
+        }
+    });
+
+    Ok(JobIdDto { job_id })
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,6 +456,26 @@ pub async fn albums_suggestions_accept(
     }
     suggestion_repo.accept(args.id)?;
     fetch_album(&album_repo, album_id)
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlbumSuggestionsResetResult {
+    pub dropped: u64,
+}
+
+/// Wipe the entire suggestions queue — pending AND dismissed. Lets a
+/// user who reflexively dismissed everything start fresh after the
+/// detector improves. The next "Detect" run repopulates from
+/// scratch.
+#[tauri::command]
+pub async fn albums_suggestions_reset_all(
+    state: State<'_, AppState>,
+) -> CommandResult<AlbumSuggestionsResetResult> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let dropped = db.conn.execute("DELETE FROM album_suggestions", [])? as u64;
+    Ok(AlbumSuggestionsResetResult { dropped })
 }
 
 #[derive(Debug, Deserialize)]

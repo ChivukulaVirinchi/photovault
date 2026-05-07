@@ -2,13 +2,19 @@
   import { onMount } from "svelte";
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { jobs } from "../lib/stores/jobs.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof duplicates.list>>>([]);
   let wasted = $state(0);
-  let running = $state(false);
   let error = $state<string | null>(null);
+
+  // Detection runs in tokio::spawn_blocking on the backend. Read state
+  // from the global jobs store so it survives navigation.
+  const dupJob = $derived(jobs.byKind("duplicates"));
+  const running = $derived(jobs.isRunning("duplicates"));
 
   async function load() {
     try {
@@ -19,10 +25,25 @@
   }
 
   async function run() {
-    running = true;
-    try { await duplicates.run(true); }
-    catch (e) { error = JSON.stringify(e); running = false; }
+    if (running) return;
+    const placeholderId = `pending-dups-${Date.now()}`;
+    jobs.register(placeholderId, "duplicates");
+    toasts.success("Detecting duplicates — feel free to navigate away.");
+    try {
+      const r = await duplicates.run(true);
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "duplicates");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      error = msg;
+      toasts.error(`Couldn't start: ${msg}`);
+    }
   }
+
+  $effect(() => {
+    if (dupJob && dupJob.status === "complete") load();
+  });
 
   onMount(load);
 </script>
@@ -31,6 +52,11 @@
   <span class="waste mono">
     {(wasted / 1024 / 1024).toFixed(0)}<span class="muted"> MB potentially wasted</span>
   </span>
+  {#if running && dupJob && dupJob.total}
+    <span class="run-status mono">
+      {dupJob.processed.toLocaleString()} / {dupJob.total.toLocaleString()}
+    </span>
+  {/if}
   <button class="primary" onclick={run} disabled={running}>
     {running ? "Scanning…" : "Scan"}
   </button>
@@ -50,17 +76,31 @@
     <ul class="grid">
       {#each groups as g (g.id)}
         <li>
-          <a href="#/duplicate?id={g.id}" aria-label="Duplicate group of {g.member_count}">
-            {#if g.cover_thumbnail_path}
-              <img
-                src={thumbUrl(libraryStore.driveRoot, g.cover_thumbnail_path) ?? ""}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                onerror={(e) => ((e.target as HTMLImageElement).style.display = "none")}
-              />
-            {/if}
-            <span class="badge mono">{g.member_count}×</span>
+          <!--
+            Single click target — straight to the side-by-side compare
+            view, where DuplicateDetail's filmstrip lets the user flip
+            through every member at full size before deciding which to
+            keep. Splitting this into two paths last round was an
+            over-correction; the single landing point is what dup
+            review actually needs.
+          -->
+          <a
+            class="card-link"
+            href="#/duplicate?id={g.id}"
+            aria-label="Compare {g.member_count} duplicates"
+          >
+            <span class="thumb">
+              {#if g.cover_thumbnail_path}
+                <img
+                  src={thumbUrl(libraryStore.driveRoot, g.cover_thumbnail_path) ?? ""}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  onerror={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+                />
+              {/if}
+              <span class="badge mono">{g.member_count}×</span>
+            </span>
           </a>
         </li>
       {/each}
@@ -73,6 +113,10 @@
   .waste {
     font-size: var(--t-sm);
     color: var(--ink);
+  }
+  .run-status {
+    font-size: var(--t-sm);
+    color: var(--ink-soft);
   }
   .empty {
     padding: var(--s-8) var(--s-5);
@@ -93,26 +137,27 @@
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: var(--s-3);
   }
-  .grid li {
-    aspect-ratio: 1;
+  .grid li { display: contents; }
+  .card-link {
     position: relative;
+    display: block;
     background: var(--bg-card);
     border: 1px solid var(--line);
     border-radius: var(--r-md);
     overflow: hidden;
+    text-decoration: none;
+    color: inherit;
     transition: border-color var(--t-fast) var(--ease),
                 box-shadow var(--t-fast) var(--ease);
   }
-  .grid li:hover {
+  .card-link:hover {
     border-color: var(--accent);
     box-shadow: 0 6px 22px color-mix(in oklab, var(--accent) 18%, transparent);
   }
-  .grid a {
-    position: absolute;
-    inset: 0;
+  .thumb {
+    position: relative;
+    aspect-ratio: 1;
     display: block;
-    text-decoration: none;
-    color: inherit;
   }
   .grid img {
     width: 100%;

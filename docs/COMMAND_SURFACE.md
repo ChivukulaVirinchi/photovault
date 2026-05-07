@@ -509,7 +509,14 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `trash.permanent_delete` | `{ photo_ids: Vec<i64> }` | `{ deleted: u32, freed_bytes: u64 }` | hard delete; UI must confirm |
 | `trash.empty` | `{}` | `{ deleted: u32, freed_bytes: u64 }` |
 
-### 10. `documents` — OCR'd text-bearing photos
+<!--
+### 10. `documents` — OCR'd text-bearing photos  [DEFERRED]
+
+The Documents tab is not exposed in the UI right now. The engine still
+classifies content categories silently for the timeline badge, and the
+IPC commands are still wired into the Tauri shell (so an embedder can
+call them), but no user-facing surface ships them today. Block kept
+for the day this returns.
 
 | Command | Args | Returns |
 |---|---|---|
@@ -517,6 +524,8 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `documents.search` | `{ q: String, cursor, limit }` | `Page<PhotoSummaryDto>` | FTS5 over ocr_text |
 | `documents.run_analysis` | `{}` | `{ job_id: String }` | emits `documents:progress`, `documents:complete` |
 | `documents.set_category` | `{ photo_id: i64, category: ContentCategoryDto }` | `()` | manual override |
+-->
+
 
 ### 11. `map`
 

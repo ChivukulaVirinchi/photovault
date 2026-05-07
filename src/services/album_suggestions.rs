@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::{params, Connection};
 
 use crate::db::album_suggestion_repo::AlbumSuggestionRepo;
@@ -26,6 +26,11 @@ pub struct DetectedSuggestion {
 pub struct SuggestionDiagnostics {
     pub total_photos_with_date: i64,
     pub photos_with_city: i64,
+    /// Photos that carry GPS lat/lng (with or without a resolved city).
+    /// Distinguishes "no place names yet, run Fill in place names" from
+    /// "your photos have no GPS metadata at all" — those need
+    /// different advice.
+    pub photos_with_gps: i64,
     pub home_city: Option<String>,
     pub trip_rows: usize,
     pub trip_gate_duration_rejected: usize,
@@ -575,6 +580,190 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 }
 
 // ---------------------------------------------------------------------------
+// Gatherings detector — face-driven, no GPS required.
+// ---------------------------------------------------------------------------
+
+/// A "gathering" is a 1–2 day window with ≥ 8 photos that contain at
+/// least 2 distinct named-or-unnamed face clusters. The intent is to
+/// catch family weekends, parties, and outings on libraries that
+/// have no location metadata at all (old phones, scanned DSLR exports).
+///
+/// We exclude photos already claimed by trip / event detectors so the
+/// same weekend doesn't get suggested twice from different angles.
+pub fn detect_gatherings(
+    conn: &Connection,
+    excluded_photo_ids: &HashSet<i64>,
+) -> Vec<DetectedSuggestion> {
+    // Pull every photo that has at least one face assigned to a cluster,
+    // ordered by date. Group key is the day bucket (UTC date).
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT DISTINCT
+            p.id,
+            CAST(strftime('%s', p.date_taken) AS INTEGER) AS ts,
+            f.cluster_id
+        FROM photos p
+        JOIN faces  f ON f.photo_id = p.id
+        WHERE p.is_trashed = FALSE
+          AND p.date_taken IS NOT NULL
+          AND f.cluster_id IS NOT NULL
+        ORDER BY p.date_taken
+        "#,
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    type Row = (i64, i64, i64); // (photo_id, ts, cluster_id)
+    let rows: Vec<Row> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default();
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    // Cluster names lookup — used to title the resulting album.
+    let cluster_names: HashMap<i64, Option<String>> = {
+        let mut s = match conn.prepare("SELECT id, name FROM face_clusters") {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        s.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    };
+
+    // Sliding-window grouping by day bucket. Two consecutive days (or
+    // a Sat→Sun) get fused into one gathering when they share clusters.
+    let secs_per_day: i64 = 86_400;
+    let max_span_days: i64 = 2;
+
+    struct Window {
+        start_ts: i64,
+        end_ts: i64,
+        photo_ids: Vec<i64>,
+        cluster_ids: HashSet<i64>,
+    }
+
+    let mut windows: Vec<Window> = Vec::new();
+    let mut cur: Option<Window> = None;
+    let mut last_seen_photo: HashMap<i64, i64> = HashMap::new(); // photo_id → ts (dedup ts across cluster rows)
+
+    for (photo_id, ts, cluster_id) in &rows {
+        let ts = *ts;
+        let pid = *photo_id;
+        let cid = *cluster_id;
+        let mut new_window = false;
+        if let Some(c) = &cur {
+            // Extend if within span.
+            if (ts - c.start_ts) <= max_span_days * secs_per_day {
+                // ok, extend
+            } else {
+                new_window = true;
+            }
+        } else {
+            new_window = true;
+        }
+        if new_window {
+            if let Some(w) = cur.take() {
+                if !w.photo_ids.is_empty() {
+                    windows.push(w);
+                }
+            }
+            cur = Some(Window {
+                start_ts: ts,
+                end_ts: ts,
+                photo_ids: Vec::new(),
+                cluster_ids: HashSet::new(),
+            });
+        }
+        let w = cur.as_mut().unwrap();
+        w.cluster_ids.insert(cid);
+        w.end_ts = w.end_ts.max(ts);
+        // Avoid double-pushing the same photo (it appears once per
+        // cluster row from the JOIN).
+        let prev_ts = last_seen_photo.get(&pid).copied();
+        if prev_ts.is_none() {
+            w.photo_ids.push(pid);
+        }
+        last_seen_photo.insert(pid, ts);
+    }
+    if let Some(w) = cur.take() {
+        if !w.photo_ids.is_empty() {
+            windows.push(w);
+        }
+    }
+
+    let mut out = Vec::new();
+    for mut w in windows {
+        // Drop photos already used by other detectors.
+        w.photo_ids.retain(|p| !excluded_photo_ids.contains(p));
+        if w.photo_ids.len() < 8 || w.cluster_ids.len() < 2 {
+            continue;
+        }
+
+        // Pick the 1-2 most-photographed clusters in the window for
+        // the title. Counting requires a second pass over rows in the
+        // window range — cheap, the window is small.
+        let mut counts: HashMap<i64, usize> = HashMap::new();
+        for (pid, _, cid) in &rows {
+            if w.photo_ids.contains(pid) {
+                *counts.entry(*cid).or_insert(0) += 1;
+            }
+        }
+        let mut sorted: Vec<(i64, usize)> = counts.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_names: Vec<String> = sorted
+            .iter()
+            .take(2)
+            .filter_map(|(cid, _)| cluster_names.get(cid).and_then(|n| n.clone()))
+            .collect();
+
+        // Build a date suffix from the window's actual span.
+        let start_dt = chrono::DateTime::<Utc>::from_timestamp(w.start_ts, 0);
+        let end_dt = chrono::DateTime::<Utc>::from_timestamp(w.end_ts, 0);
+        let date_part = match (start_dt, end_dt) {
+            (Some(s), Some(e)) if s.date_naive() == e.date_naive() => {
+                s.format("%b %-d, %Y").to_string()
+            }
+            (Some(s), Some(e)) => format!("{} – {}", s.format("%b %-d"), e.format("%b %-d, %Y")),
+            _ => String::from("—"),
+        };
+
+        let title = if top_names.is_empty() {
+            format!("Gathering · {}", date_part)
+        } else if top_names.len() == 1 {
+            format!("Time with {} · {}", top_names[0], date_part)
+        } else {
+            format!("{} & {} · {}", top_names[0], top_names[1], date_part)
+        };
+
+        let cover_photo_id = pick_cover(conn, &w.photo_ids);
+        let fingerprint = compute_fingerprint(&w.photo_ids);
+
+        out.push(DetectedSuggestion {
+            kind: "gathering".to_string(),
+            title,
+            photo_ids: w.photo_ids,
+            cover_photo_id,
+            fingerprint,
+        });
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Top-level pipeline
 // ---------------------------------------------------------------------------
 
@@ -604,6 +793,13 @@ pub fn detect_suggestions_with_diagnostics(
         photos_with_city: conn
             .query_row(
                 "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND location_city IS NOT NULL AND location_city != ''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0),
+        photos_with_gps: conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL",
                 [],
                 |row| row.get(0),
             )
@@ -738,9 +934,20 @@ pub fn detect_suggestions_with_diagnostics(
     let events = detect_events(conn, &trip_photo_ids);
     diag.event_candidates_passed = events.len();
 
+    // Gatherings: face-driven, no GPS needed. Catches "weekend with
+    // people" scenarios that trips and events miss on libraries
+    // without location metadata.
+    let already_used: HashSet<i64> = trips
+        .iter()
+        .chain(events.iter())
+        .flat_map(|s| s.photo_ids.iter().copied())
+        .collect();
+    let gatherings = detect_gatherings(conn, &already_used);
+
     let mut all: Vec<DetectedSuggestion> = Vec::new();
     all.extend(trips);
     all.extend(events);
+    all.extend(gatherings);
 
     // Persist only new suggestions (no matching fingerprint)
     let mut persisted = Vec::new();

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
+  import { ZoomIn } from "lucide-svelte";
   import type { DupMember } from "../lib/api/all";
 
   interface Props { id: number }
@@ -63,15 +65,32 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 {#if group}
+  {@const memberIds = group.members.map((m) => m.photo_id)}
   <div class="grid">
     {#each group.members as m (m.photo_id)}
       <div class="card" class:keep={m.is_suggested_keep}>
-        <a class="frame" href="#/photo?id={m.photo_id}" aria-label="Open photo">
+        <!--
+          Frame is image-only — no anchor wrapping. The card's "Keep
+          this" button below is the primary action; we expose photo
+          viewing via a small "Open" pill in the corner. Keeps the
+          two clearly distinct.
+        -->
+        <div class="frame">
           {#if m.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, m.thumbnail_path) ?? ""} alt="" />
           {/if}
           {#if m.is_suggested_keep}<span class="badge">Keep</span>{/if}
-        </a>
+          <a
+            class="open-pill"
+            href="#/photo?id={m.photo_id}"
+            onclick={() => browseContext.set(`duplicate:${id}`, memberIds)}
+            aria-label="Open at full size"
+            title="Open at full size"
+          >
+            <ZoomIn size={14} strokeWidth={2} />
+            <span>Open</span>
+          </a>
+        </div>
         <dl>
           <dt>Size</dt><dd class="mono">{fmtSize(m.file_size)}</dd>
           <dt>Date</dt><dd class="mono">{m.date_taken ?? "—"}</dd>
@@ -79,9 +98,14 @@
         </dl>
         <div class="actions">
           {#if m.is_suggested_keep}
-            <button class="primary keep-btn" disabled>Keeping</button>
+            <button class="keep-btn keeping" disabled>
+              <span class="check-glyph" aria-hidden="true">✓</span>
+              Keeping this
+            </button>
           {:else}
-            <button class="primary keep-btn" onclick={() => setKeep(m.photo_id)}>Keep this</button>
+            <button class="keep-btn primary" onclick={() => setKeep(m.photo_id)}>
+              Keep this one
+            </button>
           {/if}
         </div>
       </div>
@@ -120,8 +144,6 @@
     background: var(--bg-elev);
     position: relative;
     display: block;
-    text-decoration: none;
-    color: inherit;
   }
   .frame img { width: 100%; height: 100%; object-fit: contain; background: #000; }
   .badge {
@@ -134,7 +156,27 @@
     border-radius: 999px;
     font-size: var(--t-xs);
     font-weight: 600;
+    z-index: 1;
   }
+  .open-pill {
+    position: absolute;
+    top: var(--s-3);
+    right: var(--s-3);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border-radius: 999px;
+    font-size: var(--t-xs);
+    font-weight: 500;
+    text-decoration: none;
+    backdrop-filter: blur(4px);
+    z-index: 1;
+    transition: background var(--t-fast) var(--ease);
+  }
+  .open-pill:hover { background: rgba(0, 0, 0, 0.78); }
 
   dl {
     display: grid;
@@ -164,6 +206,36 @@
     padding: 0 var(--s-4) var(--s-4);
     margin-top: auto;
   }
-  .keep-btn { width: 100%; }
-  .keep-btn:disabled { opacity: 0.7; cursor: default; }
+  /*
+    Keep button is the primary action of this card — make it
+    visually unmistakable. Full-width, accent-colored, slightly
+    taller than usual buttons. Disabled "Keeping" state shows the
+    chosen status without losing prominence.
+  */
+  .keep-btn {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: var(--t-base);
+    font-weight: 600;
+    border-radius: var(--r-md);
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: filter var(--t-fast) var(--ease);
+  }
+  .keep-btn.primary:hover { filter: brightness(1.08); }
+  .keep-btn.keeping {
+    background: color-mix(in oklab, var(--keep) 18%, var(--bg-card));
+    border-color: var(--keep);
+    color: var(--keep);
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .keep-btn.keeping .check-glyph {
+    font-weight: 700;
+  }
 </style>

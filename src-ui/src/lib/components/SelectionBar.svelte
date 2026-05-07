@@ -1,13 +1,18 @@
 <script lang="ts">
-  import { FolderPlus, Trash2, X } from "lucide-svelte";
+  import { FolderMinus, FolderPlus, Trash2, X } from "lucide-svelte";
 
   interface Props {
     count: number;
     onAddToAlbum: () => void;
     onTrash: () => void;
     onCancel: () => void;
+    /// Optional "Remove from this album" action. Only shown when the
+    /// caller (AlbumDetail) provides a handler, so other selection
+    /// contexts (Timeline, MemoryDetail, PersonDetail) don't get a
+    /// non-applicable button.
+    onRemoveFromAlbum?: () => void;
   }
-  let { count, onAddToAlbum, onTrash, onCancel }: Props = $props();
+  let { count, onAddToAlbum, onTrash, onCancel, onRemoveFromAlbum }: Props = $props();
 </script>
 
 <div class="bar" role="region" aria-label="Selection actions">
@@ -22,6 +27,13 @@
     <FolderPlus size={15} strokeWidth={1.75} />
     <span>Add to album</span>
   </button>
+
+  {#if onRemoveFromAlbum}
+    <button class="action" onclick={onRemoveFromAlbum} title="Remove from this album">
+      <FolderMinus size={15} strokeWidth={1.75} />
+      <span>Remove from album</span>
+    </button>
+  {/if}
 
   <button class="action danger" onclick={onTrash} title="Move to trash (Del)">
     <Trash2 size={15} strokeWidth={1.75} />

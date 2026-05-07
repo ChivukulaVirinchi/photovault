@@ -1,3 +1,14 @@
+<!--
+  Documents tab deferred — the engine still classifies content
+  categories silently for the timeline badge, but there's no standalone
+  Documents view in the UI. Original implementation preserved as a
+  block comment below for the day this returns.
+
+  See App.svelte and Sidebar.svelte for the matching commented-out
+  route + nav entry, and lib/api/all.ts for the commented IPC wrapper.
+-->
+
+<!--
 <script lang="ts">
   import { onMount } from "svelte";
   import { documents } from "../lib/api/all";
@@ -42,7 +53,7 @@
   <input
     bind:value={q}
     oninput={onInput}
-    placeholder="Search OCR text…"
+    placeholder="Search OCR text..."
     class="search"
   />
 </PageHeader>
@@ -70,35 +81,18 @@
 <style>
   .page { padding: var(--s-4) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
   .count { font-size: var(--t-sm); color: var(--ink); }
-  .search {
-    width: 240px;
-    padding: 6px var(--s-3);
-    font-size: var(--t-sm);
-  }
-  .empty {
-    padding: var(--s-8) var(--s-5);
-    text-align: center;
-    max-width: 42ch;
-    margin: 0 auto;
-  }
+  .search { width: 240px; padding: 6px var(--s-3); font-size: var(--t-sm); }
+  .empty { padding: var(--s-8) var(--s-5); text-align: center; max-width: 42ch; margin: 0 auto; }
   .empty p { color: var(--ink-soft); line-height: 1.55; }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 4px;
-  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
   .cell {
     aspect-ratio: 1;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
-    transition: filter var(--t-fast) var(--ease),
-                box-shadow var(--t-fast) var(--ease);
+    transition: filter var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover {
-    filter: brightness(1.06);
-    box-shadow: 0 0 0 2px var(--accent-ghost);
-    z-index: 1;
-  }
+  .cell:hover { filter: brightness(1.06); box-shadow: 0 0 0 2px var(--accent-ghost); z-index: 1; }
   .cell img { width: 100%; height: 100%; object-fit: cover; }
 </style>
+-->

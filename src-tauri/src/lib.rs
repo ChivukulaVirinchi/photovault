@@ -42,6 +42,7 @@ pub fn run() {
             commands::library::library_apply_changes,
             commands::library::library_start_scan,
             commands::library::library_cancel_scan,
+            commands::library::jobs_cancel,
             commands::library::library_regenerate_thumbnails,
             // photos
             commands::photos::photos_list,
@@ -67,6 +68,8 @@ pub fn run() {
             commands::people::people_review_skip,
             commands::people::people_start_processing,
             commands::people::people_cancel_processing,
+            commands::people::people_reset_all,
+            commands::people::people_reset_clusters,
             // albums
             commands::albums::albums_list,
             commands::albums::albums_get,
@@ -81,6 +84,7 @@ pub fn run() {
             commands::albums::albums_suggestions_run_detection,
             commands::albums::albums_suggestions_accept,
             commands::albums::albums_suggestions_dismiss,
+            commands::albums::albums_suggestions_reset_all,
             // search
             commands::search::search_query,
             commands::search::search_recent_list,

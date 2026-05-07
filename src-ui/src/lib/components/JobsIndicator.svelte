@@ -1,5 +1,6 @@
 <script lang="ts">
   import { jobs, etaMs, type Job } from "../stores/jobs.svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { Loader2, X } from "lucide-svelte";
 
   let expanded = $state(false);
@@ -23,6 +24,24 @@
     const mr = m % 60;
     return `~${h}h ${mr}m left`;
   }
+  async function cancelJob(j: Job) {
+    // Optimistic local-state flip so the row reads "Cancelling..."
+    // immediately. The real status flip arrives via the complete event
+    // when the engine actually stops.
+    if (j.id.startsWith("pending-")) {
+      // Optimistic placeholder — just dismiss locally.
+      jobs.dismiss(j.id);
+      return;
+    }
+    try {
+      await invoke("jobs_cancel", { args: { job_id: j.id } });
+    } catch (e) {
+      // Best-effort — if the IPC fails (e.g., job already finished),
+      // leave the row alone and let the natural complete event clean up.
+      // eslint-disable-next-line no-console
+      console.warn("jobs_cancel failed:", e);
+    }
+  }
 </script>
 
 {#if jobs.count > 0}
@@ -45,6 +64,9 @@
               <Loader2 class="spin" size={13} strokeWidth={2} />
               <span class="t">{j.title}</span>
               {#if p != null}<span class="pct mono">{p}%</span>{/if}
+              <button class="icon-btn cancel" onclick={() => cancelJob(j)} aria-label="Cancel" title="Cancel">
+                <X size={12} strokeWidth={2} />
+              </button>
             </div>
             {#if j.total != null && j.total > 0}
               <div class="track" aria-hidden="true">
@@ -121,6 +143,10 @@
     cursor: pointer;
   }
   .icon-btn:hover { background: var(--bg-card); color: var(--ink); }
+  .icon-btn.cancel {
+    width: 18px; height: 18px;
+  }
+  .icon-btn.cancel:hover { color: var(--hot, #d05a4a); }
 
   .list {
     list-style: none;

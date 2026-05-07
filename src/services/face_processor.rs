@@ -162,10 +162,15 @@ impl FaceProcessor {
 
         let pipeline_start = std::time::Instant::now();
 
-        // Initialize ONNX Runtime
+        // Initialize ONNX Runtime. The bare error from `OnnxRuntime::init`
+        // is already explicit ("library not found, set ORT_DYLIB_PATH or
+        // place libonnxruntime.so..."); the previous wrapper duplicated
+        // those instructions and produced a wall-of-text toast. Keep the
+        // toast short and point users at the script that installs
+        // everything in one shot.
         let runtime = OnnxRuntime::init().map_err(|e| {
             format!(
-                "Failed to init ONNX Runtime: {}. Install ONNX Runtime 1.23.x and set ORT_DYLIB_PATH, or place the runtime library in libs/onnxruntime/.",
+                "Face detection unavailable — {}. Run scripts/setup_assets.sh in the project root to install the ONNX runtime + face models.",
                 e
             )
         })?;
@@ -174,18 +179,16 @@ impl FaceProcessor {
         let embedder_path = model_dir.join("glintr100.onnx");
 
         if !detector_path.exists() {
-            return Err(format!(
-                "Face detection model not found at: {}. \
-                 Please download SCRFD model to this location.",
-                detector_path.display()
-            ));
+            return Err(
+                "Face detection model is missing. Run scripts/setup_assets.sh in the project root to download the SCRFD + ArcFace models."
+                    .to_string(),
+            );
         }
         if !embedder_path.exists() {
-            return Err(format!(
-                "Face embedding model not found at: {}. \
-                 Please download ArcFace model to this location.",
-                embedder_path.display()
-            ));
+            return Err(
+                "Face embedding model is missing. Run scripts/setup_assets.sh in the project root to download the SCRFD + ArcFace models."
+                    .to_string(),
+            );
         }
 
         // Create faces directory
@@ -200,7 +203,11 @@ impl FaceProcessor {
         let available_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let num_workers = available_cpus.clamp(1, 6);
+        // Bumped from 6 → 8 because the new two-stage pipeline does
+        // most of its work on tiny thumbnails; per-worker memory is a
+        // fraction of what it was when each worker held a 24 MP
+        // RGB buffer. 8 saturates an 8-core machine without OOM risk.
+        let num_workers = available_cpus.clamp(1, 8);
         let intra_threads = (available_cpus / num_workers).max(1);
 
         tracing::info!(
@@ -293,7 +300,12 @@ impl FaceProcessor {
         // PhotoFaceResult from the channel below, transactionally
         // writes faces + flips faces_processed, and bumps the
         // chunks_flushed atomic so the UI can refresh mid-run.
-        const FLUSH_CHUNK: usize = 25;
+        // Smaller chunks → more frequent UI refreshes during a run.
+        // The writer thread is fast (one transaction per flush), so the
+        // overhead of 5× more flushes is negligible compared to the
+        // visual win: faces appear in the People grid every ~5 photos
+        // instead of every ~25.
+        const FLUSH_CHUNK: usize = 5;
         let (chunk_tx, chunk_rx) = mpsc::sync_channel::<Vec<PhotoFaceResult>>(4);
         let writer_handle: std::thread::JoinHandle<Result<(usize, usize), String>> = {
             let drive_path_buf = drive_path.to_path_buf();
@@ -332,7 +344,7 @@ impl FaceProcessor {
         pool.install(|| {
             unprocessed
                 .par_iter()
-                .for_each(|(photo_id, file_path, orientation, taken_ts)| {
+                .for_each(|(photo_id, file_path, orientation, taken_ts, file_hash)| {
                     // Skip entirely on cancellation — don't mark this
                     // photo processed, so a future run will retry it.
                     if cancel.load(Ordering::Relaxed) {
@@ -374,38 +386,87 @@ impl FaceProcessor {
                         }
                     });
 
-                    // Load and orient image (once!) — image_io routes
-                    // HEIC/HEIF through libheif when the feature is on.
+                    // Two-stage decode: detect on the cheap cached
+                    // thumbnail, embed on the full image. SCRFD
+                    // downsamples to 640×640 internally so detection
+                    // accuracy doesn't care about the source size; it's
+                    // the ArcFace 112×112 alignment crop that needs
+                    // resolution. Decoding a 24 MP HEIC takes ~250 ms
+                    // vs ~5 ms for the 860 px thumb — for the ~80% of
+                    // photos that have zero faces, we skip the full
+                    // decode entirely.
                     let full_path = drive_path_arc.join(file_path);
-                    let image = match crate::services::image_io::open_image(&full_path) {
-                        Ok(img) => {
-                            let img = apply_exif_orientation(img, *orientation);
-                            let max_dim = img.width().max(img.height());
-                            if max_dim > 2048 {
-                                img.resize(2048, 2048, image::imageops::FilterType::Triangle)
-                            } else {
-                                img
-                            }
+                    let large_thumb = drive_path_arc
+                        .join(".photovault")
+                        .join("thumbnails")
+                        .join("large")
+                        .join("v2")
+                        .join(&file_hash[..2.min(file_hash.len())])
+                        .join(format!("{}.jpg", file_hash));
+
+                    // ---- Stage 1: detect on the thumbnail when present ----
+                    let detect_image: image::DynamicImage = if large_thumb.exists() {
+                        match image::ImageReader::open(&large_thumb)
+                            .ok()
+                            .and_then(|r| r.with_guessed_format().ok())
+                            .and_then(|r| r.decode().ok())
+                        {
+                            Some(img) => img,
+                            None => match crate::services::image_io::open_image(&full_path) {
+                                Ok(img) => {
+                                    let img = apply_exif_orientation(img, *orientation);
+                                    let max_dim = img.width().max(img.height());
+                                    if max_dim > 2048 {
+                                        img.resize(2048, 2048, image::imageops::FilterType::Triangle)
+                                    } else {
+                                        img
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!("Failed to open image {}: {}", file_path, e);
+                                    processed_count.fetch_add(1, Ordering::Relaxed);
+                                    return PhotoFaceResult {
+                                        photo_id: *photo_id,
+                                        file_path: file_path.clone(),
+                                        faces: Vec::new(),
+                                        taken_ts: *taken_ts,
+                                        brightness: 0.0,
+                                        had_error: true,
+                                    };
+                                }
+                            },
                         }
-                        Err(e) => {
-                            tracing::debug!("Failed to open image {}: {}", file_path, e);
-                            processed_count.fetch_add(1, Ordering::Relaxed);
-                            return PhotoFaceResult {
-                                photo_id: *photo_id,
-                                file_path: file_path.clone(),
-                                faces: Vec::new(),
-                                taken_ts: *taken_ts,
-                                brightness: 0.0,
-                                had_error: true,
-                            };
+                    } else {
+                        // No thumbnail yet — decode full and use it for
+                        // both stages.
+                        match crate::services::image_io::open_image(&full_path) {
+                            Ok(img) => {
+                                let img = apply_exif_orientation(img, *orientation);
+                                let max_dim = img.width().max(img.height());
+                                if max_dim > 2048 {
+                                    img.resize(2048, 2048, image::imageops::FilterType::Triangle)
+                                } else {
+                                    img
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("Failed to open image {}: {}", file_path, e);
+                                processed_count.fetch_add(1, Ordering::Relaxed);
+                                return PhotoFaceResult {
+                                    photo_id: *photo_id,
+                                    file_path: file_path.clone(),
+                                    faces: Vec::new(),
+                                    taken_ts: *taken_ts,
+                                    brightness: 0.0,
+                                    had_error: true,
+                                };
+                            }
                         }
                     };
 
-                    // Compute brightness once (eliminates redundant image reload)
-                    let brightness = Self::average_brightness(&image);
+                    // Brightness needs only thumbnail resolution.
+                    let brightness = Self::average_brightness(&detect_image);
 
-                    // Cancel check: post-decode is a natural breakpoint
-                    // before the (~200 ms) detector inference fires.
                     if cancel.load(Ordering::Relaxed) {
                         return PhotoFaceResult {
                             photo_id: *photo_id,
@@ -417,14 +478,41 @@ impl FaceProcessor {
                         };
                     }
 
-                    // Detect faces
-                    let detected = DETECTOR.with(|d| {
+                    // Detect faces on the thumbnail.
+                    let mut detected = DETECTOR.with(|d| {
                         let mut borrow = d.borrow_mut();
                         match borrow.as_mut() {
-                            Some(det) => det.detect_adaptive(&image),
+                            Some(det) => det.detect_adaptive(&detect_image),
                             None => Vec::new(),
                         }
                     });
+
+                    // ---- Stage 2: re-align faces against the full
+                    // image for crisp embeddings. We only pay the
+                    // full-decode cost when faces actually exist.
+                    if !detected.is_empty() && large_thumb.exists() {
+                        if let Ok(full_img) =
+                            crate::services::image_io::open_image(&full_path)
+                        {
+                            let full_img = apply_exif_orientation(full_img, *orientation);
+                            let scale_x =
+                                full_img.width() as f32 / detect_image.width() as f32;
+                            let scale_y =
+                                full_img.height() as f32 / detect_image.height() as f32;
+                            for face in detected.iter_mut() {
+                                let mut scaled = face.landmarks;
+                                for lm in &mut scaled {
+                                    lm.0 *= scale_x;
+                                    lm.1 *= scale_y;
+                                }
+                                if let Some(aligned) =
+                                    crate::ml::alignment::align_face_112(&full_img, &scaled)
+                                {
+                                    face.aligned_face = Some(aligned);
+                                }
+                            }
+                        }
+                    }
 
                     if !detected.is_empty() {
                         tracing::info!(

@@ -11,6 +11,19 @@ pub struct BurstGroupRecord {
     pub start_time: String,
     pub end_time: String,
     pub photo_count: i64,
+    /// Cover thumbnails (suggested-best first, then by date) — the
+    /// listing card renders these as a horizontal filmstrip the user
+    /// can click directly to open any photo in the viewer.
+    pub cover_thumbnail_paths: Vec<String>,
+    /// Photo IDs aligned 1:1 with `cover_thumbnail_paths`. Lets the
+    /// frontend wire each filmstrip thumb to a specific photo route
+    /// without an extra IPC roundtrip.
+    pub cover_photo_ids: Vec<i64>,
+    /// Every member's photo_id, in display order. Used to scope
+    /// PhotoDetail's prev/next arrows to this burst when the user
+    /// clicks a thumb in the listing — they navigate within the burst,
+    /// not the whole library.
+    pub member_photo_ids: Vec<i64>,
 }
 
 /// Burst group member record
@@ -140,7 +153,10 @@ impl<'a> BurstRepo<'a> {
         tx.commit()
     }
 
-    /// Get all burst groups
+    /// Get all burst groups + the first 4 thumbnails per group for the
+    /// listing card's 2×2 stack. Two queries (one for groups, one for
+    /// thumbs) is fine here — the listing is small and we keep the
+    /// SQL plain rather than wrestling a window function.
     pub fn get_all_groups(&self) -> SqliteResult<Vec<BurstGroupRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -156,12 +172,59 @@ impl<'a> BurstRepo<'a> {
                 start_time: row.get(1)?,
                 end_time: row.get(2)?,
                 photo_count: row.get(3)?,
+                cover_thumbnail_paths: Vec::new(),
+                cover_photo_ids: Vec::new(),
+                member_photo_ids: Vec::new(),
             })
         })?;
 
         let mut groups = Vec::new();
         for row in rows {
             groups.push(row?);
+        }
+
+        // Cover thumbnails (up to 6 for the filmstrip) — suggested-best
+        // first, then by date. Photo ids paired 1:1 so the frontend
+        // can route directly to PhotoDetail on click.
+        let mut cover_stmt = self.conn.prepare(
+            r#"
+            SELECT m.photo_id, p.thumbnail_path
+              FROM burst_group_members m
+              JOIN photos p ON p.id = m.photo_id
+             WHERE m.group_id = ?1
+               AND p.thumbnail_path IS NOT NULL
+          ORDER BY m.is_suggested_best DESC, p.date_taken ASC
+             LIMIT 6
+            "#,
+        )?;
+        // Every member's photo_id in the same order — used as the
+        // browseContext scope when opening a photo from the listing
+        // card. Caps at the natural group size; bursts rarely exceed
+        // tens of photos.
+        let mut all_stmt = self.conn.prepare(
+            r#"
+            SELECT m.photo_id
+              FROM burst_group_members m
+              JOIN photos p ON p.id = m.photo_id
+             WHERE m.group_id = ?1
+          ORDER BY m.is_suggested_best DESC, p.date_taken ASC
+            "#,
+        )?;
+        for g in groups.iter_mut() {
+            let covers: Vec<(i64, String)> = cover_stmt
+                .query_map(params![g.id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            g.cover_photo_ids = covers.iter().map(|(id, _)| *id).collect();
+            g.cover_thumbnail_paths = covers.into_iter().map(|(_, p)| p).collect();
+
+            let members: Vec<i64> = all_stmt
+                .query_map(params![g.id], |row| row.get::<_, i64>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            g.member_photo_ids = members;
         }
 
         Ok(groups)

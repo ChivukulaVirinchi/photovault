@@ -25,13 +25,16 @@ pub struct DuplicateGroup {
 }
 
 /// Hamming-distance threshold (out of 64 bits) below which two photos
-/// are considered the same image. 6 bits ≈ 91% bit agreement, which is
-/// the empirical floor for "actual duplicates": re-encoded JPEGs,
-/// stripped-EXIF copies, resolution variants. Anything looser flooded
-/// the listing with merely-similar photos (different composition that
-/// happens to share dominant colours). Burst-style near-dupes are
-/// handled by the burst detector, not here.
-const PHASH_HAMMING_THRESHOLD: u32 = 6;
+/// are considered the same image. 4 bits ≈ 94% bit agreement — the
+/// floor for "really actually the same shot, different file":
+/// re-encoded JPEGs, stripped-EXIF copies, scale variants, watermark-
+/// added copies. The previous 6-bit threshold (91%) still flagged too
+/// many compositionally-similar but visually distinct photos as
+/// "duplicates" (same wall + same lighting → near-identical pHash but
+/// different subjects). Tighter is the right error: missing a dup is
+/// fine, false-flagging real photos as dups erodes trust in the
+/// listing. Burst-style near-dupes belong to the burst detector.
+const PHASH_HAMMING_THRESHOLD: u32 = 4;
 
 /// Duplicate detection service
 pub struct DuplicateDetector;
@@ -326,30 +329,42 @@ impl DuplicateDetector {
         scored.first().map(|(id, _, _, _)| *id)
     }
 
-    /// Get total wasted space from duplicates (in bytes)
+    /// Wasted bytes across the duplicate listing.
+    ///
+    /// Counts every detected duplicate group — both byte-exact dupes
+    /// (same file_hash) AND perceptual ones (pHash match). The earlier
+    /// version of this function only summed exact matches, which on a
+    /// perceptual-only library reported "0 MB potentially wasted" even
+    /// when the listing had dozens of groups. Now: walk the
+    /// duplicate_groups table directly and sum (total_size - largest)
+    /// per group, since the user's win is keeping one copy and
+    /// trashing the rest.
     pub fn calculate_wasted_space(conn: &Connection) -> rusqlite::Result<u64> {
-        // For each duplicate group, sum all file sizes except the largest
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_hash, SUM(file_size) as total_size, MAX(file_size) as max_size, COUNT(*) as count
-            FROM photos
-            WHERE is_trashed = FALSE
-            GROUP BY file_hash
+            SELECT
+                COALESCE(SUM(p.file_size), 0) AS total_size,
+                COALESCE(MAX(p.file_size), 0) AS max_size,
+                COUNT(*) AS count
+            FROM duplicate_groups g
+            JOIN duplicate_group_members m ON m.group_id = g.id
+            JOIN photos p ON p.id = m.photo_id
+            WHERE p.is_trashed = FALSE
+            GROUP BY g.id
             HAVING count > 1
             "#,
         )?;
 
         let wasted: i64 = stmt
             .query_map([], |row| {
-                let total: i64 = row.get(1)?;
-                let max: i64 = row.get(2)?;
-                // Wasted = total - one copy
+                let total: i64 = row.get(0)?;
+                let max: i64 = row.get(1)?;
                 Ok(total - max)
             })?
             .filter_map(|r| r.ok())
             .sum();
 
-        Ok(wasted as u64)
+        Ok(wasted.max(0) as u64)
     }
 }
 

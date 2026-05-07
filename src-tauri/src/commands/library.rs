@@ -366,6 +366,17 @@ pub async fn library_cancel_scan(
     Ok(())
 }
 
+/// Generic job-cancel handler used by the global JobsIndicator's X
+/// button — works for any job_id regardless of domain. Engine workers
+/// that respect the cancel flag (face_processor, scanner, geocoding
+/// backfill, etc.) abort at the next checkpoint; engines that don't
+/// will run to completion but the registry slot is still released.
+#[tauri::command]
+pub async fn jobs_cancel(state: State<'_, AppState>, args: CancelJobArgs) -> CommandResult<()> {
+    state.jobs.lock().await.cancel(&args.job_id);
+    Ok(())
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct LibraryRegenerateThumbnailsArgs {
     #[allow(dead_code)] // photo_ids targeted regen lands in M3 — for now we

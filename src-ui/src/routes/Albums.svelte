@@ -2,6 +2,9 @@
   import { onMount } from "svelte";
   import { albums } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { jobs } from "../lib/stores/jobs.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { AlbumDto, AlbumSuggestionDto } from "../lib/api/types";
@@ -12,6 +15,11 @@
   let creating = $state(false);
   let newName = $state("");
   let error = $state<string | null>(null);
+  // Detection state derived from the global jobs store so it survives
+  // page navigation. The store gets fed by `album_suggestions:progress`
+  // / `album_suggestions:complete` events emitted by the Rust shell.
+  const detecting = $derived(jobs.isRunning("albumSuggestions"));
+  const detectJob = $derived(jobs.byKind("albumSuggestions"));
 
   // Live filter — the text field appears once the user has enough
   // albums to actually need scanning (8+).
@@ -56,8 +64,22 @@
   }
 
   async function runDetection() {
-    try { await albums.suggestions.runDetection(); await load(); }
-    catch (e) { error = JSON.stringify(e); }
+    if (detecting) return;
+    // Optimistic placeholder so the indicator pops on the click
+    // frame, before the IPC even returns.
+    const placeholderId = `pending-album-${Date.now()}`;
+    jobs.register(placeholderId, "albumSuggestions");
+    toasts.success("Looking for trip and event patterns…");
+    try {
+      const r = await albums.suggestions.runDetection();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "albumSuggestions");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      error = msg;
+      toasts.error(`Couldn't detect: ${msg}`);
+    }
   }
 
   async function openPreview(s: AlbumSuggestionDto) {
@@ -96,16 +118,39 @@
     if (e.key === "Escape") { e.preventDefault(); closePreview(); }
   }
 
+  // React to album-suggestion completion via the global jobs store.
+  // Doing it here (instead of via a one-shot Tauri `listen()`) means
+  // the toast still fires if the user clicks Detect, navigates away,
+  // and comes back — the store is filled by the app-boot subscription.
+  let toastedJobIds = new Set<string>();
+  $effect(() => {
+    if (!detectJob) return;
+    if (detectJob.status === "complete" && !toastedJobIds.has(detectJob.id)) {
+      toastedJobIds.add(detectJob.id);
+      load();
+      const msg = detectJob.message || "Suggestion detection finished.";
+      if (msg.toLowerCase().startsWith("couldn't")) {
+        toasts.error(msg);
+      } else {
+        toasts.success(msg);
+      }
+    }
+  });
+
   onMount(() => {
     load();
     window.addEventListener("keydown", onPreviewKey);
-    return () => window.removeEventListener("keydown", onPreviewKey);
+    return () => {
+      window.removeEventListener("keydown", onPreviewKey);
+    };
   });
 </script>
 
 <PageHeader title="Albums">
   <span class="count mono">{list.length}<span class="muted"> albums</span></span>
-  <button class="ghost" onclick={runDetection}>Detect</button>
+  <button class="ghost" onclick={runDetection} disabled={detecting}>
+    {detecting ? "Detecting…" : "Detect"}
+  </button>
   {#if creating}
     <!-- svelte-ignore a11y_autofocus -->
     <input bind:value={newName} onkeydown={onCreateKey} placeholder="Album name" autofocus />
@@ -148,7 +193,9 @@
       <p>Make one, or run detection to find what already groups itself.</p>
       <div class="row">
         <button class="primary" onclick={() => (creating = true)}>New album</button>
-        <button class="ghost" onclick={runDetection}>Detect</button>
+        <button class="ghost" onclick={runDetection} disabled={detecting}>
+    {detecting ? "Detecting…" : "Detect"}
+  </button>
       </div>
     </div>
   {/if}
@@ -163,18 +210,38 @@
           <strong class="title">{s.title}</strong>
           <span class="muted small">{s.photo_ids.length} photos</span>
         </header>
+        <!--
+          Album-modal preview uses the padding-top:100% aspect-ratio
+          pattern (a child span absolutely-fills the cell). This is
+          the bulletproof version — `aspect-ratio: 1` on grid items
+          inside a nested flex container kept fighting computed
+          heights and producing overlap. The hack predates aspect-
+          ratio in CSS but works reliably across every browser.
+        -->
         <div class="preview-grid">
           {#if previewLoading}
             {#each Array(12) as _}
-              <div class="ph"></div>
+              <span class="m-cell loading-ph">
+                <span class="m-pad"></span>
+              </span>
             {/each}
           {:else}
             {#each previewPhotos as p (p.id)}
-              <div class="ph">
-                {#if p.thumbnail_path}
-                  <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
-                {/if}
-              </div>
+              <a
+                class="m-cell"
+                href="#/photo?id={p.id}"
+                onclick={() =>
+                  browseContext.set(
+                    `suggestion:${s.id}`,
+                    previewPhotos.map((q) => q.id),
+                  )}
+              >
+                <span class="m-pad">
+                  {#if p.thumbnail_path}
+                    <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+                  {/if}
+                </span>
+              </a>
             {/each}
           {/if}
         </div>
@@ -361,25 +428,54 @@
     color: var(--ink);
     line-height: 1.1;
   }
+  /*
+    Bulletproof grid for the suggestion preview modal. `aspect-ratio:
+    1` on grid items inside this nested flex layout kept producing
+    overlap on resize / scroll. The padding-top:100% hack guarantees
+    a 1:1 cell at any width, in any container. Don't migrate this
+    back to `.pv-photo-grid` without re-testing on small/large modals.
+  */
   .preview-grid {
     padding: var(--s-4) var(--s-6);
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    grid-auto-rows: 1fr;
-    align-items: start;
-    gap: var(--s-2);
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px;
+    align-content: start;
   }
-  .ph {
-    aspect-ratio: 1;
-    width: 100%;
+  .m-cell {
+    display: block;
     background: var(--bg-elev);
     border-radius: var(--r-sm);
     overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .m-cell:hover {
+    filter: brightness(1.06);
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .m-pad {
+    display: block;
+    position: relative;
+    padding-top: 100%; /* the square */
+  }
+  .m-cell img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .preview-grid .loading-ph {
+    /* Skeleton slot while preview load is in flight. */
+    background: var(--bg-elev);
+  }
   .modal footer {
     flex-shrink: 0;
     padding: var(--s-3) var(--s-6) var(--s-5);

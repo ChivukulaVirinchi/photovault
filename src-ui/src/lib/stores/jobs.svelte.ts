@@ -16,6 +16,12 @@ export interface Job {
   /// Wall-clock ms since the job started (set from the event's `elapsed_ms`).
   elapsed_ms: number;
   status: "running" | "complete" | "error";
+  /// Face-pipeline only: number of streaming-writer flushes so far. The
+  /// People page watches this and reloads the cluster grid whenever it
+  /// bumps so newly-detected faces appear mid-run.
+  chunks_flushed?: number;
+  /// Face-pipeline only: cumulative count of faces detected so far.
+  faces_found?: number;
 }
 
 export type JobKind =
@@ -25,16 +31,18 @@ export type JobKind =
   | "bursts"
   | "documents"
   | "thumbnails"
-  | "geocoding";
+  | "geocoding"
+  | "albumSuggestions";
 
 const KIND_TITLE: Record<JobKind, string> = {
-  scan:       "Scanning library",
-  faces:      "Finding faces",
-  duplicates: "Detecting duplicates",
-  bursts:     "Detecting bursts",
-  documents:  "Classifying documents",
-  thumbnails: "Generating thumbnails",
-  geocoding:  "Resolving places",
+  scan:             "Scanning library",
+  faces:            "Finding faces",
+  duplicates:       "Detecting duplicates",
+  bursts:           "Detecting bursts",
+  documents:        "Classifying documents",
+  thumbnails:       "Generating thumbnails",
+  geocoding:        "Resolving places",
+  albumSuggestions: "Looking for trips",
 };
 
 class JobsStore {
@@ -66,14 +74,33 @@ class JobsStore {
       files_found?: number;
       current_file?: string;
       is_complete?: boolean;
+      // faces-specific
+      chunks_flushed?: number;
+      faces_found?: number;
+      // legacy fallbacks: older binaries used these names. Reading them
+      // here means the new frontend works against an unrebuilt Rust
+      // shell — the field rename in `FacesProgressDto` was breaking the
+      // progress bar silently.
+      photos_processed?: number;
+      total_photos?: number | null;
+      faces_detected?: number;
+      // bursts/duplicates complete payload
+      groups_found?: number;
     };
     const handle = (kind: JobKind, complete: boolean) => (e: { payload: Wire }) => {
       const p = e.payload;
       // Coalesce different progress shapes into one Job.
-      const processed = p.files_processed ?? p.processed ?? 0;
+      const processed =
+        p.files_processed ?? p.processed ?? p.photos_processed ?? 0;
       const total =
-        p.files_found != null ? p.files_found : (p.total ?? null);
-      const message = p.message ?? p.current_file ?? null;
+        p.files_found ?? p.total ?? p.total_photos ?? null;
+      const facesFound = p.faces_found ?? p.faces_detected ?? 0;
+      const message =
+        p.message ??
+        p.current_file ??
+        (complete && p.groups_found != null
+          ? `${p.groups_found} group${p.groups_found === 1 ? "" : "s"}`
+          : null);
       const id = p.job_id;
       const next = new Map(this.jobs);
       const prev = next.get(id);
@@ -86,6 +113,8 @@ class JobsStore {
         total: total != null ? total : null,
         elapsed_ms: p.elapsed_ms ?? prev?.elapsed_ms ?? 0,
         status: complete ? "complete" : "running",
+        chunks_flushed: p.chunks_flushed ?? prev?.chunks_flushed ?? 0,
+        faces_found: facesFound > 0 ? facesFound : (prev?.faces_found ?? 0),
       });
       this.jobs = next;
       if (complete) {
@@ -106,6 +135,9 @@ class JobsStore {
       ["documents:complete",  "documents",  true ],
       ["thumbnails:progress", "thumbnails", false],
       ["geocoding:progress",  "geocoding",  false],
+      ["geocoding:complete",  "geocoding",  true ],
+      ["album_suggestions:progress", "albumSuggestions", false],
+      ["album_suggestions:complete", "albumSuggestions", true ],
     ];
     const unlistens = await Promise.all(
       subs.map(([ev, kind, done]) => listen<Wire>(ev, handle(kind, done))),
@@ -140,6 +172,18 @@ class JobsStore {
       if (j.kind === kind && j.status === "running") return true;
     }
     return false;
+  }
+
+  /// Return the most-recent job of this kind (running or just-completed
+  /// while it lingers), so a route component can read live counts and
+  /// progress without subscribing to events itself.
+  byKind(kind: JobKind): Job | null {
+    let best: Job | null = null;
+    for (const j of this.jobs.values()) {
+      if (j.kind !== kind) continue;
+      if (best == null || j.elapsed_ms > best.elapsed_ms) best = j;
+    }
+    return best;
   }
 
   dismiss(id: string) {

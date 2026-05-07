@@ -7,6 +7,7 @@
   import PhotoDetail from "./routes/PhotoDetail.svelte";
   import People from "./routes/People.svelte";
   import PersonDetail from "./routes/PersonDetail.svelte";
+  import PersonReview from "./routes/PersonReview.svelte";
   import Albums from "./routes/Albums.svelte";
   import AlbumDetail from "./routes/AlbumDetail.svelte";
   import Search from "./routes/Search.svelte";
@@ -17,7 +18,10 @@
   import Bursts from "./routes/Bursts.svelte";
   import BurstDetail from "./routes/BurstDetail.svelte";
   import Trash from "./routes/Trash.svelte";
-  import Documents from "./routes/Documents.svelte";
+  // Documents tab deferred — see Sidebar.svelte. Route stub kept
+  // commented in case it returns; the engine still classifies content
+  // categories silently for the timeline badge.
+  // import Documents from "./routes/Documents.svelte";
   import Insights from "./routes/Insights.svelte";
   import Settings from "./routes/Settings.svelte";
   import MapView from "./routes/Map.svelte";
@@ -83,6 +87,8 @@
         <PhotoDetail id={Number(route.params.id)} />
       {:else if route.path === "/people"}
         <People />
+      {:else if route.path === "/people/review"}
+        <PersonReview />
       {:else if route.path === "/person"}
         <PersonDetail id={Number(route.params.id)} />
       {:else if route.path === "/albums"}
@@ -105,8 +111,8 @@
         <BurstDetail id={Number(route.params.id)} />
       {:else if route.path === "/trash"}
         <Trash />
-      {:else if route.path === "/documents"}
-        <Documents />
+      <!-- {:else if route.path === "/documents"}
+        <Documents /> -->
       {:else if route.path === "/insights"}
         <Insights />
       {:else if route.path === "/health"}

@@ -7,7 +7,13 @@ use crate::ml::FaceEmbedding;
 use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding, ReviewItem};
 
 type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
-type UnprocessedPhotoRow = (i64, String, i32, Option<i64>);
+/// (id, file_path, orientation, taken_ts, file_hash)
+///
+/// `file_hash` is plumbed through so the face worker can locate the
+/// pre-generated Large thumbnail on disk and decode that instead of the
+/// full image — typically a 5-10× speedup on libraries that have
+/// already been thumbnailed.
+type UnprocessedPhotoRow = (i64, String, i32, Option<i64>, String);
 
 impl<'a> FaceRepo<'a> {
     /// Get unclustered faces with photo_id and embeddings.
@@ -295,7 +301,8 @@ impl<'a> FaceRepo<'a> {
                 CASE
                     WHEN date_taken IS NOT NULL THEN CAST(strftime('%s', date_taken) AS INTEGER)
                     ELSE NULL
-                END AS taken_ts
+                END AS taken_ts,
+                file_hash
             FROM photos
             WHERE faces_processed = FALSE AND is_trashed = FALSE
             ORDER BY date_taken DESC
@@ -308,6 +315,7 @@ impl<'a> FaceRepo<'a> {
                 row.get::<_, String>(1)?,
                 row.get::<_, i32>(2)?,
                 row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })?;
 

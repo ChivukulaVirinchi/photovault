@@ -124,7 +124,20 @@ fn candidate_asset_roots() -> Vec<PathBuf> {
             roots.push(exe_dir.to_path_buf());
             // Debian install layout: /usr/bin/photovault -> /usr/lib/photovault
             roots.push(exe_dir.join("..").join("lib").join("photovault"));
+            // `cargo tauri dev` runs the binary from target/debug/. Walk
+            // up two levels to land on the workspace root, where the
+            // dev tree's `libs/` and `models/` actually live.
+            roots.push(exe_dir.join("..").join(".."));
         }
+    }
+    // `cargo tauri dev` sets CWD to src-tauri/. Walk up so the
+    // workspace root's libs/ + models/ are reachable.
+    if let Some(parent) = std::env::current_dir()
+        .ok()
+        .as_deref()
+        .and_then(|p| p.parent())
+    {
+        roots.push(parent.to_path_buf());
     }
 
     roots.push(project_root());

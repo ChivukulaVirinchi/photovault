@@ -14,6 +14,13 @@ pub struct DuplicateGroupRecord {
     /// as the group's cover so the user can recognise the photo at a
     /// glance instead of just seeing "Group of 4".
     pub cover_thumbnail_path: Option<String>,
+    /// Photo id matching the cover_thumbnail_path. Lets the listing
+    /// route directly to the photo viewer on click (which then uses
+    /// `member_photo_ids` as its prev/next scope).
+    pub cover_photo_id: Option<i64>,
+    /// All members in display order — same scope used by PhotoDetail's
+    /// arrow navigation when the user clicks a thumb in the listing.
+    pub member_photo_ids: Vec<i64>,
 }
 
 /// Duplicate group member record
@@ -118,7 +125,14 @@ impl<'a> DuplicateRepo<'a> {
                      WHERE m.group_id = dg.id
                   ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
                      LIMIT 1
-                ) AS cover_thumbnail_path
+                ) AS cover_thumbnail_path,
+                (
+                    SELECT m.photo_id
+                      FROM duplicate_group_members m
+                     WHERE m.group_id = dg.id
+                  ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
+                     LIMIT 1
+                ) AS cover_photo_id
             FROM duplicate_groups dg
             LEFT JOIN duplicate_group_members dgm ON dg.id = dgm.group_id
             GROUP BY dg.id
@@ -131,12 +145,33 @@ impl<'a> DuplicateRepo<'a> {
                 id: row.get(0)?,
                 member_count: row.get(1)?,
                 cover_thumbnail_path: row.get(2)?,
+                cover_photo_id: row.get(3)?,
+                member_photo_ids: Vec::new(),
             })
         })?;
 
         let mut groups = Vec::new();
         for row in rows {
             groups.push(row?);
+        }
+
+        // Pull every member's photo_id per group — drives the
+        // browseContext scope when the user clicks a duplicate's
+        // thumb in the listing.
+        let mut members_stmt = self.conn.prepare(
+            r#"
+            SELECT m.photo_id
+              FROM duplicate_group_members m
+             WHERE m.group_id = ?1
+          ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
+            "#,
+        )?;
+        for g in groups.iter_mut() {
+            let ids: Vec<i64> = members_stmt
+                .query_map(params![g.id], |row| row.get::<_, i64>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            g.member_photo_ids = ids;
         }
 
         Ok(groups)
