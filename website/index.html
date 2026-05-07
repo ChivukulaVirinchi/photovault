@@ -82,8 +82,17 @@
 
     .brand {
       display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
+      line-height: 1.05;
+      position: relative;
+    }
+
+    .brand-mark {
+      display: flex;
       align-items: baseline;
-      gap: 0.55rem;
+      gap: 0.4rem;
       font-family: "Cormorant Garamond", Georgia, serif;
       font-style: italic;
       font-weight: 500;
@@ -92,7 +101,7 @@
       position: relative;
     }
 
-    .brand::after {
+    .brand-mark::after {
       content: "";
       width: 8px;
       height: 8px;
@@ -101,6 +110,15 @@
       align-self: center;
       margin-bottom: 0.7rem;
       margin-left: -0.5rem;
+    }
+
+    .brand-tagline {
+      font-size: 0.62rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      font-weight: 500;
+      margin-left: 1px;
     }
 
     .nav-links {
@@ -390,7 +408,8 @@
   <header class="topbar">
     <div class="container topbar-inner">
       <a class="brand" href="./" aria-label="Smriti">
-        smriti
+        <span class="brand-mark">smriti</span>
+        <span class="brand-tagline">Photo library</span>
       </a>
       <nav class="nav-links" aria-label="Primary navigation">
         <a href="#downloads">Download</a>

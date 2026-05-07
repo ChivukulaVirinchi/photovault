@@ -1,15 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"
      role="img" aria-label="Smriti">
   <!--
-    Logomark — a square avatar version. The lowercase italic 's' of
-    the wordmark with the same warm-ochre dot, scaled to feel
-    balanced inside a circle/square. Sidebar uses this when collapsed.
+    Logomark — square avatar version of the wordmark. Lowercase italic
+    's' + the warm-ochre tittle. The internal style block keeps the
+    glyph readable on dark UA backgrounds when this asset is referenced
+    via <img> / <link rel="icon"> (where currentColor isn't available).
   -->
-  <text x="20" y="78"
+  <style>
+    .glyph { fill: #2a2622; }
+    @media (prefers-color-scheme: dark) {
+      .glyph { fill: #f1ebde; }
+    }
+  </style>
+  <text class="glyph"
+        x="20" y="78"
         font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
         font-style="italic"
         font-weight="500"
-        font-size="84"
-        fill="#2a2622">s</text>
+        font-size="84">s</text>
   <circle cx="78" cy="32" r="7" fill="#c89968" />
 </svg>

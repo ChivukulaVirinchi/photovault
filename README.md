@@ -1,7 +1,10 @@
 <div align="center">
-  <img src="docs/smriti-logo.svg" alt="Smriti" width="280">
-  <p><em>स्मृति — that which is remembered</em></p>
-  <p><strong>Your photo library, organized — on your machine.</strong></p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/smriti-logo-dark.svg">
+    <img src="docs/smriti-logo.svg" alt="Smriti" width="280">
+  </picture>
+  <p><strong>The offline photo library for your own drive.</strong></p>
+  <p><em>स्मृति (smriti) — Sanskrit, "that which is remembered."</em></p>
   <p>
     Lightning fast on hundreds of thousands of photos. Offline-first
     by default. No cloud, no telemetry, no account required.

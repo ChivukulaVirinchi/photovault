@@ -3,16 +3,27 @@
   <!--
     Wordmark: lowercase italic Cormorant Garamond. Rendered as text so
     the file stays a few hundred bytes; the app ships Cormorant (see
-    main.ts), and README contexts fall back to the system serif italic
-    stack — visually close, no broken layout. The single warm-ochre
-    dot replaces the tittle on the *i* and is the only colour.
+    main.ts), and README/GitHub contexts fall back to the system serif
+    italic stack — visually close, no broken layout. The single warm-
+    ochre dot replaces the tittle on the *i* and is the only colour.
+
+    The internal <style> block swaps the text fill on dark UAs (GitHub
+    dark theme, the website's auto-dark mode) so the wordmark stays
+    readable. SVGs loaded via <img> can't use currentColor from the
+    parent, so the media query lives inside the SVG itself.
   -->
-  <text x="20" y="68"
+  <style>
+    .wordmark { fill: #2a2622; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #f1ebde; }
+    }
+  </style>
+  <text class="wordmark"
+        x="20" y="68"
         font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
         font-style="italic"
         font-weight="500"
         font-size="64"
-        letter-spacing="0.5"
-        fill="#2a2622">smriti</text>
+        letter-spacing="0.5">smriti</text>
   <circle cx="195" cy="22" r="6" fill="#c89968" />
 </svg>

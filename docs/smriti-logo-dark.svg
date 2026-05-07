@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 100" width="320" height="100"
+     role="img" aria-label="Smriti">
+  <!--
+    Dark-mode variant of the wordmark. Used by README's <picture>
+    source-set when the GitHub viewer is in dark theme. Identical
+    geometry to smriti-logo.svg; only the text fill changes from
+    charcoal #2a2622 to cream #f1ebde.
+  -->
+  <text x="20" y="68"
+        font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
+        font-style="italic"
+        font-weight="500"
+        font-size="64"
+        letter-spacing="0.5"
+        fill="#f1ebde">smriti</text>
+  <circle cx="195" cy="22" r="6" fill="#c89968" />
+</svg>

@@ -6,8 +6,6 @@
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
-  import smritiLogo from "../../assets/smriti-logo.svg";
-  import smritiLogomark from "../../assets/smriti-logomark.svg";
 
   interface Props { current: string }
   let { current }: Props = $props();
@@ -94,9 +92,48 @@
       {/if}
     </button>
     {#if collapsed}
-      <img src={smritiLogomark} alt="Smriti" class="brand-logomark" />
+      <!-- Square logomark: lowercase italic "s" + ochre tittle. Uses
+           currentColor so the text follows the sidebar's --ink — fixes
+           the dark-mode invisibility the external <img> SVG had. -->
+      <svg
+        class="brand-logomark"
+        viewBox="0 0 64 64"
+        role="img"
+        aria-label="Smriti"
+      >
+        <text
+          x="14"
+          y="48"
+          font-family="'Cormorant Garamond', Georgia, serif"
+          font-style="italic"
+          font-weight="500"
+          font-size="56"
+          fill="currentColor"
+        >s</text>
+        <circle cx="46" cy="20" r="5" fill="#c89968" />
+      </svg>
     {:else}
-      <img src={smritiLogo} alt="Smriti" class="brand-wordmark" />
+      <div class="brand">
+        <svg
+          class="brand-wordmark"
+          viewBox="0 0 220 56"
+          role="img"
+          aria-label="Smriti"
+        >
+          <text
+            x="2"
+            y="44"
+            font-family="'Cormorant Garamond', Georgia, serif"
+            font-style="italic"
+            font-weight="500"
+            font-size="44"
+            fill="currentColor"
+            letter-spacing="0.5"
+          >smriti</text>
+          <circle cx="135" cy="14" r="4" fill="#c89968" />
+        </svg>
+        <span class="brand-tagline">Photo library</span>
+      </div>
     {/if}
   </header>
 
@@ -195,12 +232,30 @@
     border-color: transparent;
   }
 
-  /* Wordmark for the expanded sidebar — fixed visual height so the
-     header doesn't shift when the SVG loads. */
+  /* Brand stack — wordmark + small tagline below it.
+     Inline <svg> (not <img>) so the text fill picks up `--ink` via
+     currentColor and stays readable in dark mode without a separate
+     dark-mode asset. */
+  .brand {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    line-height: 1;
+    color: var(--ink);
+  }
   .brand-wordmark {
     height: 28px;
     width: auto;
     display: block;
+  }
+  .brand-tagline {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    font-weight: 500;
+    margin-left: 2px;
   }
   /* Square logomark for the collapsed sidebar — fits inside the same
      header without the text wordmark's width. */
@@ -208,6 +263,7 @@
     width: 26px;
     height: 26px;
     display: block;
+    color: var(--ink);
   }
 
   nav {

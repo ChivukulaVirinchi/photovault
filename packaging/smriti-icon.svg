@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     role="img" aria-label="Smriti">
+  <!--
+    Launcher icon source. Rasterised into the .png / .ico / .icns
+    bundles. Solid background so the glyph stays legible on any wall-
+    paper or theme; not just a text-on-transparent like the wordmark.
+
+    Layers:
+      1. Cream rounded square (brand bg #f6f1e8) — the museum nameplate.
+      2. Lowercase italic 's' in the brand charcoal #2a2622.
+      3. Warm-ochre tittle #c89968 (the same one that sits on the *i*
+         in the full wordmark) tucked into the upper-right.
+      4. Hairline ochre stroke at 1.5px so the icon reads on dark
+         desktops too — without it the cream square dissolves into
+         dark wallpapers at small sizes.
+  -->
+  <rect x="32" y="32" width="960" height="960" rx="208" ry="208"
+        fill="#f6f1e8"
+        stroke="#c89968"
+        stroke-width="6" />
+  <text x="232" y="772"
+        font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
+        font-style="italic"
+        font-weight="500"
+        font-size="820"
+        fill="#2a2622">s</text>
+  <circle cx="780" cy="296" r="64" fill="#c89968" />
+</svg>
