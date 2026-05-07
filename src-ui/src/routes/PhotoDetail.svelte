@@ -519,7 +519,7 @@
                 </span>
               {:else}
                 <span class="coords mono small">
-                  {p.gps.lat.toFixed(4)}°, {p.gps.lng.toFixed(4)}°
+                  Approx. {p.gps.lat.toFixed(3)}°, {p.gps.lng.toFixed(3)}°
                 </span>
               {/if}
               {#if p.gps.altitude != null}

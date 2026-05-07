@@ -7,7 +7,15 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { SearchResults } from "../lib/api/all";
 
-  let q = $state("");
+  interface Props {
+    /// Pre-fill the search bar from the URL (e.g. #/search?q=Goa).
+    /// Lets Insights / Map / etc. deep-link into a filtered list.
+    initialQuery?: string;
+  }
+  let { initialQuery = "" }: Props = $props();
+
+  // svelte-ignore state_referenced_locally
+  let q = $state(initialQuery);
   let results = $state<SearchResults | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -29,7 +37,10 @@
     debounceId = window.setTimeout(run, 250);
   }
 
-  onMount(() => inputEl?.focus());
+  onMount(() => {
+    inputEl?.focus();
+    if (q.trim()) run();
+  });
 </script>
 
 <PageHeader title="Search" />
@@ -100,27 +111,35 @@
         <ul class="places">
           {#each results.places as pl}
             <li>
-              <span class="city">{pl.city}</span>
-              {#if pl.country}<span class="country">, {pl.country}</span>{/if}
-              <span class="muted small mono">{pl.photo_count}</span>
+              <a class="place-link" href={`#/search?q=${encodeURIComponent(pl.city ?? pl.country ?? "")}`}>
+                <span class="city">{pl.city}</span>
+                {#if pl.country}<span class="country">, {pl.country}</span>{/if}
+                <span class="muted small mono">{pl.photo_count}</span>
+              </a>
             </li>
           {/each}
         </ul>
       </section>
     {/if}
-    {#if results.photo_ids.length > 0}
+    {#if results.photos.length > 0}
       <section>
-        <h3 class="section-title">Photos · {results.photo_ids.length}</h3>
+        <h3 class="section-title">Photos · {results.photos.length}</h3>
         <div class="grid">
-          {#each results.photo_ids.slice(0, 200) as pid}
-            <a class="cell" href="#/photo?id={pid}">
-              <span class="muted small mono">#{pid}</span>
+          {#each results.photos.slice(0, 200) as p (p.photo_id)}
+            <a class="cell" href="#/photo?id={p.photo_id}" title="#{p.photo_id}">
+              {#if p.thumbnail_path}
+                <img
+                  src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""}
+                  alt=""
+                  loading="lazy"
+                />
+              {/if}
             </a>
           {/each}
         </div>
       </section>
     {/if}
-    {#if results.people.length === 0 && results.albums.length === 0 && results.places.length === 0 && results.photo_ids.length === 0}
+    {#if results.people.length === 0 && results.albums.length === 0 && results.places.length === 0 && results.photos.length === 0}
       <div class="empty">
         <p>Nothing matches that yet.</p>
       </div>
@@ -215,14 +234,23 @@
     flex-direction: column;
     gap: 2px;
   }
-  .places li {
+  .places li { padding: 0; }
+  .place-link {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
     background: var(--bg-paper);
     border-radius: var(--r-md);
     border: 1px solid var(--line);
-    display: flex;
-    align-items: baseline;
-    gap: var(--s-2);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease),
+                background var(--t-fast) var(--ease);
+  }
+  .place-link:hover {
+    background: var(--bg-card);
+    border-color: var(--accent);
   }
   .city { font-size: var(--t-base); font-weight: 600; }
   .country { color: var(--ink-muted); }
@@ -230,21 +258,25 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 6px;
   }
   .cell {
     aspect-ratio: 1;
+    min-width: 0;
     background: var(--bg-card);
     border-radius: var(--r-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--ink-faint);
-    text-decoration: none;
-    transition: background var(--t-fast) var(--ease);
+    overflow: hidden;
+    position: relative;
+    display: block;
+    transition: filter var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
   }
-  .cell:hover { background: var(--bg-elev); }
+  .cell:hover {
+    filter: brightness(1.06);
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
   .empty {
     padding: var(--s-9) var(--s-5);

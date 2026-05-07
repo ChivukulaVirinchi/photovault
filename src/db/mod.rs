@@ -28,7 +28,7 @@ pub mod trash_repo;
 pub use album_repo::{AlbumRecord, AlbumRepo};
 pub use album_suggestion_repo::{AlbumSuggestionRecord, AlbumSuggestionRepo};
 pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
-pub use connection::{tile_cache_dir, Database};
+pub use connection::{db_path_for, open_secondary, tile_cache_dir, Database};
 pub use document_repo::DocumentRepo;
 pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo};
 pub use face_repo::{FaceClusterRecord, FaceRepo, ReviewItem};

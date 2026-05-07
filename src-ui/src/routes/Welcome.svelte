@@ -77,26 +77,15 @@
   <div class="canvas">
     <header class="hero">
       <h1 class="hero-title display">Photographs.</h1>
-      <p class="hero-sub">
-        Open a folder. The index lives in
-        <code class="mono">.photovault/</code>
-        on the drive itself — portable, never uploaded.
-      </p>
+      <p class="hero-sub">Everything you've kept.</p>
     </header>
-
-    <div class="cta-row">
-      <button class="primary cta" onclick={browseForFolder} disabled={libraryStore.loading}>
-        Choose a folder
-      </button>
-      <span class="hint">or drag one onto this window</span>
-    </div>
 
     {#if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
 
     {#if extraRemembered.length > 0}
       <section>
-        <h3 class="section-title">Recent</h3>
+        <h3 class="section-title">Open again</h3>
         <ul class="drives">
           {#each extraRemembered as p (p)}
             <li>
@@ -144,11 +133,12 @@
       </section>
     {/if}
 
-    {#if libraryStore.drives.length === 0 && extraRemembered.length === 0}
-      <p class="empty-hint">
-        Nothing detected. Use <strong>Choose a folder</strong> above.
-      </p>
-    {/if}
+    <div class="cta-row">
+      <button class="primary cta" onclick={browseForFolder} disabled={libraryStore.loading}>
+        Choose a folder
+      </button>
+      <span class="hint">or drag one onto this window</span>
+    </div>
   </div>
 
   <!-- Drag-drop overlay covers the whole window. -->
@@ -189,9 +179,8 @@
   .hero {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
-    padding-bottom: var(--s-5);
-    border-bottom: 1px solid var(--line-soft);
+    gap: var(--s-2);
+    padding-bottom: var(--s-3);
   }
   .hero-title {
     font-size: var(--t-display);
@@ -203,18 +192,10 @@
     margin: 0;
   }
   .hero-sub {
-    font-size: var(--t-base);
+    font-size: var(--t-lg);
     color: var(--ink-soft);
-    max-width: 50ch;
-    line-height: 1.55;
-  }
-
-  code.mono {
-    background: var(--bg-card);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 0.9em;
-    color: var(--ink);
+    line-height: 1.4;
+    margin: 0;
   }
 
   .cta-row {
@@ -244,14 +225,6 @@
     color: var(--ink-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-  }
-
-  .empty-hint {
-    padding: var(--s-5);
-    text-align: center;
-    border: 1px dashed var(--line);
-    border-radius: var(--r-md);
-    color: var(--ink-muted);
   }
 
   .drives {

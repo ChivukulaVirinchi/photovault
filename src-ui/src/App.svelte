@@ -19,13 +19,14 @@
   import Trash from "./routes/Trash.svelte";
   import Documents from "./routes/Documents.svelte";
   import Insights from "./routes/Insights.svelte";
-  import Health from "./routes/Health.svelte";
   import Settings from "./routes/Settings.svelte";
   import MapView from "./routes/Map.svelte";
   import Cull from "./routes/Cull.svelte";
   import Shortcuts from "./routes/Shortcuts.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ToastHost from "./lib/components/ToastHost.svelte";
+  import JobsIndicator from "./lib/components/JobsIndicator.svelte";
+  import { jobs } from "./lib/stores/jobs.svelte";
 
   let route = $state<{ path: string; params: Record<string, string> }>({
     path: "/timeline",
@@ -61,6 +62,10 @@
     window.addEventListener("keydown", onKey);
     libraryStore.refresh();
     settingsStore.load();
+    // Single global subscription to all long-job progress events. Per-
+    // route progress UI reads from this store, so navigation never
+    // loses state — the work was already running in the background.
+    jobs.install();
     return () => {
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);
@@ -85,7 +90,7 @@
       {:else if route.path === "/album"}
         <AlbumDetail id={Number(route.params.id)} />
       {:else if route.path === "/search"}
-        <Search />
+        <Search initialQuery={route.params.q ?? ""} />
       {:else if route.path === "/memories"}
         <Memories />
       {:else if route.path === "/memory"}
@@ -105,7 +110,7 @@
       {:else if route.path === "/insights"}
         <Insights />
       {:else if route.path === "/health"}
-        <Health />
+        <Settings />
       {:else if route.path === "/settings"}
         <Settings />
       {:else if route.path === "/map"}
@@ -124,6 +129,7 @@
 {/if}
 
 <ToastHost />
+<JobsIndicator />
 
 <style>
   .shell {

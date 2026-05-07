@@ -29,13 +29,25 @@ impl GeocodingService {
         Ok(Self { conn })
     }
 
+    /// Hard cutoff (km) for the city match. Without this, sparse
+    /// regions in cities1000 can route a photo's coordinates to a city
+    /// hundreds of km away (e.g., a small admin region in Tibet
+    /// becoming the "nearest" match for photos taken in Goa). 100 km is
+    /// the empirical sweet spot — covers photos shot from rural areas
+    /// near a city while still rejecting cross-country mis-attributions.
+    const MAX_CITY_DISTANCE_KM: f64 = 100.0;
+
     pub fn reverse_geocode(&self, lat: f64, lon: f64) -> Option<GeocodingResult> {
         if !Self::is_valid_coordinate(lat, lon) {
             return None;
         }
 
+        // ±1° (~110 km) covers the cutoff at most latitudes; expand
+        // once to ±2° to catch edge cases where the photo sits exactly
+        // between cells. Any further-out match exceeds the haversine
+        // cutoff and gets filtered out anyway.
         self.search_bounding_box(lat, lon, 1.0)
-            .or_else(|| self.search_bounding_box(lat, lon, 3.0))
+            .or_else(|| self.search_bounding_box(lat, lon, 2.0))
     }
 
     fn search_bounding_box(&self, lat: f64, lon: f64, radius_deg: f64) -> Option<GeocodingResult> {
@@ -44,12 +56,19 @@ impl GeocodingService {
         let min_lon = lon - radius_deg;
         let max_lon = lon + radius_deg;
 
+        // Filter to recognisable cities. Anything below ~100k pop is
+        // typically a name only locals know — a 5k-person place a few km
+        // from a metro still won the proximity contest and confused
+        // users. 100k is roughly "you've heard of it on the news"; the
+        // tradeoff is rural photos won't get a city tag at all, which
+        // is the honest answer (the Approx. lat/lng fallback handles
+        // those). Names come from `ascii_name` (no diacritics).
         let mut stmt = self
             .conn
             .prepare(
                 r#"
                 SELECT
-                    name,
+                    ascii_name,
                     country_name,
                     country_code,
                     latitude,
@@ -57,6 +76,7 @@ impl GeocodingService {
                 FROM cities
                 WHERE latitude BETWEEN ?1 AND ?2
                   AND longitude BETWEEN ?3 AND ?4
+                  AND population >= 100000
                 ORDER BY population DESC
                 LIMIT 100
                 "#,
@@ -104,7 +124,16 @@ impl GeocodingService {
             }
         }
 
-        nearest.map(|(r, _)| r)
+        // Drop matches farther than the cutoff. Returning None here
+        // surfaces "unknown location" upstream, which is more honest
+        // than attributing to a far-away city.
+        nearest.and_then(|(r, dist)| {
+            if dist <= Self::MAX_CITY_DISTANCE_KM {
+                Some(r)
+            } else {
+                None
+            }
+        })
     }
 
     fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {

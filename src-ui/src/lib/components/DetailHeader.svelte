@@ -2,6 +2,8 @@
   import type { Snippet } from "svelte";
 
   interface Props {
+    /// Fallback href used when there's no history to go back to (fresh
+    /// tab / direct deep-link). The button always prefers `history.back()`.
     backHref: string;
     backLabel: string;
     title: Snippet;
@@ -9,10 +11,21 @@
     actions?: Snippet;
   }
   let { backHref, backLabel, title, subtitle, actions }: Props = $props();
+
+  /// Prefer browser history so the user lands wherever they came from
+  /// (Insights, Search, Map drawer, etc.). The hardcoded backHref is
+  /// only used when history is empty (e.g., direct URL load).
+  function onBackClick(e: MouseEvent) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // let modifier-clicks open new tab
+    if (window.history.length > 1) {
+      e.preventDefault();
+      window.history.back();
+    }
+  }
 </script>
 
 <header class="detail-header">
-  <a class="back" href={backHref}>
+  <a class="back" href={backHref} onclick={onBackClick}>
     <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
       <path d="M7.5 2.5L4 6L7.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
     </svg>

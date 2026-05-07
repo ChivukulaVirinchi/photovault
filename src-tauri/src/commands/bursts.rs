@@ -34,6 +34,12 @@ pub async fn bursts_get_group(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = BurstRepo::new(&db.conn);
+    // Self-heal: groups created before auto-suggest landed have no best
+    // member, so the UI shows zero "Pick this" candidates and the user
+    // can't trash non-best. Default-suggest the first member by date,
+    // idempotently. Same applies if the previously-best photo was
+    // trashed and removed from the group.
+    repo.ensure_suggested_best(args.id)?;
     let members = repo.get_group_members(args.id)?;
     if members.is_empty() {
         return Err(CommandError::not_found("burst_group", args.id));
@@ -129,11 +135,11 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         lib.drive_root.clone()
     };
-    let db_arc = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        lib.db.clone()
-    };
+    // Burst detection opens its OWN sqlite connection to the same DB.
+    // SQLite WAL mode allows the foreground photos_list query to keep
+    // running while we read here — without this, holding the shared
+    // Arc<Mutex<Database>> blocks every other handler for the entire
+    // detection duration, making the timeline appear empty.
 
     emit(
         &app_clone,
@@ -157,15 +163,21 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     // ThumbnailService v2 layout: <drive>/.photovault/thumbnails/small/v2/<2hash>/<hash>.jpg
     let thumbs_root = drive_root.join(".photovault/thumbnails/small/v2");
 
+    let db_path = photovault::db::db_path_for(&drive_root);
     tokio::task::spawn_blocking(move || {
-        let db = db_arc.blocking_lock();
+        let conn = match photovault::db::open_secondary(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("bursts: open secondary DB failed: {}", e);
+                return;
+            }
+        };
         let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
         let groups = detector
-            .find_bursts(&db.conn, Some(&drive_root), Some(&thumbs_root))
+            .find_bursts(&conn, Some(&drive_root), Some(&thumbs_root))
             .unwrap_or_default();
         let count = groups.len();
-        // Persist via burst_repo.
-        let repo = BurstRepo::new(&db.conn);
+        let repo = BurstRepo::new(&conn);
         let triples: Vec<(String, String, Vec<i64>)> = groups
             .into_iter()
             .map(|g| {
@@ -177,7 +189,6 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
             })
             .collect();
         let _ = repo.sync_burst_groups(&triples);
-        drop(db);
 
         emit(
             &app_clone,

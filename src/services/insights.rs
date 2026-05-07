@@ -27,6 +27,13 @@ pub struct LocationStat {
     pub photo_count: i64,
 }
 
+/// A country stat row for the top-countries section.
+#[derive(Debug, Clone)]
+pub struct CountryStat {
+    pub country: String,
+    pub photo_count: i64,
+}
+
 /// A camera stat row for the camera-breakdown section.
 #[derive(Debug, Clone)]
 pub struct CameraStat {
@@ -58,6 +65,7 @@ pub struct InsightsData {
     pub monthly_counts: [i64; 12],
     pub top_people: Vec<PersonStat>,
     pub top_locations: Vec<LocationStat>,
+    pub top_countries: Vec<CountryStat>,
     pub top_cameras: Vec<CameraStat>,
     /// Distinct years present in the library (descending).
     pub available_years: Vec<i32>,
@@ -240,7 +248,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                AND p.is_trashed = FALSE{}
              GROUP BY fc.id
              ORDER BY cnt DESC
-             LIMIT 5",
+             LIMIT 10",
             yc.replace(&dt, &normalized_datetime_sql("p.date_taken"))
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -257,7 +265,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         }
     }
 
-    // 10. Top 5 locations (by city)
+    // 10. Top cities (by photo count)
     let mut top_locations = Vec::new();
     {
         let mut stmt = conn.prepare(&format!(
@@ -268,7 +276,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                AND location_city != ''{}
              GROUP BY location_city
              ORDER BY cnt DESC
-             LIMIT 5",
+             LIMIT 30",
             yc
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -280,6 +288,32 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         })?;
         for stat in rows.flatten() {
             top_locations.push(stat);
+        }
+    }
+
+    // 10b. Top countries (by photo count). Separate aggregation so a
+    // country with photos spread across many cities still surfaces.
+    let mut top_countries = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT location_country, COUNT(*) AS cnt
+             FROM photos
+             WHERE is_trashed = FALSE
+               AND location_country IS NOT NULL
+               AND location_country != ''{}
+             GROUP BY location_country
+             ORDER BY cnt DESC
+             LIMIT 20",
+            yc
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CountryStat {
+                country: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                photo_count: row.get(1)?,
+            })
+        })?;
+        for stat in rows.flatten() {
+            top_countries.push(stat);
         }
     }
 
@@ -340,6 +374,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         monthly_counts,
         top_people,
         top_locations,
+        top_countries,
         top_cameras,
         available_years,
     })

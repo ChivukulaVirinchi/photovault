@@ -157,12 +157,12 @@
   .saved-link:hover { border-bottom-color: var(--accent); }
 
   .grid {
-    padding: var(--s-4) var(--s-7) var(--s-7);
+    padding: var(--s-5) var(--s-7) var(--s-8);
     flex: 1;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--s-3);
   }
   .cell {
     aspect-ratio: 1;

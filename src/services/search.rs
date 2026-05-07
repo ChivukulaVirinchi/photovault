@@ -14,6 +14,7 @@ pub struct SearchResult {
     pub date_taken: Option<String>,
     pub location_city: Option<String>,
     pub location_country: Option<String>,
+    pub thumbnail_path: Option<String>,
 }
 
 /// Search results grouped by date.
@@ -75,7 +76,7 @@ impl SearchService {
         }
 
         let mut sql = String::from(
-            "SELECT id, file_path, date_taken, location_city, location_country FROM photos WHERE is_trashed = FALSE",
+            "SELECT id, file_path, date_taken, location_city, location_country, thumbnail_path FROM photos WHERE is_trashed = FALSE",
         );
         let mut params_dyn: Vec<String> = Vec::new();
 
@@ -105,6 +106,7 @@ impl SearchService {
                         date_taken: row.get(2)?,
                         location_city: row.get(3)?,
                         location_country: row.get(4)?,
+                        thumbnail_path: row.get(5)?,
                     })
                 })?;
                 for r in rows {
@@ -118,6 +120,7 @@ impl SearchService {
                         date_taken: row.get(2)?,
                         location_city: row.get(3)?,
                         location_country: row.get(4)?,
+                        thumbnail_path: row.get(5)?,
                     })
                 })?;
                 for r in rows {
@@ -133,6 +136,7 @@ impl SearchService {
                             date_taken: row.get(2)?,
                             location_city: row.get(3)?,
                             location_country: row.get(4)?,
+                            thumbnail_path: row.get(5)?,
                         })
                     },
                 )?;
@@ -156,6 +160,7 @@ impl SearchService {
                             date_taken: row.get(2)?,
                             location_city: row.get(3)?,
                             location_country: row.get(4)?,
+                            thumbnail_path: row.get(5)?,
                         })
                     },
                 )?;
@@ -317,7 +322,7 @@ impl SearchService {
         date: Option<&DateRange>,
     ) -> SqliteResult<Vec<SearchResult>> {
         let mut sql = String::from(
-            "SELECT id, date_taken, location_city, location_country \
+            "SELECT id, date_taken, location_city, location_country, thumbnail_path \
              FROM photos p WHERE is_trashed = FALSE",
         );
         let mut bind: Vec<String> = Vec::new();
@@ -335,6 +340,9 @@ impl SearchService {
                     LOWER(ocr_text)         LIKE LOWER(?) OR \
                     LOWER(location_city)    LIKE LOWER(?) OR \
                     LOWER(location_country) LIKE LOWER(?) OR \
+                    LOWER(camera_make)      LIKE LOWER(?) OR \
+                    LOWER(camera_model)     LIKE LOWER(?) OR \
+                    LOWER(COALESCE(camera_make, '') || ' ' || COALESCE(camera_model, '')) LIKE LOWER(?) OR \
                     EXISTS ( \
                       SELECT 1 FROM faces f \
                       JOIN face_clusters fc ON fc.id = f.cluster_id \
@@ -345,7 +353,7 @@ impl SearchService {
                   )",
             );
             let like = format!("%{}%", t);
-            for _ in 0..5 {
+            for _ in 0..8 {
                 bind.push(like.clone());
             }
         }
@@ -360,6 +368,7 @@ impl SearchService {
                     date_taken: row.get(1)?,
                     location_city: row.get(2)?,
                     location_country: row.get(3)?,
+                    thumbnail_path: row.get(4)?,
                 })
             })?
             .collect::<SqliteResult<Vec<_>>>()?;
@@ -368,9 +377,12 @@ impl SearchService {
 
     fn search_people(conn: &Connection, q: &str) -> SqliteResult<Vec<PersonHit>> {
         let like = format!("%{}%", q);
+        // representative_face_id → relative `.photovault/faces/<id>.jpg`
+        // path. Mirrors face_repo::populate_face_thumbnails so the
+        // frontend's thumbUrl helper resolves the file uniformly.
         let mut stmt = conn.prepare(
             r#"
-            SELECT fc.id, fc.name, fc.photo_count
+            SELECT fc.id, fc.name, fc.photo_count, fc.representative_face_id
             FROM face_clusters fc
             WHERE fc.name IS NOT NULL
               AND LOWER(fc.name) LIKE LOWER(?1)
@@ -379,11 +391,12 @@ impl SearchService {
             "#,
         )?;
         let rows = stmt.query_map(params![like], |row| {
+            let face_id: Option<i64> = row.get(3)?;
             Ok(PersonHit {
                 cluster_id: row.get(0)?,
                 name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 photo_count: row.get(2)?,
-                face_thumbnail_path: None,
+                face_thumbnail_path: face_id.map(|id| format!(".photovault/faces/{}.jpg", id)),
             })
         })?;
         rows.collect()
@@ -391,12 +404,15 @@ impl SearchService {
 
     fn search_albums(conn: &Connection, q: &str) -> SqliteResult<Vec<AlbumHit>> {
         let like = format!("%{}%", q);
+        // LEFT JOIN to pull the cover photo's thumbnail_path so the
+        // frontend can render the album hit with its cover image.
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, photo_count
-            FROM albums
-            WHERE LOWER(name) LIKE LOWER(?1)
-            ORDER BY updated_at DESC
+            SELECT a.id, a.name, a.photo_count, pcov.thumbnail_path
+            FROM albums a
+            LEFT JOIN photos pcov ON pcov.id = a.cover_photo_id
+            WHERE LOWER(a.name) LIKE LOWER(?1)
+            ORDER BY a.updated_at DESC
             LIMIT 10
             "#,
         )?;
@@ -405,7 +421,7 @@ impl SearchService {
                 album_id: row.get(0)?,
                 name: row.get(1)?,
                 photo_count: row.get(2)?,
-                cover_thumbnail_path: None,
+                cover_thumbnail_path: row.get(3)?,
             })
         })?;
         rows.collect()

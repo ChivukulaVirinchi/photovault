@@ -55,9 +55,12 @@ impl OpenLibrary {
     }
 
     fn build_thumbnails(drive_root: &Path) -> std::io::Result<Arc<ThumbnailService>> {
-        // Cache budget is generous (4 GB). Real eviction is driven by
-        // the service's byte-budget check, not this ceiling.
-        let svc = ThumbnailService::new(drive_root, 4.0)?;
+        // Disk budget comes from user settings. Falls back to 5 GB if
+        // the config file is missing or corrupt — same default as the
+        // setting's bottom value, so users on small disks aren't
+        // surprised after a fresh install.
+        let cfg = photovault::config::AppConfig::load();
+        let svc = ThumbnailService::new(drive_root, cfg.thumbnail_cache_gb)?;
         let _ = svc.load_existing_thumbnails();
         Ok(Arc::new(svc))
     }

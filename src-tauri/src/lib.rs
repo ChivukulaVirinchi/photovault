@@ -121,6 +121,7 @@ pub fn run() {
             commands::documents::documents_set_category,
             // map
             commands::map::map_pins,
+            commands::map::map_pins_all,
             commands::map::map_cluster_filmstrip,
             commands::map::map_tile_cache_stats,
             commands::map::map_tile_cache_set_limit,

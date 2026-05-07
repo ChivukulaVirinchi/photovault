@@ -90,6 +90,39 @@ impl<'a> BurstRepo<'a> {
         tx.commit()
     }
 
+    /// If the group has no `is_suggested_best = TRUE` member, pick one.
+    /// Targets the earliest member (by photos.date_taken, falling back to
+    /// `bgm.rowid`) so the choice is stable across calls. Idempotent —
+    /// callers can run it on every read.
+    pub fn ensure_suggested_best(&self, group_id: i64) -> SqliteResult<()> {
+        let has_best: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM burst_group_members \
+             WHERE group_id = ?1 AND is_suggested_best = TRUE",
+            params![group_id],
+            |r| r.get(0),
+        )?;
+        if has_best > 0 {
+            return Ok(());
+        }
+        self.conn.execute(
+            r#"
+            UPDATE burst_group_members
+               SET is_suggested_best = TRUE
+             WHERE group_id = ?1
+               AND photo_id = (
+                   SELECT bgm.photo_id
+                     FROM burst_group_members bgm
+                     JOIN photos p ON p.id = bgm.photo_id
+                    WHERE bgm.group_id = ?1
+                    ORDER BY p.date_taken ASC, bgm.rowid ASC
+                    LIMIT 1
+               )
+            "#,
+            params![group_id],
+        )?;
+        Ok(())
+    }
+
     /// Set the suggested best photo for a group (atomic)
     pub fn set_suggested_best(&self, group_id: i64, photo_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -219,6 +252,15 @@ fn create_group_in_conn(
     )?;
     let group_id = conn.last_insert_rowid();
     insert_group_members(conn, group_id, photo_ids)?;
+    // Default-suggest the first member as best so the UI shows a
+    // bordered "pick" without forcing the user to choose. The detail
+    // view's "Pick this" buttons let them change it.
+    if let Some(first) = photo_ids.first() {
+        conn.execute(
+            "UPDATE burst_group_members SET is_suggested_best = TRUE WHERE group_id = ?1 AND photo_id = ?2",
+            params![group_id, first],
+        )?;
+    }
     Ok(group_id)
 }
 

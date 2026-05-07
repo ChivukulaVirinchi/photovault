@@ -14,7 +14,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
@@ -76,35 +76,44 @@ pub struct ThumbnailEntry {
 /// scrolling window even on huge libraries.
 const CACHE_ENTRY_CAPACITY: usize = 10_000;
 
-/// Concurrency limiter using std::sync primitives (safe for spawn_blocking)
+/// Blocking concurrency limiter. Callers wait on a condvar until a
+/// permit is free instead of failing fast. The previous `try_acquire`
+/// returned an error when the queue was full — under prewarm load that
+/// surfaced as "Too many concurrent thumbnail generations" for every
+/// foreground IPC request, which the UI reported as a missing thumbnail.
 struct ConcurrencyLimiter {
     max: usize,
-    current: Mutex<usize>,
+    state: Mutex<usize>,
+    cv: Condvar,
 }
 
 impl ConcurrencyLimiter {
     fn new(max: usize) -> Self {
         Self {
             max,
-            current: Mutex::new(0),
+            state: Mutex::new(0),
+            cv: Condvar::new(),
         }
     }
 
-    /// Try to acquire a permit. Returns true if acquired.
-    fn try_acquire(&self) -> bool {
-        let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        if *current < self.max {
-            *current += 1;
-            true
-        } else {
-            false
+    /// Block until a permit is available, then claim it. Safe to call
+    /// from a `spawn_blocking` worker — Tokio has hundreds of blocking
+    /// threads and parking one is fine.
+    fn acquire(&self) {
+        let mut current = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while *current >= self.max {
+            current = self.cv.wait(current).unwrap_or_else(|e| e.into_inner());
         }
+        *current += 1;
     }
 
-    /// Release a permit.
+    /// Release a permit and wake one waiter.
     fn release(&self) {
-        let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        *current = current.saturating_sub(1);
+        {
+            let mut current = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            *current = current.saturating_sub(1);
+        }
+        self.cv.notify_one();
     }
 }
 
@@ -162,15 +171,18 @@ impl ThumbnailService {
             cache: Arc::new(RwLock::new(LruCache::new(capacity))),
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
-            generation_limiter: Arc::new(ConcurrencyLimiter::new(8)),
+            // Cap concurrent decodes at 4. Each large JPEG holds ~50–80 MB
+            // of decoded RGB while resizing — at 8-wide we saw OOM on
+            // mid-spec laptops. 4 keeps the working set under ~320 MB.
+            generation_limiter: Arc::new(ConcurrencyLimiter::new(4)),
             generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
 
     /// Prewarm Small thumbnails for a batch of photos. Skips any that
-    /// already exist on disk (cheap stat). Runs sequentially relying on
-    /// the existing 8-permit concurrency limiter inside
-    /// `generate_thumbnail` — caller wraps in `spawn_blocking`.
+    /// already exist on disk (cheap stat). Runs in parallel via Rayon —
+    /// the concurrency limiter inside `generate_thumbnail` caps the
+    /// number of in-flight image decodes at 4 to avoid OOM.
     ///
     /// Aborts as soon as `cancel` is set so a fresh scan or app-exit
     /// can stop prewarm immediately. Returns the number of newly
@@ -180,29 +192,34 @@ impl ThumbnailService {
         items: &[(PathBuf, String, i32)],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> usize {
-        use std::sync::atomic::Ordering;
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let size = ThumbnailSize::Small;
-        let mut generated = 0usize;
-        for (photo_path, file_hash, orientation) in items {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            // Skip if a thumbnail file already exists on disk for this
-            // hash+size — that's the same key the on-demand generator
-            // uses, so the cost is one stat per photo.
-            let cached = self
-                .cache_dir
-                .join(size.dir_name())
-                .join(format!("{}.jpg", file_hash));
-            if cached.exists() {
-                continue;
-            }
-            match self.generate_thumbnail(photo_path, file_hash, *orientation, size) {
-                Ok(_) => generated += 1,
-                Err(e) => tracing::trace!("prewarm skipped {}: {}", photo_path.display(), e),
-            }
-        }
-        generated
+        let generated = AtomicUsize::new(0);
+        items
+            .par_iter()
+            .for_each(|(photo_path, file_hash, orientation)| {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                // Skip if a thumbnail file already exists on disk for this
+                // hash+size — that's the same key the on-demand generator
+                // uses, so the cost is one stat per photo.
+                let cached = self
+                    .cache_dir
+                    .join(size.dir_name())
+                    .join(format!("{}.jpg", file_hash));
+                if cached.exists() {
+                    return;
+                }
+                match self.generate_thumbnail(photo_path, file_hash, *orientation, size) {
+                    Ok(_) => {
+                        generated.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => tracing::trace!("prewarm skipped {}: {}", photo_path.display(), e),
+                }
+            });
+        generated.load(Ordering::Relaxed)
     }
 
     /// Generate a thumbnail synchronously with a timeout guard.
@@ -215,10 +232,9 @@ impl ThumbnailService {
         orientation: i32,
         size: ThumbnailSize,
     ) -> Result<PathBuf, String> {
-        // Acquire concurrency permit (std::sync for blocking context)
-        if !self.generation_limiter.try_acquire() {
-            return Err("Too many concurrent thumbnail generations".to_string());
-        }
+        // Block until a permit is free. Foreground (UI) callers wait
+        // their turn rather than fail-fast.
+        self.generation_limiter.acquire();
 
         let start = Instant::now();
         let result = self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start);
@@ -281,11 +297,13 @@ impl ThumbnailService {
         // Generate thumbnail
         let thumb = self.create_thumbnail(&img, size);
 
-        // Save as JPEG with quality appropriate to size
+        // Save as JPEG. Lower quality at the small end where artifacts
+        // are invisible to the eye anyway, kept high for the viewer-size
+        // Large where compression shows.
         let quality = match size {
-            ThumbnailSize::Small => 82,
-            ThumbnailSize::Medium => 85,
-            ThumbnailSize::Large => 90,
+            ThumbnailSize::Small => 78,
+            ThumbnailSize::Medium => 83,
+            ThumbnailSize::Large => 88,
         };
         let mut out = std::fs::File::create(&thumb_path)
             .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
@@ -354,7 +372,12 @@ impl ThumbnailService {
     }
 
     /// Create a thumbnail from an image, maintaining aspect ratio.
-    /// Uses Lanczos3 for all sizes — produces sharp, high-quality downscales.
+    ///
+    /// Filter choice trades quality for speed:
+    /// - Small (grid): `Triangle` is ~4× faster than `Lanczos3` and the
+    ///   difference is invisible at 260 px on a typical screen.
+    /// - Medium: `CatmullRom` keeps edges crisp without Lanczos3's cost.
+    /// - Large (viewer): `Lanczos3` — the user is going to look at this.
     fn create_thumbnail(&self, img: &DynamicImage, size: ThumbnailSize) -> DynamicImage {
         let max_dim = size.pixels();
         let (width, height) = img.dimensions();
@@ -368,7 +391,12 @@ impl ThumbnailService {
             ((width as f64 * ratio) as u32, max_dim)
         };
 
-        img.resize(new_width, new_height, FilterType::Lanczos3)
+        let filter = match size {
+            ThumbnailSize::Small => FilterType::Triangle,
+            ThumbnailSize::Medium => FilterType::CatmullRom,
+            ThumbnailSize::Large => FilterType::Lanczos3,
+        };
+        img.resize(new_width, new_height, filter)
     }
 
     /// Get the path where a thumbnail should be stored.
@@ -541,12 +569,32 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrency_limiter() {
-        let limiter = ConcurrencyLimiter::new(2);
-        assert!(limiter.try_acquire());
-        assert!(limiter.try_acquire());
-        assert!(!limiter.try_acquire()); // Should fail, at max
+    fn test_concurrency_limiter_blocks_until_release() {
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let limiter = Arc::new(ConcurrencyLimiter::new(1));
+        limiter.acquire();
+
+        // Second acquire should block. Spawn a thread that waits on
+        // it, then release from the main thread after a short delay
+        // and confirm the thread woke up.
+        let l = limiter.clone();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = started.clone();
+        let handle = thread::spawn(move || {
+            l.acquire();
+            s.store(true, std::sync::atomic::Ordering::Release);
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        assert!(!started.load(std::sync::atomic::Ordering::Acquire));
+
         limiter.release();
-        assert!(limiter.try_acquire()); // Should succeed again
+        handle.join().unwrap();
+        assert!(started.load(std::sync::atomic::Ordering::Acquire));
+
+        limiter.release();
     }
 }

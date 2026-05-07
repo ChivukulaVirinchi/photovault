@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { duplicates } from "../lib/api/all";
+  import { libraryStore } from "../lib/stores/library.svelte";
+  import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof duplicates.list>>>([]);
@@ -45,12 +47,20 @@
       </button>
     </div>
   {:else}
-    <ul class="list">
+    <ul class="grid">
       {#each groups as g (g.id)}
         <li>
-          <a href="#/duplicate?id={g.id}">
-            <span class="title">Group of <strong>{g.member_count}</strong></span>
-            <span class="arrow" aria-hidden="true">→</span>
+          <a href="#/duplicate?id={g.id}" aria-label="Duplicate group of {g.member_count}">
+            {#if g.cover_thumbnail_path}
+              <img
+                src={thumbUrl(libraryStore.driveRoot, g.cover_thumbnail_path) ?? ""}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                onerror={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+              />
+            {/if}
+            <span class="badge mono">{g.member_count}×</span>
           </a>
         </li>
       {/each}
@@ -75,37 +85,52 @@
     margin: 0 auto;
   }
   .empty p { color: var(--ink-soft); line-height: 1.55; }
-  .list {
+  .grid {
     list-style: none;
     padding: 0;
     margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-width: 720px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--s-3);
   }
-  .list a {
-    display: flex;
-    align-items: center;
-    gap: var(--s-4);
-    justify-content: space-between;
-    padding: var(--s-3) var(--s-4);
-    background: var(--bg-paper);
+  .grid li {
+    aspect-ratio: 1;
+    position: relative;
+    background: var(--bg-card);
     border: 1px solid var(--line);
     border-radius: var(--r-md);
-    color: inherit;
-    text-decoration: none;
+    overflow: hidden;
     transition: border-color var(--t-fast) var(--ease),
-                background var(--t-fast) var(--ease);
+                box-shadow var(--t-fast) var(--ease);
   }
-  .list a:hover {
-    background: var(--bg-card);
+  .grid li:hover {
     border-color: var(--accent);
+    box-shadow: 0 6px 22px color-mix(in oklab, var(--accent) 18%, transparent);
   }
-  .title {
-    font-size: var(--t-base);
-    color: var(--ink);
+  .grid a {
+    position: absolute;
+    inset: 0;
+    display: block;
+    text-decoration: none;
+    color: inherit;
   }
-  .title strong { font-weight: 600; }
-  .arrow { color: var(--accent); }
+  .grid img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .grid .badge {
+    position: absolute;
+    top: var(--s-2);
+    right: var(--s-2);
+    background: rgba(0, 0, 0, 0.66);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: var(--t-sm);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    z-index: 1;
+  }
 </style>

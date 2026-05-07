@@ -415,29 +415,31 @@ use std::sync::Arc;
 /// passes are idempotent and persist their groups, so the Bursts and
 /// Duplicates tabs reflect the fresh library state without the user
 /// having to manually click "Scan" inside each tab.
-async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
-    let st: tauri::State<AppState> = app.state();
-    let db_arc = {
-        let guard = st.library.read().await;
-        match guard.as_ref() {
-            Some(lib) => lib.db.clone(),
-            None => return,
-        }
-    };
+async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
+    // Open a secondary connection so we don't compete with foreground
+    // photos_list / albums queries for the shared Arc<Mutex<Database>>.
+    // SQLite WAL handles the concurrent reader/writer.
+    let db_path = photovault::db::db_path_for(&drive_root);
 
     let drive_for_dups = drive_root.clone();
-    let db_for_dups = db_arc.clone();
+    let db_path_for_dups = db_path.clone();
     let dups = tokio::task::spawn_blocking(move || {
-        let db = db_for_dups.blocking_lock();
+        let conn = match photovault::db::open_secondary(&db_path_for_dups) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("post-scan dups: open secondary DB failed: {}", e);
+                return 0u64;
+            }
+        };
         let exact =
-            photovault::services::duplicate_detector::DuplicateDetector::find_duplicates(&db.conn)
+            photovault::services::duplicate_detector::DuplicateDetector::find_duplicates(&conn)
                 .unwrap_or_default();
         let exclude_ids: std::collections::HashSet<i64> = exact
             .iter()
             .flat_map(|g| g.photo_ids.iter().copied())
             .collect();
         let perc = photovault::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
-            &db.conn,
+            &conn,
             &drive_for_dups,
             &exclude_ids,
         )
@@ -452,7 +454,7 @@ async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
                 g.duplicate_type,
             ));
         }
-        let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+        let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
         let _ = repo.sync_duplicate_groups(&to_persist);
         (exact.len() + perc.len()) as u64
     })
@@ -461,9 +463,15 @@ async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
     tracing::info!("post-scan: {} duplicate groups", dups);
 
     let drive_for_bursts = drive_root.clone();
-    let db_for_bursts = db_arc.clone();
+    let db_path_for_bursts = db_path.clone();
     let bursts = tokio::task::spawn_blocking(move || {
-        let db = db_for_bursts.blocking_lock();
+        let conn = match photovault::db::open_secondary(&db_path_for_bursts) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("post-scan bursts: open secondary DB failed: {}", e);
+                return 0u64;
+            }
+        };
         let cfg = photovault::config::AppConfig::load();
         let burst_cfg = photovault::services::burst_detector::BurstConfig {
             max_gap_seconds: cfg.burst_time_window_seconds,
@@ -472,7 +480,7 @@ async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
         let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
         let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
         let groups = detector
-            .find_bursts(&db.conn, Some(&drive_for_bursts), Some(&thumbs_root))
+            .find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root))
             .unwrap_or_default();
         let triples: Vec<(String, String, Vec<i64>)> = groups
             .iter()
@@ -484,7 +492,7 @@ async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
                 )
             })
             .collect();
-        let repo = photovault::db::burst_repo::BurstRepo::new(&db.conn);
+        let repo = photovault::db::burst_repo::BurstRepo::new(&conn);
         let _ = repo.sync_burst_groups(&triples);
         groups.len() as u64
     })

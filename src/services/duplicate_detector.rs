@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use image_hasher::{HashAlg, HasherConfig};
+use rayon::prelude::*;
 use rusqlite::Connection;
 
 /// Result of duplicate detection
@@ -24,12 +25,13 @@ pub struct DuplicateGroup {
 }
 
 /// Hamming-distance threshold (out of 64 bits) below which two photos
-/// are considered perceptually similar. 14 bits ≈ 78% bit agreement,
-/// catches re-edits, re-encodes, AND exposure-bracketed sequences
-/// (±1-2 EV typical) without false-positives between visually distinct
-/// photos that happen to share rough composition. Bumped from 10 after
-/// users reported burst/exposure-variant pairs being missed.
-const PHASH_HAMMING_THRESHOLD: u32 = 14;
+/// are considered the same image. 6 bits ≈ 91% bit agreement, which is
+/// the empirical floor for "actual duplicates": re-encoded JPEGs,
+/// stripped-EXIF copies, resolution variants. Anything looser flooded
+/// the listing with merely-similar photos (different composition that
+/// happens to share dominant colours). Burst-style near-dupes are
+/// handled by the burst detector, not here.
+const PHASH_HAMMING_THRESHOLD: u32 = 6;
 
 /// Duplicate detection service
 pub struct DuplicateDetector;
@@ -135,11 +137,12 @@ impl DuplicateDetector {
             return Ok(Vec::new());
         }
 
-        // Naive O(n²) pairwise. ~1 ns per popcount means 100k photos
-        // = 100M ops = under a second in release. For libraries
-        // larger than that, the bucket-by-prefix optimisation in
-        // CLAUDE.md is the next step; we don't need it for v1.0.
-        let mut parent: Vec<usize> = (0..rows.len()).collect();
+        // Pairwise pHash comparison parallelised with rayon. The
+        // collected pairs feed a sequential union-find — typical photo
+        // libraries have thousands of pairs, not millions, so the
+        // bottleneck is the O(n²) hamming comparison, not the merge.
+        // Union-find stays single-threaded because it's tiny by
+        // comparison and concurrent path-compression is fiddly.
         fn find(p: &mut [usize], mut x: usize) -> usize {
             while p[x] != x {
                 p[x] = p[p[x]];
@@ -147,18 +150,30 @@ impl DuplicateDetector {
             }
             x
         }
-        for i in 0..rows.len() {
-            for j in (i + 1)..rows.len() {
-                let a = rows[i].1 as u64;
-                let b = rows[j].1 as u64;
-                let dist = (a ^ b).count_ones();
-                if dist <= PHASH_HAMMING_THRESHOLD {
-                    let ra = find(&mut parent, i);
-                    let rb = find(&mut parent, j);
-                    if ra != rb {
-                        parent[ra] = rb;
-                    }
-                }
+        let n = rows.len();
+        let phashes: Vec<u64> = rows.iter().map(|r| r.1 as u64).collect();
+        let pairs: Vec<(usize, usize)> = (0..n)
+            .into_par_iter()
+            .flat_map(|i| {
+                let a = phashes[i];
+                ((i + 1)..n)
+                    .filter_map(|j| {
+                        let dist = (a ^ phashes[j]).count_ones();
+                        if dist <= PHASH_HAMMING_THRESHOLD {
+                            Some((i, j))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut parent: Vec<usize> = (0..n).collect();
+        for (i, j) in pairs {
+            let ra = find(&mut parent, i);
+            let rb = find(&mut parent, j);
+            if ra != rb {
+                parent[ra] = rb;
             }
         }
 
@@ -215,48 +230,56 @@ impl DuplicateDetector {
             return Ok(());
         }
 
-        let hasher = HasherConfig::new()
-            .hash_alg(HashAlg::DoubleGradient)
-            .hash_size(8, 8)
-            .to_hasher();
-
         let small_root = drive_root
             .join(".photovault")
             .join("thumbnails")
             .join("small")
             .join("v2");
 
-        let tx = conn.unchecked_transaction()?;
-        let mut update = tx.prepare("UPDATE photos SET phash = ?2 WHERE id = ?1")?;
-        let mut written = 0usize;
-        for (id, file_hash) in &pending {
-            let subdir = &file_hash[..2.min(file_hash.len())];
-            let thumb_path = small_root.join(subdir).join(format!("{}.jpg", file_hash));
-            if !thumb_path.exists() {
-                continue;
-            }
-            let img = match crate::services::image_io::open_image(&thumb_path) {
-                Ok(i) => i,
-                Err(e) => {
-                    tracing::trace!("phash skip {}: {}", thumb_path.display(), e);
-                    continue;
+        // Decode + hash in parallel. Each rayon worker builds its own
+        // hasher (Hasher<...> is not Send+Sync so we can't share one).
+        // Cost is negligible — HasherConfig::to_hasher is cheap.
+        let computed: Vec<(i64, i64)> = pending
+            .par_iter()
+            .filter_map(|(id, file_hash)| {
+                let subdir = &file_hash[..2.min(file_hash.len())];
+                let thumb_path = small_root.join(subdir).join(format!("{}.jpg", file_hash));
+                if !thumb_path.exists() {
+                    return None;
                 }
-            };
-            let h = hasher.hash_image(&img);
-            // image_hasher returns variable-length bytes; truncate or
-            // pad to exactly 8 bytes (= 64 bits) and reinterpret as i64.
-            let bytes = h.as_bytes();
-            let mut buf = [0u8; 8];
-            let n = bytes.len().min(8);
-            buf[..n].copy_from_slice(&bytes[..n]);
-            let phash = i64::from_le_bytes(buf);
-            update.execute(rusqlite::params![id, phash])?;
-            written += 1;
+                let img = match crate::services::image_io::open_image(&thumb_path) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        tracing::trace!("phash skip {}: {}", thumb_path.display(), e);
+                        return None;
+                    }
+                };
+                let hasher = HasherConfig::new()
+                    .hash_alg(HashAlg::DoubleGradient)
+                    .hash_size(8, 8)
+                    .to_hasher();
+                let h = hasher.hash_image(&img);
+                // image_hasher returns variable-length bytes; pad/truncate
+                // to exactly 8 bytes (= 64 bits) and reinterpret as i64.
+                let bytes = h.as_bytes();
+                let mut buf = [0u8; 8];
+                let n = bytes.len().min(8);
+                buf[..n].copy_from_slice(&bytes[..n]);
+                let phash = i64::from_le_bytes(buf);
+                Some((*id, phash))
+            })
+            .collect();
+
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut update = tx.prepare("UPDATE photos SET phash = ?2 WHERE id = ?1")?;
+            for (id, phash) in &computed {
+                update.execute(rusqlite::params![id, phash])?;
+            }
         }
-        drop(update);
         tx.commit()?;
-        if written > 0 {
-            tracing::info!("Backfilled phash for {} photos", written);
+        if !computed.is_empty() {
+            tracing::info!("Backfilled phash for {} photos", computed.len());
         }
         Ok(())
     }

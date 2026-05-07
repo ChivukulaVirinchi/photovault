@@ -28,6 +28,11 @@ pub struct SettingsUpdateArgs {
     pub home_city_override: Option<Option<String>>,
     pub auto_update_check_enabled: Option<bool>,
     pub sidebar_collapsed: Option<bool>,
+    /// Recently-opened drive paths (most-recent first). The frontend
+    /// pushes the freshly-opened path on every `library.open` so the
+    /// Welcome screen can list "Recent" libraries.
+    pub remembered_drives: Option<Vec<String>>,
+    pub thumbnail_cache_gb: Option<f64>,
 }
 
 #[tauri::command]
@@ -93,6 +98,12 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     }
     if let Some(v) = args.sidebar_collapsed {
         cfg.sidebar_collapsed = v;
+    }
+    if let Some(v) = args.remembered_drives {
+        cfg.remembered_drives = v.into_iter().map(std::path::PathBuf::from).collect();
+    }
+    if let Some(v) = args.thumbnail_cache_gb {
+        cfg.thumbnail_cache_gb = v;
     }
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),

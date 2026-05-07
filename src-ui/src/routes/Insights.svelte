@@ -9,12 +9,91 @@
   let year = $state<number | null>(null);
   let error = $state<string | null>(null);
 
+  /// Show the first N entries of long lists; "Show all" reveals the rest.
+  const PEEK = 10;
+  let showAllPeople    = $state(false);
+  let showAllCountries = $state(false);
+  let showAllCities    = $state(false);
+
+  /// Tooltip state for the monthly bars.
+  let tip = $state<{ x: number; y: number; label: string } | null>(null);
+
   async function load() {
     try { data = await insights.compute(year); }
     catch (e) { error = JSON.stringify(e); }
   }
 
   $effect(() => { void year; load(); });
+
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function onBarHover(e: MouseEvent, monthIdx: number, count: number) {
+    const t = e.currentTarget as HTMLElement;
+    const rect = t.getBoundingClientRect();
+    tip = {
+      x: rect.left + rect.width / 2,
+      y: rect.top - 4,
+      label: `${months[monthIdx]} — ${count.toLocaleString()} photos`,
+    };
+  }
+  function clearTip() { tip = null; }
+
+  function placeHref(city?: string, country?: string): string {
+    // Search by the most specific term only — city when present, else
+    // country. Concatenating "Nagpur India" matches the FTS-like
+    // free-text path against both, but most users just want photos
+    // from a single named place.
+    const q = (city ?? country ?? "").trim();
+    return `#/search?q=${encodeURIComponent(q)}`;
+  }
+
+  // ---------- heatmap ----------
+  /// Build a 53-week × 7-day grid for the heatmap. Each cell is a day
+  /// of the year (or the closest 53-week window covering this year).
+  /// Color intensity is the photo count for that day.
+  function heatmapGrid(d: InsightsData) {
+    const yr = d.heatmap_year;
+    const start = new Date(yr, 0, 1);
+    // Align grid to Sunday: walk back to the previous Sunday.
+    start.setDate(start.getDate() - start.getDay());
+    const cells: Array<{ date: string; count: number; inYear: boolean }> = [];
+    const cur = new Date(start);
+    for (let i = 0; i < 53 * 7; i++) {
+      const m = pad(cur.getMonth() + 1);
+      const day = pad(cur.getDate());
+      const date = `${cur.getFullYear()}-${m}-${day}`;
+      cells.push({
+        date,
+        count: d.heatmap[date] ?? 0,
+        inYear: cur.getFullYear() === yr,
+      });
+      cur.setDate(cur.getDate() + 1);
+    }
+    return cells;
+  }
+  function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
+
+  function intensityClass(count: number, max: number): string {
+    if (count === 0) return "h0";
+    const pct = max > 0 ? count / max : 0;
+    if (pct < 0.15) return "h1";
+    if (pct < 0.35) return "h2";
+    if (pct < 0.6)  return "h3";
+    return "h4";
+  }
+
+  function fmtDateLong(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  }
+
+  let hoverDay = $state<{ x: number; y: number; date: string; count: number } | null>(null);
+  function onCellHover(e: MouseEvent, date: string, count: number) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    hoverDay = { x: r.left + r.width / 2, y: r.top - 6, date, count };
+  }
+  function clearDayHover() { hoverDay = null; }
 </script>
 
 <PageHeader title="Insights">
@@ -32,13 +111,14 @@
 
 <div class="page">
   {#if data}
+    {@const d = data}
     <section class="stats">
       {#each [
-        { n: data.total_photos, label: "photos" },
-        { n: data.people_count, label: "people" },
-        { n: data.album_count, label: "albums" },
-        { n: data.country_count, label: "countries" },
-        { n: data.city_count, label: "cities" },
+        { n: d.total_photos, label: "photos" },
+        { n: d.people_count, label: "people" },
+        { n: d.album_count,  label: "albums" },
+        { n: d.country_count, label: "countries" },
+        { n: d.city_count,   label: "cities" },
       ] as stat}
         <div class="stat">
           <strong class="num">{stat.n.toLocaleString()}</strong>
@@ -50,21 +130,55 @@
     <section>
       <h3 class="section-title">Rhythm by month</h3>
       <div class="bars">
-        {#each data.monthly_counts as count, i}
-          {@const max = Math.max(1, ...data.monthly_counts)}
-          <div class="bar-col">
-            <div class="bar" style="height: {(count / max) * 100}%" title="{count} photos"></div>
-            <span class="month mono">{["J","F","M","A","M","J","J","A","S","O","N","D"][i]}</span>
+        {#each d.monthly_counts as count, i}
+          {@const max = Math.max(1, ...d.monthly_counts)}
+          <div
+            class="bar-col"
+            onmouseenter={(e) => onBarHover(e, i, count)}
+            onmousemove={(e) => onBarHover(e, i, count)}
+            onmouseleave={clearTip}
+            role="presentation"
+          >
+            <div class="bar" style="height: {(count / max) * 100}%"></div>
+            <span class="month mono">{months[i].charAt(0)}</span>
           </div>
         {/each}
       </div>
+
+      {#if Object.keys(d.heatmap).length > 0}
+        {@const cells = heatmapGrid(d)}
+        {@const hMax = Math.max(1, ...Object.values(d.heatmap))}
+        <h3 class="section-title sub">Day by day · {d.heatmap_year}</h3>
+        <div class="heatmap" role="presentation">
+          <div class="heat-grid">
+            {#each cells as c (c.date)}
+              <span
+                class="heat-cell {intensityClass(c.count, hMax)}"
+                class:out={!c.inYear}
+                onmouseenter={(e) => onCellHover(e, c.date, c.count)}
+                onmouseleave={clearDayHover}
+                role="presentation"
+              ></span>
+            {/each}
+          </div>
+          <div class="heat-legend mono">
+            <span>less</span>
+            <span class="heat-cell h0"></span>
+            <span class="heat-cell h1"></span>
+            <span class="heat-cell h2"></span>
+            <span class="heat-cell h3"></span>
+            <span class="heat-cell h4"></span>
+            <span>more</span>
+          </div>
+        </div>
+      {/if}
     </section>
 
-    {#if data.top_people.length > 0}
+    {#if d.top_people.length > 0}
       <section>
         <h3 class="section-title">Faces you see often</h3>
         <ul class="row">
-          {#each data.top_people as p}
+          {#each (showAllPeople ? d.top_people : d.top_people.slice(0, PEEK)) as p (p.cluster_id)}
             <li>
               <a href="#/person?id={p.cluster_id}">
                 {#if p.face_crop_path}
@@ -80,18 +194,67 @@
             </li>
           {/each}
         </ul>
+        {#if d.top_people.length > PEEK}
+          <button class="more" onclick={() => (showAllPeople = !showAllPeople)}>
+            {showAllPeople ? "Show fewer" : `Show all ${d.top_people.length}`}
+          </button>
+        {/if}
       </section>
     {/if}
 
-    {#if data.top_locations.length > 0}
+    {#if d.top_countries.length > 0}
       <section>
-        <h3 class="section-title">Places you've been</h3>
-        <ul class="locations">
-          {#each data.top_locations as l}
+        <h3 class="section-title">Countries you've been to</h3>
+        <ul class="places">
+          {#each (showAllCountries ? d.top_countries : d.top_countries.slice(0, PEEK)) as c (c.country)}
             <li>
-              <span class="city">{l.city}</span>
-              <span class="country">, {l.country}</span>
-              <span class="muted small mono">{l.photo_count}</span>
+              <a href={placeHref(undefined, c.country)} class="place-row">
+                <span class="city">{c.country}</span>
+                <span class="muted small mono">{c.photo_count}</span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+        {#if d.top_countries.length > PEEK}
+          <button class="more" onclick={() => (showAllCountries = !showAllCountries)}>
+            {showAllCountries ? "Show fewer" : `Show all ${d.top_countries.length}`}
+          </button>
+        {/if}
+      </section>
+    {/if}
+
+    {#if d.top_locations.length > 0}
+      <section>
+        <h3 class="section-title">Cities you've been to</h3>
+        <ul class="places">
+          {#each (showAllCities ? d.top_locations : d.top_locations.slice(0, PEEK)) as l (l.city + l.country)}
+            <li>
+              <a href={placeHref(l.city, l.country)} class="place-row">
+                <span class="city">{l.city}</span>
+                <span class="country">, {l.country}</span>
+                <span class="muted small mono">{l.photo_count}</span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+        {#if d.top_locations.length > PEEK}
+          <button class="more" onclick={() => (showAllCities = !showAllCities)}>
+            {showAllCities ? "Show fewer" : `Show all ${d.top_locations.length}`}
+          </button>
+        {/if}
+      </section>
+    {/if}
+
+    {#if d.top_cameras.length > 0}
+      <section>
+        <h3 class="section-title">Cameras</h3>
+        <ul class="places">
+          {#each d.top_cameras as cam (cam.camera)}
+            <li>
+              <a href="#/search?q={encodeURIComponent(cam.camera)}" class="place-row">
+                <span class="city">{cam.camera}</span>
+                <span class="muted small mono">{cam.photo_count}</span>
+              </a>
             </li>
           {/each}
         </ul>
@@ -99,6 +262,19 @@
     {/if}
   {/if}
 </div>
+
+{#if tip}
+  <div class="floating-tip mono" style="left: {tip.x}px; top: {tip.y}px">
+    {tip.label}
+  </div>
+{/if}
+{#if hoverDay}
+  <div class="floating-tip" style="left: {hoverDay.x}px; top: {hoverDay.y}px">
+    <strong>{hoverDay.count}</strong>
+    <span> {hoverDay.count === 1 ? "photo" : "photos"}</span>
+    <span class="dim"> · {fmtDateLong(hoverDay.date)}</span>
+  </div>
+{/if}
 
 <style>
   .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
@@ -142,7 +318,9 @@
     letter-spacing: 0.1em;
     margin: 0 0 var(--s-3);
   }
+  .section-title.sub { margin-top: var(--s-5); }
 
+  /* ---- monthly bars ---- */
   .bars {
     display: flex;
     align-items: stretch;
@@ -160,22 +338,66 @@
     justify-content: flex-end;
     align-items: center;
     gap: 6px;
+    cursor: pointer;
   }
   .bar {
     width: 70%;
     background: var(--accent);
     border-radius: 2px 2px 0 0;
     min-height: 2px;
-    opacity: 0.85;
+    opacity: 0.7;
     transition: opacity var(--t-fast) var(--ease);
   }
-  .bar:hover { opacity: 1; }
+  .bar-col:hover .bar { opacity: 1; }
   .month {
     font-size: 10px;
     color: var(--ink-faint);
     letter-spacing: 0.05em;
   }
 
+  /* ---- heatmap ---- */
+  .heatmap {
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: var(--s-3);
+  }
+  .heat-grid {
+    display: grid;
+    grid-template-rows: repeat(7, 11px);
+    grid-auto-flow: column;
+    grid-auto-columns: 11px;
+    gap: 3px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .heat-cell {
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+    cursor: default;
+    background: var(--bg-card);
+    transition: filter var(--t-fast) var(--ease);
+  }
+  .heat-cell:hover { filter: brightness(1.3); outline: 1px solid var(--ink-faint); }
+  .heat-cell.out { opacity: 0.25; }
+  .heat-cell.h0 { background: color-mix(in oklab, var(--bg) 90%, var(--accent)); }
+  .heat-cell.h1 { background: color-mix(in oklab, var(--bg) 70%, var(--accent)); }
+  .heat-cell.h2 { background: color-mix(in oklab, var(--bg) 50%, var(--accent)); }
+  .heat-cell.h3 { background: color-mix(in oklab, var(--bg) 25%, var(--accent)); }
+  .heat-cell.h4 { background: var(--accent); }
+  .heat-legend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: var(--s-3);
+    font-size: 10px;
+    color: var(--ink-muted);
+    justify-content: flex-end;
+  }
+  .heat-legend .heat-cell { cursor: default; }
+
+  /* ---- people row ---- */
   .row {
     list-style: none;
     padding: 0;
@@ -209,29 +431,64 @@
   .placeholder { background: var(--bg-elev); }
   .info { display: flex; flex-direction: column; }
 
-  .locations {
+  /* ---- places ---- */
+  .places {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
   }
-  .locations li {
-    padding: var(--s-3) var(--s-4);
+  .places li {
     background: var(--bg-paper);
     border: 1px solid var(--line);
     border-radius: var(--r-md);
+  }
+  .place-row {
     display: flex;
     align-items: baseline;
     gap: var(--s-2);
+    padding: var(--s-3) var(--s-4);
+    color: inherit;
+    text-decoration: none;
+    transition: background var(--t-fast) var(--ease);
   }
+  .place-row:hover { background: var(--bg-card); }
   .city {
     font-size: var(--t-base);
     font-weight: 600;
     color: var(--ink);
   }
   .country { color: var(--ink-muted); }
-  .locations .muted { margin-left: auto; }
+  .place-row .muted { margin-left: auto; }
+
+  .more {
+    margin-top: var(--s-2);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--accent);
+    font-size: var(--t-sm);
+    padding: 4px 0;
+    cursor: pointer;
+  }
+  .more:hover { text-decoration: underline; }
+
+  .floating-tip {
+    position: fixed;
+    transform: translate(-50%, -100%);
+    padding: 5px 11px;
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    font-size: var(--t-xs);
+    color: var(--ink);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 50;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+  }
+  .floating-tip strong { color: var(--ink); font-weight: 600; }
+  .floating-tip .dim { color: var(--ink-muted); }
   .small { font-size: var(--t-xs); }
 </style>

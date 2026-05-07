@@ -57,8 +57,14 @@ pub async fn map_pins(
         cap,
     )?;
 
+    // Always cluster at low zoom (≤7 = country / continent level), even
+    // for small libraries. Otherwise a few hundred geotagged photos
+    // render as individual thumb pins splattered across a continent —
+    // visually noisy and useless. At higher zooms we fall back to
+    // "single pins until pin_count exceeds max_pins".
     let max_pins = args.max_pins.unwrap_or(1000) as usize;
-    if raw.len() <= max_pins {
+    let force_cluster = args.zoom <= 7;
+    if !force_cluster && raw.len() <= max_pins {
         return Ok(raw
             .into_iter()
             .filter_map(|p| {
@@ -76,42 +82,98 @@ pub async fn map_pins(
             .collect());
     }
 
-    // Cluster server-side: snap to grid, keep the newest photo per cell as the
-    // representative, count members, and remember member ids so the frontend
-    // can render a filmstrip drawer without an extra round-trip.
+    // Cluster server-side: snap to grid, count members, remember
+    // member ids for the filmstrip drawer. The pin's lat/lng is set
+    // to the **cell center** so adjacent clusters never visually
+    // collide along the representative photo's exact coords.
     let cell = cell_size_deg(args.zoom);
     type Key = (i64, i64);
-    let mut cells: HashMap<Key, MapPinDto> = HashMap::new();
+    struct CellAcc {
+        thumb: Option<String>,
+        rep_id: i64,
+        photo_ids: Vec<i64>,
+    }
+    let mut cells: HashMap<Key, CellAcc> = HashMap::new();
 
     for p in raw.iter() {
         let (Some(lat), Some(lng)) = (p.gps_latitude, p.gps_longitude) else {
             continue;
         };
         let key: Key = ((lat / cell).floor() as i64, (lng / cell).floor() as i64);
-        let entry = cells.entry(key).or_insert_with(|| MapPinDto {
-            photo_id: p.id,
-            lat,
-            lng,
-            thumbnail_path: p.thumbnail_path.clone(),
-            count: 0,
+        let entry = cells.entry(key).or_insert_with(|| CellAcc {
+            thumb: p.thumbnail_path.clone(),
+            rep_id: p.id,
             photo_ids: Vec::new(),
         });
-        entry.count += 1;
         entry.photo_ids.push(p.id);
-        // Keep the newest member as representative (raw is already
-        // ordered by date_taken DESC, so first-seen is newest).
+        // Keep the newest member as representative (raw is ordered
+        // date_taken DESC, so first-seen is newest).
     }
 
-    // Single-photo "clusters" become regular pins (drop the redundant photo_ids list).
     Ok(cells
-        .into_values()
-        .map(|mut p| {
-            if p.count == 1 {
-                p.photo_ids.clear();
+        .into_iter()
+        .map(|((kx, ky), acc)| {
+            // Cell center: (kx + 0.5) * cell_size_deg.
+            let cell_lat = (kx as f64 + 0.5) * cell;
+            let cell_lng = (ky as f64 + 0.5) * cell;
+            let count = acc.photo_ids.len() as u32;
+            // Leave photo_ids empty for single-photo "clusters" — the
+            // frontend renders those as regular thumb pins, no
+            // filmstrip needed.
+            let photo_ids = if count > 1 { acc.photo_ids } else { Vec::new() };
+            MapPinDto {
+                photo_id: acc.rep_id,
+                lat: cell_lat,
+                lng: cell_lng,
+                thumbnail_path: acc.thumb,
+                count,
+                photo_ids,
             }
-            p
         })
         .collect())
+}
+
+/// Return every geotagged photo (lat/lng + thumb) in one shot.
+///
+/// Lets the frontend cluster client-side via supercluster.js, which
+/// updates instantly on every zoom — no IPC roundtrip per zoom, no
+/// snap-back glitch where markers sit at the previous zoom's positions
+/// while a new query is in flight. Capped at 100k pins (anything
+/// bigger needs a more sophisticated scheme; a 100k-pin library is
+/// already ~8 MB on the wire which is fine but not infinite).
+#[tauri::command]
+pub async fn map_pins_all(state: State<'_, AppState>) -> CommandResult<Vec<MapPinDto>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+
+    // Direct SQL — bypassing list_in_bounds since we want every
+    // GPS-tagged photo regardless of viewport.
+    let mut stmt = db.conn.prepare(
+        r#"
+        SELECT id, gps_latitude, gps_longitude, thumbnail_path
+          FROM photos
+         WHERE is_trashed = FALSE
+           AND gps_latitude  IS NOT NULL
+           AND gps_longitude IS NOT NULL
+         ORDER BY date_taken DESC
+         LIMIT 100000
+        "#,
+    )?;
+    let pins: Vec<MapPinDto> = stmt
+        .query_map([], |row| {
+            Ok(MapPinDto {
+                photo_id: row.get(0)?,
+                lat: row.get::<_, f64>(1)?,
+                lng: row.get::<_, f64>(2)?,
+                thumbnail_path: row.get(3)?,
+                count: 1,
+                photo_ids: Vec::new(),
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(pins)
 }
 
 #[derive(Debug, Deserialize)]

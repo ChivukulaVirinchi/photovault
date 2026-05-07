@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import maplibregl, { type Map as MapInstance, type Marker } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
+  import Supercluster from "supercluster";
   import { map as mapApi } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -13,6 +14,18 @@
 
   installTileCache();
 
+  /// Each geotagged photo, stored once and clustered client-side. The
+  /// previous design did the clustering on the backend and re-fetched
+  /// on every zoom change — markers stayed at their old positions
+  /// while the new query was in flight, then snapped 1–2 s later.
+  /// Supercluster runs on the data we already have, so each zoom step
+  /// recomputes positions before MapLibre's next frame.
+  type PinFeature = {
+    type: "Feature";
+    geometry: { type: "Point"; coordinates: [number, number] };
+    properties: { photo_id: number; thumbnail_path: string | null };
+  };
+
   let containerEl: HTMLDivElement | undefined = $state();
   let map: MapInstance | null = null;
   let markers: Marker[] = [];
@@ -20,96 +33,153 @@
   let totalGeotagged = $state<number | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  let firstLoad = true;
+  let renderTimer: ReturnType<typeof setTimeout> | null = null;
+  let cluster: Supercluster<PinFeature["properties"]> | null = null;
 
-  // Filmstrip drawer state
+  // Filmstrip drawer state — for clusters, photo_ids are the leaves of
+  // the supercluster tree; for single pins, just the one id.
+  type ClusterRef = {
+    lat: number;
+    lng: number;
+    count: number;
+    photo_ids: number[];
+  };
   let drawerOpen = $state(false);
-  let drawerPin = $state<MapPin | null>(null);
+  let drawerRef = $state<ClusterRef | null>(null);
   let drawerPhotos = $state<PhotoSummaryDto[]>([]);
   let drawerLoading = $state(false);
 
   /// Cluster appearance:
-  ///   far zoom (≤6): big count-only bubble (counts can be huge, thumbs feel noisy)
+  ///   far zoom (≤6): big count-only bubble
   ///   mid zoom (7+): representative thumbnail + +N badge
   function clusterShowsThumb(zoom: number): boolean {
     return zoom >= 6.5;
   }
 
-  function buildMarkerElement(pin: MapPin, zoom: number): HTMLElement {
-    if (pin.count > 1) {
-      const wrap = document.createElement("button");
-      wrap.type = "button";
-      wrap.className = "pv-pin pv-pin-cluster";
-      wrap.setAttribute("aria-label", `${pin.count} photos here`);
+  function buildClusterElement(
+    count: number,
+    repThumb: string | null,
+    zoom: number,
+    onClick: () => void,
+  ): HTMLElement {
+    const wrap = document.createElement("button");
+    wrap.type = "button";
+    wrap.className = "pv-pin pv-pin-cluster";
+    wrap.setAttribute("aria-label", `${count} photos here`);
 
-      if (clusterShowsThumb(zoom) && pin.thumbnail_path) {
-        wrap.classList.add("with-thumb");
-        const url = thumbUrl(libraryStore.driveRoot, pin.thumbnail_path);
-        if (url) wrap.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
-        const badge = document.createElement("span");
-        badge.className = "pv-pin-badge";
-        badge.textContent =
-          pin.count >= 1000
-            ? "+" + (pin.count / 1000).toFixed(pin.count >= 10000 ? 0 : 1) + "k"
-            : "+" + pin.count;
-        wrap.appendChild(badge);
-      } else {
-        const inner = document.createElement("span");
-        inner.className = "pv-pin-count";
-        inner.textContent =
-          pin.count >= 1000
-            ? (pin.count / 1000).toFixed(pin.count >= 10000 ? 0 : 1) + "k"
-            : String(pin.count);
-        wrap.appendChild(inner);
-      }
-
-      wrap.onclick = (e) => {
-        e.stopPropagation();
-        openDrawer(pin);
-      };
-      return wrap;
+    if (clusterShowsThumb(zoom) && repThumb) {
+      wrap.classList.add("with-thumb");
+      const url = thumbUrl(libraryStore.driveRoot, repThumb);
+      if (url) wrap.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
+      const badge = document.createElement("span");
+      badge.className = "pv-pin-badge";
+      badge.textContent =
+        count >= 1000
+          ? "+" + (count / 1000).toFixed(count >= 10000 ? 0 : 1) + "k"
+          : "+" + count;
+      wrap.appendChild(badge);
+    } else {
+      const inner = document.createElement("span");
+      inner.className = "pv-pin-count";
+      inner.textContent =
+        count >= 1000
+          ? (count / 1000).toFixed(count >= 10000 ? 0 : 1) + "k"
+          : String(count);
+      wrap.appendChild(inner);
     }
 
+    wrap.onclick = (e) => {
+      e.stopPropagation();
+      onClick();
+    };
+    return wrap;
+  }
+
+  function buildSingleElement(photoId: number, thumb: string | null): HTMLElement {
     const el = document.createElement("a");
     el.className = "pv-pin pv-pin-single";
-    el.href = `#/photo?id=${pin.photo_id}`;
-    el.setAttribute("aria-label", `Photo #${pin.photo_id}`);
-    if (pin.thumbnail_path) {
-      const url = thumbUrl(libraryStore.driveRoot, pin.thumbnail_path);
+    el.href = `#/photo?id=${photoId}`;
+    el.setAttribute("aria-label", `Photo #${photoId}`);
+    if (thumb) {
+      const url = thumbUrl(libraryStore.driveRoot, thumb);
       if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
     }
     return el;
   }
 
-  async function refreshPins() {
-    if (!map) return;
+  /// Render the visible clusters/points. Synchronous — no IPC roundtrip.
+  function renderMarkers() {
+    if (!map || !cluster) return;
     const b = map.getBounds();
-    const z = map.getZoom();
+    const z = Math.round(map.getZoom());
+    const bbox: [number, number, number, number] = [
+      b.getWest(),
+      b.getSouth(),
+      b.getEast(),
+      b.getNorth(),
+    ];
+    const features = cluster.getClusters(bbox, z);
+
+    for (const m of markers) m.remove();
+    markers = [];
+
+    let visible = 0;
+    for (const f of features) {
+      const [lng, lat] = f.geometry.coordinates as [number, number];
+      const props = f.properties as Record<string, unknown>;
+      const isCluster = props.cluster === true;
+      let el: HTMLElement;
+      if (isCluster) {
+        const count = props.point_count as number;
+        const clusterId = props.cluster_id as number;
+        // Pick a representative thumbnail from the cluster's leaves.
+        // getLeaves with limit=1 is enough for the marker face.
+        const leaves = cluster!.getLeaves(clusterId, 1, 0) as PinFeature[];
+        const repThumb = leaves[0]?.properties.thumbnail_path ?? null;
+        el = buildClusterElement(count, repThumb, map.getZoom(), () => {
+          openClusterDrawer(clusterId, lat, lng);
+        });
+        visible += count;
+      } else {
+        el = buildSingleElement(
+          props.photo_id as number,
+          (props.thumbnail_path as string | null) ?? null,
+        );
+        visible += 1;
+      }
+      markers.push(
+        new maplibregl.Marker({ element: el, anchor: "center" })
+          .setLngLat([lng, lat])
+          .addTo(map!),
+      );
+    }
+    pinCount = visible;
+  }
+
+  function scheduleRender() {
+    if (renderTimer) clearTimeout(renderTimer);
+    // Tiny debounce so a rapid pan-then-zoom collapses to one paint.
+    renderTimer = setTimeout(renderMarkers, 16);
+  }
+
+  async function loadAllPins() {
     loading = true;
     try {
-      const pins = await mapApi.pins(
-        {
-          north: b.getNorth(),
-          south: b.getSouth(),
-          east: b.getEast(),
-          west: b.getWest(),
-        },
-        Math.round(z),
-        800,
-      );
-      for (const m of markers) m.remove();
-      markers = pins.map((pin) => {
-        const el = buildMarkerElement(pin, z);
-        return new maplibregl.Marker({ element: el, anchor: "center" })
-          .setLngLat([pin.lng, pin.lat])
-          .addTo(map!);
+      const pins = await mapApi.pinsAll();
+      const features: PinFeature[] = pins.map((p: MapPin) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+        properties: { photo_id: p.photo_id, thumbnail_path: p.thumbnail_path },
+      }));
+      const sc = new Supercluster<PinFeature["properties"]>({
+        radius: 60,
+        maxZoom: 16,
+        minPoints: 2,
       });
-      pinCount = pins.reduce((acc, p) => acc + p.count, 0);
-      if (firstLoad) {
-        firstLoad = false;
-        if (totalGeotagged === null) totalGeotagged = pinCount;
-      }
+      sc.load(features);
+      cluster = sc;
+      totalGeotagged = features.length;
+      renderMarkers();
       error = null;
     } catch (e) {
       error = JSON.stringify(e);
@@ -118,23 +188,23 @@
     }
   }
 
-  function debouncedRefresh() {
-    if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refreshPins, 220);
-  }
-
   function fitToContent() {
     if (!map) return;
     map.flyTo({ center: [0, 20], zoom: 2, speed: 1.4 });
   }
 
-  async function openDrawer(pin: MapPin) {
-    drawerPin = pin;
+  async function openClusterDrawer(clusterId: number, lat: number, lng: number) {
+    if (!cluster) return;
+    // Cap leaves at 500 — any more and the filmstrip becomes useless;
+    // user can zoom in to break the cluster apart.
+    const leaves = cluster.getLeaves(clusterId, 500, 0) as PinFeature[];
+    const photoIds = leaves.map((l) => l.properties.photo_id);
+    drawerRef = { lat, lng, count: photoIds.length, photo_ids: photoIds };
     drawerOpen = true;
     drawerLoading = true;
     drawerPhotos = [];
     try {
-      drawerPhotos = await mapApi.clusterFilmstrip(pin.photo_ids);
+      drawerPhotos = await mapApi.clusterFilmstrip(photoIds);
     } catch (e) {
       error = JSON.stringify(e);
     } finally {
@@ -144,14 +214,14 @@
 
   function closeDrawer() {
     drawerOpen = false;
-    drawerPin = null;
+    drawerRef = null;
     drawerPhotos = [];
   }
 
   function zoomIntoCluster() {
-    if (!map || !drawerPin) return;
+    if (!map || !drawerRef) return;
     map.flyTo({
-      center: [drawerPin.lng, drawerPin.lat],
+      center: [drawerRef.lng, drawerRef.lat],
       zoom: Math.min(map.getZoom() + 2, 18),
       speed: 1.5,
       curve: 1.4,
@@ -196,17 +266,18 @@
       attributionControl: { compact: true },
     });
 
-    map.on("load", refreshPins);
-    map.on("moveend", debouncedRefresh);
-    map.on("zoomend", debouncedRefresh);
+    map.on("load", loadAllPins);
+    map.on("move", scheduleRender);
+    map.on("zoom", scheduleRender);
     window.addEventListener("keydown", onKey);
   });
 
   onDestroy(() => {
-    if (refreshTimer) clearTimeout(refreshTimer);
+    if (renderTimer) clearTimeout(renderTimer);
     for (const m of markers) m.remove();
     map?.remove();
     map = null;
+    cluster = null;
     window.removeEventListener("keydown", onKey);
   });
 </script>
@@ -225,8 +296,8 @@
   <div class="canvas" bind:this={containerEl}></div>
   <div class="vignette" aria-hidden="true"></div>
 
-  {#if drawerOpen && drawerPin}
-    {@const dp = drawerPin}
+  {#if drawerOpen && drawerRef}
+    {@const dp = drawerRef}
     <aside class="drawer" aria-label="Photos at this location">
       <header>
         <div class="title-row">

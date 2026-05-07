@@ -5,12 +5,29 @@
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { AlbumDto, AlbumSuggestionDto } from "../lib/api/types";
+  import type { PhotoSummaryDto } from "../lib/api/types";
 
   let list = $state<AlbumDto[]>([]);
   let suggestions = $state<AlbumSuggestionDto[]>([]);
   let creating = $state(false);
   let newName = $state("");
   let error = $state<string | null>(null);
+
+  // Live filter — the text field appears once the user has enough
+  // albums to actually need scanning (8+).
+  let filter = $state("");
+  const visibleList = $derived.by(() => {
+    if (!filter.trim()) return list;
+    const q = filter.trim().toLowerCase();
+    return list.filter((a) => a.name.toLowerCase().includes(q));
+  });
+
+  // Preview modal — opened by clicking a suggestion card. Holds the
+  // currently-previewed suggestion + its first ~12 photos.
+  let previewSugg = $state<AlbumSuggestionDto | null>(null);
+  let previewPhotos = $state<PhotoSummaryDto[]>([]);
+  let previewLoading = $state(false);
+  let previewActing = $state(false);
 
   async function load() {
     try {
@@ -43,17 +60,47 @@
     catch (e) { error = JSON.stringify(e); }
   }
 
+  async function openPreview(s: AlbumSuggestionDto) {
+    previewSugg = s;
+    previewPhotos = [];
+    previewLoading = true;
+    try {
+      // Load every photo in the suggestion — the modal scrolls so the
+      // user can scan the whole set before accepting. Cap matches the
+      // backend preview limit; suggestions almost never exceed 200.
+      previewPhotos = await albums.suggestions.preview(s.id, Math.max(s.photo_ids.length, 12));
+    } catch (e) { error = JSON.stringify(e); }
+    finally { previewLoading = false; }
+  }
+  function closePreview() {
+    previewSugg = null;
+    previewPhotos = [];
+  }
+
   async function acceptSuggestion(id: number) {
-    try { await albums.suggestions.accept(id); await load(); }
+    previewActing = true;
+    try { await albums.suggestions.accept(id); closePreview(); await load(); }
     catch (e) { error = JSON.stringify(e); }
+    finally { previewActing = false; }
   }
 
   async function dismissSuggestion(id: number) {
-    try { await albums.suggestions.dismiss(id); await load(); }
+    previewActing = true;
+    try { await albums.suggestions.dismiss(id); closePreview(); await load(); }
     catch (e) { error = JSON.stringify(e); }
+    finally { previewActing = false; }
   }
 
-  onMount(load);
+  function onPreviewKey(e: KeyboardEvent) {
+    if (!previewSugg) return;
+    if (e.key === "Escape") { e.preventDefault(); closePreview(); }
+  }
+
+  onMount(() => {
+    load();
+    window.addEventListener("keydown", onPreviewKey);
+    return () => window.removeEventListener("keydown", onPreviewKey);
+  });
 </script>
 
 <PageHeader title="Albums">
@@ -80,20 +127,16 @@
       </div>
       <div class="suggest-grid">
         {#each suggestions as s (s.id)}
-          <article class="suggestion">
+          <button class="suggestion" onclick={() => openPreview(s)} aria-label="Preview suggestion {s.title}">
             {#if s.cover_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, s.cover_thumbnail_path) ?? ""} alt="" />
             {/if}
             <div class="body">
               <span class="kind mono">{s.kind}</span>
               <strong class="title">{s.title}</strong>
-              <span class="muted small">{s.photo_ids.length} photos</span>
-              <div class="row">
-                <button class="primary" onclick={() => acceptSuggestion(s.id)}>Accept</button>
-                <button class="ghost" onclick={() => dismissSuggestion(s.id)}>Dismiss</button>
-              </div>
+              <span class="muted small">{s.photo_ids.length} photos · click to preview</span>
             </div>
-          </article>
+          </button>
         {/each}
       </div>
     </section>
@@ -108,9 +151,62 @@
         <button class="ghost" onclick={runDetection}>Detect</button>
       </div>
     </div>
-  {:else if list.length > 0}
+  {/if}
+
+  {#if previewSugg}
+    {@const s = previewSugg}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-scrim" role="presentation" onclick={closePreview}>
+      <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+        <header>
+          <span class="kind mono">{s.kind}</span>
+          <strong class="title">{s.title}</strong>
+          <span class="muted small">{s.photo_ids.length} photos</span>
+        </header>
+        <div class="preview-grid">
+          {#if previewLoading}
+            {#each Array(12) as _}
+              <div class="ph"></div>
+            {/each}
+          {:else}
+            {#each previewPhotos as p (p.id)}
+              <div class="ph">
+                {#if p.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+                {/if}
+              </div>
+            {/each}
+          {/if}
+        </div>
+        <footer>
+          <button class="ghost" onclick={() => dismissSuggestion(s.id)} disabled={previewActing}>
+            Dismiss
+          </button>
+          <button class="ghost" onclick={closePreview} disabled={previewActing}>Cancel</button>
+          <button class="primary" onclick={() => acceptSuggestion(s.id)} disabled={previewActing}>
+            Accept
+          </button>
+        </footer>
+      </div>
+    </div>
+  {/if}
+
+  {#if list.length > 0}
+    {#if list.length >= 8}
+      <div class="filter-row">
+        <input
+          type="search"
+          placeholder="Filter albums…"
+          bind:value={filter}
+          aria-label="Filter albums"
+        />
+        {#if filter}
+          <button class="clear" onclick={() => (filter = "")} aria-label="Clear filter">×</button>
+        {/if}
+      </div>
+    {/if}
     <div class="grid">
-      {#each list as a (a.id)}
+      {#each visibleList as a (a.id)}
         <a class="card" href="#/album?id={a.id}">
           <div class="cover">
             {#if a.cover_thumbnail_path}
@@ -183,6 +279,18 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease),
+                transform var(--t-fast) var(--ease);
+  }
+  .suggestion:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px color-mix(in oklab, var(--accent) 18%, transparent);
   }
   .suggestion img {
     width: 100%;
@@ -194,7 +302,7 @@
     padding: var(--s-3) var(--s-4) var(--s-4);
     display: flex;
     flex-direction: column;
-    gap: var(--s-2);
+    gap: 4px;
   }
   .suggestion .kind {
     font-size: var(--t-xs);
@@ -207,7 +315,115 @@
     font-size: var(--t-base);
     font-weight: 600;
   }
-  .suggestion .row { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
+
+  /* ----- preview modal ----- */
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in oklab, #000 60%, transparent);
+    backdrop-filter: blur(2px);
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--s-6);
+  }
+  .modal {
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg, 12px);
+    box-shadow: 0 28px 60px rgba(0,0,0,0.55);
+    max-width: 760px;
+    width: 100%;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .modal header {
+    padding: var(--s-5) var(--s-6) var(--s-3);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .modal header .kind {
+    font-size: var(--t-xs);
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .modal header .title {
+    font-family: var(--font-display);
+    font-size: var(--t-2xl);
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .preview-grid {
+    padding: var(--s-4) var(--s-6);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 1fr;
+    align-items: start;
+    gap: var(--s-2);
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .ph {
+    aspect-ratio: 1;
+    width: 100%;
+    background: var(--bg-elev);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+  }
+  .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .modal footer {
+    flex-shrink: 0;
+    padding: var(--s-3) var(--s-6) var(--s-5);
+    border-top: 1px solid var(--line-soft);
+    background: var(--bg-paper);
+    display: flex;
+    gap: var(--s-2);
+    justify-content: flex-end;
+  }
+
+  .filter-row {
+    position: relative;
+    margin-bottom: var(--s-4);
+    max-width: 360px;
+  }
+  .filter-row input {
+    width: 100%;
+    padding: 8px 32px 8px 12px;
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    color: var(--ink);
+    font-size: var(--t-sm);
+  }
+  .filter-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .filter-row .clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: 0;
+    color: var(--ink-muted);
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    line-height: 1;
+    font-size: 16px;
+  }
+  .filter-row .clear:hover { background: var(--bg-card); color: var(--ink); }
 
   .grid {
     display: grid;

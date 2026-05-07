@@ -157,18 +157,17 @@ pub async fn duplicates_run(
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
 
-    // Snapshot the Arc<Mutex<Database>>; the spawned thread will lock it
-    // synchronously via blocking_lock.
-    let db_arc = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        lib.db.clone()
-    };
+    // Open a fresh sqlite connection inside the spawn_blocking thread
+    // (see bursts.rs for the same pattern). Holding the shared
+    // Arc<Mutex<Database>> for the entire detection blocks every
+    // foreground read for ~seconds, which is what makes the timeline
+    // appear empty until detection finishes.
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         lib.drive_root.clone()
     };
+    let db_path = photovault::db::db_path_for(&drive_root);
 
     emit(
         &app_clone,
@@ -185,8 +184,14 @@ pub async fn duplicates_run(
     );
 
     tokio::task::spawn_blocking(move || {
-        let db = db_arc.blocking_lock();
-        let exact = DuplicateDetector::find_duplicates(&db.conn).unwrap_or_default();
+        let conn = match photovault::db::open_secondary(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("duplicates: open secondary DB failed: {}", e);
+                return;
+            }
+        };
+        let exact = DuplicateDetector::find_duplicates(&conn).unwrap_or_default();
         let mut groups_found = exact.len();
 
         if args.include_perceptual {
@@ -198,7 +203,7 @@ pub async fn duplicates_run(
             // each photo's small-thumbnail path itself, matching the
             // ThumbnailService v2 layout.
             if let Ok(perc) =
-                DuplicateDetector::find_perceptual_duplicates(&db.conn, &drive_root, &exclude_ids)
+                DuplicateDetector::find_perceptual_duplicates(&conn, &drive_root, &exclude_ids)
             {
                 groups_found += perc.len();
                 // Persist both passes' groups so the UI can read them.
@@ -212,7 +217,7 @@ pub async fn duplicates_run(
                         g.duplicate_type,
                     ));
                 }
-                let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+                let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
                 if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
                     tracing::warn!("dup persist: {}", e);
                 }
@@ -230,12 +235,11 @@ pub async fn duplicates_run(
                     )
                 })
                 .collect();
-            let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&db.conn);
+            let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
             if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
                 tracing::warn!("dup persist: {}", e);
             }
         }
-        drop(db);
 
         emit(
             &app_clone,

@@ -66,20 +66,24 @@
   <div class="grid">
     {#each group.members as m (m.photo_id)}
       <div class="card" class:keep={m.is_suggested_keep}>
-        <div class="frame">
+        <a class="frame" href="#/photo?id={m.photo_id}" aria-label="Open photo">
           {#if m.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, m.thumbnail_path) ?? ""} alt="" />
           {/if}
           {#if m.is_suggested_keep}<span class="badge">Keep</span>{/if}
-        </div>
+        </a>
         <dl>
           <dt>Size</dt><dd class="mono">{fmtSize(m.file_size)}</dd>
           <dt>Date</dt><dd class="mono">{m.date_taken ?? "—"}</dd>
           <dt>Path</dt><dd class="mono path" title={m.file_path ?? ""}>{m.file_path ?? "—"}</dd>
         </dl>
-        {#if !m.is_suggested_keep}
-          <button class="primary keep-btn" onclick={() => setKeep(m.photo_id)}>Keep this one</button>
-        {/if}
+        <div class="actions">
+          {#if m.is_suggested_keep}
+            <button class="primary keep-btn" disabled>Keeping</button>
+          {:else}
+            <button class="primary keep-btn" onclick={() => setKeep(m.photo_id)}>Keep this</button>
+          {/if}
+        </div>
       </div>
     {/each}
   </div>
@@ -112,11 +116,14 @@
     box-shadow: 0 0 0 1px var(--keep) inset;
   }
   .frame {
-    aspect-ratio: 1;
+    aspect-ratio: 4 / 3;
     background: var(--bg-elev);
     position: relative;
+    display: block;
+    text-decoration: none;
+    color: inherit;
   }
-  .frame img { width: 100%; height: 100%; object-fit: cover; }
+  .frame img { width: 100%; height: 100%; object-fit: contain; background: #000; }
   .badge {
     position: absolute;
     top: var(--s-3);
@@ -153,5 +160,10 @@
     white-space: nowrap;
   }
 
-  .keep-btn { margin: 0 var(--s-4) var(--s-4); }
+  .actions {
+    padding: 0 var(--s-4) var(--s-4);
+    margin-top: auto;
+  }
+  .keep-btn { width: 100%; }
+  .keep-btn:disabled { opacity: 0.7; cursor: default; }
 </style>

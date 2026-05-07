@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon,
-    Copy, Layers, FileText, BarChart2, Activity, Trash2, Settings,
+    Copy, Layers, FileText, BarChart2, Trash2, Settings,
     ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
@@ -22,7 +22,6 @@
     { path: "/bursts",     label: "Bursts",     icon: Layers     },
     { path: "/documents",  label: "Documents",  icon: FileText   },
     { path: "/insights",   label: "Insights",   icon: BarChart2  },
-    { path: "/health",     label: "Health",     icon: Activity   },
     { path: "/trash",      label: "Trash",      icon: Trash2     },
     { path: "/settings",   label: "Settings",   icon: Settings   },
   ];

@@ -1,16 +1,20 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
-  import { geocoding } from "../lib/api/all";
+  import { albums, geocoding, health } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
-  import type { Settings } from "../lib/api/all";
+  import type { LibraryHealthData, Settings } from "../lib/api/all";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
   let backfilling = $state(false);
+  let healthData = $state<LibraryHealthData | null>(null);
 
-  onMount(() => { settingsStore.load(); });
+  onMount(() => {
+    settingsStore.load();
+    health.compute().then((d) => (healthData = d)).catch(() => {});
+  });
 
   const s = $derived(settingsStore.data);
 
@@ -22,17 +26,31 @@
     finally { saving = false; }
   }
 
-  async function backfillGeocoding() {
+  async function backfillGeocoding(force = false) {
     if (backfilling) return;
     backfilling = true;
     try {
-      const r = await geocoding.backfill();
+      const r = await geocoding.backfill(force);
       if (!r.geonames_db_present) {
         toasts.error("GeoNames database not found. Run scripts/setup_assets.sh");
       } else if (r.considered === 0) {
         toasts.success("No photos need geocoding — all GPS-tagged photos already have place names.");
+      } else if (r.cleared > 0) {
+        toasts.success(`Resolved ${r.updated}, cleared ${r.cleared} stale match${r.cleared === 1 ? "" : "es"}.`);
       } else {
         toasts.success(`Resolved ${r.updated} of ${r.considered} GPS-tagged photos.`);
+      }
+      // Album suggestions (trip / event detection) need location data
+      // to fire — so re-run detection now that the place names are
+      // populated. Failure is non-fatal: the user can re-run from the
+      // Albums tab.
+      if (r.geonames_db_present && r.updated > 0) {
+        try {
+          const det = await albums.suggestions.runDetection();
+          if (det.created > 0) {
+            toasts.info(`Found ${det.created} new album suggestion${det.created === 1 ? "" : "s"}.`);
+          }
+        } catch {}
       }
     } catch (e) {
       toasts.error(`Geocoding backfill failed: ${e}`);
@@ -93,6 +111,24 @@
           <span class="unit mono">days</span>
         </span>
       </label>
+      <label>
+        <span class="label-text">
+          Thumbnail cache <span class="hint">(per drive, on disk)</span>
+        </span>
+        <span class="number-with-unit">
+          <select
+            value={String(s.thumbnail_cache_gb)}
+            onchange={(e) => patch({ thumbnail_cache_gb: Number((e.target as HTMLSelectElement).value) })}
+          >
+            <option value="1">1 GB</option>
+            <option value="2">2 GB</option>
+            <option value="5">5 GB</option>
+            <option value="10">10 GB</option>
+            <option value="25">25 GB</option>
+          </select>
+          <span class="unit hint mono">on next library open</span>
+        </span>
+      </label>
     </section>
 
     <section>
@@ -132,11 +168,38 @@
         Run this once after first setup, or after a scan that ran with the database missing.
       </p>
       <div class="action-row">
-        <button class="primary" onclick={backfillGeocoding} disabled={backfilling}>
+        <button class="primary" onclick={() => backfillGeocoding(false)} disabled={backfilling}>
           {backfilling ? "Resolving…" : "Fill in place names"}
+        </button>
+        <button class="ghost" onclick={() => backfillGeocoding(true)} disabled={backfilling}
+          title="Re-resolve every GPS-tagged photo, overwriting stale matches">
+          Refresh all
         </button>
       </div>
     </section>
+
+    {#if healthData}
+      {@const h = healthData}
+      <section>
+        <h3 class="section-title">Library health</h3>
+        <ul class="counters">
+          {#each [
+            { n: h.total_photos, label: "Total photos", tone: "neutral" },
+            { n: h.missing_thumbnails, label: "Missing thumbnails", tone: h.missing_thumbnails > 0 ? "warn" : "ok" },
+            { n: h.inaccurate_dates, label: "Inaccurate dates", tone: h.inaccurate_dates > 0 ? "warn" : "ok", note: "Pulled from mtime — possibly wrong year." },
+            { n: h.missing_dates, label: "No date at all", tone: h.missing_dates > 0 ? "warn" : "ok" },
+            { n: h.heic_count, label: "HEIC photos", tone: h.heic_decoder_available || h.heic_count === 0 ? "ok" : "warn", note: h.heic_decoder_available ? "Decoder available." : "Decoder NOT available — these won't render." },
+            { n: h.face_processed_no_faces, label: "Processed but no faces", tone: "neutral", note: "Likely face-less landscapes; nothing to fix." },
+          ] as stat}
+            <li class="counter" data-tone={stat.tone}>
+              <strong class="num">{stat.n.toLocaleString()}</strong>
+              <span class="lbl">{stat.label}</span>
+              {#if stat.note}<span class="note">{stat.note}</span>{/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     <section>
       <h3 class="section-title">Updates</h3>
@@ -203,4 +266,37 @@
     margin: 0 0 var(--s-3);
   }
   .action-row { display: flex; gap: var(--s-2); }
+
+  /* Library health counters — moved here from the dedicated /health route. */
+  .counters {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--s-3);
+  }
+  .counter {
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r-md);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-left-width: 3px;
+  }
+  .counter[data-tone="ok"]   { border-left-color: var(--keep); }
+  .counter[data-tone="warn"] { border-left-color: var(--accent); }
+  .counter[data-tone="neutral"] { border-left-color: var(--ink-faint); }
+  .counter .num {
+    font-family: var(--font-display);
+    font-size: var(--t-2xl);
+    font-weight: 500;
+    line-height: 1;
+    color: var(--ink);
+    font-variation-settings: "opsz" 36;
+  }
+  .counter .lbl { font-size: var(--t-sm); color: var(--ink); font-weight: 500; }
+  .counter .note { font-size: var(--t-xs); color: var(--ink-muted); margin-top: 2px; }
 </style>

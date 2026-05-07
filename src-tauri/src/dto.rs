@@ -25,7 +25,9 @@ use photovault::services::burst_detector::BurstGroup;
 use photovault::services::drive_detector::DriveInfo;
 use photovault::services::duplicate_detector::DuplicateGroup;
 use photovault::services::geocoding::GeocodingResult;
-use photovault::services::insights::{CameraStat, InsightsData, LocationStat, PersonStat};
+use photovault::services::insights::{
+    CameraStat, CountryStat, InsightsData, LocationStat, PersonStat,
+};
 use photovault::services::library_health::LibraryHealth;
 use photovault::services::memories::MemoryCard;
 use photovault::services::search::{
@@ -456,6 +458,7 @@ pub struct SearchPhotoDto {
     pub date_taken: Option<String>,
     pub location_city: Option<String>,
     pub location_country: Option<String>,
+    pub thumbnail_path: Option<String>,
 }
 
 impl From<SearchResult> for SearchPhotoDto {
@@ -465,6 +468,7 @@ impl From<SearchResult> for SearchPhotoDto {
             date_taken: r.date_taken,
             location_city: r.location_city,
             location_country: r.location_country,
+            thumbnail_path: r.thumbnail_path,
         }
     }
 }
@@ -537,6 +541,7 @@ pub struct MemoryDetailDto {
 pub struct DuplicateGroupSummaryDto {
     pub id: i64,
     pub member_count: i64,
+    pub cover_thumbnail_path: Option<String>,
 }
 
 impl From<DuplicateGroupRecord> for DuplicateGroupSummaryDto {
@@ -544,6 +549,7 @@ impl From<DuplicateGroupRecord> for DuplicateGroupSummaryDto {
         Self {
             id: g.id,
             member_count: g.member_count,
+            cover_thumbnail_path: g.cover_thumbnail_path,
         }
     }
 }
@@ -741,6 +747,7 @@ pub struct InsightsDto {
     pub monthly_counts: [i64; 12],
     pub top_people: Vec<PersonStatDto>,
     pub top_locations: Vec<LocationStatDto>,
+    pub top_countries: Vec<CountryStatDto>,
     pub top_cameras: Vec<CameraStatDto>,
     pub available_years: Vec<i32>,
 }
@@ -763,6 +770,7 @@ impl From<InsightsData> for InsightsDto {
             monthly_counts: d.monthly_counts,
             top_people: d.top_people.into_iter().map(Into::into).collect(),
             top_locations: d.top_locations.into_iter().map(Into::into).collect(),
+            top_countries: d.top_countries.into_iter().map(Into::into).collect(),
             top_cameras: d.top_cameras.into_iter().map(Into::into).collect(),
             available_years: d.available_years,
         }
@@ -801,6 +809,21 @@ impl From<LocationStat> for LocationStatDto {
     fn from(s: LocationStat) -> Self {
         Self {
             city: s.city,
+            country: s.country,
+            photo_count: s.photo_count,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CountryStatDto {
+    pub country: String,
+    pub photo_count: i64,
+}
+
+impl From<CountryStat> for CountryStatDto {
+    fn from(s: CountryStat) -> Self {
+        Self {
             country: s.country,
             photo_count: s.photo_count,
         }
@@ -923,6 +946,7 @@ pub struct SettingsDto {
     pub home_city_override: Option<String>,
     pub auto_update_check_enabled: bool,
     pub sidebar_collapsed: bool,
+    pub thumbnail_cache_gb: f64,
 }
 
 impl From<&AppConfig> for SettingsDto {
@@ -959,6 +983,7 @@ impl From<&AppConfig> for SettingsDto {
             home_city_override: c.home_city_override.clone(),
             auto_update_check_enabled: c.auto_update_check_enabled,
             sidebar_collapsed: c.sidebar_collapsed,
+            thumbnail_cache_gb: c.thumbnail_cache_gb,
         }
     }
 }

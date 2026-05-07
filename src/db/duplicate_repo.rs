@@ -9,6 +9,11 @@ use super::MAX_ROWS_PER_INSERT;
 pub struct DuplicateGroupRecord {
     pub id: i64,
     pub member_count: i64,
+    /// Relative thumbnail path of one member — the suggested-keep when set,
+    /// otherwise the first member by photo id. The listing UI shows this
+    /// as the group's cover so the user can recognise the photo at a
+    /// glance instead of just seeing "Group of 4".
+    pub cover_thumbnail_path: Option<String>,
 }
 
 /// Duplicate group member record
@@ -95,13 +100,25 @@ impl<'a> DuplicateRepo<'a> {
         tx.commit()
     }
 
-    /// Get all duplicate groups with member counts
+    /// Get all duplicate groups with member counts and a cover thumbnail.
+    ///
+    /// The cover comes from the suggested-keep member when one is set,
+    /// otherwise the lowest-id member. We pull the cover with a
+    /// correlated sub-query so the result is one round-trip per listing.
     pub fn get_all_groups(&self) -> SqliteResult<Vec<DuplicateGroupRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT 
+            SELECT
                 dg.id,
-                COUNT(dgm.id) as member_count
+                COUNT(dgm.id) AS member_count,
+                (
+                    SELECT p.thumbnail_path
+                      FROM duplicate_group_members m
+                      JOIN photos p ON p.id = m.photo_id
+                     WHERE m.group_id = dg.id
+                  ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
+                     LIMIT 1
+                ) AS cover_thumbnail_path
             FROM duplicate_groups dg
             LEFT JOIN duplicate_group_members dgm ON dg.id = dgm.group_id
             GROUP BY dg.id
@@ -113,6 +130,7 @@ impl<'a> DuplicateRepo<'a> {
             Ok(DuplicateGroupRecord {
                 id: row.get(0)?,
                 member_count: row.get(1)?,
+                cover_thumbnail_path: row.get(2)?,
             })
         })?;
 

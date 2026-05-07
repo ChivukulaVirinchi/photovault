@@ -37,9 +37,31 @@ pub fn photovault_dir(drive_root: &Path) -> PathBuf {
     drive_root.join(".photovault")
 }
 
+/// Returns the SQLite database file path for a drive root.
+///
+/// Use this when a background task needs to open its own connection
+/// to the same database — e.g. duplicate / burst detection runs in
+/// `spawn_blocking` and shouldn't compete with the shared
+/// `Arc<Mutex<Database>>` for a lock. SQLite WAL handles the
+/// concurrent reader/writer.
+pub fn db_path_for(drive_root: &Path) -> PathBuf {
+    photovault_dir(drive_root).join("photovault.db")
+}
+
 /// Returns the map tile cache directory for a drive root.
 pub fn tile_cache_dir(drive_root: &Path) -> PathBuf {
     photovault_dir(drive_root).join("tile_cache")
+}
+
+/// Open a fresh connection to an existing PhotoVault database.
+///
+/// Configures the same WAL / cache pragmas as `open_for_drive` so
+/// background detection tasks see the same performance profile.
+/// Returns an error if the path doesn't exist or can't be opened.
+pub fn open_secondary(db_path: &Path) -> Result<Connection, DatabaseError> {
+    let conn = Connection::open(db_path)?;
+    Database::configure_connection(&conn)?;
+    Ok(conn)
 }
 
 impl Database {
@@ -75,7 +97,7 @@ impl Database {
     }
 
     /// Configure SQLite connection for optimal performance
-    fn configure_connection(conn: &Connection) -> SqliteResult<()> {
+    pub(crate) fn configure_connection(conn: &Connection) -> SqliteResult<()> {
         // Write-Ahead Logging for better concurrent read performance
         conn.pragma_update(None, "journal_mode", "WAL")?;
 

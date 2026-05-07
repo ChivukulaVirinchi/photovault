@@ -135,6 +135,7 @@ export interface SearchResults {
     date_taken: string | null;
     location_city: string | null;
     location_country: string | null;
+    thumbnail_path: string | null;
   }>;
 }
 
@@ -182,6 +183,7 @@ export const memories = {
 export interface DupGroupSummary {
   id: number;
   member_count: number;
+  cover_thumbnail_path: string | null;
 }
 export interface DupMember {
   photo_id: number;
@@ -309,6 +311,7 @@ export interface InsightsData {
     face_crop_path: string | null;
   }>;
   top_locations: Array<{ city: string; country: string; photo_count: number }>;
+  top_countries: Array<{ country: string; photo_count: number }>;
   top_cameras: Array<{ camera: string; photo_count: number }>;
   available_years: number[];
 }
@@ -347,6 +350,7 @@ export interface Settings {
   home_city_override: string | null;
   auto_update_check_enabled: boolean;
   sidebar_collapsed: boolean;
+  thumbnail_cache_gb: number;
 }
 export const settings = {
   get: () => call<Settings>("settings_get"),
@@ -375,6 +379,8 @@ export const map = {
       zoom,
       max_pins: maxPins ?? null,
     }),
+  /// Every geotagged photo. Used by the client-side clustering map.
+  pinsAll: () => call<MapPin[]>("map_pins_all"),
   clusterFilmstrip: (photoIds: number[]) =>
     call<PhotoSummaryDto[]>("map_cluster_filmstrip", { photo_ids: photoIds }),
 };
@@ -386,14 +392,17 @@ export const geocoding = {
       "geocoding_resolve_one",
       { lat, lng },
     ),
-  /// Walk every photo with GPS but no resolved location and fill it in.
-  /// Idempotent — returns counts of photos considered vs updated.
-  backfill: () =>
+  /// Walk every GPS-tagged photo and resolve a place name. Default
+  /// fills only NULL rows; `forceRefresh = true` re-resolves all and
+  /// clears entries that no longer match (used to flush stale data
+  /// after geocoder rules change).
+  backfill: (forceRefresh = false) =>
     call<{
       considered: number;
       updated: number;
+      cleared: number;
       geonames_db_present: boolean;
-    }>("geocoding_backfill"),
+    }>("geocoding_backfill", { force_refresh: forceRefresh }),
 };
 
 // ---------- system ----------

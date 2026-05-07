@@ -65,16 +65,18 @@
     {#each group.members as m (m.photo_id)}
       {@const summary = summaries.get(m.photo_id)}
       <div class="card" class:best={m.is_suggested_best}>
-        <div class="frame">
+        <a class="frame" href="#/photo?id={m.photo_id}" aria-label="Open photo">
           {#if summary?.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, summary.thumbnail_path) ?? ""} alt="" />
           {/if}
           {#if m.is_suggested_best}<span class="badge">Best</span>{/if}
-        </div>
+        </a>
         <div class="meta">
-          <span class="muted small mono">sharpness {m.sharpness_score?.toFixed(2) ?? "—"}</span>
-          {#if !m.is_suggested_best}
-            <button onclick={() => setBest(m.photo_id)}>Pick this</button>
+          {#if m.is_suggested_best}
+            <a class="open-link" href="#/photo?id={m.photo_id}">Open</a>
+          {:else}
+            <a class="open-link" href="#/photo?id={m.photo_id}">Open</a>
+            <button class="pick" onclick={() => setBest(m.photo_id)}>Pick this</button>
           {/if}
         </div>
       </div>
@@ -92,7 +94,7 @@
     flex: 1;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: var(--s-3);
   }
   .card {
@@ -104,12 +106,17 @@
   }
   .card.best {
     border-color: var(--keep);
-    box-shadow: 0 0 0 1px var(--keep) inset;
+    box-shadow:
+      0 0 0 2px var(--keep) inset,
+      0 4px 16px color-mix(in oklab, var(--keep) 35%, transparent);
   }
   .frame {
-    aspect-ratio: 1;
+    aspect-ratio: 4 / 3;
     background: var(--bg-elev);
     position: relative;
+    display: block;
+    text-decoration: none;
+    color: inherit;
   }
   .frame img { width: 100%; height: 100%; object-fit: cover; }
   .badge {
@@ -124,11 +131,21 @@
     font-weight: 600;
   }
   .meta {
-    padding: var(--s-3);
+    padding: var(--s-2) var(--s-3);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--s-2);
+    font-size: var(--t-xs);
   }
-  .small { font-size: var(--t-xs); }
+  .open-link {
+    color: var(--ink-muted);
+    text-decoration: none;
+    font-size: var(--t-xs);
+  }
+  .open-link:hover { color: var(--accent); }
+  .pick {
+    font-size: var(--t-xs);
+    padding: 4px 10px;
+  }
 </style>

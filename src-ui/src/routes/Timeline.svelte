@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { photos } from "../lib/api/photos";
-  import { trash } from "../lib/api/all";
+  import { memories, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { events, type ScanProgress } from "../lib/api/events";
   import { library } from "../lib/api/library";
@@ -46,6 +46,10 @@
   let scanProgress = $state<ScanProgress | null>(null);
   let scanJobId = $state<string | null>(null);
 
+  // Today's memories — surfaced as a horizontal strip above the
+  // timeline. Hidden when the library has no qualifying memories.
+  let memoryCards = $state<MemoryCard[]>([]);
+
   // Scrubber state
   let scrubHover = $state(false);
   let scrubDragging = $state(false);
@@ -54,6 +58,11 @@
 
   // Multi-select dialog
   let showAddDialog = $state(false);
+
+  // Index into `items` of the keyboard-focused cell. -1 = none.
+  // Bumped on click so arrow nav picks up where the user left off; reset
+  // when items reload from a fresh scan.
+  let focusedIdx = $state(-1);
 
   // Drag-marquee state (selection by rectangle)
   let marqueeStart = $state<{ x: number; y: number } | null>(null);
@@ -135,12 +144,21 @@
   }
 
   // Build rows: optional label rows interleaved with photo rows.
+  // Total height of the memories strip when shown. Plumbed into the
+  // virtualizer as the first virtual row so it scrolls away with the
+  // rest of the content.
+  const MEMORIES_STRIP_HEIGHT = 340;
+
   type Row =
+    | { kind: "memories"; height: number; cards: MemoryCard[] }
     | { kind: "label"; height: number; label: string; firstIso: string | null }
     | { kind: "photos"; height: number; photos: PhotoSummaryDto[]; firstIso: string | null };
 
   const rows = $derived.by((): Row[] => {
     const out: Row[] = [];
+    if (memoryCards.length > 0) {
+      out.push({ kind: "memories", height: MEMORIES_STRIP_HEIGHT, cards: memoryCards });
+    }
     const C = cols;
     const RH = rowH;
     const LH = LABEL_PX[zoom];
@@ -206,7 +224,12 @@
     const r = scrollEl.getBoundingClientRect();
     containerW = r.width - 14;
     containerH = r.height;
-    const onScroll = () => { scrollTop = scrollEl!.scrollTop; };
+    const onScroll = () => {
+      scrollTop = scrollEl!.scrollTop;
+      // Persist so that returning from PhotoDetail lands the user back
+      // at the same row instead of the top of the timeline.
+      try { sessionStorage.setItem("scroll:/timeline", String(scrollTop)); } catch {}
+    };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       ro.disconnect();
@@ -214,8 +237,36 @@
     };
   });
 
+  // Restore scroll position once the virtualizer has built enough content
+  // to reach the saved offset. Runs as a $effect so it re-checks every
+  // time totalHeight grows (loadMore appends pages).
+  let scrollRestored = $state(false);
+  $effect(() => {
+    if (scrollRestored || !scrollEl) return;
+    const raw = (() => { try { return sessionStorage.getItem("scroll:/timeline"); } catch { return null; } })();
+    const target = raw ? parseInt(raw, 10) : 0;
+    if (!Number.isFinite(target) || target <= 0) {
+      scrollRestored = true;
+      return;
+    }
+    if (v.totalHeight >= target + 16) {
+      scrollEl.scrollTop = target;
+      scrollRestored = true;
+    } else if (hasMore && !loading) {
+      // Pre-load more pages so the virtualizer can paint the saved
+      // position without flashing the top of the list.
+      loadMore();
+    } else if (!hasMore) {
+      // Library is shorter than where we left off (photos trashed, etc.)
+      // — give up, leave the user at the bottom rather than stuck in
+      // an effect loop.
+      scrollRestored = true;
+    }
+  });
+
   onMount(() => {
     loadMore();
+    memories.today().then((c) => (memoryCards = c)).catch(() => {});
     let unlistens: Array<() => void> = [];
     events
       .onScanProgress((p) => { if (p.job_id === scanJobId) scanProgress = p; })
@@ -243,10 +294,17 @@
 
   // ----------- selection -----------
   function onCellClick(e: MouseEvent, photo: PhotoSummaryDto) {
+    focusedIdx = items.findIndex((p) => p.id === photo.id);
     handleCellClick(e, photo.id, items.map((p) => p.id));
   }
 
   // ----------- drag-marquee selection -----------
+  // Coalesce pointermove updates to one per animation frame. Each update
+  // does a getBoundingClientRect() per visible cell + writes to the
+  // reactive selection set, which invalidates `class:selected` on every
+  // cell. At 120 Hz pointer rates with hundreds of cells visible this
+  // overwhelmed the renderer and looked like a hang.
+  let marqueeRaf = 0;
   function onScrollPointerDown(e: PointerEvent) {
     // Only respond to primary-button drags that started on empty space
     // (not on a cell or any interactive child).
@@ -263,11 +321,19 @@
   function onScrollPointerMove(e: PointerEvent) {
     if (!marqueeStart) return;
     marqueeCurrent = { x: e.clientX, y: e.clientY };
-    updateMarqueeSelection();
+    if (marqueeRaf !== 0) return;
+    marqueeRaf = requestAnimationFrame(() => {
+      marqueeRaf = 0;
+      updateMarqueeSelection();
+    });
   }
   function onScrollPointerUp(e: PointerEvent) {
     if (!marqueeStart) return;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+    if (marqueeRaf !== 0) {
+      cancelAnimationFrame(marqueeRaf);
+      marqueeRaf = 0;
+    }
     marqueeStart = null;
     marqueeCurrent = null;
   }
@@ -290,7 +356,16 @@
       const m = href.match(/id=(\d+)/);
       if (m) next.add(Number(m[1]));
     });
+    // Skip the assignment when the resulting set is identical — avoids
+    // re-rendering every visible cell when the marquee crawls inside an
+    // empty gap between rows.
+    if (setsEqual(selection.ids, next)) return;
     selection.ids = next;
+  }
+  function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+    if (a.size !== b.size) return false;
+    for (const x of a) if (!b.has(x)) return false;
+    return true;
   }
 
   async function bulkTrash() {
@@ -326,12 +401,71 @@
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (selection.active()) {
-      if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
-      else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
+      if (e.key === "Escape") { selection.clear(); e.preventDefault(); return; }
+      else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); return; }
       else if (e.key === "a" || e.key === "A") {
-        if (!e.metaKey && !e.ctrlKey) { showAddDialog = true; e.preventDefault(); }
+        if (!e.metaKey && !e.ctrlKey) { showAddDialog = true; e.preventDefault(); return; }
       }
     }
+    // Grid navigation. Active when no selection and the user has clicked
+    // on the timeline at least once (focusedIdx tracks the last cell).
+    if (!scrollEl) return;
+    const C = cols;
+    const N = items.length;
+    if (N === 0) return;
+    let next = focusedIdx;
+    switch (e.key) {
+      case "ArrowRight": next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + 1)); break;
+      case "ArrowLeft":  next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - 1)); break;
+      case "ArrowDown":  next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + C)); break;
+      case "ArrowUp":    next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - C)); break;
+      case "PageDown":   next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + C * pageRows())); break;
+      case "PageUp":     next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - C * pageRows())); break;
+      case "Home":       next = 0; break;
+      case "End":        next = N - 1; break;
+      case "Enter": {
+        if (focusedIdx >= 0 && focusedIdx < N) {
+          window.location.hash = `/photo?id=${items[focusedIdx].id}`;
+          e.preventDefault();
+        }
+        return;
+      }
+      default: return;
+    }
+    e.preventDefault();
+    focusedIdx = next;
+    scrollFocusedIntoView();
+  }
+  function pageRows(): number {
+    return Math.max(1, Math.floor((containerH - 32) / Math.max(1, rowH + GAP_PX[zoom])));
+  }
+  function scrollFocusedIntoView() {
+    if (!scrollEl || focusedIdx < 0) return;
+    // Compute approximate Y of the focused cell. The row index in the
+    // photo bucket plus any leading label rows isn't trivially known,
+    // so we read the DOM after reactivity settles. rAF lets the row
+    // render before we measure.
+    requestAnimationFrame(() => {
+      const id = items[focusedIdx]?.id;
+      if (id == null || !scrollEl) return;
+      const cell = scrollEl.querySelector<HTMLAnchorElement>(`a.cell[href="#/photo?id=${id}"]`);
+      if (!cell) {
+        // Cell isn't rendered yet (virtualized out). Estimate offset from
+        // total cells before it and scroll there; the next frame's render
+        // will bring it into view.
+        const rowIdx = Math.floor(focusedIdx / Math.max(1, cols));
+        const targetY = rowIdx * (rowH + GAP_PX[zoom]);
+        scrollEl.scrollTo({ top: Math.max(0, targetY - containerH / 2), behavior: "auto" });
+        return;
+      }
+      const cr = cell.getBoundingClientRect();
+      const sr = scrollEl.getBoundingClientRect();
+      if (cr.top < sr.top + 8) {
+        scrollEl.scrollBy({ top: cr.top - sr.top - 8, behavior: "smooth" });
+      } else if (cr.bottom > sr.bottom - 8) {
+        scrollEl.scrollBy({ top: cr.bottom - sr.bottom + 8, behavior: "smooth" });
+      }
+    });
   }
   function onWheel(e: WheelEvent) {
     if (!e.ctrlKey && !e.metaKey) return;
@@ -370,17 +504,36 @@
     if (photo.thumbnail_path) return;
     const idx = items.findIndex((p) => p.id === photo.id);
     if (idx < 0) return;
+    // Debounced viewport-driven generation. The IO fires on intersect
+    // AND de-intersect; we only fire the IPC after the cell has been
+    // continuously visible for 250 ms. This prevents fast scrolls from
+    // queuing a thumb request for every cell that flashed past — the
+    // backend used to chew through the full scrolled-past range first
+    // while the cells the user was actually looking at sat empty.
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (e.isIntersecting) {
-          requestIfMissing(photo, idx);
-          io.disconnect();
-          break;
+          if (timer == null) {
+            timer = setTimeout(() => {
+              timer = null;
+              requestIfMissing(photo, idx);
+              io.disconnect();
+            }, 250);
+          }
+        } else if (timer != null) {
+          clearTimeout(timer);
+          timer = null;
         }
       }
-    }, { root: scrollEl, rootMargin: "200px" });
+    }, { root: scrollEl, rootMargin: "100px" });
     io.observe(node);
-    return { destroy() { io.disconnect(); } };
+    return {
+      destroy() {
+        if (timer != null) clearTimeout(timer);
+        io.disconnect();
+      },
+    };
   }
 
   // ----------- scrubber -----------
@@ -409,7 +562,10 @@
         return (rows[i] as { kind: "label"; label: string }).label;
       }
     }
-    return rows[0] ? bucketLabel(rows[0].firstIso, zoom) : "";
+    const head = rows[0];
+    if (!head) return "";
+    if (head.kind === "memories") return "";
+    return bucketLabel(head.firstIso, zoom);
   }
   const draggedBucket = $derived.by(() => {
     if (!scrubDragging) return "";
@@ -477,10 +633,28 @@
         <div
           class="row"
           class:row-label={row.kind === "label"}
+          class:row-memories={row.kind === "memories"}
           style="transform: translateY({v.offsets[i]}px); height: {row.height}px;"
         >
           {#if row.kind === "label"}
             <span class="label">{row.label}</span>
+          {:else if row.kind === "memories"}
+            <section class="memories-strip" aria-label="Memories" data-no-marquee="true">
+              <h3 class="strip-title">From your library</h3>
+              <div class="strip-row">
+                {#each row.cards as c (c.id)}
+                  <a class="memory-card" href="#/memory?id={c.id}" data-no-marquee="true">
+                    {#if c.hero_thumbnail_path}
+                      <img src={thumbUrl(libraryStore.driveRoot, c.hero_thumbnail_path) ?? ""} alt="" loading="lazy" />
+                    {/if}
+                    <div class="memory-overlay">
+                      <strong class="memory-title">{c.title}</strong>
+                      <span class="memory-count mono">{c.photo_count} photos</span>
+                    </div>
+                  </a>
+                {/each}
+              </div>
+            </section>
           {:else}
             <div
               class="photos"
@@ -490,6 +664,7 @@
                 <a
                   class="cell"
                   class:selected={selection.has(photo.id)}
+                  class:focused={focusedIdx >= 0 && items[focusedIdx]?.id === photo.id}
                   href="#/photo?id={photo.id}"
                   title="#{photo.id}"
                   use:cellAttach={photo}
@@ -574,7 +749,93 @@
     flex: 1;
     position: relative;
     overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ----- memories strip ----- */
+  .memories-strip {
+    box-sizing: border-box;
+    width: 100%;
     height: 100%;
+    /* No horizontal padding — the .scroll container already provides
+       --s-7 on each side, so the first card's left edge lines up with
+       the first photo column below. */
+    padding: var(--s-2) 0 var(--s-3);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    overflow: hidden;
+  }
+  .strip-title {
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .strip-row {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: var(--s-3);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  .memory-card {
+    flex: 0 0 auto;
+    width: 280px;
+    height: 100%;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    color: inherit;
+    text-decoration: none;
+    transition: transform var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+  }
+  .memory-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.35);
+    border-color: var(--accent);
+  }
+  .memory-card img {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    object-fit: cover;
+    display: block;
+  }
+  .memory-overlay {
+    flex-shrink: 0;
+    padding: var(--s-2) var(--s-3) var(--s-3);
+    background: var(--bg-paper);
+    border-top: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .memory-title {
+    font-family: var(--font-display);
+    font-size: var(--t-sm);
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .memory-count {
+    font-size: var(--t-xs);
+    color: var(--ink-muted);
   }
 
   .scroll {
@@ -608,6 +869,8 @@
     right: 0;
     contain: layout style paint;
     will-change: transform;
+    transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+                height 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
   }
   .row-label {
     display: flex;
@@ -623,6 +886,7 @@
   .photos {
     display: grid;
     padding: 1px 0;
+    transition: gap 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
   }
   .cell {
     background: var(--bg-card);
@@ -647,6 +911,10 @@
     box-shadow: inset 0 0 0 3px var(--accent);
   }
   .cell.selected img { filter: brightness(0.85); }
+  .cell.focused {
+    box-shadow: 0 0 0 2px var(--accent);
+    z-index: 1;
+  }
   .cell .check {
     position: absolute;
     top: 6px;

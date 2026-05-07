@@ -47,9 +47,21 @@ fn candidate_geonames_roots() -> Vec<PathBuf> {
             roots.push(dir.to_path_buf());
             // Debian install layout
             roots.push(dir.join("..").join("lib").join("photovault"));
+            // target/debug/<binary> → walk up to workspace root
+            roots.push(dir.join("..").join(".."));
+            roots.push(dir.join("..").join("..").join(".."));
         }
     }
-    roots.push(crate::bootstrap::project_root());
+    let cwd = crate::bootstrap::project_root();
+    // `cargo tauri dev` typically sets CWD to src-tauri/. Walk up so the
+    // dev tree's data/ directory is reachable.
+    if let Some(parent) = cwd.parent() {
+        roots.push(parent.to_path_buf());
+        if let Some(grand) = parent.parent() {
+            roots.push(grand.to_path_buf());
+        }
+    }
+    roots.push(cwd);
     roots.push(PathBuf::from("/usr/lib/photovault"));
     roots
 }

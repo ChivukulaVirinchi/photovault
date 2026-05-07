@@ -81,6 +81,13 @@ pub struct AppConfig {
     /// on every drive-select.
     #[serde(default)]
     pub geonames_warning_seen: bool,
+
+    /// Disk budget for the on-drive thumbnail cache, expressed in
+    /// gigabytes. Drives the LRU eviction in `ThumbnailService`. Default
+    /// 5 GB suits a mid-size phone library; small-disk users can dial
+    /// down, big-library users up.
+    #[serde(default = "default_thumbnail_cache_gb")]
+    pub thumbnail_cache_gb: f64,
 }
 
 /// Bumped any time the EXIF date fallback chain changes. Stored in
@@ -119,6 +126,10 @@ fn default_map_cache_limit_mb() -> u32 {
     500
 }
 
+fn default_thumbnail_cache_gb() -> f64 {
+    5.0
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -146,6 +157,7 @@ impl Default for AppConfig {
             show_first_run_update_prompt: true,
             date_logic_version: 0,
             geonames_warning_seen: false,
+            thumbnail_cache_gb: default_thumbnail_cache_gb(),
         }
     }
 }
@@ -188,6 +200,7 @@ impl AppConfig {
         self.weight_cooccurrence = self.weight_cooccurrence.clamp(0.0, 2.0);
         self.weight_temporal = self.weight_temporal.clamp(0.0, 2.0);
         self.map_cache_limit_mb = self.map_cache_limit_mb.clamp(50, 10_000);
+        self.thumbnail_cache_gb = self.thumbnail_cache_gb.clamp(0.5, 100.0);
     }
 
     /// Save config to disk.

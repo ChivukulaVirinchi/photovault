@@ -322,12 +322,15 @@ pub fn detect_trips(
     for span in spans {
         let duration_days = (span.end - span.start).num_days() + 1;
 
-        // Gate 1: >= 2 days
-        if duration_days < 2 {
+        // Gate 1: >= 3 days. Two-day "trips" surfaced as suggestions
+        // tend to be weekend errands, not the trips users want to
+        // remember.
+        if duration_days < 3 {
             continue;
         }
-        // Gate 2: >= 8 photos
-        if span.photo_ids.len() < 8 {
+        // Gate 2: >= 15 photos. The old floor (8) flagged any short
+        // outing with a photo per attraction; users called it noisy.
+        if span.photo_ids.len() < 15 {
             continue;
         }
         // Gate 3: city in < 10% of weeks (rarity)
@@ -500,8 +503,9 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
     let mut suggestions = Vec::new();
 
     for window in &windows {
-        // Gate 1: >= 8 photos
-        if window.len() < 8 {
+        // Gate 1: >= 15 photos. Same noise-reduction reasoning as the
+        // trip detector — short bursts at home aren't event-worthy.
+        if window.len() < 15 {
             continue;
         }
 
@@ -708,11 +712,11 @@ pub fn detect_suggestions_with_diagnostics(
 
             for (city, start, end, count) in spans {
                 let duration_days = (end - start).num_days() + 1;
-                if duration_days < 2 {
+                if duration_days < 3 {
                     diag.trip_gate_duration_rejected += 1;
                     continue;
                 }
-                if count < 8 {
+                if count < 15 {
                     diag.trip_gate_photo_count_rejected += 1;
                     continue;
                 }
