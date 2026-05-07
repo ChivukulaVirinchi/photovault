@@ -18,7 +18,7 @@
       <img src="https://img.shields.io/github/actions/workflow/status/ChivukulaVirinchi/photovault/ci.yml?branch=master&label=CI" alt="CI">
     </a>
     <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/Cargo.toml">
-      <img src="https://img.shields.io/badge/MSRV-1.75-blue" alt="MSRV 1.75">
+      <img src="https://img.shields.io/badge/MSRV-1.85-blue" alt="MSRV 1.85">
     </a>
     <a href="LICENSE">
       <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache 2.0">
@@ -190,9 +190,11 @@ third-party attribution list.
 
 ## Built with
 
-- [Rust](https://www.rust-lang.org/) — the whole app
-- [iced](https://iced.rs/) — cross-platform GUI
-- [SQLite](https://sqlite.org/) — embedded database
-- [ONNX Runtime](https://onnxruntime.ai/) — face detection / recognition
+- [Rust](https://www.rust-lang.org/) — the engine: services, DB, ML, indexing
+- [Tauri 2](https://tauri.app/) — native desktop shell (Linux / Windows / macOS)
+- [Svelte 5](https://svelte.dev/) + [Vite](https://vitejs.dev/) — frontend
+- [SQLite](https://sqlite.org/) — embedded per-drive database
+- [ONNX Runtime](https://onnxruntime.ai/) — on-device face detection + recognition
+- [MapLibre GL](https://maplibre.org/) — interactive map view
 - [GeoNames](https://www.geonames.org/) — offline reverse geocoding
 - [OpenStreetMap](https://www.openstreetmap.org/) — map tiles

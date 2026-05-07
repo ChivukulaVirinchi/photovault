@@ -6,24 +6,43 @@ Smriti builds natively on Linux, Windows, and macOS.
 
 ### Linux
 
-- Rust toolchain (stable) via `rustup`
-- Build deps for iced/wgpu stack (Ubuntu/Debian example):
+- Rust toolchain (stable, MSRV 1.85+) via `rustup`
+- Node 20+ and npm (the frontend is Vite + Svelte 5)
+- Tauri build deps. On Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev pkg-config
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev \
+  libgtk-3-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev \
+  pkg-config \
+  libheif-dev          # only if you want HEIC decoding
 ```
 
 ### Windows
 
 - Rust toolchain via `rustup`
-- Visual Studio Build Tools (Desktop development with C++)
-- Build from PowerShell at the UNC path (WSL shared filesystem)
+- Node 20+ via the official installer or `winget install OpenJS.NodeJS`
+- Visual Studio Build Tools (Desktop development with C++) — provides
+  the MSVC linker that `cargo build` and Tauri's bundler both need.
+- WebView2 Runtime — preinstalled on Windows 11; auto-downloaded by
+  Tauri on Windows 10 if missing.
 
 ### macOS
 
-- Xcode command line tools
+- Xcode command line tools (`xcode-select --install`)
 - Rust toolchain via `rustup`
+- Node 20+ via Homebrew (`brew install node`) or the official installer
+
+### One-time tooling
+
+```bash
+cargo install tauri-cli --version "^2" --locked
+```
 
 ## Asset setup (optional but recommended)
 
@@ -49,39 +68,47 @@ Both scripts are idempotent and useful for local development/testing.
 
 ## Build and run
 
-Debug build:
+Smriti is a Tauri 2 app: the Rust engine + Tauri shell live in
+`src/` and `src-tauri/`, the Svelte 5 frontend lives in `src-ui/`.
+The `cargo tauri` CLI orchestrates both halves.
+
+Dev mode (hot reload via Vite, opens a native window):
 
 ```bash
-cargo build
-RUST_LOG=smriti=debug cargo run
+cd src-ui && npm install && cd ..   # one-time
+cargo tauri dev
 ```
 
-Release build:
+Production bundle (`.deb` + AppImage on Linux, `.msi` on Windows,
+`.dmg` / tar.gz on macOS):
 
 ```bash
-cargo build --release
-./target/release/smriti
+cargo tauri build
 ```
 
-Windows release binary:
+Engine-only build (useful when iterating on `src/` without a window):
 
-```powershell
-.\target\release\smriti.exe
+```bash
+cargo build -p smriti -p smriti-tauri
 ```
 
 ## Test and lint
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --all-targets -p smriti -p smriti-tauri -- -D warnings
+cargo test -p smriti -p smriti-tauri
+(cd src-ui && npm run check && npm run build)
 ```
 
-## Linux packaging (Ubuntu + AppImage)
+## Linux packaging (.deb + AppImage)
 
-### Ubuntu / Debian `.deb`
+The official path is `cargo tauri build` — it produces both
+`.deb` and AppImage in `src-tauri/target/release/bundle/`. Tag-driven
+CI (`.github/workflows/release.yml`) runs the same command on a
+fresh Ubuntu runner for every `v*` tag.
 
-Local build:
+For a hand-built `.deb` outside Tauri's bundler:
 
 ```bash
 cargo install cargo-deb --locked

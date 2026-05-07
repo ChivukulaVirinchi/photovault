@@ -6,13 +6,16 @@ Thanks for your interest. Contributions of all sizes are welcome.
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/photovault.git`
-3. Install Rust 1.75+: https://rustup.rs/
-4. Set up assets:
+3. Install Rust 1.85+: https://rustup.rs/
+4. Install Node 20+ (for the Svelte frontend) and the Tauri CLI:
+   `cargo install tauri-cli --version "^2" --locked`
+5. Install frontend deps: `cd src-ui && npm install && cd ..`
+6. Set up assets:
    - Linux: `./scripts/setup_assets.sh`
    - Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup_assets.ps1`
-5. Build and run: `cargo run`
-6. Create a feature branch: `git checkout -b my-feature`
-7. Make your changes, run checks, and open a PR
+7. Build and run: `cargo tauri dev`
+8. Create a feature branch: `git checkout -b my-feature`
+9. Make your changes, run checks, and open a PR
 
 ## Where to find work
 
@@ -59,42 +62,48 @@ cargo test
 
 Every PR must pass these checks before it can be merged into `master`:
 
-| Check  | What runs                                  | Where                  |
-|--------|--------------------------------------------|------------------------|
-| Format | `cargo fmt --all --check`                  | `ci.yml` `fmt`         |
-| Lint   | `cargo clippy --all-targets`               | `ci.yml` `quality` × 3 |
-| Tests  | `cargo test`                               | `ci.yml` `quality` × 3 |
-| MSRV   | `cargo check --all-targets` on Rust 1.75   | `ci.yml` `msrv`        |
-| Audit  | `cargo audit` (RUSTSEC advisories)         | `ci.yml` `audit`       |
-| Deny   | `cargo deny check` (licenses + bans)       | `ci.yml` `deny`        |
+| Check       | What runs                                          | Where                  |
+|-------------|----------------------------------------------------|------------------------|
+| Format      | `cargo fmt --all --check`                          | `ci.yml` `fmt`         |
+| Lint        | `cargo clippy --all-targets`                       | `ci.yml` `quality` × 3 |
+| Tests       | `cargo test`                                       | `ci.yml` `quality` × 3 |
+| MSRV        | `cargo check --all-targets` on Rust 1.85           | `ci.yml` `msrv`        |
+| Frontend    | `npm run check && npm run build` (Svelte + Vite)   | `ci.yml` `quality`     |
+| Audit       | `cargo audit` (RUSTSEC advisories)                 | `ci.yml` `audit`       |
+| Deny        | `cargo deny check` (licenses + bans)               | `ci.yml` `deny`        |
 
-The `quality` job runs on Linux, Windows, and macOS. All six checks must
-be green; the maintainer will not merge a red PR. Run them locally before
+The `quality` job runs on Linux, Windows, and macOS. All checks must be
+green; the maintainer will not merge a red PR. Run them locally before
 pushing — debugging in CI is slower than running locally.
 
 ```bash
 cargo fmt --all --check
-cargo clippy --all-targets
-cargo test
-cargo +1.75 check --all-targets   # MSRV
+cargo clippy --all-targets -p smriti -p smriti-tauri
+cargo test -p smriti -p smriti-tauri
+cargo +1.85 check --all-targets   # MSRV
+(cd src-ui && npm run check && npm run build)
 cargo audit                       # if installed
 cargo deny check                  # if installed
 ```
 
 ### Architecture overview
 
-- `src/db/` -- SQLite schema and repositories
-- `src/services/` -- business logic and pipelines
-- `src/ml/` -- ONNX model wrappers
-- `src/app/` -- state machine and handlers
-- `src/views/` -- UI rendering per screen
-- `src/components/` -- reusable UI primitives
+Smriti is a three-layer app:
 
-### Critical iced rules
+- **`src/`** — pure Rust engine (`smriti` library). No UI dependency.
+  - `src/db/` — SQLite schema and repositories
+  - `src/services/` — scanner, faces, duplicates, bursts, geocoding
+  - `src/ml/` — ONNX runtime wrapper, detector, embedder
+  - `src/config/`, `src/models/`, `src/scoring/`, `src/search/`
+- **`src-tauri/`** — Tauri 2 shell. One file per command domain in
+  `src-tauri/src/commands/`. The IPC contract is documented in
+  `docs/COMMAND_SURFACE.md` — both sides implement against it.
+- **`src-ui/`** — Vite + Svelte 5 frontend. Routes call the typed
+  Tauri client in `src-ui/src/lib/api/`. State lives in runes-based
+  stores under `src-ui/src/lib/stores/`.
 
-- Never use `height(Length::Fill)` inside a vertical `scrollable`.
-- A button without `on_press` is disabled and blocks child events.
-- Photo detail has an early-return render path in `src/app/views.rs`; overlays must be handled there too.
+Anything more than ~15 lines of logic in a Tauri command handler is
+a sign it should move to the engine instead.
 
 ## Pull request guidelines
 

@@ -1,18 +1,29 @@
-# Smriti — Tauri Command Surface (v1)
+# Smriti — Tauri Command Surface
 
-> **Branch:** `tauri-migration`
-> **Status:** design draft — frozen before any handler code lands
-> **Companion plan:** `~/.claude/plans/temporal-popping-micali.md`
+> **Status:** active contract. The Tauri shell (`src-tauri/`) and the
+> Svelte frontend (`src-ui/`) both implement against this document.
+> The original iced UI was removed in 2026-05; this is now the only
+> way the frontend talks to the engine.
 
 ---
 
 ## Context
 
-Smriti is currently an iced desktop app whose UI has hit its ceiling — face-grid scrolling, transitions, and lightbox interactions cannot be made fluid in iced without disproportionate effort. We're rewriting only the UI in Tauri 2 + Svelte 5; the entire Rust backend (`src/services/`, `src/db/`, `src/ml/`, `src/scoring/`, `src/search/`, `src/models/`) stays.
+Smriti's engine (`src/`) is a pure Rust library — services, DB, ML,
+search. The Tauri 2 shell (`src-tauri/`) wraps it in
+`#[tauri::command]` handlers, and the Svelte 5 frontend (`src-ui/`)
+calls those handlers via Tauri IPC.
 
-The command surface is the *only* thing the new frontend will see. Refactoring it later means touching both sides simultaneously and breaking external library consumers (we want this to grow into a small ecosystem). So we design it once, deliberately, as if it were a public API — because functionally it is.
+The command surface is the *only* thing the frontend sees. Refactoring
+it means touching both sides simultaneously and breaking any external
+library consumers (we want the engine to grow into a small ecosystem).
+So we keep it deliberate, as if it were a public API — because
+functionally it is.
 
-This document is the contract: what commands exist, what they accept, what they return, what they emit, and what errors they raise. Both the Rust handler authors and the Svelte client authors implement against this.
+This document is the contract: what commands exist, what they accept,
+what they return, what they emit, and what errors they raise. Both
+the Rust handler authors and the Svelte client authors implement
+against this.
 
 ---
 
@@ -52,7 +63,7 @@ smriti/
 └── src/                          ← unchanged Rust core (the "library")
 ```
 
-Existing `src/main.rs` (iced entry) stays for now — we keep both binaries during the migration so the iced UI remains shippable until Svelte parity. Once Svelte ships, `src/main.rs` and the entire iced UI (`src/views/`, `src/components/`, `src/app/`, `src/theme/`) are deleted.
+The migration is complete: `src/` is library-only (no `main.rs`, no UI), and the Tauri shell in `src-tauri/` is the single bin. The earlier iced UI (`src/views/`, `src/components/`, `src/app/`, `src/theme/`) was removed in 2026-05.
 
 ---
 
@@ -652,7 +663,12 @@ async fn photos_list(
 
 Anything more complex is a service-layer change, not a handler change. This keeps the boundary inspectable.
 
-**Repo extensions needed.** Some repos need cursor variants (`list_after(cursor, limit)`). We'll add these as new methods alongside the existing `get_all_by_date(limit, offset)` — old methods stay for the iced UI during migration.
+**Cursor pagination.** Repos that feed the timeline expose a
+`list_after(cursor, limit)` variant that tiebreaks `(date_taken DESC,
+id DESC)` with explicit `IS NULL` ordering, so a stable cursor can be
+carried across page boundaries. The older `get_all_by_date(limit,
+offset)` method is retained for callers that still want offset
+semantics (insights, exports).
 
 ---
 
@@ -670,7 +686,7 @@ Anything more complex is a service-layer change, not a handler change. This keep
 
 ## Out of scope for this doc
 
-- Actual Tauri scaffolding (`tauri init`, `tauri.conf.json` content) — the next plan
-- Svelte side (routing, components, virtualization) — a separate plan
-- Removing the iced UI — that's the *last* migration step, after Svelte parity
-- Cross-platform installer changes — already handled by existing `cargo-dist` setup; Tauri sidecar config will be a separate small plan
+- Tauri scaffolding (`tauri.conf.json`, capabilities) — see `src-tauri/`
+- Svelte routing / components / virtualization — see `src-ui/`
+- Cross-platform installer pipeline — see
+  `.github/workflows/release.yml` (Tauri-bundler driven)
