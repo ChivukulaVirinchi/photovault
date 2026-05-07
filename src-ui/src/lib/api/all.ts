@@ -59,6 +59,9 @@ export const people = {
       cursor,
       limit,
     }),
+  /// Photos that haven't yet had face detection — drives the resume banner.
+  pendingFaceCount: () =>
+    call<{ pending_photos: number }>("people_pending_face_count"),
 };
 
 export interface ReviewItem {

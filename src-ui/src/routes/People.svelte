@@ -10,6 +10,7 @@
 
   let clusters = $state<PersonDto[]>([]);
   let error = $state<string | null>(null);
+  let pendingPhotos = $state(0);
   // Engine emits a `chunks_flushed` counter that bumps every time the
   // writer thread commits a batch to disk. We track the last value the
   // page reloaded against and refetch whenever it advances — that's how
@@ -32,6 +33,15 @@
       clusters = await people.list({ minPhotos: 2 });
     } catch (e) {
       error = JSON.stringify(e);
+    }
+  }
+
+  async function loadPending() {
+    try {
+      const r = await people.pendingFaceCount();
+      pendingPhotos = r.pending_photos;
+    } catch {
+      // silent — banner just hides
     }
   }
 
@@ -84,7 +94,18 @@
     }
   });
 
-  onMount(load);
+  onMount(() => {
+    load();
+    loadPending();
+  });
+
+  // Refresh pending count when a face job completes (so the banner
+  // reflects what's actually left after the run).
+  $effect(() => {
+    if (facesJob?.status === "complete") {
+      loadPending();
+    }
+  });
 </script>
 
 <PageHeader title="People">
@@ -105,6 +126,19 @@
 {#if running && facesJob && progressPct != null}
   <div class="progress" aria-label="Face detection progress">
     <div class="bar"><div class="fill" style="width: {progressPct}%"></div></div>
+  </div>
+{/if}
+
+{#if !running && pendingPhotos > 0}
+  <div class="resume-banner">
+    <div class="resume-text">
+      <strong>{pendingPhotos.toLocaleString()}</strong>
+      photo{pendingPhotos === 1 ? "" : "s"} still need face detection.
+      <span class="hint">
+        Pick up where you left off — works even if you moved the drive from another machine.
+      </span>
+    </div>
+    <button class="primary" onclick={startFaceProcessing}>Resume detection</button>
   </div>
 {/if}
 
@@ -174,6 +208,33 @@
     background: var(--accent);
     transition: width 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
   }
+  .resume-banner {
+    margin: var(--s-3) var(--s-7) var(--s-2);
+    padding: var(--s-3) var(--s-4);
+    border: 1px solid color-mix(in oklab, var(--line) 60%, var(--accent) 40%);
+    background: color-mix(in oklab, var(--bg-card) 80%, var(--accent) 20%);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+  }
+  .resume-banner .resume-text {
+    flex: 1;
+    color: var(--ink);
+    font-size: var(--t-sm);
+  }
+  .resume-banner .resume-text strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .resume-banner .resume-text .hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    line-height: 1.4;
+  }
+
   .empty {
     padding: var(--s-9) var(--s-5);
     text-align: center;

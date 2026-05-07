@@ -276,6 +276,11 @@ impl From<FaceClusterRecord> for PersonDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingFaceCountDto {
+    pub pending_photos: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReviewItemDto {
     pub queue_id: i64,
     pub face_id: i64,

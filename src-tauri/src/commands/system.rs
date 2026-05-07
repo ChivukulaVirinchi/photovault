@@ -49,49 +49,131 @@ pub async fn system_open_in_explorer(
 /// Reveal a file in the platform's file manager — selecting the file
 /// itself, not just opening the containing folder.
 ///
-/// Both branches set `current_dir("/")` because on Fedora 40+ / modern
-/// GNOME the default `xdg-open` flow can be wrapped in
-/// `systemd-run --scope --user`, which inherits Tauri's cwd. If that
-/// inherited cwd is anything systemd considers non-absolute the launch
-/// fails with `WorkingDirectory= expects an absolute path or '~'`.
-/// Pinning cwd to `/` defuses the entire class of issues.
+/// On modern GNOME / Fedora the naïve path (`xdg-open` → `gio open`)
+/// creates a transient `systemd-run --scope --user` unit whose
+/// `WorkingDirectory=` is sourced from glib's launch context, *not*
+/// from the kernel-inherited cwd of the spawning process. So just
+/// pinning `Command::current_dir("/")` on `xdg-open` doesn't reach
+/// the failing systemd call. We bypass `xdg-open` / `gio` entirely:
+/// first try the canonical D-Bus interface synchronously, then exec
+/// known file manager binaries directly with `setsid` to escape our
+/// process-group / cgroup scope.
 #[cfg(target_os = "linux")]
 fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
-    use std::process::Command;
-    // Resolve to absolute — `file://` URIs need absolute paths and the
-    // canonicalised form survives downstream pickup.
+    use std::collections::HashSet;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // org.freedesktop.FileManager1.ShowItems is the canonical interface
-    // implemented by Nautilus, Nemo, Dolphin, Caja, Thunar, and others.
+    let parent = abs
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| abs.clone());
     let uri = format!("file://{}", abs.display());
-    let dbus_status = Command::new("dbus-send")
-        .current_dir("/")
+
+    // Build a Command that's fully detached from our cgroup / session:
+    //   - cwd pinned to "/" so any process that *does* read it sees an
+    //     absolute path
+    //   - stdio nulled so child output doesn't leak into our terminal
+    //   - pre_exec calls setsid() in the forked child, putting it into
+    //     a brand-new session — escapes the systemd user scope that
+    //     wraps our Tauri process
+    let detached = |program: &str| -> Command {
+        let mut cmd = Command::new(program);
+        cmd.current_dir("/")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: setsid() is async-signal-safe. The child is in a
+        // freshly-forked state where only this closure runs before
+        // exec; no other threads, no allocator state to corrupt.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        cmd
+    };
+
+    // Step 1: gdbus call to org.freedesktop.FileManager1.ShowItems.
+    // `gdbus call` is synchronous (waits for reply) and propagates
+    // D-Bus errors via non-zero exit, which lets us distinguish
+    // "service not registered" from "succeeded".
+    let array = format!("['{}']", uri.replace('\'', "\\'"));
+    let gdbus = detached("gdbus")
         .args([
+            "call",
             "--session",
-            "--dest=org.freedesktop.FileManager1",
-            "--type=method_call",
+            "--dest",
+            "org.freedesktop.FileManager1",
+            "--object-path",
             "/org/freedesktop/FileManager1",
+            "--method",
             "org.freedesktop.FileManager1.ShowItems",
-            &format!("array:string:{}", uri),
-            "string:",
+            &array,
+            "",
         ])
         .status();
-    if matches!(dbus_status, Ok(s) if s.success()) {
+    if matches!(gdbus, Ok(s) if s.success()) {
         return Ok(());
     }
-    // Fallback: open the parent directory in the default file manager.
-    // Using `xdg-open` directly (instead of the `open` crate) so we
-    // can pin cwd; the `open` crate doesn't expose that knob.
-    let parent = abs.parent().unwrap_or(&abs);
-    let status = Command::new("xdg-open")
-        .current_dir("/")
-        .arg(parent)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other("xdg-open exited non-zero"))
+
+    // Step 2: probe `xdg-mime query default inode/directory` for the
+    // user's preferred file manager .desktop id, then exec the
+    // matching binary directly. Skip xdg-open / gio open entirely.
+    let preferred = Command::new("xdg-mime")
+        .args(["query", "default", "inode/directory"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    // (.desktop id substring, binary, optional select flag).
+    // Order: most common first; preferred-by-xdg-mime wins via the
+    // sort below regardless of position here.
+    let known: &[(&str, &str, Option<&str>)] = &[
+        ("nautilus", "nautilus", Some("--select")),
+        ("dolphin", "dolphin", Some("--select")),
+        ("nemo", "nemo", None),
+        ("thunar", "thunar", None),
+        ("caja", "caja", None),
+        ("pcmanfm", "pcmanfm", None),
+        ("dde-file-manager", "dde-file-manager", Some("--show-item")),
+        ("io.elementary.files", "io.elementary.files", None),
+    ];
+
+    // Try the user's preferred FM first, then the rest in declared order.
+    let mut tried: HashSet<&str> = HashSet::new();
+    let order = known
+        .iter()
+        .filter(|(id, _, _)| !preferred.is_empty() && preferred.contains(id))
+        .chain(known.iter().filter(|(id, _, _)| !preferred.contains(id)));
+
+    for (_, bin, flag) in order {
+        if !tried.insert(bin) {
+            continue;
+        }
+        let mut cmd = detached(bin);
+        match flag {
+            Some(f) => {
+                cmd.arg(f).arg(&abs);
+            }
+            None => {
+                // No --select equivalent: open the parent directory.
+                cmd.arg(&parent);
+            }
+        }
+        // spawn (don't wait) — file managers are long-lived GUI apps;
+        // setsid above means orphaning is fine.
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
     }
+
+    Err(std::io::Error::other(
+        "no Linux file manager found (tried gdbus FileManager1, nautilus, dolphin, nemo, thunar, caja, pcmanfm, dde-file-manager)",
+    ))
 }
 
 #[cfg(target_os = "macos")]

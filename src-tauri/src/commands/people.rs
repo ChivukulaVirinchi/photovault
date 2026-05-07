@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, State};
 
 use smriti::db::face_repo::FaceRepo;
 
-use crate::dto::{JobIdDto, PersonDto, ReviewItemDto};
+use crate::dto::{JobIdDto, PendingFaceCountDto, PersonDto, ReviewItemDto};
 use crate::events::{EV_FACES_COMPLETE, EV_FACES_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
@@ -39,6 +39,19 @@ pub async fn people_list(
     }
     repo.populate_face_thumbnails(&mut clusters, &lib.drive_root)?;
     Ok(clusters.into_iter().map(Into::into).collect())
+}
+
+/// Count of photos with `faces_processed = FALSE`. Drives the
+/// "Resume face detection" banner on the People page.
+#[tauri::command]
+pub async fn people_pending_face_count(
+    state: State<'_, AppState>,
+) -> CommandResult<PendingFaceCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let pending_photos = FaceRepo::new(&db.conn).count_pending_face_processing()?;
+    Ok(PendingFaceCountDto { pending_photos })
 }
 
 #[derive(Debug, Deserialize)]

@@ -64,7 +64,14 @@
               <Loader2 class="spin" size={13} strokeWidth={2} />
               <span class="t">{j.title}</span>
               {#if p != null}<span class="pct mono">{p}%</span>{/if}
-              <button class="icon-btn cancel" onclick={() => cancelJob(j)} aria-label="Cancel" title="Cancel">
+              <button
+                class="icon-btn cancel"
+                onclick={() => cancelJob(j)}
+                aria-label={j.kind === "faces" ? "Pause" : "Cancel"}
+                title={j.kind === "faces"
+                  ? "Pause — resume later, even after moving the drive to another machine"
+                  : "Cancel"}
+              >
                 <X size={12} strokeWidth={2} />
               </button>
             </div>

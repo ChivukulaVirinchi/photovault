@@ -5082,6 +5082,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "kamadak-exif",
+ "libc",
  "open",
  "rusqlite",
  "serde",

@@ -16,6 +16,16 @@ type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
 type UnprocessedPhotoRow = (i64, String, i32, Option<i64>, String);
 
 impl<'a> FaceRepo<'a> {
+    /// Count of photos that haven't yet had face detection run. Drives
+    /// the "Resume face detection" banner on the People page.
+    pub fn count_pending_face_processing(&self) -> SqliteResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM photos WHERE faces_processed = FALSE AND is_trashed = FALSE",
+            [],
+            |row| row.get(0),
+        )
+    }
+
     /// Get unclustered faces with photo_id and embeddings.
     pub fn get_unclustered_faces_with_photo_embeddings(
         &self,

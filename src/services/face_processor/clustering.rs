@@ -367,10 +367,7 @@ impl FaceProcessor {
     fn merge_similar_clusters(face_repo: &FaceRepo) -> Result<usize, String> {
         // Tunable: how aggressively to unify fragments. Higher = safer.
         // Mean of top-3 cross-cluster similarities above this -> merge.
-        // 0.68 is the bar at which two clusters are confidently the same
-        // person. Lower values silently merged distinct people whose
-        // gallery shots happened to share lighting / angle / accessories.
-        const MERGE_THRESHOLD: f32 = 0.68;
+        const MERGE_THRESHOLD: f32 = 0.55;
         const TOP_K_PAIRS: usize = 3;
 
         let galleries = face_repo

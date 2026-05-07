@@ -67,6 +67,7 @@ pub fn run() {
             commands::people::people_cancel_processing,
             commands::people::people_reset_all,
             commands::people::people_reset_clusters,
+            commands::people::people_pending_face_count,
             // albums
             commands::albums::albums_list,
             commands::albums::albums_get,

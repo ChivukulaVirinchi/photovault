@@ -54,14 +54,16 @@ pub struct BandingConfig {
 
 impl Default for BandingConfig {
     fn default() -> Self {
-        // Cosine bars for ArcFace / glintr100 L2-normalized embeddings.
-        // 0.62 / 0.12 is calibrated to push borderline matches into the
-        // review queue rather than auto-assigning them — at 0.55 / 0.08
-        // hard-similar pairs (siblings, glasses-wearers, similar lighting)
-        // were sailing through the HIGH band silently.
+        // Tuned to err toward the review queue. A face gets auto-assigned
+        // only when its mean top-K cosine to a cluster's gallery is ≥ 0.65
+        // AND beats the runner-up cluster by ≥ 0.12. Anything weaker goes
+        // to AMBIGUOUS — the user confirms via PersonReview, and that
+        // confirmed face becomes a sticky `user_confirmed` gallery exemplar
+        // that drives all future retrievals. Better to ask twice than to
+        // silently misclassify.
         Self {
             low_threshold: 0.40,
-            high_threshold: 0.62,
+            high_threshold: 0.65,
             margin: 0.12,
         }
     }
