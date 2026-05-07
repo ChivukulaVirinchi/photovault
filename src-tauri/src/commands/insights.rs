@@ -20,13 +20,13 @@ pub async fn insights_compute(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let mut data = photovault::services::insights::compute(&db.conn, args.year)?;
+    let mut data = smriti::services::insights::compute(&db.conn, args.year)?;
 
     // Resolve the hero photo's thumbnail path (relative). Mirrors the
     // photo_request_thumbnail layout so the frontend's thumbUrl helper
     // resolves it without an extra round-trip.
     if let Some(hero_id) = data.hero_photo_id {
-        let repo = photovault::db::PhotoRepo::new(&db.conn);
+        let repo = smriti::db::PhotoRepo::new(&db.conn);
         if let Ok(Some(photo)) = repo.get_by_id(hero_id) {
             data.hero_thumbnail_path = photo.thumbnail_path;
         }

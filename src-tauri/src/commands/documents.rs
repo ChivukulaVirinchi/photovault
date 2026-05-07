@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use tauri::State;
 
-use photovault::db::document_repo::DocumentRepo;
+use smriti::db::document_repo::DocumentRepo;
 
 use crate::dto::{ContentCategoryDto, Page, PhotoSummaryDto};
 use crate::pagination;
@@ -40,9 +40,9 @@ pub async fn documents_list(
             // results from each requested category. Capped by `limit`
             // overall — first-come ordering, since the per-call SQL
             // already orders by date_taken DESC.
-            let mut all: Vec<photovault::models::Photo> = Vec::new();
+            let mut all: Vec<smriti::models::Photo> = Vec::new();
             for c in cats {
-                let name = photovault::models::ContentCategory::from(c)
+                let name = smriti::models::ContentCategory::from(c)
                     .as_str()
                     .to_string();
                 let rows = repo.get_documents_by_category(&name, limit, offset)?;
@@ -127,7 +127,7 @@ pub async fn documents_set_category(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let cat = photovault::models::ContentCategory::from(args.category);
+    let cat = smriti::models::ContentCategory::from(args.category);
     DocumentRepo::new(&db.conn).update_content_category(args.photo_id, cat.as_str())?;
     Ok(())
 }

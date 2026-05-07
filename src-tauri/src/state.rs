@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use photovault::db::Database;
-use photovault::services::thumbnail::ThumbnailService;
+use smriti::db::Database;
+use smriti::services::thumbnail::ThumbnailService;
 use tokio::sync::{Mutex, RwLock};
 
 pub struct AppState {
@@ -59,7 +59,7 @@ impl OpenLibrary {
         // the config file is missing or corrupt — same default as the
         // setting's bottom value, so users on small disks aren't
         // surprised after a fresh install.
-        let cfg = photovault::config::AppConfig::load();
+        let cfg = smriti::config::AppConfig::load();
         let svc = ThumbnailService::new(drive_root, cfg.thumbnail_cache_gb)?;
         let _ = svc.load_existing_thumbnails();
         Ok(Arc::new(svc))

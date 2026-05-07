@@ -6,6 +6,8 @@
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
+  import smritiLogo from "../../assets/smriti-logo.svg";
+  import smritiLogomark from "../../assets/smriti-logomark.svg";
 
   interface Props { current: string }
   let { current }: Props = $props();
@@ -91,8 +93,10 @@
         <ChevronLeft size={14} strokeWidth={1.75} />
       {/if}
     </button>
-    {#if !collapsed}
-      <span class="brand">PhotoVault</span>
+    {#if collapsed}
+      <img src={smritiLogomark} alt="Smriti" class="brand-logomark" />
+    {:else}
+      <img src={smritiLogo} alt="Smriti" class="brand-wordmark" />
     {/if}
   </header>
 
@@ -191,14 +195,19 @@
     border-color: transparent;
   }
 
-  .brand {
-    font-family: var(--font-display);
-    font-variation-settings: "opsz" 24, "wdth" 100;
-    font-weight: 600;
-    font-size: var(--t-lg);
-    letter-spacing: -0.025em;
-    color: var(--ink);
-    line-height: 1;
+  /* Wordmark for the expanded sidebar — fixed visual height so the
+     header doesn't shift when the SVG loads. */
+  .brand-wordmark {
+    height: 28px;
+    width: auto;
+    display: block;
+  }
+  /* Square logomark for the collapsed sidebar — fits inside the same
+     header without the text wordmark's width. */
+  .brand-logomark {
+    width: 26px;
+    height: 26px;
+    display: block;
   }
 
   nav {

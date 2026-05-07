@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::db::burst_repo::BurstRepo;
+use smriti::db::burst_repo::BurstRepo;
 
 use crate::dto::{BurstGroupDto, BurstGroupSummaryDto, BurstMemberDto, JobIdDto};
 use crate::events::{JobProgress, EV_BURSTS_COMPLETE, EV_BURSTS_PROGRESS};
@@ -95,8 +95,7 @@ pub async fn bursts_trash_non_best(
     let db = lib.db.lock().await;
     let repo = BurstRepo::new(&db.conn);
     let to_trash = repo.get_photos_to_trash(args.group_id)?;
-    let trashed =
-        photovault::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
+    let trashed = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
     repo.delete_group(args.group_id)?;
     Ok(BurstsCountResultDto { count: trashed })
 }
@@ -155,24 +154,24 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
         },
     );
 
-    let cfg = photovault::config::AppConfig::load();
-    let burst_cfg = photovault::services::burst_detector::BurstConfig {
+    let cfg = smriti::config::AppConfig::load();
+    let burst_cfg = smriti::services::burst_detector::BurstConfig {
         max_gap_seconds: cfg.burst_time_window_seconds,
         ..Default::default()
     };
     // ThumbnailService v2 layout: <drive>/.photovault/thumbnails/small/v2/<2hash>/<hash>.jpg
     let thumbs_root = drive_root.join(".photovault/thumbnails/small/v2");
 
-    let db_path = photovault::db::db_path_for(&drive_root);
+    let db_path = smriti::db::db_path_for(&drive_root);
     tokio::task::spawn_blocking(move || {
-        let conn = match photovault::db::open_secondary(&db_path) {
+        let conn = match smriti::db::open_secondary(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("bursts: open secondary DB failed: {}", e);
                 return;
             }
         };
-        let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
+        let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
         let groups = detector
             .find_bursts(&conn, Some(&drive_root), Some(&thumbs_root))
             .unwrap_or_default();

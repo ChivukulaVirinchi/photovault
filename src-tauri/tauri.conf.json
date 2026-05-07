@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PhotoVault",
+  "productName": "Smriti",
   "version": "0.2.0",
-  "identifier": "dev.photovault.app",
+  "identifier": "in.smriti.app",
   "build": {
     "beforeDevCommand": "npm run dev --prefix ../src-ui",
     "beforeBuildCommand": "npm run build --prefix ../src-ui",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PhotoVault",
+        "title": "Smriti",
         "width": 1280,
         "height": 800,
         "minWidth": 800,
@@ -50,7 +50,7 @@
     "copyright": "2026, Virinchi Chivukula",
     "category": "Photography",
     "shortDescription": "Offline-first photo library manager",
-    "longDescription": "PhotoVault organizes your photos locally — face recognition, smart albums, full-text search, and a portable per-drive index. Nothing is uploaded anywhere.",
+    "longDescription": "Smriti organizes your photos locally — face recognition, smart albums, full-text search, and a portable per-drive index. Nothing is uploaded anywhere.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -9,8 +9,8 @@ use std::sync::atomic::Ordering;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::db::Database;
-use photovault::services::drive_detector::DriveDetector;
+use smriti::db::Database;
+use smriti::services::drive_detector::DriveDetector;
 
 use crate::dto::{DriveDto, IndexChangesDto, JobIdDto, LibraryHandleDto};
 use crate::events::{EV_SCAN_COMPLETE, EV_SCAN_PROGRESS, EV_THUMBNAILS_PROGRESS};
@@ -35,7 +35,7 @@ pub async fn library_current(
         return Ok(None);
     };
     let db = lib.db.lock().await;
-    let repo = photovault::db::PhotoRepo::new(&db.conn);
+    let repo = smriti::db::PhotoRepo::new(&db.conn);
     let photo_count = repo.count()?;
     Ok(Some(LibraryHandleDto {
         drive_root: lib.drive_root.display().to_string(),
@@ -61,7 +61,7 @@ pub async fn library_resolve_path(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let repo = photovault::db::PhotoRepo::new(&db.conn);
+    let repo = smriti::db::PhotoRepo::new(&db.conn);
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
@@ -76,7 +76,7 @@ pub async fn library_detect_changes(state: State<'_, AppState>) -> CommandResult
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let reindexer = photovault::services::reindexer::Reindexer::new();
+    let reindexer = smriti::services::reindexer::Reindexer::new();
     let changes = reindexer.detect_changes(&db.conn, &lib.drive_root)?;
     Ok(IndexChangesDto {
         added: changes.added.len() as u64,
@@ -115,16 +115,14 @@ pub async fn library_open(
     let database = Database::open_for_drive(&drive_root)?;
     let needs_schema = database.needs_schema()?;
     if needs_schema {
-        photovault::db::create_schema(&database.conn)?;
+        smriti::db::create_schema(&database.conn)?;
     }
-    photovault::db::migrations::run_migrations(&database.conn).map_err(|e| {
-        CommandError::Database {
-            message: e.to_string(),
-        }
+    smriti::db::migrations::run_migrations(&database.conn).map_err(|e| CommandError::Database {
+        message: e.to_string(),
     })?;
 
     let photo_count = {
-        let repo = photovault::db::PhotoRepo::new(&database.conn);
+        let repo = smriti::db::PhotoRepo::new(&database.conn);
         repo.count()?
     };
 
@@ -185,7 +183,7 @@ pub async fn library_apply_changes(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let reindexer = photovault::services::reindexer::Reindexer::new();
+    let reindexer = smriti::services::reindexer::Reindexer::new();
     let mut changes = reindexer.detect_changes(&db.conn, &lib.drive_root)?;
     if !args.added {
         changes.added.clear();
@@ -283,7 +281,7 @@ pub async fn library_start_scan(
 
     tokio::spawn(async move {
         // Bridge the photovault scanner channel → Tauri events.
-        let (rx, scanner_cancel, handle) = photovault::services::scanner::start_scan(
+        let (rx, scanner_cancel, handle) = smriti::services::scanner::start_scan(
             drive_root_clone.clone(),
             database,
             args.scan_hidden_folders,
@@ -430,31 +428,31 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
     // Open a secondary connection so we don't compete with foreground
     // photos_list / albums queries for the shared Arc<Mutex<Database>>.
     // SQLite WAL handles the concurrent reader/writer.
-    let db_path = photovault::db::db_path_for(&drive_root);
+    let db_path = smriti::db::db_path_for(&drive_root);
 
     let drive_for_dups = drive_root.clone();
     let db_path_for_dups = db_path.clone();
     let dups = tokio::task::spawn_blocking(move || {
-        let conn = match photovault::db::open_secondary(&db_path_for_dups) {
+        let conn = match smriti::db::open_secondary(&db_path_for_dups) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("post-scan dups: open secondary DB failed: {}", e);
                 return 0u64;
             }
         };
-        let exact =
-            photovault::services::duplicate_detector::DuplicateDetector::find_duplicates(&conn)
-                .unwrap_or_default();
+        let exact = smriti::services::duplicate_detector::DuplicateDetector::find_duplicates(&conn)
+            .unwrap_or_default();
         let exclude_ids: std::collections::HashSet<i64> = exact
             .iter()
             .flat_map(|g| g.photo_ids.iter().copied())
             .collect();
-        let perc = photovault::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
-            &conn,
-            &drive_for_dups,
-            &exclude_ids,
-        )
-        .unwrap_or_default();
+        let perc =
+            smriti::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
+                &conn,
+                &drive_for_dups,
+                &exclude_ids,
+            )
+            .unwrap_or_default();
         let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
             Vec::with_capacity(exact.len() + perc.len());
         for g in exact.iter().chain(perc.iter()) {
@@ -465,7 +463,7 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
                 g.duplicate_type,
             ));
         }
-        let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
+        let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
         let _ = repo.sync_duplicate_groups(&to_persist);
         (exact.len() + perc.len()) as u64
     })
@@ -476,19 +474,19 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
     let drive_for_bursts = drive_root.clone();
     let db_path_for_bursts = db_path.clone();
     let bursts = tokio::task::spawn_blocking(move || {
-        let conn = match photovault::db::open_secondary(&db_path_for_bursts) {
+        let conn = match smriti::db::open_secondary(&db_path_for_bursts) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("post-scan bursts: open secondary DB failed: {}", e);
                 return 0u64;
             }
         };
-        let cfg = photovault::config::AppConfig::load();
-        let burst_cfg = photovault::services::burst_detector::BurstConfig {
+        let cfg = smriti::config::AppConfig::load();
+        let burst_cfg = smriti::services::burst_detector::BurstConfig {
             max_gap_seconds: cfg.burst_time_window_seconds,
             ..Default::default()
         };
-        let detector = photovault::services::burst_detector::BurstDetector::new(burst_cfg);
+        let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
         let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
         let groups = detector
             .find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root))
@@ -503,7 +501,7 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
                 )
             })
             .collect();
-        let repo = photovault::db::burst_repo::BurstRepo::new(&conn);
+        let repo = smriti::db::burst_repo::BurstRepo::new(&conn);
         let _ = repo.sync_burst_groups(&triples);
         groups.len() as u64
     })

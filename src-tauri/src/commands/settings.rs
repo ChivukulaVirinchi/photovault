@@ -7,7 +7,7 @@ use crate::{CommandError, CommandResult};
 
 #[tauri::command]
 pub async fn settings_get() -> CommandResult<SettingsDto> {
-    let cfg = photovault::config::AppConfig::load();
+    let cfg = smriti::config::AppConfig::load();
     Ok((&cfg).into())
 }
 
@@ -37,8 +37,8 @@ pub struct SettingsUpdateArgs {
 
 #[tauri::command]
 pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<SettingsDto> {
-    use photovault::config::{AppTheme, DateFormat};
-    let mut cfg = photovault::config::AppConfig::load();
+    use smriti::config::{AppTheme, DateFormat};
+    let mut cfg = smriti::config::AppConfig::load();
     if let Some(t) = args.theme {
         cfg.theme = match t.as_str() {
             "dark" => AppTheme::Dark,

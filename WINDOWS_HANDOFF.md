@@ -19,7 +19,7 @@ Use this file from a Windows PowerShell session in the same repo.
 
 - `cargo build --release --target x86_64-pc-windows-msvc --target-dir .\\target-win` succeeded from Windows PowerShell on UNC repo path.
 - MSI build succeeded after moving WiX packaging step to a local NTFS staging folder and using `--target-bin-dir`.
-- MSI was produced and copied back to `target\\wix\\PhotoVault-Setup-x64.msi` in the repo.
+- MSI was produced and copied back to `target\\wix\\Smriti-Setup-x64.msi` in the repo.
 - User install flow works as expected when launching MSI from a local path (for example Downloads) with UAC elevation.
 - Silent install from a non-elevated shell fails with `Error 1925` (expected for per-machine install).
 
@@ -33,19 +33,19 @@ Use this file from a Windows PowerShell session in the same repo.
   - `packaging/wix-license.rtf` (generated from project `LICENSE`)
 - `wix/main.wxs` now sets WiX UI variables (`WixUIBannerBmp`, `WixUIDialogBmp`, `WixUILicenseRtf`) and `WIXUI_INSTALLDIR`.
 
-This should address the previous issues where setup looked generic and did not visibly present PhotoVault branding.
+This should address the previous issues where setup looked generic and did not visibly present Smriti branding.
 
 ## Asset installer 404 clarification
 
-- Local/dev runs can return 404 for asset download when no published release contains `PhotoVault-Assets.zip` yet.
+- Local/dev runs can return 404 for asset download when no published release contains `Smriti-Assets.zip` yet.
 - This is expected if the release is still draft or has not been published.
 - For local testing, set:
 
 ```powershell
-$env:PHOTOVAULT_ASSET_PACK_PATH = "C:\path\to\PhotoVault-Assets.zip"
+$env:PHOTOVAULT_ASSET_PACK_PATH = "C:\path\to\Smriti-Assets.zip"
 ```
 
-App now also attempts a version-pinned fallback URL (`.../releases/download/v<app-version>/PhotoVault-Assets.zip`) after trying `releases/latest`.
+App now also attempts a version-pinned fallback URL (`.../releases/download/v<app-version>/Smriti-Assets.zip`) after trying `releases/latest`.
 
 ## Primary objective
 
@@ -83,9 +83,9 @@ Expected host: `x86_64-pc-windows-msvc`
 $TargetDir = ".\target-win"
 cargo build --release --target x86_64-pc-windows-msvc --target-dir $TargetDir
 
-$exe = Join-Path $TargetDir "x86_64-pc-windows-msvc\release\photovault.exe"
+$exe = Join-Path $TargetDir "x86_64-pc-windows-msvc\release\smriti.exe"
 if (-not (Test-Path $exe)) {
-  $exe = (Get-ChildItem -Recurse -Filter photovault.exe $TargetDir | Select-Object -First 1).FullName
+  $exe = (Get-ChildItem -Recurse -Filter smriti.exe $TargetDir | Select-Object -First 1).FullName
 }
 
 $exe
@@ -140,22 +140,22 @@ New-Item -ItemType Directory -Path $LocalRepo | Out-Null
 robocopy $RepoUNC $LocalRepo /MIR /XD .git target target-win .github website .cache libs models data /NFL /NDL /NJH /NJS /NP | Out-Null
 
 # Reuse already built EXE from UNC build output
-$srcExe = Join-Path $RepoUNC "target-win\x86_64-pc-windows-msvc\release\photovault.exe"
+$srcExe = Join-Path $RepoUNC "target-win\x86_64-pc-windows-msvc\release\smriti.exe"
 $dstBinDir = Join-Path $LocalRepo "target-win\x86_64-pc-windows-msvc\release"
 New-Item -ItemType Directory -Path $dstBinDir -Force | Out-Null
-Copy-Item $srcExe (Join-Path $dstBinDir "photovault.exe") -Force
+Copy-Item $srcExe (Join-Path $dstBinDir "smriti.exe") -Force
 
 Set-Location $LocalRepo
 
-cargo wix --no-build --target x86_64-pc-windows-msvc --target-bin-dir "$dstBinDir" --bin-path "$wixBin" --output target\wix\PhotoVault-Setup-x64.msi
+cargo wix --no-build --target x86_64-pc-windows-msvc --target-bin-dir "$dstBinDir" --bin-path "$wixBin" --output target\wix\Smriti-Setup-x64.msi
 
 # Copy MSI back to repo target folder
 $repoWix = Join-Path $RepoUNC "target\wix"
 New-Item -ItemType Directory -Path $repoWix -Force | Out-Null
-Copy-Item .\target\wix\PhotoVault-Setup-x64.msi (Join-Path $repoWix "PhotoVault-Setup-x64.msi") -Force
+Copy-Item .\target\wix\Smriti-Setup-x64.msi (Join-Path $repoWix "Smriti-Setup-x64.msi") -Force
 
-Test-Path (Join-Path $repoWix "PhotoVault-Setup-x64.msi")
-Get-Item (Join-Path $repoWix "PhotoVault-Setup-x64.msi")
+Test-Path (Join-Path $repoWix "Smriti-Setup-x64.msi")
+Get-Item (Join-Path $repoWix "Smriti-Setup-x64.msi")
 ```
 
 Expected: MSI exists.
@@ -163,8 +163,8 @@ Expected: MSI exists.
 ### 6) Install (real user flow) + verify + launch
 
 ```powershell
-$msiUNC = "\\wsl.localhost\Ubuntu-24.04\home\virinchi\code\rust\photovault\target\wix\PhotoVault-Setup-x64.msi"
-$msiLocal = Join-Path $env:USERPROFILE "Downloads\PhotoVault-Setup-x64.msi"
+$msiUNC = "\\wsl.localhost\Ubuntu-24.04\home\virinchi\code\rust\photovault\target\wix\Smriti-Setup-x64.msi"
+$msiLocal = Join-Path $env:USERPROFILE "Downloads\Smriti-Setup-x64.msi"
 Copy-Item $msiUNC $msiLocal -Force
 
 # Optional: remove Mark-of-the-Web if present
@@ -173,8 +173,8 @@ Unblock-File $msiLocal -ErrorAction SilentlyContinue
 # Open local folder and double-click MSI in Explorer (recommended user test)
 explorer.exe /select,$msiLocal
 
-Test-Path "$env:ProgramFiles\PhotoVault\photovault.exe"
-& "$env:ProgramFiles\PhotoVault\photovault.exe"
+Test-Path "$env:ProgramFiles\Smriti\smriti.exe"
+& "$env:ProgramFiles\Smriti\smriti.exe"
 ```
 
 Expected:
@@ -187,11 +187,11 @@ Expected:
 ### 7) Validate Start Menu + uninstall entry
 
 ```powershell
-Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk"
+Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Smriti\Smriti.lnk"
 
 Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
   ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
-  Where-Object { $_.DisplayName -eq "PhotoVault" } |
+  Where-Object { $_.DisplayName -eq "Smriti" } |
   Select-Object DisplayName, DisplayVersion, Publisher
 ```
 
@@ -200,14 +200,14 @@ Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
 Recommended user test:
 
 - Open `Settings -> Apps -> Installed apps`.
-- Uninstall `PhotoVault`.
+- Uninstall `Smriti`.
 
 CLI equivalent:
 
 ```powershell
 Start-Process msiexec.exe -ArgumentList "/x `"$msiLocal`" /qn /norestart" -Wait -PassThru
-Test-Path "$env:ProgramFiles\PhotoVault\photovault.exe"
-Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\PhotoVault\PhotoVault.lnk"
+Test-Path "$env:ProgramFiles\Smriti\smriti.exe"
+Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Smriti\Smriti.lnk"
 ```
 
 Expected final value: `False`.
@@ -222,8 +222,8 @@ where.exe cargo
 cargo -Vv
 rustc -Vv
 
-Get-ChildItem -Recurse -Filter photovault.exe .\target, .\target-win -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime
-Get-ChildItem -Recurse -Filter PhotoVault-Setup-x64.msi .\target, .\target-win -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime
+Get-ChildItem -Recurse -Filter smriti.exe .\target, .\target-win -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime
+Get-ChildItem -Recurse -Filter Smriti-Setup-x64.msi .\target, .\target-win -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime
 
 Test-Path "C:\tools\wix311\candle.exe"
 Test-Path "C:\tools\wix311\light.exe"

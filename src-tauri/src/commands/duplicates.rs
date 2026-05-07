@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::db::duplicate_repo::DuplicateRepo;
-use photovault::services::duplicate_detector::DuplicateDetector;
+use smriti::db::duplicate_repo::DuplicateRepo;
+use smriti::services::duplicate_detector::DuplicateDetector;
 
 use crate::dto::{DuplicateGroupDto, DuplicateGroupSummaryDto, DuplicateMemberDto, JobIdDto};
 use crate::events::{JobProgress, EV_DUPLICATES_COMPLETE, EV_DUPLICATES_PROGRESS};
@@ -106,8 +106,7 @@ pub async fn duplicates_trash_others(
     let db = lib.db.lock().await;
     let repo = DuplicateRepo::new(&db.conn);
     let to_trash = repo.get_photos_to_trash(args.group_id)?;
-    let trashed =
-        photovault::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
+    let trashed = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
     repo.delete_group(args.group_id)?;
     Ok(CountResultDto { count: trashed })
 }
@@ -167,7 +166,7 @@ pub async fn duplicates_run(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         lib.drive_root.clone()
     };
-    let db_path = photovault::db::db_path_for(&drive_root);
+    let db_path = smriti::db::db_path_for(&drive_root);
 
     emit(
         &app_clone,
@@ -184,7 +183,7 @@ pub async fn duplicates_run(
     );
 
     tokio::task::spawn_blocking(move || {
-        let conn = match photovault::db::open_secondary(&db_path) {
+        let conn = match smriti::db::open_secondary(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("duplicates: open secondary DB failed: {}", e);
@@ -217,7 +216,7 @@ pub async fn duplicates_run(
                         g.duplicate_type,
                     ));
                 }
-                let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
+                let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
                 if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
                     tracing::warn!("dup persist: {}", e);
                 }
@@ -235,7 +234,7 @@ pub async fn duplicates_run(
                     )
                 })
                 .collect();
-            let repo = photovault::db::duplicate_repo::DuplicateRepo::new(&conn);
+            let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
             if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
                 tracing::warn!("dup persist: {}", e);
             }

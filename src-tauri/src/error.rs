@@ -61,9 +61,9 @@ impl CommandError {
     }
 }
 
-impl From<photovault::error::AppError> for CommandError {
-    fn from(e: photovault::error::AppError) -> Self {
-        use photovault::error::AppError;
+impl From<smriti::error::AppError> for CommandError {
+    fn from(e: smriti::error::AppError) -> Self {
+        use smriti::error::AppError;
         match e {
             AppError::Database(err) => Self::Database {
                 message: err.to_string(),
@@ -110,9 +110,9 @@ impl From<std::io::Error> for CommandError {
     }
 }
 
-impl From<photovault::db::connection::DatabaseError> for CommandError {
-    fn from(e: photovault::db::connection::DatabaseError) -> Self {
-        use photovault::db::connection::DatabaseError;
+impl From<smriti::db::connection::DatabaseError> for CommandError {
+    fn from(e: smriti::db::connection::DatabaseError) -> Self {
+        use smriti::db::connection::DatabaseError;
         match e {
             DatabaseError::OpenError(err) => Self::Database {
                 message: err.to_string(),

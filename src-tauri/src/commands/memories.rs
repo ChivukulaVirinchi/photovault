@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
-use photovault::services::thumbnail::{ThumbnailService, ThumbnailSize};
+use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
 
 use crate::dto::{MemoryCardDto, MemoryDetailDto, PersonDto, PhotoSummaryDto};
 use crate::state::AppState;
@@ -19,10 +19,10 @@ pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<Mem
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let today = Local::now().date_naive();
-        if !photovault::services::memories::library_is_old_enough(&db.conn, today) {
+        if !smriti::services::memories::library_is_old_enough(&db.conn, today) {
             return Ok(Vec::new());
         }
-        let cards = photovault::services::memories::generate_for_today(&db.conn, today)
+        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
             .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let mut dtos: Vec<MemoryCardDto> = cards.into_iter().map(Into::into).collect();
         let inputs = collect_hero_inputs(&db.conn, &dtos)?;
@@ -59,14 +59,14 @@ pub async fn memories_detail(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let today = Local::now().date_naive();
-        let cards = photovault::services::memories::generate_for_today(&db.conn, today)
+        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
             .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let card = cards
             .into_iter()
             .find(|c| c.id == args.memory_id)
             .ok_or_else(|| CommandError::not_found("memory", args.memory_id.clone()))?;
 
-        let photo_repo = photovault::db::PhotoRepo::new(&db.conn);
+        let photo_repo = smriti::db::PhotoRepo::new(&db.conn);
         let photos = photo_repo.get_by_ids(&card.photo_ids)?;
         let dto: MemoryCardDto = card.into();
         let inputs = collect_hero_inputs(&db.conn, std::slice::from_ref(&dto))?;
@@ -110,7 +110,7 @@ pub async fn memories_blocked_people(state: State<'_, AppState>) -> CommandResul
         return Ok(Vec::new());
     }
 
-    let face_repo = photovault::db::face_repo::FaceRepo::new(conn);
+    let face_repo = smriti::db::face_repo::FaceRepo::new(conn);
     let all = face_repo.get_all_clusters()?;
     Ok(all
         .into_iter()
@@ -171,14 +171,14 @@ pub async fn memories_save_as_album(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let today = Local::now().date_naive();
-    let cards = photovault::services::memories::generate_for_today(&db.conn, today)
+    let cards = smriti::services::memories::generate_for_today(&db.conn, today)
         .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
     let card = cards
         .into_iter()
         .find(|c| c.id == args.memory_id)
         .ok_or_else(|| CommandError::not_found("memory", args.memory_id.clone()))?;
 
-    let album_repo = photovault::db::album_repo::AlbumRepo::new(&db.conn);
+    let album_repo = smriti::db::album_repo::AlbumRepo::new(&db.conn);
     let name = args.name.unwrap_or(card.title.clone());
     let album_id = album_repo.create(&name)?;
     if !card.photo_ids.is_empty() {
@@ -207,7 +207,7 @@ fn collect_hero_inputs(
     if cards.is_empty() {
         return Ok(Vec::new());
     }
-    let repo = photovault::db::PhotoRepo::new(conn);
+    let repo = smriti::db::PhotoRepo::new(conn);
     let mut out = Vec::with_capacity(cards.len());
     for (idx, c) in cards.iter().enumerate() {
         if let Some(p) = repo.get_by_id(c.hero_photo_id)? {

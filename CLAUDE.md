@@ -1,4 +1,4 @@
-# PhotoVault — Development Guide
+# Smriti — Development Guide
 
 ## What is this?
 
@@ -54,7 +54,7 @@ cargo test               # tests
 
 Note: Windows `cargo build` on the UNC path is slower (~2-3x) due to the WSL filesystem bridge. This is fine for periodic Windows smoke tests — primary development happens in WSL.
 
-The `target/` directory has separate artifacts per platform. Windows = `photovault.exe`, Linux = `photovault`. They do NOT conflict.
+The `target/` directory has separate artifacts per platform. Windows = `smriti.exe`, Linux = `smriti`. They do NOT conflict.
 
 ### Windows Setup (one-time)
 
@@ -108,7 +108,7 @@ Both are idempotent — skip files that already exist.
 
 ```bash
 # Engine + Tauri shell (debug)
-cargo build -p photovault -p photovault-tauri
+cargo build -p smriti -p smriti-tauri
 
 # Frontend (one-time + on every change for production builds)
 cd src-ui && npm install && npm run build && cd ..
@@ -121,11 +121,11 @@ cargo tauri dev
 cargo tauri build
 
 # Tests
-cargo test -p photovault
-cargo test -p photovault-tauri
+cargo test -p smriti
+cargo test -p smriti-tauri
 
 # Lint gate (required before any push)
-cargo clippy --all-targets -p photovault -p photovault-tauri
+cargo clippy --all-targets -p smriti -p smriti-tauri
 cd src-ui && npm run check && npm run build
 ```
 

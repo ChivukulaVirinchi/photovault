@@ -1,4 +1,4 @@
-# PhotoVault v1.0 Release Checklist
+# Smriti v1.0 Release Checklist
 
 A tick-off list of everything that needs to happen outside the code
 before tagging `v1.0.0`. All items are free — no certificates, no
@@ -98,7 +98,7 @@ for free, installers update themselves as cargo-dist upgrades.
 - [ ] Verify the init wrote a `[workspace.metadata.dist]` block to
       `Cargo.toml` and regenerated `.github/workflows/release.yml`.
 - [ ] Port the existing asset-pack job (the one that packages ML
-      models + GeoNames + ORT into `PhotoVault-Assets.zip`) into
+      models + GeoNames + ORT into `Smriti-Assets.zip`) into
       cargo-dist's `extra-artifacts` hook. See the old workflow in
       git history if you need the exact commands.
 - [ ] Test with a throwaway tag on a branch:
@@ -116,7 +116,7 @@ none of these block v1.0.
 
 ### 4.1 · Create the Homebrew tap repo
 
-- [ ] `gh repo create ChivukulaVirinchi/homebrew-photovault --public --description "Homebrew tap for PhotoVault"`
+- [ ] `gh repo create ChivukulaVirinchi/homebrew-photovault --public --description "Homebrew tap for Smriti"`
 - [ ] After the first cargo-dist release, the tap is auto-maintained —
       you just need the repo to exist.
 
@@ -137,7 +137,7 @@ brew install --cask photovault
 Users install with:
 
 ```powershell
-winget install ChivukulaVirinchi.PhotoVault
+winget install ChivukulaVirinchi.Smriti
 ```
 
 ### 4.3 · Submit to Flathub
@@ -166,7 +166,7 @@ When 1.1, 1.2, 1.3, 2.1, and 3.1 are all ticked:
       conventional-commit prefixes). Merge it — this creates the
       tag automatically.
 - [ ] Or, if you want to force a specific version tag manually:
-      `git tag -a v1.0.0-beta.1 -m "PhotoVault 1.0.0-beta.1" && git push origin v1.0.0-beta.1`
+      `git tag -a v1.0.0-beta.1 -m "Smriti 1.0.0-beta.1" && git push origin v1.0.0-beta.1`
 - [ ] Wait ~15 minutes for the release workflow to build all
       artifacts. With cargo-dist set to draft mode, edit the draft
       and click **Publish** once it looks good.
@@ -221,8 +221,8 @@ fine to skip for a hobby project:
   Gatekeeper warns once; users right-click → Open. Same trade-off.
 - **Microsoft Store / MSIX** — Significant packaging effort, low
   reach vs. the MSI path.
-- **Resolving InsightFace model licensing** — PhotoVault doesn't
+- **Resolving InsightFace model licensing** — Smriti doesn't
   bundle the weights. The setup script downloads them from
   upstream on the user's own machine. The terms that apply to
   each user are the ones the upstream project publishes; that's
-  between them and InsightFace, not PhotoVault's concern.
+  between them and InsightFace, not Smriti's concern.

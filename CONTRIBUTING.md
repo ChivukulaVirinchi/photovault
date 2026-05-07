@@ -1,4 +1,4 @@
-# Contributing to PhotoVault
+# Contributing to Smriti
 
 Thanks for your interest. Contributions of all sizes are welcome.
 
@@ -108,7 +108,7 @@ cargo deny check                  # if installed
 
 Use the bug report template and include:
 - OS and version
-- PhotoVault version
+- Smriti version
 - Repro steps
 - Expected vs actual behavior
 - Relevant logs

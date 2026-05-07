@@ -11,7 +11,7 @@ This sends the report to maintainers privately. We will acknowledge receipt
 and coordinate disclosure with you before any details become public.
 
 If you cannot use GitHub Security Advisories, email
-`chivukulakmohan@gmail.com` with subject `[PhotoVault Security]`.
+`chivukulakmohan@gmail.com` with subject `[Smriti Security]`.
 PGP key fingerprint will be published on the project website prior to v1.0.
 
 ## Response targets
@@ -32,7 +32,7 @@ a fix timeline.
 In scope:
 
 - Code execution from malicious image files (image-decoder bugs that lead
-  to memory unsafety in PhotoVault's process).
+  to memory unsafety in Smriti's process).
 - Path traversal in scanner, reindexer, asset-installer, or thumbnail
   pipelines (any code that builds filesystem paths from external input).
 - SQL injection in database queries.
@@ -46,10 +46,10 @@ In scope:
 Out of scope:
 
 - Bugs in upstream dependencies — please report to those projects directly.
-  We will accept a report if PhotoVault's specific use of the dependency
+  We will accept a report if Smriti's specific use of the dependency
   amplifies the impact.
 - Issues that require physical access to an unlocked device.
-- Cloud-related concerns: PhotoVault has no cloud component by design.
+- Cloud-related concerns: Smriti has no cloud component by design.
 - ONNX model adversarial inputs (out of scope unless they cause memory
   corruption rather than just incorrect predictions).
 

@@ -9,7 +9,7 @@ use crate::{CommandError, CommandResult};
 
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
-    let h = photovault::bootstrap::asset_health();
+    let h = smriti::bootstrap::asset_health();
     Ok(h.into())
 }
 
@@ -35,7 +35,7 @@ pub async fn system_open_in_explorer(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let repo = photovault::db::PhotoRepo::new(&db.conn);
+    let repo = smriti::db::PhotoRepo::new(&db.conn);
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
@@ -48,13 +48,24 @@ pub async fn system_open_in_explorer(
 
 /// Reveal a file in the platform's file manager — selecting the file
 /// itself, not just opening the containing folder.
+///
+/// Both branches set `current_dir("/")` because on Fedora 40+ / modern
+/// GNOME the default `xdg-open` flow can be wrapped in
+/// `systemd-run --scope --user`, which inherits Tauri's cwd. If that
+/// inherited cwd is anything systemd considers non-absolute the launch
+/// fails with `WorkingDirectory= expects an absolute path or '~'`.
+/// Pinning cwd to `/` defuses the entire class of issues.
 #[cfg(target_os = "linux")]
 fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     use std::process::Command;
+    // Resolve to absolute — `file://` URIs need absolute paths and the
+    // canonicalised form survives downstream pickup.
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     // org.freedesktop.FileManager1.ShowItems is the canonical interface
     // implemented by Nautilus, Nemo, Dolphin, Caja, Thunar, and others.
-    let uri = format!("file://{}", path.display());
+    let uri = format!("file://{}", abs.display());
     let dbus_status = Command::new("dbus-send")
+        .current_dir("/")
         .args([
             "--session",
             "--dest=org.freedesktop.FileManager1",
@@ -69,8 +80,18 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
         return Ok(());
     }
     // Fallback: open the parent directory in the default file manager.
-    let parent = path.parent().unwrap_or(path);
-    open::that(parent).map_err(io_err)
+    // Using `xdg-open` directly (instead of the `open` crate) so we
+    // can pin cwd; the `open` crate doesn't expose that knob.
+    let parent = abs.parent().unwrap_or(&abs);
+    let status = Command::new("xdg-open")
+        .current_dir("/")
+        .arg(parent)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("xdg-open exited non-zero"))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -98,11 +119,6 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     Command::new("explorer.exe").arg(arg).status().map(|_| ())
 }
 
-#[cfg(target_os = "linux")]
-fn io_err(e: impl std::fmt::Display) -> std::io::Error {
-    std::io::Error::other(e.to_string())
-}
-
 #[derive(Debug, Serialize)]
 pub struct CopiedPathDto {
     pub path: String,
@@ -120,7 +136,7 @@ pub async fn system_copy_path_to_clipboard(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let repo = photovault::db::PhotoRepo::new(&db.conn);
+    let repo = smriti::db::PhotoRepo::new(&db.conn);
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
@@ -141,7 +157,7 @@ pub struct UpdateStatusDto {
 
 #[tauri::command]
 pub async fn system_updates_check() -> CommandResult<UpdateStatusDto> {
-    let result = photovault::services::update_checker::check_for_updates()
+    let result = smriti::services::update_checker::check_for_updates()
         .await
         .map_err(|e| CommandError::Network {
             message: e.to_string(),

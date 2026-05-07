@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use tauri::State;
 
-use photovault::db::PhotoRepo;
+use smriti::db::PhotoRepo;
 
 use crate::dto::{MapPinDto, PhotoSummaryDto, TileCacheStatsDto};
 use crate::state::AppState;
@@ -199,7 +199,7 @@ pub async fn map_cluster_filmstrip(
 pub async fn map_tile_cache_stats(state: State<'_, AppState>) -> CommandResult<TileCacheStatsDto> {
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let dir = photovault::db::tile_cache_dir(&lib.drive_root);
+    let dir = smriti::db::tile_cache_dir(&lib.drive_root);
     let mut size_bytes: u64 = 0;
     let mut file_count: u64 = 0;
     if dir.exists() {
@@ -210,7 +210,7 @@ pub async fn map_tile_cache_stats(state: State<'_, AppState>) -> CommandResult<T
             }
         }
     }
-    let cfg = photovault::config::AppConfig::load();
+    let cfg = smriti::config::AppConfig::load();
     let limit_bytes = (cfg.map_cache_limit_mb as u64) * 1024 * 1024;
     Ok(TileCacheStatsDto {
         size_bytes,
@@ -228,7 +228,7 @@ pub struct MapTileCacheSetLimitArgs {
 
 #[tauri::command]
 pub async fn map_tile_cache_set_limit(args: MapTileCacheSetLimitArgs) -> CommandResult<()> {
-    let mut cfg = photovault::config::AppConfig::load();
+    let mut cfg = smriti::config::AppConfig::load();
     cfg.map_cache_limit_mb = args.limit_mb.clamp(50, 10_000);
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),
@@ -247,7 +247,7 @@ pub async fn map_tile_cache_clear(
 ) -> CommandResult<MapTileCacheClearedDto> {
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let dir = photovault::db::tile_cache_dir(&lib.drive_root);
+    let dir = smriti::db::tile_cache_dir(&lib.drive_root);
     let mut freed: u64 = 0;
     if dir.exists() {
         for entry in walk(&dir) {

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=PhotoVault
-Comment=Offline-first photo library manager
-Exec=photovault
-Icon=photovault
-Type=Application
-Categories=Graphics;Photography;
-Keywords=photos;gallery;offline;
-StartupWMClass=photovault

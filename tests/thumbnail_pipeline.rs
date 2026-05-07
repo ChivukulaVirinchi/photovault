@@ -4,7 +4,7 @@
 //! and verifies output quality and dimensions.
 
 use image::{DynamicImage, ImageBuffer, Rgb};
-use photovault::services::thumbnail::{ThumbnailService, ThumbnailSize};
+use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
 use std::path::Path;
 use tempfile::tempdir;
 

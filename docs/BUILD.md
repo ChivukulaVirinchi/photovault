@@ -1,6 +1,6 @@
 # Build from Source
 
-PhotoVault builds natively on Linux, Windows, and macOS.
+Smriti builds natively on Linux, Windows, and macOS.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb
 
 ## Asset setup (optional but recommended)
 
-PhotoVault now ships a small core application.
+Smriti now ships a small core application.
 Face recognition and offline geocoding use an optional asset pack
 (ONNX runtime + models + geonames DB) that can be installed in-app with one click.
 
@@ -66,7 +66,7 @@ cargo build --release
 Windows release binary:
 
 ```powershell
-.\target\release\photovault.exe
+.\target\release\smriti.exe
 ```
 
 ## Test and lint
@@ -108,13 +108,13 @@ sudo apt remove photovault
 
 AppImage is built in CI from release tags (`v*`) via `.github/workflows/release.yml`.
 Current output name:
-- `PhotoVault-x86_64.AppImage`
+- `Smriti-x86_64.AppImage`
 
 Run:
 
 ```bash
-chmod +x PhotoVault-x86_64.AppImage
-./PhotoVault-x86_64.AppImage
+chmod +x Smriti-x86_64.AppImage
+./Smriti-x86_64.AppImage
 ```
 
 ## Windows packaging (MSI + ZIP)
@@ -141,11 +141,11 @@ cargo build --release --target x86_64-pc-windows-msvc
 From repository root:
 
 ```powershell
-cargo wix --target x86_64-pc-windows-msvc --output target\wix\PhotoVault-Setup-x64.msi
+cargo wix --target x86_64-pc-windows-msvc --output target\wix\Smriti-Setup-x64.msi
 ```
 
 Output:
-- `target\wix\PhotoVault-Setup-x64.msi`
+- `target\wix\Smriti-Setup-x64.msi`
 
 MSI installs the core app. Optional assets are installed separately.
 
@@ -204,7 +204,7 @@ In-app optional asset installation resolves in this order:
 
 1. `PHOTOVAULT_ASSET_PACK_PATH` (local zip path override)
 2. `PHOTOVAULT_ASSET_PACK_URL` (custom URL override)
-3. latest published release URL (`.../releases/latest/download/PhotoVault-Assets.zip`)
-4. version-pinned fallback (`.../releases/download/v<app-version>/PhotoVault-Assets.zip`)
+3. latest published release URL (`.../releases/latest/download/Smriti-Assets.zip`)
+4. version-pinned fallback (`.../releases/download/v<app-version>/Smriti-Assets.zip`)
 
 If you are testing locally before publishing a release, set `PHOTOVAULT_ASSET_PACK_PATH`.

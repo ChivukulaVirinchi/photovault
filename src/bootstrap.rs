@@ -13,7 +13,7 @@ pub const SETUP_ASSETS_HINT: &str =
 pub const SETUP_ASSETS_HINT: &str = "./scripts/setup_assets.sh";
 
 pub const ASSET_PACK_URL_DEFAULT: &str =
-    "https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip";
+    "https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip";
 
 #[derive(Debug, Clone, Default)]
 pub struct AssetHealth {
@@ -58,12 +58,25 @@ pub fn project_root() -> PathBuf {
 pub fn default_asset_install_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        .join("smriti")
+        .join("assets")
+}
+
+/// Pre-rename install dir, kept as a secondary lookup so users who
+/// installed assets under the old "photovault" path keep working
+/// after the upgrade. Removed in a future release.
+fn legacy_asset_install_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
         .join("photovault")
         .join("assets")
 }
 
 pub fn asset_pack_url() -> String {
-    std::env::var("PHOTOVAULT_ASSET_PACK_URL")
+    // Read SMRITI_* first, fall back to the legacy PHOTOVAULT_*
+    // env name for one release worth of grace.
+    std::env::var("SMRITI_ASSET_PACK_URL")
+        .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_URL"))
         .unwrap_or_else(|_| ASSET_PACK_URL_DEFAULT.to_string())
 }
 
@@ -112,21 +125,28 @@ fn candidate_asset_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
     roots.push(default_asset_install_dir());
+    // Legacy fallback so users with assets installed under the old
+    // PhotoVault path keep working through the rename.
+    roots.push(legacy_asset_install_dir());
 
+    if let Ok(from_env) = std::env::var("SMRITI_ASSET_DIR") {
+        roots.push(PathBuf::from(from_env));
+    }
     if let Ok(from_env) = std::env::var("PHOTOVAULT_ASSET_DIR") {
-        let p = PathBuf::from(from_env);
-        roots.push(p);
+        roots.push(PathBuf::from(from_env));
     }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             // Portable/AppImage layout
             roots.push(exe_dir.to_path_buf());
-            // Debian install layout: /usr/bin/photovault -> /usr/lib/photovault
+            // Debian install layout: /usr/bin/<name> -> /usr/lib/<name>
+            roots.push(exe_dir.join("..").join("lib").join("smriti"));
+            // Legacy install path under the old name.
             roots.push(exe_dir.join("..").join("lib").join("photovault"));
-            // `cargo tauri dev` runs the binary from target/debug/. Walk
-            // up two levels to land on the workspace root, where the
-            // dev tree's `libs/` and `models/` actually live.
+            // `cargo tauri dev` runs the binary from target/debug/.
+            // Walk up two levels to land on the workspace root, where
+            // the dev tree's `libs/` and `models/` actually live.
             roots.push(exe_dir.join("..").join(".."));
         }
     }
@@ -141,7 +161,8 @@ fn candidate_asset_roots() -> Vec<PathBuf> {
     }
 
     roots.push(project_root());
-    roots.push(PathBuf::from("/usr/lib/photovault"));
+    roots.push(PathBuf::from("/usr/lib/smriti"));
+    roots.push(PathBuf::from("/usr/lib/photovault")); // legacy
 
     roots
 }
@@ -201,21 +222,28 @@ pub fn ensure_geonames_db() {
 }
 
 pub async fn install_asset_pack() -> Result<String, String> {
-    let bytes = if let Ok(local_path) = std::env::var("PHOTOVAULT_ASSET_PACK_PATH") {
+    // Honour SMRITI_* env vars first, fall back to legacy PHOTOVAULT_*
+    // for one release worth of grace.
+    let local_path = std::env::var("SMRITI_ASSET_PACK_PATH")
+        .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_PATH"))
+        .ok();
+    let bytes = if let Some(local_path) = local_path {
         std::fs::read(&local_path).map_err(|e| {
             format!(
-                "Failed to read PHOTOVAULT_ASSET_PACK_PATH {}: {}",
+                "Failed to read SMRITI_ASSET_PACK_PATH {}: {}",
                 local_path, e
             )
         })?
     } else {
         let primary_url = asset_pack_url();
-        let fallback_url = std::env::var("PHOTOVAULT_ASSET_PACK_FALLBACK_URL").unwrap_or_else(|_| {
-            format!(
-                "https://github.com/ChivukulaVirinchi/photovault/releases/download/v{}/PhotoVault-Assets.zip",
-                env!("CARGO_PKG_VERSION")
-            )
-        });
+        let fallback_url = std::env::var("SMRITI_ASSET_PACK_FALLBACK_URL")
+            .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_FALLBACK_URL"))
+            .unwrap_or_else(|_| {
+                format!(
+                    "https://github.com/ChivukulaVirinchi/photovault/releases/download/v{}/Smriti-Assets.zip",
+                    env!("CARGO_PKG_VERSION")
+                )
+            });
 
         let mut last_error = None;
         let mut downloaded = None;
@@ -246,7 +274,7 @@ pub async fn install_asset_pack() -> Result<String, String> {
 
         downloaded.ok_or_else(|| {
             format!(
-                "Asset pack download failed. {}. If you are testing locally before publishing a release, set PHOTOVAULT_ASSET_PACK_PATH to a local PhotoVault-Assets.zip.",
+                "Asset pack download failed. {}. If you are testing locally before publishing a release, set SMRITI_ASSET_PACK_PATH to a local Smriti-Assets.zip.",
                 last_error.unwrap_or_else(|| "No successful download source".to_string())
             )
         })?

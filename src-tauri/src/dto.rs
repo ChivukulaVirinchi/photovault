@@ -11,29 +11,25 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use photovault::config::AppConfig;
-use photovault::db::album_repo::AlbumRecord;
-use photovault::db::album_suggestion_repo::AlbumSuggestionRecord;
-use photovault::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
-use photovault::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
-use photovault::db::face_repo::{FaceClusterRecord, ReviewItem};
-use photovault::db::recent_search_repo::RecentSearch;
-use photovault::db::trash_repo::TrashedPhotoRecord;
-use photovault::models::{ContentCategory, Photo};
-use photovault::services::album_suggestions::DetectedSuggestion;
-use photovault::services::burst_detector::BurstGroup;
-use photovault::services::drive_detector::DriveInfo;
-use photovault::services::duplicate_detector::DuplicateGroup;
-use photovault::services::geocoding::GeocodingResult;
-use photovault::services::insights::{
-    CameraStat, CountryStat, InsightsData, LocationStat, PersonStat,
-};
-use photovault::services::library_health::LibraryHealth;
-use photovault::services::memories::MemoryCard;
-use photovault::services::search::{
-    AlbumHit, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults,
-};
-use photovault::services::trash::TrashStats;
+use smriti::config::AppConfig;
+use smriti::db::album_repo::AlbumRecord;
+use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
+use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
+use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
+use smriti::db::face_repo::{FaceClusterRecord, ReviewItem};
+use smriti::db::recent_search_repo::RecentSearch;
+use smriti::db::trash_repo::TrashedPhotoRecord;
+use smriti::models::{ContentCategory, Photo};
+use smriti::services::album_suggestions::DetectedSuggestion;
+use smriti::services::burst_detector::BurstGroup;
+use smriti::services::drive_detector::DriveInfo;
+use smriti::services::duplicate_detector::DuplicateGroup;
+use smriti::services::geocoding::GeocodingResult;
+use smriti::services::insights::{CameraStat, CountryStat, InsightsData, LocationStat, PersonStat};
+use smriti::services::library_health::LibraryHealth;
+use smriti::services::memories::MemoryCard;
+use smriti::services::search::{AlbumHit, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults};
+use smriti::services::trash::TrashStats;
 
 /// Generic page-of-T return shape used by every paginated command.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -921,8 +917,8 @@ pub struct AssetHealthDto {
     pub summary: String,
 }
 
-impl From<photovault::bootstrap::AssetHealth> for AssetHealthDto {
-    fn from(h: photovault::bootstrap::AssetHealth) -> Self {
+impl From<smriti::bootstrap::AssetHealth> for AssetHealthDto {
+    fn from(h: smriti::bootstrap::AssetHealth) -> Self {
         let summary = h.summary();
         Self {
             missing_face_models: h.missing_face_models,
@@ -962,16 +958,16 @@ pub struct SettingsDto {
 impl From<&AppConfig> for SettingsDto {
     fn from(c: &AppConfig) -> Self {
         let theme = match c.theme {
-            photovault::config::AppTheme::Dark => "dark",
-            photovault::config::AppTheme::Light => "light",
-            photovault::config::AppTheme::System => "system",
+            smriti::config::AppTheme::Dark => "dark",
+            smriti::config::AppTheme::Light => "light",
+            smriti::config::AppTheme::System => "system",
         }
         .to_string();
         let date_format = match c.date_format {
-            photovault::config::DateFormat::Locale => "locale",
-            photovault::config::DateFormat::Iso => "iso",
-            photovault::config::DateFormat::Us => "us",
-            photovault::config::DateFormat::Eu => "eu",
+            smriti::config::DateFormat::Locale => "locale",
+            smriti::config::DateFormat::Iso => "iso",
+            smriti::config::DateFormat::Us => "us",
+            smriti::config::DateFormat::Eu => "eu",
         }
         .to_string();
         Self {

@@ -8,7 +8,7 @@
 //! always land in separate clusters at reasonable thresholds.
 
 use ndarray::Array1;
-use photovault::ml::{ClusterInput, FaceClusterer, FaceEmbedding};
+use smriti::ml::{ClusterInput, FaceClusterer, FaceEmbedding};
 use std::collections::HashMap;
 
 const EMBEDDING_DIM: usize = 512;

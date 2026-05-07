@@ -7,7 +7,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ndarray::Array1;
-use photovault::ml::{ClusterInput, FaceClusterer, FaceEmbedding};
+use smriti::ml::{ClusterInput, FaceClusterer, FaceEmbedding};
 
 const EMBEDDING_DIM: usize = 512;
 

@@ -18,9 +18,9 @@
 //! pipeline will run this via `cargo test --ignored`.
 
 use chrono::{Duration as ChronoDuration, Utc};
-use photovault::db::photo_repo::PhotoInsert;
-use photovault::db::{create_schema, Database, PhotoRepo};
-use photovault::models::compute_groups;
+use smriti::db::photo_repo::PhotoInsert;
+use smriti::db::{create_schema, Database, PhotoRepo};
+use smriti::models::compute_groups;
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -76,7 +76,7 @@ fn timeline_compute_groups_scales_to_50k_photos() {
     let temp = tempdir().unwrap();
     let db = Database::open_for_drive(temp.path()).unwrap();
     create_schema(&db.conn).unwrap();
-    photovault::db::migrations::run_migrations(&db.conn).unwrap();
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
 
     let repo = PhotoRepo::new(&db.conn);
 

@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::db::album_repo::AlbumRepo;
-use photovault::db::album_suggestion_repo::AlbumSuggestionRepo;
+use smriti::db::album_repo::AlbumRepo;
+use smriti::db::album_suggestion_repo::AlbumSuggestionRepo;
 
 use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
 use crate::events::{JobProgress, EV_ALBUM_SUGGESTIONS_COMPLETE, EV_ALBUM_SUGGESTIONS_PROGRESS};
@@ -87,7 +87,7 @@ pub async fn albums_suggestions_preview(
     let mut ids = s.photo_ids();
     ids.truncate(limit);
 
-    let photo_repo = photovault::db::PhotoRepo::new(&db.conn);
+    let photo_repo = smriti::db::PhotoRepo::new(&db.conn);
     let photos = photo_repo.get_by_ids(&ids)?;
     Ok(photos.iter().map(PhotoSummaryDto::from).collect())
 }
@@ -314,8 +314,8 @@ pub async fn albums_suggestions_run_detection(
             },
         );
 
-        let db_path = photovault::db::db_path_for(&drive_root);
-        let conn = match photovault::db::open_secondary(&db_path) {
+        let db_path = smriti::db::db_path_for(&drive_root);
+        let conn = match smriti::db::open_secondary(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("album suggestions: failed to open secondary db: {}", e);
@@ -362,7 +362,7 @@ pub async fn albums_suggestions_run_detection(
         );
 
         let (suggestions, diag) =
-            photovault::services::album_suggestions::detect_suggestions_with_diagnostics(
+            smriti::services::album_suggestions::detect_suggestions_with_diagnostics(
                 &conn,
                 home_override.as_deref(),
             );

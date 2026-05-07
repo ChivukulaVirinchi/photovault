@@ -1,4 +1,4 @@
-# PhotoVault — Tauri Command Surface (v1)
+# Smriti — Tauri Command Surface (v1)
 
 > **Branch:** `tauri-migration`
 > **Status:** design draft — frozen before any handler code lands
@@ -8,7 +8,7 @@
 
 ## Context
 
-PhotoVault is currently an iced desktop app whose UI has hit its ceiling — face-grid scrolling, transitions, and lightbox interactions cannot be made fluid in iced without disproportionate effort. We're rewriting only the UI in Tauri 2 + Svelte 5; the entire Rust backend (`src/services/`, `src/db/`, `src/ml/`, `src/scoring/`, `src/search/`, `src/models/`) stays.
+Smriti is currently an iced desktop app whose UI has hit its ceiling — face-grid scrolling, transitions, and lightbox interactions cannot be made fluid in iced without disproportionate effort. We're rewriting only the UI in Tauri 2 + Svelte 5; the entire Rust backend (`src/services/`, `src/db/`, `src/ml/`, `src/scoring/`, `src/search/`, `src/models/`) stays.
 
 The command surface is the *only* thing the new frontend will see. Refactoring it later means touching both sides simultaneously and breaking external library consumers (we want this to grow into a small ecosystem). So we design it once, deliberately, as if it were a public API — because functionally it is.
 
@@ -658,8 +658,8 @@ Anything more complex is a service-layer change, not a handler change. This keep
 
 ## Verification
 
-1. `cargo build -p photovault-tauri` succeeds (Linux + Windows)
-2. `cargo test -p photovault-tauri` covers:
+1. `cargo build -p smriti-tauri` succeeds (Linux + Windows)
+2. `cargo test -p smriti-tauri` covers:
    - `pagination::encode` ↔ `pagination::decode` roundtrip
    - `From<AppError> for CommandError` exhaustive (one test per AppError variant)
    - DTO `From<Photo>` etc. for every conversion (one fixture per DTO)

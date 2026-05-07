@@ -6,13 +6,13 @@
 //! fixture drive — those need ONNX/SQLite state that's expensive to
 //! prepare in-process.
 
-use photovault_tauri_lib::pagination::{self, Cursor};
+use smriti_tauri_lib::pagination::{self, Cursor};
 
 fn main() {
-    let drives = photovault::services::drive_detector::DriveDetector::detect();
+    let drives = smriti::services::drive_detector::DriveDetector::detect();
     println!("drives: {} detected", drives.len());
 
-    let h = photovault::bootstrap::asset_health();
+    let h = smriti::bootstrap::asset_health();
     println!("assets: {}", h.summary());
 
     let c = Cursor {

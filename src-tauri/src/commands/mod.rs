@@ -27,7 +27,7 @@ pub mod trash;
 
 use crate::pagination::Cursor;
 
-pub(crate) fn cursor_for_lite(p: &photovault::db::photo_repo::PhotoLite) -> Cursor {
+pub(crate) fn cursor_for_lite(p: &smriti::db::photo_repo::PhotoLite) -> Cursor {
     Cursor {
         date_taken: p.date_taken,
         id: p.id,

@@ -1,4 +1,4 @@
-//! Database module for PhotoVault
+//! Database module for Smriti
 //!
 //! Uses SQLite with the database stored on the indexed drive itself,
 //! making the index fully portable.
@@ -9,6 +9,14 @@
 /// repo (which never exceeds 5 columns per row) well under either
 /// limit, while still giving a ~3× speedup vs. one INSERT per row.
 pub const MAX_ROWS_PER_INSERT: usize = 200;
+
+/// Per-drive metadata folder. Kept as `.photovault` for backwards
+/// compatibility with libraries indexed before the Smriti rename —
+/// renaming would orphan every user's existing thumbnails / db /
+/// face crops on disk. Treat the on-disk folder name as part of the
+/// wire contract; new code reads this constant rather than the
+/// literal so the link to the legacy name stays explicit.
+pub const LIBRARY_METADATA_DIR: &str = ".photovault";
 
 pub mod album_repo;
 pub mod album_suggestion_repo;

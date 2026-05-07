@@ -1,6 +1,6 @@
 # Third-Party Licenses and Attributions
 
-PhotoVault uses the following third-party assets and dependencies.
+Smriti uses the following third-party assets and dependencies.
 
 ## Data
 
@@ -18,11 +18,11 @@ Map tiles used in the Map view.
 
 ## ML Models
 
-PhotoVault does **not** bundle ML model weights in the installer.
+Smriti does **not** bundle ML model weights in the installer.
 The optional asset-pack installer downloads them from the upstream
 projects linked below, on the user's machine, after install.
 Whatever terms the upstream projects publish govern how you're
-allowed to use those weights — PhotoVault is a neutral integrator.
+allowed to use those weights — Smriti is a neutral integrator.
 
 ### SCRFD-10G-BNKPS (face detection)
 - Upstream: [InsightFace](https://github.com/deepinsight/insightface)
@@ -41,7 +41,7 @@ allowed to use those weights — PhotoVault is a neutral integrator.
 The shared library that loads and executes the above models.
 - License: [MIT License](https://github.com/microsoft/onnxruntime/blob/main/LICENSE)
 - Attribution: Microsoft Corporation
-- Distributed via official GitHub releases; PhotoVault's setup
+- Distributed via official GitHub releases; Smriti's setup
   script downloads the matching platform binary on demand.
 
 ### libheif (optional, `heic` Cargo feature)
@@ -50,7 +50,7 @@ Decoder for HEIC / HEIF photos (every iPhone export since iOS 11).
 - Attribution: Dirk Farin / Struktur AG
 - System library — install via `apt install libheif-dev` (Linux),
   `brew install libheif` (macOS), or vendor binaries (Windows).
-  When the `heic` feature is off PhotoVault still indexes HEIC files
+  When the `heic` feature is off Smriti still indexes HEIC files
   but reports a clear "HEIC support not compiled in" error on decode.
 
 ## Fonts
@@ -75,7 +75,7 @@ Icon font.
 
 ## Software dependencies
 
-PhotoVault depends on many Rust crates. Run the following to
+Smriti depends on many Rust crates. Run the following to
 generate a full per-crate license list:
 
 ```bash

@@ -1,18 +1,18 @@
 [package]
-name = "photovault-tauri"
+name = "smriti-tauri"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Tauri shell for PhotoVault — wraps the photovault library in IPC handlers."
+description = "Tauri shell for Smriti — wraps the smriti library in IPC handlers."
 license = "Apache-2.0"
 publish = false
 
 [lib]
-name = "photovault_tauri_lib"
+name = "smriti_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "photovault-tauri"
+name = "smriti-tauri"
 path = "src/main.rs"
 
 [[example]]
@@ -23,7 +23,7 @@ path = "examples/smoke.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-photovault = { path = ".." }
+smriti = { path = ".." }
 
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-single-instance = "2"

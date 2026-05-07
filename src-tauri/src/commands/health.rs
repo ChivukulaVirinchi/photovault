@@ -11,6 +11,6 @@ pub async fn health_compute(state: State<'_, AppState>) -> CommandResult<Library
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let data = photovault::services::library_health::compute(&db.conn, &lib.drive_root)?;
+    let data = smriti::services::library_health::compute(&db.conn, &lib.drive_root)?;
     Ok(data.into())
 }

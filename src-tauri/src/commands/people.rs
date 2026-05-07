@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::db::face_repo::FaceRepo;
+use smriti::db::face_repo::FaceRepo;
 
 use crate::dto::{JobIdDto, PersonDto, ReviewItemDto};
 use crate::events::{EV_FACES_COMPLETE, EV_FACES_PROGRESS};
@@ -245,20 +245,19 @@ pub async fn people_start_processing(
     let started = job.started_at;
     let job_id_clone = job_id.clone();
 
-    let cfg = photovault::config::AppConfig::load();
-    let model_dir = photovault::bootstrap::model_dir();
+    let cfg = smriti::config::AppConfig::load();
+    let model_dir = smriti::bootstrap::model_dir();
     let detector_conf = cfg.face_detection_confidence;
     let clustering_threshold = cfg.face_clustering_threshold;
-    let resolver_weights = photovault::ml::ResolverWeights {
+    let resolver_weights = smriti::ml::ResolverWeights {
         cooccurrence: cfg.weight_cooccurrence,
         temporal: cfg.weight_temporal,
         ..Default::default()
     };
 
     tokio::spawn(async move {
-        let (tx, rx) = async_channel::bounded::<
-            photovault::services::face_processor::FaceProcessingProgress,
-        >(64);
+        let (tx, rx) =
+            async_channel::bounded::<smriti::services::face_processor::FaceProcessingProgress>(64);
 
         // Forwarder: copies engine progress 1:1 into the Tauri event
         // stream. The engine already publishes real per-photo counts and
@@ -303,10 +302,10 @@ pub async fn people_start_processing(
         // error like "model not found").
         let cancel_flag: Option<Arc<std::sync::atomic::AtomicBool>> = Some(cancel.clone());
         let pipeline_result: Result<
-            photovault::services::face_processor::FaceProcessingResult,
+            smriti::services::face_processor::FaceProcessingResult,
             String,
         > = tokio::task::spawn_blocking(move || {
-            photovault::services::face_processor::FaceProcessor::process_photos(
+            smriti::services::face_processor::FaceProcessor::process_photos(
                 &drive_root,
                 &model_dir,
                 detector_conf,

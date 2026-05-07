@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Smriti
+Comment=A quiet, offline photo library
+Exec=smriti %F
+Icon=smriti
+Type=Application
+Categories=Graphics;Photography;
+Keywords=photos;gallery;offline;memory;
+StartupWMClass=smriti

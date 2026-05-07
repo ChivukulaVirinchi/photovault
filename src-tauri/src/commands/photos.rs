@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use photovault::db::album_repo::AlbumRepo;
-use photovault::db::face_repo::FaceRepo;
-use photovault::db::PhotoRepo;
+use smriti::db::album_repo::AlbumRepo;
+use smriti::db::face_repo::FaceRepo;
+use smriti::db::PhotoRepo;
 
 use crate::dto::{AlbumDto, Page, PersonDto, PhotoDto, PhotoSummaryDto};
 use crate::pagination::{self, Cursor};
@@ -265,10 +265,10 @@ async fn paged<F>(
 ) -> CommandResult<Page<PhotoSummaryDto>>
 where
     F: FnOnce(
-        &photovault::db::Database,
+        &smriti::db::Database,
         Option<(Option<chrono::DateTime<chrono::Utc>>, i64)>,
         i64,
-    ) -> Result<Vec<photovault::db::photo_repo::PhotoLite>, CommandError>,
+    ) -> Result<Vec<smriti::db::photo_repo::PhotoLite>, CommandError>,
 {
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -356,7 +356,7 @@ pub async fn photos_request_thumbnail(
             &abs,
             &hash_for_thread,
             orientation,
-            photovault::services::thumbnail::ThumbnailSize::Small,
+            smriti::services::thumbnail::ThumbnailSize::Small,
         )
     })
     .await

@@ -3,9 +3,9 @@
 //! Tests the full DB lifecycle: schema creation, photo insertion,
 //! querying, geocoding updates, trash flow, and data integrity.
 
-use photovault::db::photo_repo::PhotoInsert;
-use photovault::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
-use photovault::services::TrashService;
+use smriti::db::photo_repo::PhotoInsert;
+use smriti::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
+use smriti::services::TrashService;
 use tempfile::tempdir;
 
 fn setup_db() -> (tempfile::TempDir, Database) {
@@ -75,7 +75,7 @@ fn test_schema_creation() {
 #[test]
 fn test_v15_composite_indexes_present_and_used() {
     let (_temp, db) = setup_db();
-    photovault::db::migrations::run_migrations(&db.conn).unwrap();
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
 
     // Expected indexes after migration v15.
     for index in &[
@@ -126,7 +126,7 @@ fn test_v15_composite_indexes_present_and_used() {
     );
 
     // Idempotent re-run should not error or double-insert version rows.
-    photovault::db::migrations::run_migrations(&db.conn).unwrap();
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
     let version_count: i32 = db
         .conn
         .query_row(

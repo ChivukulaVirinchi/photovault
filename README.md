@@ -1,5 +1,6 @@
 <div align="center">
-  <h1>PhotoVault</h1>
+  <img src="docs/smriti-logo.svg" alt="Smriti" width="280">
+  <p><em>स्मृति — that which is remembered</em></p>
   <p><strong>Your photo library, organized — on your machine.</strong></p>
   <p>
     Lightning fast on hundreds of thousands of photos. Offline-first
@@ -24,7 +25,7 @@
     </a>
   </p>
 
-  <img src="website/hero-screenshot.png" alt="PhotoVault screenshot" width="800">
+  <img src="website/hero-screenshot.png" alt="Smriti screenshot" width="800">
 </div>
 
 ---
@@ -41,7 +42,7 @@
 
 ## Why offline?
 
-Your photos are personal. PhotoVault keeps them that way.
+Your photos are personal. Smriti keeps them that way.
 
 - No cloud upload. Photos stay on your drive.
 - No account required. No telemetry. No analytics.
@@ -51,9 +52,9 @@ Your photos are personal. PhotoVault keeps them that way.
 ## Install
 
 ### Linux
-- **Debian / Ubuntu**: [Download .deb](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-ubuntu-amd64.deb)
-- **AppImage (other distros)**: [Download AppImage](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-x86_64.AppImage) → `chmod +x` → run
-- **Optional assets pack**: [PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
+- **Debian / Ubuntu**: [Download .deb](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-ubuntu-amd64.deb)
+- **AppImage (other distros)**: [Download AppImage](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-x86_64.AppImage) → `chmod +x` → run
+- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
   — ML models for face recognition plus offline geocoding data.
 
 Linux release artifacts include `SHA256SUMS` for integrity
@@ -61,26 +62,26 @@ verification. Tagged releases run smoke tests for both the `.deb`
 and the AppImage in CI before publishing.
 
 ### Windows
-- **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Setup-x64.msi)
+- **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Setup-x64.msi)
 - **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/photovault-x86_64-pc-windows-msvc.zip)
-- **Optional assets pack**: [PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
+- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
 
-> PhotoVault's installer is not code-signed. Windows SmartScreen
+> Smriti's installer is not code-signed. Windows SmartScreen
 > may warn on first launch — click **More info** → **Run anyway**.
 
 ### macOS
 - Download the macOS archive from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
-- **Optional assets pack**: [PhotoVault-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/PhotoVault-Assets.zip)
+- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
 
-> PhotoVault is not notarized for macOS. Gatekeeper may warn on
+> Smriti is not notarized for macOS. Gatekeeper may warn on
 > first launch — right-click the app → **Open** → **Open anyway**.
 
 ## Automatic updates
 
-PhotoVault can check for new releases and (where possible) download
+Smriti can check for new releases and (where possible) download
 and install them for you. The check is **opt-in**: on first run a
 prompt asks whether you want it, and you can change the answer later
-in **Settings → Advanced**. When enabled, PhotoVault queries
+in **Settings → Advanced**. When enabled, Smriti queries
 `api.github.com` at most once every 24 hours; no photo data or
 telemetry is sent. See [PRIVACY.md](PRIVACY.md) for the full
 disclosure.
@@ -117,7 +118,7 @@ cargo build --release --features heic
 Shipped binaries (.deb, AppImage, macOS .tar.gz) include HEIC support
 out of the box. The Windows MSI ships without HEIC for now —
 `libheif` Windows binaries will land in v1.1. Without HEIC enabled,
-PhotoVault still indexes `.heic` files but reports a clear "HEIC
+Smriti still indexes `.heic` files but reports a clear "HEIC
 support not compiled in" error when asked to decode one.
 
 Optional — install the asset pack locally for face recognition + geocoding:
@@ -170,7 +171,7 @@ Headline entry points:
 - **[Issues](https://github.com/ChivukulaVirinchi/photovault/issues)** — bug reports and feature requests, via the templates.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, commit style, CI gates, architectural rules.
 - **[Security advisories](https://github.com/ChivukulaVirinchi/photovault/security/advisories/new)** — private reporting path for vulnerabilities (see [SECURITY.md](SECURITY.md)).
-- **Sponsor** — if PhotoVault is useful to you, the Sponsor button at the top of this repo helps keep it maintained.
+- **Sponsor** — if Smriti is useful to you, the Sponsor button at the top of this repo helps keep it maintained.
 
 > **Note on face-recognition models.** The face detection + recognition
 > models come from [InsightFace](https://github.com/deepinsight/insightface)

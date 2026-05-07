@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use tauri::State;
 
-use photovault::db::recent_search_repo::RecentSearchRepo;
-use photovault::services::search::SearchService;
+use smriti::db::recent_search_repo::RecentSearchRepo;
+use smriti::services::search::SearchService;
 
 use crate::dto::{RecentSearchDto, SearchResultsDto};
 use crate::state::AppState;

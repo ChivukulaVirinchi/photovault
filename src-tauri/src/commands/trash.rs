@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use tauri::State;
 
-use photovault::db::trash_repo::TrashRepo;
-use photovault::services::trash::TrashService;
+use smriti::db::trash_repo::TrashRepo;
+use smriti::services::trash::TrashService;
 
 use crate::dto::{Page, TrashStatsDto, TrashedPhotoDto};
 use crate::pagination;

@@ -5,8 +5,8 @@ This is the canonical maintainer flow for Linux releases.
 ## Scope
 
 Supported Linux artifacts:
-- `PhotoVault-ubuntu-amd64.deb`
-- `PhotoVault-x86_64.AppImage`
+- `Smriti-ubuntu-amd64.deb`
+- `Smriti-x86_64.AppImage`
 
 Published by tag-driven CI workflow:
 - `.github/workflows/release.yml`
@@ -56,13 +56,13 @@ photovault
 ```
 
 Expected output:
-- `PhotoVault-x86_64.AppImage`
+- `Smriti-x86_64.AppImage`
 
 Run test:
 
 ```bash
-chmod +x PhotoVault-x86_64.AppImage
-./PhotoVault-x86_64.AppImage
+chmod +x Smriti-x86_64.AppImage
+./Smriti-x86_64.AppImage
 ```
 
 ## 3) Publish Linux artifacts via CI
@@ -72,7 +72,7 @@ Create and push a release tag:
 ```bash
 git checkout master
 git pull origin master
-git tag -a vX.Y.Z -m "PhotoVault vX.Y.Z"
+git tag -a vX.Y.Z -m "Smriti vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
@@ -81,8 +81,8 @@ CI will create a draft release with assets.
 ## 4) Verify release assets
 
 Ensure draft release contains at least:
-- `PhotoVault-ubuntu-amd64.deb`
-- `PhotoVault-x86_64.AppImage`
+- `Smriti-ubuntu-amd64.deb`
+- `Smriti-x86_64.AppImage`
 - `SHA256SUMS`
 
 Note: Draft release creation is blocked unless Linux smoke-test jobs pass.
@@ -100,8 +100,8 @@ Open draft release, review notes, publish.
 ## 6) Post-release checks
 
 Validate website links:
-- Ubuntu `.deb`: `/releases/latest/download/PhotoVault-ubuntu-amd64.deb`
-- AppImage: `/releases/latest/download/PhotoVault-x86_64.AppImage`
+- Ubuntu `.deb`: `/releases/latest/download/Smriti-ubuntu-amd64.deb`
+- AppImage: `/releases/latest/download/Smriti-x86_64.AppImage`
 
 ## 7) Troubleshooting
 

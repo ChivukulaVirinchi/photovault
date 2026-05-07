@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use photovault::services::geocoding::GeocodingService;
+use smriti::services::geocoding::GeocodingService;
 
 use crate::dto::{JobIdDto, LocationDto};
 use crate::events::{JobProgress, EV_GEOCODING_COMPLETE, EV_GEOCODING_PROGRESS};
@@ -21,7 +21,7 @@ pub struct GeocodingResolveOneArgs {
 pub async fn geocoding_resolve_one(
     args: GeocodingResolveOneArgs,
 ) -> CommandResult<Option<LocationDto>> {
-    let path = photovault::db::geonames::geonames_db_path();
+    let path = smriti::db::geonames::geonames_db_path();
     if !path.exists() {
         return Ok(None);
     }
@@ -157,7 +157,7 @@ fn backfill_inner(
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<GeocodingCompleteDto, String> {
     use std::sync::atomic::Ordering;
-    let path = photovault::db::geonames::geonames_db_path();
+    let path = smriti::db::geonames::geonames_db_path();
     if !path.exists() {
         return Ok(GeocodingCompleteDto {
             job_id: job_id.to_string(),
@@ -170,8 +170,8 @@ fn backfill_inner(
         });
     }
     let svc = GeocodingService::new(&path).map_err(|e| e.to_string())?;
-    let db_path = photovault::db::db_path_for(drive_root);
-    let conn = photovault::db::open_secondary(&db_path).map_err(|e| e.to_string())?;
+    let db_path = smriti::db::db_path_for(drive_root);
+    let conn = smriti::db::open_secondary(&db_path).map_err(|e| e.to_string())?;
 
     let sql = if force_refresh {
         r#"

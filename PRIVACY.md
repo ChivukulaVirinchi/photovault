@@ -1,10 +1,10 @@
 # Privacy
 
-PhotoVault is offline-first. Here is exactly what that means.
+Smriti is offline-first. Here is exactly what that means.
 
 ## What stays local
 
-**All of your photos.** PhotoVault never uploads, syncs, or
+**All of your photos.** Smriti never uploads, syncs, or
 transmits your photos anywhere. They stay on your drive.
 
 **All of your metadata.** Face data, locations, dates, EXIF —
@@ -20,7 +20,7 @@ Four things, all by design and clearly scoped:
 
 ### 1. Map tiles (OpenStreetMap)
 
-When you open the **Map** view, PhotoVault downloads map tiles for
+When you open the **Map** view, Smriti downloads map tiles for
 the regions you pan/zoom to. Tiles are cached locally; subsequent
 views of the same region are served from cache. To limit or
 disable: avoid the Map view, or cap the cache size in
@@ -42,7 +42,7 @@ Re-triggered from **Settings → Advanced → Reinstall Assets**.
 
 ### 3. Update check (opt-in)
 
-When enabled, PhotoVault queries `api.github.com` at most once
+When enabled, Smriti queries `api.github.com` at most once
 every 24 hours to see if a new release has been published. This is
 **opt-in** — disabled by default. On first run a prompt asks
 whether you want it; you can change the answer later in
@@ -69,7 +69,7 @@ entirely.
 If you enable update checks and click **Download** in the banner
 when a new version is available:
 
-- PhotoVault downloads the matching installer for your platform
+- Smriti downloads the matching installer for your platform
   (AppImage, MSI, .dmg, or portable zip) from `github.com/…/releases`.
 - Downloaded bytes are verified against the signed `SHA256SUMS`
   published alongside the release.
@@ -77,7 +77,7 @@ when a new version is available:
   install or library is sent.
 
 If you installed via a system package manager (apt, Homebrew,
-winget, Flatpak), PhotoVault shows the matching upgrade command
+winget, Flatpak), Smriti shows the matching upgrade command
 instead of self-replacing. No download happens in that path.
 
 ## Where your data lives
