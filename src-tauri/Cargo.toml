@@ -2,7 +2,7 @@
 name = "smriti-tauri"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Tauri shell for Smriti — wraps the smriti library in IPC handlers."
 license = "Apache-2.0"
 publish = false

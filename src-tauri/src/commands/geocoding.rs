@@ -264,7 +264,7 @@ fn backfill_inner(
                 None => {}
             }
             processed += 1;
-            if processed % tick == 0 || processed == considered {
+            if processed.is_multiple_of(tick) || processed == considered {
                 emit(
                     app,
                     EV_GEOCODING_PROGRESS,

@@ -6,7 +6,7 @@ Thanks for your interest. Contributions of all sizes are welcome.
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/photovault.git`
-3. Install Rust 1.85+: https://rustup.rs/
+3. Install Rust 1.88+: https://rustup.rs/
 4. Install Node 20+ (for the Svelte frontend) and the Tauri CLI:
    `cargo install tauri-cli --version "^2" --locked`
 5. Install frontend deps: `cd src-ui && npm install && cd ..`

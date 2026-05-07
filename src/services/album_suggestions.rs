@@ -722,7 +722,7 @@ pub fn detect_gatherings(
             }
         }
         let mut sorted: Vec<(i64, usize)> = counts.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
         let top_names: Vec<String> = sorted
             .iter()
             .take(2)

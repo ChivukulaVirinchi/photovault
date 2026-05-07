@@ -317,7 +317,7 @@ fn run_scan(
             batch.clear();
 
             // Send progress
-            if files_processed % 50 == 0 || files_processed <= 5 {
+            if files_processed.is_multiple_of(50) || files_processed <= 5 {
                 let _ = progress_tx.send_blocking(ScanProgress {
                     files_found: total_found,
                     files_processed,

@@ -18,7 +18,7 @@
       <img src="https://img.shields.io/github/actions/workflow/status/ChivukulaVirinchi/photovault/ci.yml?branch=master&label=CI" alt="CI">
     </a>
     <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/Cargo.toml">
-      <img src="https://img.shields.io/badge/MSRV-1.85-blue" alt="MSRV 1.85">
+      <img src="https://img.shields.io/badge/MSRV-1.88-blue" alt="MSRV 1.88">
     </a>
     <a href="LICENSE">
       <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache 2.0">

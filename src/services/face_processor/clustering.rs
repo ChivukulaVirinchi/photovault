@@ -367,7 +367,10 @@ impl FaceProcessor {
     fn merge_similar_clusters(face_repo: &FaceRepo) -> Result<usize, String> {
         // Tunable: how aggressively to unify fragments. Higher = safer.
         // Mean of top-3 cross-cluster similarities above this -> merge.
-        const MERGE_THRESHOLD: f32 = 0.55;
+        // 0.68 is the bar at which two clusters are confidently the same
+        // person. Lower values silently merged distinct people whose
+        // gallery shots happened to share lighting / angle / accessories.
+        const MERGE_THRESHOLD: f32 = 0.68;
         const TOP_K_PAIRS: usize = 3;
 
         let galleries = face_repo
@@ -655,17 +658,16 @@ impl FaceProcessor {
             let band = crate::ml::retrieval::classify(&reranked, &banding);
 
             match band {
-                crate::ml::ConfidenceBand::High { hit } => {
+                crate::ml::ConfidenceBand::High { hit }
                     if face_repo
                         .assign_face_to_cluster(*face_id, hit.cluster_id)
-                        .is_ok()
-                    {
-                        cluster_photo_ids
-                            .entry(hit.cluster_id)
-                            .or_default()
-                            .insert(*photo_id);
-                        assigned += 1;
-                    }
+                        .is_ok() =>
+                {
+                    cluster_photo_ids
+                        .entry(hit.cluster_id)
+                        .or_default()
+                        .insert(*photo_id);
+                    assigned += 1;
                 }
                 _ => {
                     // AMBIGUOUS / LOW: leave for end-of-run pipeline.

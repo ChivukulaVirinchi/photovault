@@ -54,10 +54,15 @@ pub struct BandingConfig {
 
 impl Default for BandingConfig {
     fn default() -> Self {
+        // Cosine bars for ArcFace / glintr100 L2-normalized embeddings.
+        // 0.62 / 0.12 is calibrated to push borderline matches into the
+        // review queue rather than auto-assigning them — at 0.55 / 0.08
+        // hard-similar pairs (siblings, glasses-wearers, similar lighting)
+        // were sailing through the HIGH band silently.
         Self {
             low_threshold: 0.40,
-            high_threshold: 0.55,
-            margin: 0.08,
+            high_threshold: 0.62,
+            margin: 0.12,
         }
     }
 }
