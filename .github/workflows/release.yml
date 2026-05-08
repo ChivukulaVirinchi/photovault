@@ -75,6 +75,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix src-ui
 
+      # tauri-action runs `beforeBuildCommand` from the repo root, not from
+      # `src-tauri/`, so a relative `--prefix ../src-ui` would escape the
+      # checkout. Build the frontend explicitly here and let Tauri pick up
+      # the prebuilt `frontendDist`.
+      - name: Build frontend
+        run: npm run build --prefix src-ui
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -94,20 +101,46 @@ jobs:
       - uses: actions/checkout@v4
       - name: Download ONNX models + GeoNames + ORT
         run: |
-          mkdir -p assets-pack/models assets-pack/data assets-pack/libs/onnxruntime
-          # Models
-          curl -sSLfo assets-pack/models/scrfd_10g_bnkps.onnx \
-            https://github.com/deepinsight/insightface/releases/download/v0.7/scrfd_10g_bnkps.onnx
-          curl -sSLfo assets-pack/models/glintr100.onnx \
-            https://github.com/deepinsight/insightface/releases/download/v0.7/glintr100.onnx
+          set -euo pipefail
+          mkdir -p assets-pack/models assets-pack/data \
+                   assets-pack/libs/onnxruntime/linux \
+                   assets-pack/libs/onnxruntime/windows
+
+          # Face models (Hugging Face mirror — same as scripts/setup_assets.sh)
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o assets-pack/models/scrfd_10g_bnkps.onnx \
+            https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o assets-pack/models/glintr100.onnx \
+            https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx
+
           # GeoNames cities1000 + country codes
-          curl -sSLfo /tmp/cities1000.zip http://download.geonames.org/export/dump/cities1000.zip
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o /tmp/cities1000.zip \
+            https://download.geonames.org/export/dump/cities1000.zip
           unzip -o /tmp/cities1000.zip -d assets-pack/data/
-          curl -sSLfo assets-pack/data/country_codes.txt \
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o assets-pack/data/country_codes.txt \
             https://download.geonames.org/export/dump/countryInfo.txt
-          # ORT shared libs (one .so for Linux, one .dll for Windows)
-          # The setup_assets.sh script already knows the URL/version of choice.
-          ./scripts/setup_assets.sh --download-only --target ./assets-pack || true
+
+          # ONNX Runtime — Linux x64 .so
+          ORT_VER=1.23.0
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o /tmp/ort-linux.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-linux-x64-${ORT_VER}.tgz"
+          mkdir -p /tmp/ort-linux
+          tar -xzf /tmp/ort-linux.tgz -C /tmp/ort-linux
+          cp /tmp/ort-linux/onnxruntime-linux-x64-${ORT_VER}/lib/libonnxruntime.so* \
+             assets-pack/libs/onnxruntime/linux/
+
+          # ONNX Runtime — Windows x64 .dll
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o /tmp/ort-win.zip \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-win-x64-${ORT_VER}.zip"
+          unzip -o /tmp/ort-win.zip -d /tmp/ort-win
+          cp /tmp/ort-win/onnxruntime-win-x64-${ORT_VER}/lib/onnxruntime.dll \
+             assets-pack/libs/onnxruntime/windows/
+
       - name: Zip pack
         run: |
           cd assets-pack
