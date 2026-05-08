@@ -60,3 +60,7 @@ tempfile = "3"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# Pass-through to smriti's heic feature (libheif-rs). Release builds set
+# this so shipped binaries decode HEIC out of the box; default omits it
+# so a fresh `cargo build` doesn't require libheif on the system.
+heic = ["smriti/heic"]
