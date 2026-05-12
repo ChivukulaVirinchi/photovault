@@ -10,6 +10,7 @@ use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
 use crate::events::{JobProgress, EV_ALBUM_SUGGESTIONS_COMPLETE, EV_ALBUM_SUGGESTIONS_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
+use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
 use crate::{CommandError, CommandResult};
 
 fn fetch_album(repo: &AlbumRepo, id: i64) -> CommandResult<AlbumDto> {
@@ -20,13 +21,74 @@ fn fetch_album(repo: &AlbumRepo, id: i64) -> CommandResult<AlbumDto> {
         .ok_or_else(|| CommandError::not_found("album", id))
 }
 
+/// Collects (album_index, file_path, file_hash, orientation) for every
+/// album with a cover photo. Used to upgrade `cover_thumbnail_path`
+/// from the stored Small variant to Medium before returning to the UI.
+fn collect_album_cover_inputs(
+    conn: &rusqlite::Connection,
+    albums: &[AlbumDto],
+) -> rusqlite::Result<Vec<CoverInput>> {
+    if albums.is_empty() {
+        return Ok(Vec::new());
+    }
+    let repo = smriti::db::PhotoRepo::new(conn);
+    let mut out = Vec::with_capacity(albums.len());
+    for (idx, a) in albums.iter().enumerate() {
+        let Some(cover_id) = a.cover_photo_id else {
+            continue;
+        };
+        if let Some(p) = repo.get_by_id(cover_id)? {
+            out.push((idx, p.file_path, p.file_hash, p.orientation));
+        }
+    }
+    Ok(out)
+}
+
+/// Same for AI suggestions, which carry their own cover_photo_id field.
+fn collect_suggestion_cover_inputs(
+    conn: &rusqlite::Connection,
+    suggestions: &[AlbumSuggestionDto],
+) -> rusqlite::Result<Vec<CoverInput>> {
+    if suggestions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let repo = smriti::db::PhotoRepo::new(conn);
+    let mut out = Vec::with_capacity(suggestions.len());
+    for (idx, s) in suggestions.iter().enumerate() {
+        let Some(cover_id) = s.cover_photo_id else {
+            continue;
+        };
+        if let Some(p) = repo.get_by_id(cover_id)? {
+            out.push((idx, p.file_path, p.file_hash, p.orientation));
+        }
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn albums_list(state: State<'_, AppState>) -> CommandResult<Vec<AlbumDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = AlbumRepo::new(&db.conn);
-    Ok(repo.get_all()?.into_iter().map(Into::into).collect())
+    let (mut albums, inputs, drive_root, thumbs) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        let db = lib.db.lock().await;
+        let repo = AlbumRepo::new(&db.conn);
+        let albums: Vec<AlbumDto> = repo.get_all()?.into_iter().map(Into::into).collect();
+        let inputs = collect_album_cover_inputs(&db.conn, &albums)?;
+        (
+            albums,
+            inputs,
+            lib.drive_root.clone(),
+            lib.thumbnails.clone(),
+        )
+    };
+
+    let upgrades = upgrade_covers_to_medium(thumbs, drive_root, inputs).await;
+    for (idx, path) in upgrades {
+        if let (Some(a), Some(p)) = (albums.get_mut(idx), path) {
+            a.cover_thumbnail_path = Some(p);
+        }
+    }
+    Ok(albums)
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,27 +101,60 @@ pub async fn albums_get(
     state: State<'_, AppState>,
     args: AlbumsGetArgs,
 ) -> CommandResult<AlbumDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = AlbumRepo::new(&db.conn);
-    let all = repo.get_all()?;
-    let album = all
-        .into_iter()
-        .find(|a| a.id == args.id)
-        .ok_or_else(|| CommandError::not_found("album", args.id))?;
-    Ok(album.into())
+    let (mut album, inputs, drive_root, thumbs) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        let db = lib.db.lock().await;
+        let repo = AlbumRepo::new(&db.conn);
+        let all = repo.get_all()?;
+        let album_model = all
+            .into_iter()
+            .find(|a| a.id == args.id)
+            .ok_or_else(|| CommandError::not_found("album", args.id))?;
+        let album: AlbumDto = album_model.into();
+        let inputs = collect_album_cover_inputs(&db.conn, std::slice::from_ref(&album))?;
+        (
+            album,
+            inputs,
+            lib.drive_root.clone(),
+            lib.thumbnails.clone(),
+        )
+    };
+
+    let upgrades = upgrade_covers_to_medium(thumbs, drive_root, inputs).await;
+    if let Some((_, Some(p))) = upgrades.into_iter().next() {
+        album.cover_thumbnail_path = Some(p);
+    }
+    Ok(album)
 }
 
 #[tauri::command]
 pub async fn albums_suggestions_list(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AlbumSuggestionDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = AlbumSuggestionRepo::new(&db.conn);
-    Ok(repo.get_pending()?.into_iter().map(Into::into).collect())
+    let (mut suggestions, inputs, drive_root, thumbs) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        let db = lib.db.lock().await;
+        let repo = AlbumSuggestionRepo::new(&db.conn);
+        let suggestions: Vec<AlbumSuggestionDto> =
+            repo.get_pending()?.into_iter().map(Into::into).collect();
+        let inputs = collect_suggestion_cover_inputs(&db.conn, &suggestions)?;
+        (
+            suggestions,
+            inputs,
+            lib.drive_root.clone(),
+            lib.thumbnails.clone(),
+        )
+    };
+
+    let upgrades = upgrade_covers_to_medium(thumbs, drive_root, inputs).await;
+    for (idx, path) in upgrades {
+        if let (Some(s), Some(p)) = (suggestions.get_mut(idx), path) {
+            s.cover_thumbnail_path = Some(p);
+        }
+    }
+    Ok(suggestions)
 }
 
 #[derive(Debug, Deserialize)]

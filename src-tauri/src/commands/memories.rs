@@ -2,14 +2,11 @@
 
 use chrono::Local;
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tauri::State;
-
-use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
 
 use crate::dto::{MemoryCardDto, MemoryDetailDto, PersonDto, PhotoSummaryDto};
 use crate::state::AppState;
+use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
 use crate::{CommandError, CommandResult};
 
 #[tauri::command]
@@ -34,7 +31,7 @@ pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<Mem
         (dtos, inputs, lib.drive_root.clone(), lib.thumbnails.clone())
     };
 
-    let upgrades = upgrade_to_medium(thumbs, drive_root, hero_inputs).await;
+    let upgrades = upgrade_covers_to_medium(thumbs, drive_root, hero_inputs).await;
     let mut cards = cards;
     for (idx, path) in upgrades {
         if let Some(c) = cards.get_mut(idx) {
@@ -80,7 +77,7 @@ pub async fn memories_detail(
         )
     };
 
-    let upgrades = upgrade_to_medium(thumbs, drive_root, hero_input).await;
+    let upgrades = upgrade_covers_to_medium(thumbs, drive_root, hero_input).await;
     if let Some((_, path)) = upgrades.into_iter().next() {
         dto.hero_thumbnail_path = path;
     }
@@ -193,17 +190,13 @@ pub async fn memories_save_as_album(
         .ok_or_else(|| CommandError::not_found("album", album_id))
 }
 
-/// One row of hero-thumbnail input — the bundle of fields needed to
-/// generate (or look up) a medium-size thumbnail for a card's hero.
-type HeroInput = (usize, i64, String, String, i32);
-
-/// Collects (card_index, hero_photo_id, file_path, file_hash, orientation)
-/// for every card whose hero exists. Used to drive medium-thumbnail
-/// generation without holding the DB lock.
+/// Collects (card_index, file_path, file_hash, orientation) for every
+/// card whose hero photo exists. Feeds `upgrade_covers_to_medium` so
+/// the medium thumbnail generation runs outside the DB lock.
 fn collect_hero_inputs(
     conn: &rusqlite::Connection,
     cards: &[MemoryCardDto],
-) -> rusqlite::Result<Vec<HeroInput>> {
+) -> rusqlite::Result<Vec<CoverInput>> {
     if cards.is_empty() {
         return Ok(Vec::new());
     }
@@ -211,52 +204,8 @@ fn collect_hero_inputs(
     let mut out = Vec::with_capacity(cards.len());
     for (idx, c) in cards.iter().enumerate() {
         if let Some(p) = repo.get_by_id(c.hero_photo_id)? {
-            out.push((idx, p.id, p.file_path, p.file_hash, p.orientation));
+            out.push((idx, p.file_path, p.file_hash, p.orientation));
         }
     }
     Ok(out)
-}
-
-/// For each hero, return the relative path to its Medium-size thumbnail.
-/// If the file doesn't exist on disk, generate it synchronously (capped
-/// by the ThumbnailService's 8-permit limiter). Failures fall through
-/// to None — the frontend is expected to fall back to the Small variant.
-async fn upgrade_to_medium(
-    svc: Arc<ThumbnailService>,
-    drive_root: PathBuf,
-    inputs: Vec<HeroInput>,
-) -> Vec<(usize, Option<String>)> {
-    if inputs.is_empty() {
-        return Vec::new();
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut out: Vec<(usize, Option<String>)> = Vec::with_capacity(inputs.len());
-        for (idx, _id, file_path, file_hash, orientation) in inputs {
-            let subdir = &file_hash[..2.min(file_hash.len())];
-            let rel = format!(
-                ".photovault/thumbnails/medium/v2/{}/{}.jpg",
-                subdir, file_hash
-            );
-            let abs_thumb = drive_root.join(&rel);
-            if abs_thumb.exists() {
-                out.push((idx, Some(rel)));
-                continue;
-            }
-            let abs_src = drive_root.join(&file_path);
-            match svc.generate_thumbnail(&abs_src, &file_hash, orientation, ThumbnailSize::Medium) {
-                Ok(_) => out.push((idx, Some(rel))),
-                Err(e) => {
-                    tracing::debug!(
-                        "memory medium thumb generate failed for {}: {}",
-                        file_path,
-                        e
-                    );
-                    out.push((idx, None));
-                }
-            }
-        }
-        out
-    })
-    .await
-    .unwrap_or_default()
 }

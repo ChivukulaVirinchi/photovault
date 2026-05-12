@@ -10,6 +10,7 @@ pub mod events;
 pub mod jobs;
 pub mod pagination;
 pub mod state;
+pub mod thumbnail_upgrade;
 
 pub use error::{CommandError, CommandResult};
 pub use state::AppState;
