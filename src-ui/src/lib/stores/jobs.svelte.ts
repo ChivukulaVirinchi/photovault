@@ -26,6 +26,7 @@ export interface Job {
 
 export type JobKind =
   | "scan"
+  | "metadata"
   | "faces"
   | "duplicates"
   | "bursts"
@@ -35,7 +36,8 @@ export type JobKind =
   | "albumSuggestions";
 
 const KIND_TITLE: Record<JobKind, string> = {
-  scan:             "Scanning library",
+  scan:             "Indexing files",
+  metadata:         "Reading metadata",
   faces:            "Finding faces",
   duplicates:       "Detecting duplicates",
   bursts:           "Detecting bursts",
@@ -77,6 +79,8 @@ class JobsStore {
       // faces-specific
       chunks_flushed?: number;
       faces_found?: number;
+      // metadata-extraction-specific
+      done?: number;
       // legacy fallbacks: older binaries used these names. Reading them
       // here means the new frontend works against an unrebuilt Rust
       // shell — the field rename in `FacesProgressDto` was breaking the
@@ -91,7 +95,7 @@ class JobsStore {
       const p = e.payload;
       // Coalesce different progress shapes into one Job.
       const processed =
-        p.files_processed ?? p.processed ?? p.photos_processed ?? 0;
+        p.files_processed ?? p.processed ?? p.photos_processed ?? p.done ?? 0;
       const total =
         p.files_found ?? p.total ?? p.total_photos ?? null;
       const facesFound = p.faces_found ?? p.faces_detected ?? 0;
@@ -125,6 +129,8 @@ class JobsStore {
     const subs: Array<[string, JobKind, boolean]> = [
       ["scan:progress",       "scan",       false],
       ["scan:complete",       "scan",       true ],
+      ["metadata:progress",   "metadata",   false],
+      ["metadata:complete",   "metadata",   true ],
       ["faces:progress",      "faces",      false],
       ["faces:complete",      "faces",      true ],
       ["duplicates:progress", "duplicates", false],
@@ -134,6 +140,7 @@ class JobsStore {
       ["documents:progress",  "documents",  false],
       ["documents:complete",  "documents",  true ],
       ["thumbnails:progress", "thumbnails", false],
+      ["thumbnails:complete", "thumbnails", true ],
       ["geocoding:progress",  "geocoding",  false],
       ["geocoding:complete",  "geocoding",  true ],
       ["album_suggestions:progress", "albumSuggestions", false],

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (14);
+INSERT INTO schema_version (version) VALUES (19);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS photos (
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
     faces_processed BOOLEAN DEFAULT FALSE,
+    metadata_extracted BOOLEAN DEFAULT FALSE,
+    thumbnailed BOOLEAN DEFAULT FALSE,
     brightness REAL,                   -- Average luma in [0,1], cached from face pipeline
     phash INTEGER,                     -- 64-bit DCT perceptual hash for near-duplicate detection
     content_category TEXT DEFAULT 'photo', -- 'photo' | 'document' | 'screenshot' | 'presentation' | 'whiteboard' | 'receipt'
@@ -375,6 +377,10 @@ CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
 CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
 CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
 CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
+CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
+    ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed
+    ON photos(thumbnailed) WHERE thumbnailed = FALSE;
 
 -- Faces
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);

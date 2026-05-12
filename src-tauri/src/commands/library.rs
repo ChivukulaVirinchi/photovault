@@ -4,7 +4,6 @@
 //! `library.start_scan`, `library.apply_changes` etc. land in M2.
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
@@ -12,8 +11,11 @@ use tauri::{AppHandle, Manager, State};
 use smriti::db::Database;
 use smriti::services::drive_detector::DriveDetector;
 
-use crate::dto::{DriveDto, IndexChangesDto, JobIdDto, LibraryHandleDto};
-use crate::events::{EV_SCAN_COMPLETE, EV_SCAN_PROGRESS, EV_THUMBNAILS_PROGRESS};
+use crate::dto::{DriveDto, IndexChangesDto, JobIdDto, LibraryHandleDto, MetadataProgressDto};
+use crate::events::{
+    EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
+    EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
+};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind, OpenLibrary};
 use crate::{CommandError, CommandResult};
@@ -229,75 +231,45 @@ pub struct ScanProgressDto {
 /// Start a scan job. Returns the job_id immediately; progress streams on
 /// `scan:progress`, completion on `scan:complete`.
 ///
-/// Caveat: the engine's scanner takes ownership of the Database
-/// (moves it into a spawn_blocking thread). We work around that by
-/// extracting the database from AppState, running the scan, then
-/// putting it back. While the scan runs the library is "borrowed" —
-/// other commands see `LibraryClosed` for the scan duration. M3 will
-/// refactor scanner to take `&Connection` so this dance goes away.
+/// The scanner borrows the database via `Arc<Mutex<Database>>` so the
+/// library stays open and queryable (Timeline, Map, etc.) during the
+/// scan. Cancellation is unified through the job registry's flag.
 #[tauri::command]
 pub async fn library_start_scan(
     app: AppHandle,
     state: State<'_, AppState>,
     args: LibraryStartScanArgs,
 ) -> CommandResult<JobIdDto> {
+    // Refuse a second Scan if one is already mid-run. Old code prevented
+    // this implicitly via the try_unwrap dance on the Database Arc;
+    // since we now share the Arc, we have to be explicit.
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Scan) {
+        return Err(CommandError::Conflict {
+            reason: "a scan is already in progress".into(),
+        });
+    }
+
     let job = jobs::start_job(&state, JobKind::Scan).await?;
     let job_id = job.id.clone();
 
-    // Extract Database, leaving library temporarily empty.
-    let (drive_root, database) = {
-        let mut guard = state.library.write().await;
-        let lib = guard.take().ok_or(CommandError::LibraryClosed)?;
-        let drive_root = lib.drive_root.clone();
-        let thumbnails = lib.thumbnails.clone();
-        // Try to take exclusive ownership of the DB — only possible if
-        // no other handler is currently holding it. The Arc must have a
-        // refcount of 1.
-        let db_arc = lib.db;
-        let db_mutex = match Arc::try_unwrap(db_arc) {
-            Ok(m) => m,
-            Err(arc) => {
-                // Put it back; another handler is mid-operation.
-                *guard = Some(OpenLibrary {
-                    drive_root: drive_root.clone(),
-                    db: arc,
-                    thumbnails,
-                });
-                jobs::finish_job(&state, &job_id).await;
-                return Err(CommandError::Conflict {
-                    reason: "another command is currently using the database".into(),
-                });
-            }
-        };
-        let db = db_mutex.into_inner();
-        (drive_root, db)
+    // Read the drive_root + clone the db Arc. No more take()/try_unwrap dance.
+    let (drive_root, db) = {
+        let guard = state.library.read().await;
+        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
     };
 
     let cancel = job.cancel.clone();
     let app_clone = app.clone();
-    let started = job.started_at;
-    let drive_root_clone = drive_root.clone();
     let job_id_clone = job_id.clone();
 
     tokio::spawn(async move {
-        // Bridge the engine's scanner channel → Tauri events.
-        let (rx, scanner_cancel, handle) = smriti::services::scanner::start_scan(
-            drive_root_clone.clone(),
-            database,
+        let (rx, handle) = smriti::services::scanner::start_scan(
+            drive_root.clone(),
+            db.clone(),
+            cancel,
             args.scan_hidden_folders,
         );
-
-        // Forward our unified cancel into scanner's cancel.
-        let cancel_propagator = {
-            let cancel = cancel.clone();
-            let scanner_cancel = scanner_cancel.clone();
-            tokio::spawn(async move {
-                while !cancel.load(Ordering::Relaxed) {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                scanner_cancel.store(true, Ordering::Relaxed);
-            })
-        };
 
         // Forward progress.
         while let Ok(p) = rx.recv().await {
@@ -307,7 +279,7 @@ pub async fn library_start_scan(
                 files_processed: p.files_processed,
                 bytes_processed: p.bytes_processed,
                 current_file: p.current_file,
-                elapsed_ms: started.elapsed().as_millis() as u64,
+                elapsed_ms: (p.elapsed_seconds * 1000.0) as u64,
                 is_complete: p.is_complete,
                 error_count: p.errors.len(),
             };
@@ -317,34 +289,24 @@ pub async fn library_start_scan(
                 emit(&app_clone, EV_SCAN_PROGRESS, dto);
             }
         }
-        cancel_propagator.abort();
 
-        // Re-attach the database (returned via ScanResult). Use AppHandle's
-        // state accessor — `*const AppState` would not be Send across the
-        // tokio task boundary.
-        if let Ok(result) = handle.await {
-            let st: tauri::State<AppState> = app_clone.state();
-            let mut guard = st.library.write().await;
-            let drive_for_post = drive_root_clone.clone();
-            match OpenLibrary::new(drive_root_clone, result.database) {
-                Ok(lib) => *guard = Some(lib),
-                Err(e) => {
-                    tracing::error!("re-attaching library after scan failed: {}", e);
-                }
-            }
-            drop(guard);
-            jobs::finish_job(&st, &job_id_clone).await;
-
-            // Kick off duplicate + burst detection in the background.
-            // Both are idempotent: re-running them just refreshes the
-            // groups in place. We don't await — the user's already
-            // looking at the freshly-scanned timeline; these populate
-            // the Bursts and Duplicates tabs over the next few seconds.
-            let app_for_post = app_clone.clone();
-            tokio::spawn(async move {
-                run_post_scan_detection(app_for_post, drive_for_post).await;
-            });
+        if let Ok(report) = handle.await {
+            tracing::info!("Scan complete: inserted {}", report.files_inserted);
         }
+
+        // Always release the job slot.
+        let st: tauri::State<AppState> = app_clone.state();
+        jobs::finish_job(&st, &job_id_clone).await;
+
+        // Kick off the downstream pipeline (metadata, thumbnails, etc.)
+        // in the background. Each stage is its own job with its own
+        // progress chip.
+        let app_for_post = app_clone.clone();
+        let drive_for_post = drive_root.clone();
+        let db_for_post = db.clone();
+        tokio::spawn(async move {
+            run_post_scan_pipeline(app_for_post, drive_for_post, db_for_post).await;
+        });
     });
 
     Ok(JobIdDto { job_id })
@@ -417,8 +379,322 @@ pub async fn library_regenerate_thumbnails(
     Ok(JobIdDto { job_id })
 }
 
-// Re-export Arc for the scan job's try_unwrap dance.
+/// Public IPC: start the metadata extraction pass on demand (Resume
+/// banner on Timeline). Refuses if one is already in flight.
+#[tauri::command]
+pub async fn library_start_metadata_extraction(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<JobIdDto> {
+    if state
+        .jobs
+        .lock()
+        .await
+        .has_any_of_kind(JobKind::MetadataExtraction)
+    {
+        return Err(CommandError::Conflict {
+            reason: "metadata extraction is already in progress".into(),
+        });
+    }
+    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
+
+    let (drive_root, db) = {
+        let guard = state.library.read().await;
+        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
+
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    tokio::spawn(async move {
+        run_metadata_stage(app_clone, job_id_clone, drive_root, db, cancel).await;
+    });
+
+    Ok(JobIdDto { job_id })
+}
+
+/// Public IPC: start the thumbnail generation pass on demand. Refuses
+/// if one is already in flight.
+#[tauri::command]
+pub async fn library_start_thumbnail_pass(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<JobIdDto> {
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
+        return Err(CommandError::Conflict {
+            reason: "thumbnail generation is already in progress".into(),
+        });
+    }
+    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
+
+    let (drive_root, db) = {
+        let guard = state.library.read().await;
+        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
+
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    tokio::spawn(async move {
+        run_thumbnail_pass(drive_root, db, cancel, app_clone, job_id_clone).await;
+    });
+
+    Ok(JobIdDto { job_id })
+}
+
+/// Read-only count of photos awaiting EXIF / geocoding. Drives the
+/// "Resume reading metadata" banner on Timeline.
+#[tauri::command]
+pub async fn library_pending_metadata_count(
+    state: State<'_, AppState>,
+) -> CommandResult<crate::dto::PendingCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let pending_photos =
+        smriti::db::photo_repo::PhotoRepo::new(&db.conn).count_pending_metadata()?;
+    Ok(crate::dto::PendingCountDto { pending_photos })
+}
+
+/// Read-only count of photos awaiting thumbnail generation. Drives the
+/// "Resume generating thumbnails" banner on Timeline.
+#[tauri::command]
+pub async fn library_pending_thumbnail_count(
+    state: State<'_, AppState>,
+) -> CommandResult<crate::dto::PendingCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let pending_photos =
+        smriti::db::photo_repo::PhotoRepo::new(&db.conn).count_pending_thumbnails()?;
+    Ok(crate::dto::PendingCountDto { pending_photos })
+}
+
+/// Shared body for "run metadata extraction now". Forwards engine
+/// progress events as Tauri events and releases the job slot when
+/// done. Used by both `library_start_metadata_extraction` (explicit
+/// Resume click) and the auto post-scan pipeline.
+async fn run_metadata_stage(
+    app: AppHandle,
+    job_id: String,
+    drive_root: PathBuf,
+    db: Arc<tokio::sync::Mutex<smriti::db::Database>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let (rx, handle) =
+        smriti::services::metadata_processor::start_metadata_job(drive_root, db, cancel);
+    while let Ok(p) = rx.recv().await {
+        let dto = MetadataProgressDto {
+            job_id: job_id.clone(),
+            total: p.total,
+            done: p.done,
+            elapsed_ms: (p.elapsed_seconds * 1000.0) as u64,
+            is_complete: p.is_complete,
+        };
+        if p.is_complete {
+            emit(&app, EV_METADATA_COMPLETE, dto);
+        } else {
+            emit(&app, EV_METADATA_PROGRESS, dto);
+        }
+    }
+    let _ = handle.await;
+    let st: tauri::State<AppState> = app.state();
+    jobs::finish_job(&st, &job_id).await;
+}
+
+async fn run_thumbnail_pass(
+    drive_root: PathBuf,
+    db: Arc<tokio::sync::Mutex<smriti::db::Database>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    app: AppHandle,
+    job_id: String,
+) {
+    use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
+
+    let chunk_size: usize = 20;
+    let svc = match ThumbnailService::new(
+        &drive_root,
+        smriti::config::AppConfig::load().thumbnail_cache_gb,
+    ) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::error!("thumbnail pass: failed to create service: {e}");
+            let st: tauri::State<AppState> = app.state();
+            jobs::finish_job(&st, &job_id).await;
+            return;
+        }
+    };
+
+    let mut total_done: u64 = 0;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
+        let chunk: Vec<(i64, String, String, i32)> = {
+            let guard = db.lock().await;
+            let mut stmt = match guard.conn.prepare(
+                "SELECT id, file_path, file_hash, orientation FROM photos \
+                 WHERE thumbnailed = FALSE AND is_trashed = FALSE \
+                 LIMIT ?",
+            ) {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stmt.query_map([chunk_size as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            .unwrap_or_default()
+        };
+
+        if chunk.is_empty() {
+            break;
+        }
+
+        let svc = svc.clone();
+        let drive = drive_root.clone();
+        let updates: Vec<(i64, Option<String>)> = chunk
+            .iter()
+            .map(|(id, path, hash, orient)| {
+                let abs = drive.join(path);
+                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Medium) {
+                    Ok(rel) => (*id, Some(rel.to_string_lossy().to_string())),
+                    Err(_) => (*id, None),
+                }
+            })
+            .collect();
+
+        let photo_ids: Vec<i64> = updates
+            .iter()
+            .filter_map(|(id, rel)| if rel.is_some() { Some(*id) } else { None })
+            .collect();
+
+        {
+            let mut guard = db.lock().await;
+            let tx = match guard.conn.transaction() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("thumbnail tx: {e}");
+                    continue;
+                }
+            };
+            for (id, rel) in &updates {
+                let _ = tx.execute(
+                    "UPDATE photos SET thumbnail_path = ?, thumbnailed = TRUE WHERE id = ?",
+                    rusqlite::params![rel, id],
+                );
+            }
+            if let Err(e) = tx.commit() {
+                tracing::error!("thumbnail tx commit: {e}");
+                continue;
+            }
+        }
+
+        if !photo_ids.is_empty() {
+            emit(
+                &app,
+                EV_THUMBNAIL_READY,
+                crate::dto::ThumbnailReadyDto { photo_ids },
+            );
+        }
+
+        total_done += updates.len() as u64;
+        emit(
+            &app,
+            EV_THUMBNAILS_PROGRESS,
+            crate::events::JobProgress {
+                job_id: job_id.clone(),
+                stage: "generate".into(),
+                processed: total_done,
+                total: None,
+                elapsed_ms: 0,
+                eta_ms: None,
+                message: None,
+            },
+        );
+    }
+
+    // Emit a completion event so the JobsIndicator clears the chip
+    // (the store dismisses ~2.5s after `:complete`). Without this the
+    // thumbnail row lingers as "running" forever even after the worker
+    // exits.
+    emit(
+        &app,
+        EV_THUMBNAILS_COMPLETE,
+        crate::events::JobProgress {
+            job_id: job_id.clone(),
+            stage: "generate".into(),
+            processed: total_done,
+            total: None,
+            elapsed_ms: 0,
+            eta_ms: None,
+            message: None,
+        },
+    );
+
+    let st: tauri::State<AppState> = app.state();
+    jobs::finish_job(&st, &job_id).await;
+}
+
 use std::sync::Arc;
+
+/// Auto-chain after a Scan completes: metadata → thumbnails → existing
+/// duplicates/bursts detection. Face detection is deliberately NOT
+/// auto-chained — it's heavy enough that users should opt in via the
+/// People page. The two stages we DO chain share their bodies with the
+/// public Resume-banner IPCs above; the difference is just where the
+/// cancel flag and job_id come from.
+async fn run_post_scan_pipeline(
+    app: AppHandle,
+    drive_root: PathBuf,
+    db: Arc<tokio::sync::Mutex<Database>>,
+) {
+    // Stage 2: metadata extraction.
+    {
+        let state: tauri::State<AppState> = app.state();
+        // Skip if a user-initiated metadata job is already running. The
+        // single `WHERE metadata_extracted = FALSE` worker would otherwise
+        // race itself; idempotent but wasteful.
+        if !state
+            .jobs
+            .lock()
+            .await
+            .has_any_of_kind(JobKind::MetadataExtraction)
+        {
+            if let Ok(job) = jobs::start_job(&state, JobKind::MetadataExtraction).await {
+                let cancel = job.cancel.clone();
+                let job_id = job.id.clone();
+                run_metadata_stage(app.clone(), job_id, drive_root.clone(), db.clone(), cancel)
+                    .await;
+            }
+        }
+    }
+
+    // Stage 3: thumbnails.
+    {
+        let state: tauri::State<AppState> = app.state();
+        if !state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
+            if let Ok(job) = jobs::start_job(&state, JobKind::Thumbnails).await {
+                let job_id = job.id.clone();
+                let cancel = job.cancel.clone();
+                run_thumbnail_pass(drive_root.clone(), db.clone(), cancel, app.clone(), job_id)
+                    .await;
+            }
+        }
+    }
+
+    // Face detection is intentionally NOT auto-chained — users start it
+    // explicitly via the People page so the heavy ML pass isn't running
+    // in the background by surprise.
+
+    // Existing post-scan detections (duplicates, bursts) — already idempotent.
+    run_post_scan_detection(app, drive_root).await;
+}
 
 /// Run duplicate + burst detection passes after a scan completes. Both
 /// passes are idempotent and persist their groups, so the Bursts and

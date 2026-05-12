@@ -1009,6 +1009,33 @@ pub struct IndexChangesDto {
     pub modified: u64,
 }
 
+// ---------- metadata extraction progress ----------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MetadataProgressDto {
+    pub job_id: String,
+    pub total: u64,
+    pub done: u64,
+    pub elapsed_ms: u64,
+    pub is_complete: bool,
+}
+
+/// Per-chunk update emitted by the thumbnail worker so the Timeline can
+/// refresh only the affected cells in place (no scroll reset, no
+/// full-page refetch). `photo_ids` is the set of rows just upgraded
+/// from `thumbnailed = FALSE` to `TRUE`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ThumbnailReadyDto {
+    pub photo_ids: Vec<i64>,
+}
+
+/// Count of photos in a particular pre-processed state — generic shape
+/// reused by the metadata and thumbnail resume banners on Timeline.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingCountDto {
+    pub pending_photos: i64,
+}
+
 // ---------- helper: parse date_taken column ----------
 #[allow(dead_code)]
 pub(crate) fn rfc3339(d: DateTime<Utc>) -> String {

@@ -20,4 +20,19 @@ export const library = {
     call<{ absolute_path: string }>("library_resolve_path", {
       photo_id: photoId,
     }),
+
+  // Streaming-scanner pipeline stages. After the initial walk inserts
+  // stub rows, two background passes fill the rest in: EXIF/geocoding
+  // and thumbnails. Both are pause/resume-able and persist progress
+  // via DB stage flags (`metadata_extracted`, `thumbnailed`).
+  startMetadataExtraction: () =>
+    call<JobIdDto>("library_start_metadata_extraction"),
+  startThumbnailPass: () => call<JobIdDto>("library_start_thumbnail_pass"),
+
+  // Counts that drive the resume banners on Timeline. Each returns
+  // `{ pending_photos: <i64> }`.
+  pendingMetadataCount: () =>
+    call<{ pending_photos: number }>("library_pending_metadata_count"),
+  pendingThumbnailCount: () =>
+    call<{ pending_photos: number }>("library_pending_thumbnail_count"),
 };

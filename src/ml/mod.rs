@@ -15,4 +15,4 @@ pub use face_detector::FaceDetector;
 pub use face_embedder::{FaceEmbedder, FaceEmbedding};
 pub use resolver::{rerank, ResolverContext, ResolverWeights};
 pub use retrieval::{retrieve_candidates, BandingConfig, ConfidenceBand, RetrievalHit};
-pub use runtime::OnnxRuntime;
+pub use runtime::{active_execution_provider, OnnxRuntime};

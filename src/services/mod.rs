@@ -16,6 +16,7 @@ pub mod install_method;
 pub mod library_health;
 pub mod map_math;
 pub mod memories;
+pub mod metadata_processor;
 pub mod ocr_processor;
 pub mod path_util;
 pub mod reindexer;
@@ -37,6 +38,7 @@ pub use face_processor::{
 pub use geocoding::GeocodingService;
 pub use library_health::LibraryHealth;
 pub use memories::MemoryCard;
+pub use metadata_processor::MetadataProgress;
 pub use ocr_processor::{OcrProcessor, OcrProgress};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;

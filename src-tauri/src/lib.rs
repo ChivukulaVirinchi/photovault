@@ -39,6 +39,10 @@ pub fn run() {
             commands::library::library_apply_changes,
             commands::library::library_start_scan,
             commands::library::library_cancel_scan,
+            commands::library::library_start_metadata_extraction,
+            commands::library::library_start_thumbnail_pass,
+            commands::library::library_pending_metadata_count,
+            commands::library::library_pending_thumbnail_count,
             commands::library::jobs_cancel,
             commands::library::library_regenerate_thumbnails,
             // photos
@@ -142,6 +146,7 @@ pub fn run() {
             // system
             commands::system::system_asset_health,
             commands::system::system_app_version,
+            commands::system::system_inference_provider,
             commands::system::system_open_in_explorer,
             commands::system::system_copy_path_to_clipboard,
             commands::system::system_updates_check,

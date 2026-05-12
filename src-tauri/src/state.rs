@@ -87,6 +87,12 @@ impl JobRegistry {
     pub fn finish(&mut self, job_id: &str) {
         self.inner.remove(job_id);
     }
+    /// True iff some currently-registered job has the given kind. Used by
+    /// `start_*` commands to refuse a second concurrent job of the same
+    /// kind (e.g. double-click on "Scan" while one is already running).
+    pub fn has_any_of_kind(&self, kind: JobKind) -> bool {
+        self.inner.values().any(|h| h.kind == kind)
+    }
 }
 
 pub struct JobHandle {
@@ -95,8 +101,10 @@ pub struct JobHandle {
 }
 
 #[allow(dead_code)] // variants used in M2
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
     Scan,
+    MetadataExtraction,
     FaceProcessing,
     Duplicates,
     Bursts,

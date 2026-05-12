@@ -228,6 +228,11 @@ pub async fn system_copy_path_to_clipboard(
     })
 }
 
+#[tauri::command]
+pub async fn system_inference_provider() -> CommandResult<String> {
+    Ok(smriti::ml::runtime::active_execution_provider().to_string())
+}
+
 #[derive(Debug, Serialize)]
 pub struct UpdateStatusDto {
     pub current: String,

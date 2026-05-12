@@ -193,6 +193,7 @@ impl OnnxRuntime {
         // is unavailable, ORT silently skips it and continues down the list.
         let mut providers: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
 
+        // 1. Platform-native GPU EPs (existing priority, unchanged).
         #[cfg(target_os = "windows")]
         {
             providers.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
@@ -201,6 +202,16 @@ impl OnnxRuntime {
         #[cfg(target_os = "linux")]
         {
             providers.push(ort::execution_providers::CUDAExecutionProvider::default().build());
+
+            // OpenVINO EP: only engages if the host has a custom-built libonnxruntime.so
+            // with --use_openvino AND OpenVINO toolkit installed. On a stock install
+            // this dispatch silently fails-over to the next EP, which is exactly what
+            // we want — no crash, no warning spam.
+            providers.push(
+                ort::execution_providers::OpenVINO::default()
+                    .with_device_type("GPU")
+                    .build(),
+            );
         }
 
         #[cfg(target_os = "macos")]
@@ -208,6 +219,16 @@ impl OnnxRuntime {
             providers.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
         }
 
+        // 2. CPU-side accelerators — included in the standard ORT binary.
+        //    Both are silently skipped if their kernels don't apply.
+        providers.push(
+            ort::execution_providers::OneDNN::default()
+                .with_arena_allocator(true)
+                .build(),
+        );
+        providers.push(ort::execution_providers::XNNPACK::default().build());
+
+        // 3. Vanilla CPU last.
         providers.push(ort::execution_providers::CPUExecutionProvider::default().build());
 
         if !EP_LOGGED.swap(true, Ordering::Relaxed) {
@@ -242,6 +263,11 @@ impl OnnxRuntime {
             if ep.is_available().unwrap_or(false) {
                 available.push("CUDA");
             }
+
+            let ep = ort::execution_providers::OpenVINO::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("OpenVINO");
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -252,11 +278,24 @@ impl OnnxRuntime {
             }
         }
 
+        {
+            let ep = ort::execution_providers::OneDNN::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("OneDNN");
+            }
+        }
+
+        {
+            let ep = ort::execution_providers::XNNPACK::default();
+            if ep.is_available().unwrap_or(false) {
+                available.push("XNNPACK");
+            }
+        }
+
         available.push("CPU");
 
         // Capture the best (front-of-list) provider so Settings can
-        // show what's actually engaging — falling back to CPU when no
-        // GPU EP probed available.
+        // show what's actually engaging.
         let chosen = *available.first().unwrap_or(&"CPU");
         let _ = ACTIVE_PROVIDER.set(chosen);
 

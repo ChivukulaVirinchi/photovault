@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { photos } from "../lib/api/photos";
   import { memories, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -49,6 +50,52 @@
   // away and came back.
   const scanJob = $derived(jobs.byKind("scan"));
   const scanRunning = $derived(jobs.isRunning("scan"));
+
+  // Pipeline-stage state for the Resume banners. Refreshed whenever a
+  // scan / metadata / thumbnail job completes; computed once on mount
+  // too so users who land on Timeline mid-pipeline see the right CTA.
+  let pendingMetadata = $state<number>(0);
+  let pendingThumbnails = $state<number>(0);
+  const metadataRunning = $derived(jobs.isRunning("metadata"));
+  const thumbnailsRunning = $derived(jobs.isRunning("thumbnails"));
+  const showResumeMetadata = $derived(
+    !metadataRunning && !scanRunning && pendingMetadata > 0,
+  );
+  const showResumeThumbnails = $derived(
+    !thumbnailsRunning && !scanRunning && pendingThumbnails > 0,
+  );
+
+  async function refreshPendingCounts() {
+    try {
+      const [m, t] = await Promise.all([
+        library.pendingMetadataCount(),
+        library.pendingThumbnailCount(),
+      ]);
+      pendingMetadata = m.pending_photos;
+      pendingThumbnails = t.pending_photos;
+    } catch {
+      // library not open yet, ignore
+    }
+  }
+
+  async function resumeMetadata() {
+    try {
+      const r = await library.startMetadataExtraction();
+      jobs.register(r.job_id, "metadata");
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      toasts.error(`Couldn't resume metadata: ${msg}`);
+    }
+  }
+  async function resumeThumbnails() {
+    try {
+      const r = await library.startThumbnailPass();
+      jobs.register(r.job_id, "thumbnails");
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      toasts.error(`Couldn't resume thumbnails: ${msg}`);
+    }
+  }
 
   // Today's memories — surfaced as a horizontal strip above the
   // timeline. Hidden when the library has no qualifying memories.
@@ -295,11 +342,62 @@
   onMount(() => {
     loadMore();
     memories.today().then((c) => (memoryCards = c)).catch(() => {});
-    // Scan progress + the post-scan reload now happen via the global
-    // jobs store and the $effect above. No local listeners needed.
+    refreshPendingCounts();
     window.addEventListener("keydown", onGlobalKey);
+
+    // Streaming-scanner integration. Three Tauri events drive in-place
+    // updates to the timeline so users see photos / dates / thumbnails
+    // populate progressively instead of staring at an empty grid:
+    //
+    //   thumbnail:ready    → fetch the batch of upgraded rows and patch
+    //                        their thumbnail_path in-place
+    //   metadata:progress  → refresh totals so date-group headers reflow
+    //                        as EXIF dates land
+    //   thumbnails:complete + metadata:complete → recount pending so
+    //                        the Resume banners hide
+    const unlistens: Promise<UnlistenFn>[] = [];
+    unlistens.push(
+      listen<{ photo_ids: number[] }>("thumbnail:ready", async (e) => {
+        const ids = e.payload?.photo_ids ?? [];
+        if (ids.length === 0) return;
+        // Only refetch rows the timeline currently has loaded; the rest
+        // will get the new thumbnail_path naturally on next load.
+        const have = new Set(items.map((p) => p.id));
+        const wanted = ids.filter((id) => have.has(id));
+        if (wanted.length === 0) return;
+        try {
+          const fresh = await photos.getMany(wanted);
+          const byId = new Map(fresh.map((p) => [p.id, p]));
+          items = items.map((p) => {
+            const u = byId.get(p.id);
+            if (!u) return p;
+            return { ...p, thumbnail_path: u.thumbnail_path ?? p.thumbnail_path };
+          });
+        } catch {
+          // best-effort — the on-demand thumbnail path covers misses
+        }
+      }),
+    );
+    let throttle: ReturnType<typeof setTimeout> | null = null;
+    unlistens.push(
+      listen("metadata:progress", () => {
+        // Throttle to once per second; we only need to refresh the
+        // pending count, not re-fetch photo rows.
+        if (throttle != null) return;
+        throttle = setTimeout(() => {
+          throttle = null;
+          refreshPendingCounts();
+        }, 1000);
+      }),
+    );
+    unlistens.push(listen("metadata:complete", () => refreshPendingCounts()));
+    unlistens.push(listen("thumbnails:complete", () => refreshPendingCounts()));
+    unlistens.push(listen("scan:complete", () => refreshPendingCounts()));
+
     return () => {
       window.removeEventListener("keydown", onGlobalKey);
+      if (throttle != null) clearTimeout(throttle);
+      Promise.all(unlistens).then((fns) => fns.forEach((f) => f()));
     };
   });
 
@@ -643,6 +741,27 @@
 </PageHeader>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
+
+{#if showResumeMetadata || showResumeThumbnails}
+  <div class="resume-banners">
+    {#if showResumeMetadata}
+      <div class="resume-banner">
+        <span class="msg">
+          {pendingMetadata.toLocaleString()} photos still need EXIF + place data.
+        </span>
+        <button class="primary" onclick={resumeMetadata}>Resume reading metadata</button>
+      </div>
+    {/if}
+    {#if showResumeThumbnails}
+      <div class="resume-banner">
+        <span class="msg">
+          {pendingThumbnails.toLocaleString()} photos still need thumbnails generated.
+        </span>
+        <button class="primary" onclick={resumeThumbnails}>Resume generating thumbnails</button>
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <div class="timeline-host">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -999,6 +1118,38 @@
     color: var(--ink-soft);
   }
   .scan-status { color: var(--accent); }
+
+  .resume-banners {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-7) 0;
+  }
+  .resume-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-3) var(--s-4);
+    background: var(--bg-card);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    font-size: var(--t-sm);
+  }
+  .resume-banner .msg {
+    flex: 1;
+    color: var(--ink);
+  }
+  .resume-banner .primary {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 6px 14px;
+    border-radius: var(--r-sm);
+    font-size: var(--t-sm);
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .resume-banner .primary:hover { filter: brightness(1.05); }
 
   .zoom-pill {
     display: inline-flex;

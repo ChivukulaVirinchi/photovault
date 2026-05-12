@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 18;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 19;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -112,8 +112,54 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 18 {
         migrate_v17_to_v18(conn)?;
     }
+    if current_version < 19 {
+        migrate_v18_to_v19(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v18_to_v19(conn: &Connection) -> SqliteResult<()> {
+    // Streaming scanner pipeline stage flags.
+    // Existing rows: anything inserted by the legacy scanner already
+    // has EXIF and (if successful) a thumbnail. Mark them done so the
+    // new workers don't re-process them.
+    let tx = conn.unchecked_transaction()?;
+    for (col, def) in &[
+        ("metadata_extracted", "BOOLEAN DEFAULT FALSE"),
+        ("thumbnailed", "BOOLEAN DEFAULT FALSE"),
+    ] {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, def);
+        match tx.execute(&sql, []) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    tx.execute(
+        "UPDATE photos SET metadata_extracted = TRUE WHERE date_taken IS NOT NULL OR camera_make IS NOT NULL",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE photos SET thumbnailed = TRUE WHERE thumbnail_path IS NOT NULL",
+        [],
+    )?;
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted ON photos(metadata_extracted) WHERE metadata_extracted = FALSE",
+        [],
+    )?;
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed ON photos(thumbnailed) WHERE thumbnailed = FALSE",
+        [],
+    )?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (19)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 19 (scanner pipeline stages)");
     Ok(())
 }
 
@@ -645,4 +691,138 @@ fn migrate_v1_to_v2(conn: &Connection) -> SqliteResult<()> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn test_migrate_v18_to_v19() -> rusqlite::Result<()> {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+            INSERT INTO schema_version (version) VALUES (1);
+
+            CREATE TABLE IF NOT EXISTS photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                file_mtime INTEGER,
+                date_taken DATETIME,
+                date_taken_source TEXT,
+                gps_latitude REAL,
+                gps_longitude REAL,
+                location_city TEXT,
+                location_country TEXT,
+                camera_make TEXT,
+                camera_model TEXT,
+                iso INTEGER,
+                aperture TEXT,
+                shutter_speed TEXT,
+                focal_length TEXT,
+                lens_model TEXT,
+                flash TEXT,
+                gps_altitude REAL,
+                width INTEGER,
+                height INTEGER,
+                orientation INTEGER DEFAULT 1,
+                thumbnail_path TEXT,
+                faces_processed BOOLEAN DEFAULT FALSE,
+                content_category TEXT DEFAULT 'photo',
+                ocr_text TEXT,
+                ocr_processed BOOLEAN DEFAULT FALSE,
+                ocr_confidence REAL,
+                brightness REAL,
+                phash INTEGER,
+                is_trashed BOOLEAN DEFAULT FALSE,
+                trashed_at DATETIME,
+                indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_path)
+            );
+            "#,
+        ).unwrap();
+
+        // Insert a row that already has EXIF data (simulates legacy scanner)
+        conn.execute(
+            "INSERT INTO photos (file_path, file_name, file_hash, file_size, date_taken, camera_make, thumbnail_path, faces_processed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+            rusqlite::params!["/photos/img1.jpg", "img1.jpg", "abc123", 1000000, "2024-01-01T00:00:00Z", "Canon", "thumb/img1.jpg"],
+        ).unwrap();
+
+        // Insert a row with no EXIF and no thumbnail
+        conn.execute(
+            "INSERT INTO photos (file_path, file_name, file_hash, file_size, faces_processed) VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params!["/photos/img2.png", "img2.png", "def456", 500000],
+        ).unwrap();
+
+        // Advance schema version to 18 (simulate all prior migrations done)
+        conn.execute("INSERT INTO schema_version (version) VALUES (18)", [])
+            .unwrap();
+
+        // Run v18->v19 migration
+        migrate_v18_to_v19(&conn).unwrap();
+
+        // Verify columns exist
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(photos)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|c| c.ok())
+            .collect();
+        assert!(columns.iter().any(|c| c == "metadata_extracted"));
+        assert!(columns.iter().any(|c| c == "thumbnailed"));
+
+        // Row with EXIF data should have metadata_extracted = TRUE
+        let meta_flag: bool = conn
+            .query_row(
+                "SELECT metadata_extracted FROM photos WHERE file_path = '/photos/img1.jpg'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(meta_flag);
+
+        // Row without EXIF should have metadata_extracted = FALSE
+        let meta_flag2: bool = conn
+            .query_row(
+                "SELECT metadata_extracted FROM photos WHERE file_path = '/photos/img2.png'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!meta_flag2);
+
+        // Row with thumbnail should have thumbnailed = TRUE
+        let thumb_flag: bool = conn
+            .query_row(
+                "SELECT thumbnailed FROM photos WHERE file_path = '/photos/img1.jpg'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(thumb_flag);
+
+        // Row without thumbnail should have thumbnailed = FALSE
+        let thumb_flag2: bool = conn
+            .query_row(
+                "SELECT thumbnailed FROM photos WHERE file_path = '/photos/img2.png'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!thumb_flag2);
+
+        // Verify partial indexes exist
+        let idx_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_photos_metadata_extracted', 'idx_photos_thumbnailed')",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(idx_count, 2);
+        Ok(())
+    }
 }

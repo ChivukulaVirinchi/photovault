@@ -9,6 +9,9 @@ use serde::Serialize;
 
 pub const EV_SCAN_PROGRESS: &str = "scan:progress";
 pub const EV_SCAN_COMPLETE: &str = "scan:complete";
+pub const EV_METADATA_PROGRESS: &str = "metadata:progress";
+pub const EV_METADATA_COMPLETE: &str = "metadata:complete";
+pub const EV_THUMBNAIL_READY: &str = "thumbnail:ready";
 pub const EV_FACES_PROGRESS: &str = "faces:progress";
 pub const EV_FACES_COMPLETE: &str = "faces:complete";
 pub const EV_DUPLICATES_PROGRESS: &str = "duplicates:progress";
@@ -18,6 +21,7 @@ pub const EV_BURSTS_COMPLETE: &str = "bursts:complete";
 pub const EV_DOCUMENTS_PROGRESS: &str = "documents:progress";
 pub const EV_DOCUMENTS_COMPLETE: &str = "documents:complete";
 pub const EV_THUMBNAILS_PROGRESS: &str = "thumbnails:progress";
+pub const EV_THUMBNAILS_COMPLETE: &str = "thumbnails:complete";
 pub const EV_GEOCODING_PROGRESS: &str = "geocoding:progress";
 pub const EV_GEOCODING_COMPLETE: &str = "geocoding:complete";
 pub const EV_ALBUM_SUGGESTIONS_PROGRESS: &str = "album_suggestions:progress";

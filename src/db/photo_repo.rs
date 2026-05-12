@@ -45,6 +45,41 @@ impl<'a> PhotoRepo<'a> {
         Self { conn }
     }
 
+    /// Batch insert stub rows (streaming scanner Phase 1B).
+    ///
+    /// Uses `INSERT OR IGNORE` so an idempotent re-scan never blows away
+    /// metadata that Phase 2+ already filled in. Only sets the columns
+    /// known at walk time; everything else (EXIF, thumbnail, geocoding)
+    /// is updated later by the pipeline workers.
+    pub fn insert_batch_stub(&self, photos: &[PhotoInsert]) -> SqliteResult<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut count = 0;
+
+        for photo in photos {
+            tx.execute(
+                r#"
+                INSERT INTO photos (
+                    file_path, file_name, file_hash, file_size, file_mtime,
+                    orientation, metadata_extracted, thumbnailed, faces_processed
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE, FALSE, FALSE)
+                ON CONFLICT(file_path) DO NOTHING
+                "#,
+                params![
+                    photo.relative_path,
+                    photo.file_name,
+                    photo.file_hash,
+                    photo.file_size,
+                    photo.file_mtime,
+                    photo.orientation,
+                ],
+            )?;
+            count += 1;
+        }
+
+        tx.commit()?;
+        Ok(count)
+    }
+
     /// Batch insert photos within a transaction
     pub fn insert_batch(&self, photos: &[PhotoInsert]) -> SqliteResult<usize> {
         let tx = self.conn.unchecked_transaction()?;
@@ -133,6 +168,25 @@ impl<'a> PhotoRepo<'a> {
     pub fn count(&self) -> SqliteResult<i64> {
         self.conn.query_row(
             "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Photos awaiting EXIF / geocoding extraction (Phase 2 of the
+    /// streaming scanner). Drives the "Resume reading metadata" banner.
+    pub fn count_pending_metadata(&self) -> SqliteResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Photos awaiting thumbnail generation (Phase 3).
+    pub fn count_pending_thumbnails(&self) -> SqliteResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM photos WHERE thumbnailed = FALSE AND is_trashed = FALSE",
             [],
             |row| row.get(0),
         )
