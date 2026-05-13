@@ -33,6 +33,8 @@ pub struct SettingsUpdateArgs {
     /// Welcome screen can list "Recent" libraries.
     pub remembered_drives: Option<Vec<String>>,
     pub thumbnail_cache_gb: Option<f64>,
+    pub face_gpu_bridge_url: Option<Option<String>>,
+    pub face_gpu_bridge_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -104,6 +106,23 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     }
     if let Some(v) = args.thumbnail_cache_gb {
         cfg.thumbnail_cache_gb = v;
+    }
+    if let Some(v) = args.face_gpu_bridge_url {
+        if let Some(ref url) = v {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(CommandError::Validation {
+                    field: "face_gpu_bridge_url".into(),
+                    reason: "must start with http:// or https://".into(),
+                });
+            }
+        }
+        cfg.face_gpu_bridge_url = v;
+    }
+    if let Some(v) = args.face_gpu_bridge_enabled {
+        cfg.face_gpu_bridge_enabled = v;
+        if !v {
+            cfg.face_gpu_bridge_url = None;
+        }
     }
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),

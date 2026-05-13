@@ -160,6 +160,7 @@ pub fn run() {
             commands::system::system_open_in_explorer,
             commands::system::system_copy_path_to_clipboard,
             commands::system::system_updates_check,
+            commands::system::system_test_gpu_bridge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

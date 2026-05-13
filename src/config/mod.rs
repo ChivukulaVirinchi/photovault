@@ -89,6 +89,14 @@ pub struct AppConfig {
     #[serde(default = "default_thumbnail_cache_gb")]
     pub thumbnail_cache_gb: f64,
 
+    /// Optional GPU bridge URL for face embedding (opt-in).
+    #[serde(default)]
+    pub face_gpu_bridge_url: Option<String>,
+
+    /// Whether the GPU bridge is explicitly enabled by the user.
+    #[serde(default)]
+    pub face_gpu_bridge_enabled: bool,
+
     /// Version of config migrations applied. Bumped each time a default
     /// changes and existing installs need a one-time pick-up.
     #[serde(default)]
@@ -163,6 +171,8 @@ impl Default for AppConfig {
             date_logic_version: 0,
             geonames_warning_seen: false,
             thumbnail_cache_gb: default_thumbnail_cache_gb(),
+            face_gpu_bridge_url: None,
+            face_gpu_bridge_enabled: false,
             config_version: 1,
         }
     }
@@ -219,6 +229,18 @@ impl AppConfig {
 
     /// Clamp all values to valid ranges.
     fn validate(&mut self) {
+        // Sanity-check GPU bridge URL if set
+        if let Some(ref url) = self.face_gpu_bridge_url {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                tracing::warn!(
+                    "Invalid face_gpu_bridge_url '{}' — must start with http:// or https://. Disabling.",
+                    url
+                );
+                self.face_gpu_bridge_url = None;
+                self.face_gpu_bridge_enabled = false;
+            }
+        }
+
         self.face_detection_confidence = self.face_detection_confidence.clamp(0.1, 0.95);
         self.face_clustering_threshold = self.face_clustering_threshold.clamp(0.1, 0.8);
         self.thumbnail_size = self.thumbnail_size.clamp(100, 1000);

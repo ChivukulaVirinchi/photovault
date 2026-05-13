@@ -257,3 +257,49 @@ pub async fn system_updates_check() -> CommandResult<UpdateStatusDto> {
         body: Some(result.latest.body),
     })
 }
+
+#[derive(Debug, Deserialize)]
+pub struct TestBridgeArgs {
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BridgeTestResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub gpu_name: String,
+}
+
+#[tauri::command]
+pub fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestResult> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e: reqwest::Error| CommandError::Network {
+            message: e.to_string(),
+        })?;
+    let start = std::time::Instant::now();
+    let resp = client
+        .get(format!("{}/health", args.url))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .map_err(|e: reqwest::Error| CommandError::Network {
+            message: e.to_string(),
+        })?;
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let body: serde_json::Value =
+        resp.json()
+            .map_err(|e: reqwest::Error| CommandError::Network {
+                message: e.to_string(),
+            })?;
+    let gpu_name = body
+        .get("provider")
+        .and_then(|v: &serde_json::Value| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    Ok(BridgeTestResult {
+        ok: true,
+        latency_ms,
+        gpu_name,
+    })
+}

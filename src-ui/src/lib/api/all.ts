@@ -422,6 +422,8 @@ export interface Settings {
   auto_update_check_enabled: boolean;
   sidebar_collapsed: boolean;
   thumbnail_cache_gb: number;
+  face_gpu_bridge_url: string | null;
+  face_gpu_bridge_enabled: boolean;
 }
 export const settings = {
   get: () => call<Settings>("settings_get"),
@@ -487,4 +489,9 @@ export const systemEx = {
       release_url: string | null;
       body: string | null;
     }>("system_updates_check"),
+  testGpuBridge: (url: string) =>
+    call<{ ok: boolean; latency_ms: number; gpu_name: string }>(
+      "system_test_gpu_bridge",
+      { url },
+    ),
 };

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
-  import { albums, geocoding, health, people } from "../lib/api/all";
+  import { albums, geocoding, health, people, systemEx } from "../lib/api/all";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
@@ -11,6 +11,21 @@
   let error = $state<string | null>(null);
   let healthData = $state<LibraryHealthData | null>(null);
   let acting = $state(false);
+  let testBusy = $state(false);
+  let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number } | null>(null);
+  async function testBridge() {
+    if (!s?.face_gpu_bridge_url) return;
+    testBusy = true;
+    testResult = null;
+    try {
+      const r = await systemEx.testGpuBridge(s.face_gpu_bridge_url);
+      testResult = { ok: r.ok, gpu_name: r.gpu_name, latency_ms: r.latency_ms };
+    } catch (e) {
+      testResult = { ok: false, gpu_name: "Unreachable", latency_ms: 0 };
+    } finally {
+      testBusy = false;
+    }
+  }
   // Backfill state derived from the global jobs store so progress
   // survives navigation (a 50k-photo backfill is a multi-second job).
   const backfilling = $derived(jobs.isRunning("geocoding"));
@@ -360,6 +375,47 @@
         <span class="label-text">Check for updates automatically</span>
       </label>
     </section>
+
+    <section>
+      <h3 class="section-title">Cloud face acceleration (advanced)</h3>
+      <p class="hint blurb">
+        Offload face embedding to a free GPU notebook you control.
+        Sends only 112×112 face crops (not photos) to a URL you provide.
+        Falls back to local CPU on failure.
+        <a href="https://github.com/anomalyco/photovault/blob/main/docs/face-gpu-bridge.md" target="_blank" rel="noopener" class="inline-link">How to set up a free Kaggle / Colab notebook →</a>
+      </p>
+      <label class="checkbox" style="margin-bottom: var(--s-3)">
+        <input type="checkbox" checked={s.face_gpu_bridge_enabled}
+          onchange={async (e) => {
+            const enabled = (e.target as HTMLInputElement).checked;
+            await patch({ face_gpu_bridge_enabled: enabled });
+            if (!enabled) await patch({ face_gpu_bridge_url: null });
+          }} />
+        <span class="label-text">Use a remote GPU for face embedding</span>
+      </label>
+      {#if s.face_gpu_bridge_enabled}
+        <label>
+          <span class="label-text">Bridge URL</span>
+          <div class="url-row">
+            <input
+              style="max-width: 320px"
+              value={s.face_gpu_bridge_url ?? ""}
+              placeholder="e.g. https://abc.ngrok.io"
+              onchange={(e) => patch({ face_gpu_bridge_url: ((e.target as HTMLInputElement).value.trim() || null) })} />
+            <button class="ghost" onclick={testBridge} disabled={testBusy || !s.face_gpu_bridge_url}>
+              {testBusy ? "Testing…" : "Test connection"}
+            </button>
+          </div>
+        </label>
+        {#if testResult}
+          <p class="test-result" class:ok={testResult.ok} class:fail={!testResult.ok}>
+            {testResult.ok
+              ? `✓ ${testResult.gpu_name} @ ${testResult.latency_ms}ms`
+              : `✕ ${testResult.gpu_name}`}
+          </p>
+        {/if}
+      {/if}
+    </section>
   {/if}
 </div>
 
@@ -475,4 +531,9 @@
   }
   .counter .lbl { font-size: var(--t-sm); color: var(--ink); font-weight: 500; }
   .counter .note { font-size: var(--t-xs); color: var(--ink-muted); margin-top: 2px; }
+  .url-row { display: flex; gap: var(--s-2); align-items: center; }
+  .test-result { font-size: var(--t-sm); margin-top: var(--s-2); padding: var(--s-2); border-radius: var(--r-sm); }
+  .test-result.ok { color: var(--keep); background: color-mix(in oklab, var(--keep) 10%, transparent); }
+  .test-result.fail { color: var(--hot, #d05a4a); background: color-mix(in oklab, var(--hot, #d05a4a) 10%, transparent); }
+  .inline-link { color: var(--accent); text-decoration: underline; font-style: normal; }
 </style>

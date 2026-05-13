@@ -181,3 +181,8 @@ data/                  GeoNames database (gitignored)
 - **svelte 5** + **vite 5** — frontend
 - **maplibre-gl 4** — map view + photo-detail minimap
 - **@tanstack/svelte-virtual** — kept as dep but unused; custom virtualizer in `src-ui/src/lib/virtualizer.svelte.ts`
+
+## Optional integrations
+
+Face embedding can optionally be offloaded to a user-owned Kaggle/Colab notebook
+(see `docs/face-gpu-bridge.md`). The default flow uses local ONNX Runtime.

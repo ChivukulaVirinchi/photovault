@@ -15,7 +15,8 @@ use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
 use crate::db::InferredIdentityRepo;
 use crate::ml::{
-    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime,
+    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, LocalEmbedder,
+    OnnxRuntime,
 };
 use crate::services::image_utils::apply_exif_orientation;
 
@@ -384,9 +385,9 @@ impl FaceProcessor {
                     });
                     EMBEDDER.with(|e| {
                         if e.borrow().is_none() {
-                            match FaceEmbedder::new_with_threads(&runtime, emb_path.as_ref(), intra_threads) {
+                            match LocalEmbedder::new_with_threads(&runtime, emb_path.as_ref(), intra_threads) {
                                 Ok(emb) => {
-                                    *e.borrow_mut() = Some(emb);
+                                    *e.borrow_mut() = Some(FaceEmbedder::Local(emb));
                                 }
                                 Err(e_err) => {
                                     tracing::error!("Failed to init embedder in worker: {}", e_err);

@@ -1009,6 +1009,8 @@ pub struct SettingsDto {
     pub auto_update_check_enabled: bool,
     pub sidebar_collapsed: bool,
     pub thumbnail_cache_gb: f64,
+    pub face_gpu_bridge_url: Option<String>,
+    pub face_gpu_bridge_enabled: bool,
 }
 
 impl From<&AppConfig> for SettingsDto {
@@ -1046,6 +1048,8 @@ impl From<&AppConfig> for SettingsDto {
             auto_update_check_enabled: c.auto_update_check_enabled,
             sidebar_collapsed: c.sidebar_collapsed,
             thumbnail_cache_gb: c.thumbnail_cache_gb,
+            face_gpu_bridge_url: c.face_gpu_bridge_url.clone(),
+            face_gpu_bridge_enabled: c.face_gpu_bridge_enabled,
         }
     }
 }

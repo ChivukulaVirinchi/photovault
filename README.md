@@ -36,7 +36,8 @@
 ## What it does
 
 - **Indexes photos** from any folder or external drive — no upload required
-- **Recognizes faces** on-device, groups photos by person
+- **Recognizes faces** on-device, groups photos by person.
+  [Optional: cloud GPU acceleration](docs/face-gpu-bridge.md) for 10–70× faster embedding on free Kaggle/Colab notebooks.
 - **Suggests albums** for trips and events automatically
 - **Surfaces memories** — "N years ago today" rediscovery
 - **Visualizes geography** — interactive map of where photos were taken

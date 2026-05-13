@@ -1,15 +1,17 @@
 //! ArcFace Face Embedding
 //!
 //! Generates 512-dimensional embeddings for face recognition.
-//! Uses the ArcFace-R100 model via ONNX Runtime.
+//! Uses the ArcFace-R100 model via ONNX Runtime, with optional
+//! offloading to a remote GPU bridge.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use image::RgbImage;
 use ndarray::Array1;
 use ort::session::Session;
 use ort::value::TensorRef;
 
+use super::remote_embedder::RemoteEmbedder;
 use super::OnnxRuntime;
 
 /// 512-dimensional face embedding
@@ -64,14 +66,62 @@ impl FaceEmbedding {
     }
 }
 
-/// ArcFace Face Embedder
-pub struct FaceEmbedder {
-    session: Session,
+/// Configuration for creating a FaceEmbedder.
+#[derive(Debug, Clone)]
+pub struct EmbedderConfig {
+    pub model_path: PathBuf,
+    pub gpu_bridge_url: Option<String>,
+    pub intra_threads: usize,
+}
+
+/// Dispatch enum — either local ONNX or remote GPU bridge.
+pub enum FaceEmbedder {
+    Local(LocalEmbedder),
+    Remote(RemoteEmbedder),
 }
 
 impl FaceEmbedder {
+    /// Build the configured embedder. Always creates a local instance
+    /// (required for fallback and single-face path). If a remote bridge
+    /// URL is provided *and* healthy, a Remote variant is returned
+    /// instead to handle batch embedding.
+    pub fn from_config(rt: &OnnxRuntime, cfg: &EmbedderConfig) -> Result<Self, ort::Error> {
+        if let Some(ref url) = cfg.gpu_bridge_url {
+            let remote = RemoteEmbedder::new(url.clone());
+            if remote.is_healthy() {
+                return Ok(FaceEmbedder::Remote(remote));
+            }
+        }
+        let local = LocalEmbedder::new_with_threads(rt, &cfg.model_path, cfg.intra_threads)?;
+        Ok(FaceEmbedder::Local(local))
+    }
+
+    /// Generate embedding for an aligned face image (112x112).
+    pub fn embed(&mut self, aligned_face: &RgbImage) -> Option<FaceEmbedding> {
+        match self {
+            FaceEmbedder::Local(e) => e.embed(aligned_face),
+            FaceEmbedder::Remote(e) => e.embed(aligned_face),
+        }
+    }
+
+    /// Generate embeddings for a batch of aligned face images.
+    /// Returns one Option per input; None if that input was invalid.
+    pub fn embed_batch(&mut self, faces: &[RgbImage]) -> Vec<Option<FaceEmbedding>> {
+        match self {
+            FaceEmbedder::Local(e) => e.embed_batch(faces),
+            FaceEmbedder::Remote(e) => e.embed_batch(faces),
+        }
+    }
+}
+
+/// Local ArcFace Face Embedder using ONNX Runtime.
+pub struct LocalEmbedder {
+    session: Session,
+}
+
+impl LocalEmbedder {
     /// Load the ArcFace model with a specific thread count per session.
-    pub fn new_with_threads<P: AsRef<Path>>(
+    pub fn new_with_threads<P: AsRef<std::path::Path>>(
         runtime: &OnnxRuntime,
         model_path: P,
         intra_threads: usize,

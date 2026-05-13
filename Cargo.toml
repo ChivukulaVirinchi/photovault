@@ -9,6 +9,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "multipart"] }
 
 [package]
 name = "smriti"
@@ -59,8 +60,8 @@ name = "smriti"
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio.workspace = true
+reqwest.workspace = true
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Serialization
