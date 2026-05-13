@@ -149,8 +149,7 @@ impl FaceEmbedder {
                 if missing.is_empty() {
                     return out;
                 }
-                let crops: Vec<RgbImage> =
-                    missing.iter().map(|&i| faces[i].clone()).collect();
+                let crops: Vec<RgbImage> = missing.iter().map(|&i| faces[i].clone()).collect();
                 let fb = local_fallback.embed_batch(&crops);
                 for (k, &orig_i) in missing.iter().enumerate() {
                     if let Some(emb) = fb.get(k).cloned().flatten() {

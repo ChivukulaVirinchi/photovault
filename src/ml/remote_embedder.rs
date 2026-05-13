@@ -157,16 +157,22 @@ impl RemoteEmbedder {
             .into_iter()
             .next()
             .flatten()
-        }
+    }
 
     fn do_embed_batch(&mut self, faces: &[RgbImage]) -> Result<Vec<Option<FaceEmbedding>>, String> {
         let mut form = reqwest::blocking::multipart::Form::new();
         for (i, face) in faces.iter().enumerate() {
             let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
             {
-                let mut encoder = JpegEncoder::new_with_quality(Cursor::new(&mut buf), JPEG_QUALITY);
+                let mut encoder =
+                    JpegEncoder::new_with_quality(Cursor::new(&mut buf), JPEG_QUALITY);
                 encoder
-                    .encode(face.as_raw(), face.width(), face.height(), image::ExtendedColorType::Rgb8)
+                    .encode(
+                        face.as_raw(),
+                        face.width(),
+                        face.height(),
+                        image::ExtendedColorType::Rgb8,
+                    )
                     .map_err(|e| format!("JPEG encode face[{}]: {}", i, e))?;
             }
             let part = reqwest::blocking::multipart::Part::bytes(buf)

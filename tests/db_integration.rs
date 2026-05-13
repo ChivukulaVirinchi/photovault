@@ -3,6 +3,7 @@
 //! Tests the full DB lifecycle: schema creation, photo insertion,
 //! querying, geocoding updates, trash flow, and data integrity.
 
+use smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION;
 use smriti::db::photo_repo::PhotoInsert;
 use smriti::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
 use smriti::services::TrashService;
@@ -77,36 +78,13 @@ fn test_v15_composite_indexes_present_and_used() {
     let (_temp, db) = setup_db();
     smriti::db::migrations::run_migrations(&db.conn).unwrap();
 
-    // Expected indexes after migration v15.
-    for index in &[
-        "idx_photos_trashed_date",
-        "idx_photos_faces_processed_trashed",
-        "idx_faces_cluster_confidence",
-        "idx_faces_photo_cluster",
-    ] {
-        let count: i32 = db
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='{}'",
-                    index
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
-            "Index '{}' should exist after v15 migration",
-            index
-        );
-    }
+    assert_v15_indexes_present(&db.conn);
 
     let schema_version: i32 = db
         .conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert!(schema_version >= 20, "schema_version should be >= 20");
+    assert_eq!(schema_version, MAX_KNOWN_SCHEMA_VERSION);
 
     // Verify SQLite's planner picks idx_photos_trashed_date for the
     // timeline's paginated query.
@@ -125,21 +103,131 @@ fn test_v15_composite_indexes_present_and_used() {
         joined
     );
 
-    // Idempotent re-run should not error or double-insert version rows.
-    // v20 is the baseline schema now, so check version 20.
+    // Idempotent re-run should not error or double-insert the current version.
     smriti::db::migrations::run_migrations(&db.conn).unwrap();
     let version_count: i32 = db
         .conn
         .query_row(
-            "SELECT COUNT(*) FROM schema_version WHERE version = 20",
-            [],
+            "SELECT COUNT(*) FROM schema_version WHERE version = ?1",
+            [MAX_KNOWN_SCHEMA_VERSION],
             |r| r.get(0),
         )
         .unwrap();
     assert_eq!(
         version_count, 1,
-        "migration should record version 20 exactly once even on re-run"
+        "migration should record the current version exactly once even on re-run"
     );
+}
+
+#[test]
+fn test_v14_to_latest_migration_creates_v15_composite_indexes() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO schema_version (version) VALUES (14);
+
+        CREATE TABLE photos (
+            id INTEGER PRIMARY KEY,
+            file_path TEXT NOT NULL UNIQUE,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_mtime INTEGER,
+            date_taken DATETIME,
+            date_taken_source TEXT,
+            gps_latitude REAL,
+            gps_longitude REAL,
+            location_city TEXT,
+            location_country TEXT,
+            camera_make TEXT,
+            camera_model TEXT,
+            iso INTEGER,
+            aperture TEXT,
+            shutter_speed TEXT,
+            focal_length TEXT,
+            lens_model TEXT,
+            flash TEXT,
+            gps_altitude REAL,
+            width INTEGER,
+            height INTEGER,
+            orientation INTEGER DEFAULT 1,
+            thumbnail_path TEXT,
+            faces_processed BOOLEAN DEFAULT FALSE,
+            content_category TEXT DEFAULT 'photo',
+            ocr_text TEXT,
+            ocr_processed BOOLEAN DEFAULT FALSE,
+            ocr_confidence REAL,
+            is_trashed BOOLEAN DEFAULT FALSE,
+            trashed_at DATETIME,
+            indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE face_clusters (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            representative_face_id INTEGER,
+            face_count INTEGER DEFAULT 0,
+            photo_count INTEGER DEFAULT 0,
+            is_user_named INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE faces (
+            id INTEGER PRIMARY KEY,
+            photo_id INTEGER NOT NULL,
+            bbox_x REAL NOT NULL,
+            bbox_y REAL NOT NULL,
+            bbox_width REAL NOT NULL,
+            bbox_height REAL NOT NULL,
+            embedding BLOB NOT NULL,
+            cluster_id INTEGER,
+            confidence REAL,
+            user_confirmed INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE trash (
+            id INTEGER PRIMARY KEY,
+            photo_id INTEGER NOT NULL UNIQUE,
+            original_path TEXT NOT NULL,
+            trashed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .unwrap();
+
+    smriti::db::migrations::run_migrations(&conn).unwrap();
+    assert_v15_indexes_present(&conn);
+
+    let schema_version: i32 = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(schema_version, MAX_KNOWN_SCHEMA_VERSION);
+}
+
+fn assert_v15_indexes_present(conn: &rusqlite::Connection) {
+    for index in &[
+        "idx_photos_trashed_date",
+        "idx_photos_faces_processed_trashed",
+        "idx_faces_cluster_confidence",
+        "idx_faces_photo_cluster",
+    ] {
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1",
+                [*index],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "Index '{}' should exist after v15 migration",
+            index
+        );
+    }
 }
 
 #[test]

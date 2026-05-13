@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (20);
+INSERT INTO schema_version (version) VALUES (21);
 
 -- ============================================================
 -- PHOTOS TABLE

@@ -15,8 +15,7 @@ use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
 use crate::db::InferredIdentityRepo;
 use crate::ml::{
-    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding,
-    OnnxRuntime,
+    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime,
 };
 use crate::services::image_utils::apply_exif_orientation;
 
