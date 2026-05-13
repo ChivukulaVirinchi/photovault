@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": ".test-out",
+    "rootDir": "src",
+    "noEmit": false
+  },
+  "include": [
+    "src/lib/slideshowQueue.ts",
+    "src/lib/slideshowQueue.test.ts"
+  ]
+}

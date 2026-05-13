@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use walkdir::WalkDir;
 
+use crate::services::path_util::safe_join_relative;
 use crate::services::scanner::calculate_hash;
 
 #[derive(Debug, Default, Clone)]
@@ -144,7 +145,9 @@ impl Reindexer {
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 let path = row?;
-                changes.added.push(drive_root.join(&path));
+                if let Ok(full) = safe_join_relative(drive_root, &path) {
+                    changes.added.push(full);
+                }
             }
         }
 
@@ -160,7 +163,9 @@ impl Reindexer {
             })?;
             for row in rows {
                 let (id, path) = row?;
-                changes.modified.push((id, drive_root.join(&path)));
+                if let Ok(full) = safe_join_relative(drive_root, &path) {
+                    changes.modified.push((id, full));
+                }
             }
         }
 
@@ -202,7 +207,9 @@ impl Reindexer {
 
             let mut hash_to_candidate: HashMap<String, String> = HashMap::new();
             for relative in &candidate_paths {
-                let full = drive_root.join(relative);
+                let Ok(full) = safe_join_relative(drive_root, relative) else {
+                    continue;
+                };
                 if let Ok(hash) = calculate_hash(&full) {
                     hash_to_candidate
                         .entry(hash)

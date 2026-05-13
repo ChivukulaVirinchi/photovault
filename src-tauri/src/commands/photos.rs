@@ -347,7 +347,11 @@ pub async fn photos_request_thumbnail(
         });
     }
 
-    let abs = lib.drive_root.join(&file_path);
+    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &file_path)
+        .map_err(|e| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason: e,
+        })?;
     let svc = lib.thumbnails.clone();
     let hash_for_thread = file_hash.clone();
 
@@ -434,7 +438,12 @@ pub async fn photos_exif_extras(
         let photo = repo
             .get_by_id(args.id)?
             .ok_or_else(|| CommandError::not_found("photo", args.id))?;
-        lib.drive_root.join(&photo.file_path)
+        smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path).map_err(
+            |e| CommandError::Validation {
+                field: "photo.file_path".into(),
+                reason: e,
+            },
+        )?
     };
 
     // Run the file IO + EXIF parse on a blocking pool to avoid blocking

@@ -9,8 +9,9 @@
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check } from "lucide-svelte";
+  import { Check, Play } from "lucide-svelte";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
+  import { slideshow } from "../lib/stores/slideshow.svelte";
 
   interface Props { id: number }
   let { id }: Props = $props();
@@ -21,6 +22,8 @@
   let editName = $state("");
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
+  let nextCursor = $state<string | null>(null);
+  let hasMore = $state(false);
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
@@ -102,6 +105,8 @@
       editName = album.name;
       const page = await albums.photos(id);
       photos = page.items;
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
       browseContext.set(`album:${id}`, photos.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
   }
@@ -132,6 +137,18 @@
     return `${new Date(s).toLocaleDateString()} → ${new Date(e).toLocaleDateString()}`;
   }
 
+  function startAlbumSlideshow() {
+    if (!album || photos.length === 0) return;
+    slideshow.start({
+      kind: "album",
+      label: album.name,
+      ids: photos.map((p) => p.id),
+      nextCursor,
+      hasMore,
+      loadMore: (cursor) => albums.photos(id, cursor, 200),
+    });
+  }
+
   $effect(() => { void id; load(); });
 </script>
 
@@ -157,6 +174,9 @@
         <button class="primary" onclick={rename}>Save</button>
         <button class="ghost" onclick={() => (renaming = false)}>Cancel</button>
       {:else}
+        <button class="ghost icon-action" onclick={startAlbumSlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start album slideshow">
+          <Play size={15} strokeWidth={2} />
+        </button>
         <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
         <button class="danger" onclick={deleteAlbum}>Delete</button>
       {/if}
@@ -228,4 +248,12 @@
     pointer-events: none;
   }
   .dim { color: var(--ink-faint); }
+  .icon-action {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
 </style>

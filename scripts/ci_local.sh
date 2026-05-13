@@ -43,6 +43,9 @@ run_ci() {
   step "Frontend type check"
   npm run check --prefix src-ui
 
+  step "Frontend tests"
+  npm run test --prefix src-ui
+
   step "Frontend build"
   npm run build --prefix src-ui
 
@@ -59,6 +62,9 @@ run_release() {
 
   step "Frontend dependencies"
   npm ci --prefix src-ui
+
+  step "Frontend tests"
+  npm run test --prefix src-ui
 
   step "Frontend build"
   npm run build --prefix src-ui

@@ -5,6 +5,8 @@ use std::path::Path;
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 
+use crate::services::path_util::safe_join_relative;
+
 /// Result of a permanent delete operation.
 #[derive(Debug, Default, Clone)]
 pub struct DeleteResult {
@@ -92,7 +94,13 @@ impl TrashService {
                 continue;
             };
 
-            let full_path = drive_root.join(&relative_path);
+            let full_path = match safe_join_relative(drive_root, &relative_path) {
+                Ok(path) => path,
+                Err(e) => {
+                    result.errors.push(format!("{}: {}", relative_path, e));
+                    continue;
+                }
+            };
             if full_path.exists() {
                 if let Err(e) = fs::remove_file(&full_path) {
                     result.errors.push(format!("{}: {}", relative_path, e));
@@ -102,9 +110,10 @@ impl TrashService {
             }
 
             if let Some(tp) = thumbnail_path {
-                let thumb_full = drive_root.join(tp);
-                if thumb_full.exists() {
-                    let _ = fs::remove_file(thumb_full);
+                if let Ok(thumb_full) = safe_join_relative(drive_root, &tp) {
+                    if thumb_full.exists() {
+                        let _ = fs::remove_file(thumb_full);
+                    }
                 }
             }
 

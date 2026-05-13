@@ -39,7 +39,11 @@ pub async fn system_open_in_explorer(
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = lib.drive_root.join(&photo.file_path);
+    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path)
+        .map_err(|e| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason: e,
+        })?;
     select_in_file_manager(&abs).map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
@@ -222,7 +226,11 @@ pub async fn system_copy_path_to_clipboard(
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = lib.drive_root.join(&photo.file_path);
+    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path)
+        .map_err(|e| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason: e,
+        })?;
     Ok(CopiedPathDto {
         path: abs.display().to_string(),
     })
@@ -272,6 +280,12 @@ pub struct BridgeTestResult {
 
 #[tauri::command]
 pub fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestResult> {
+    if !smriti::config::is_allowed_gpu_bridge_url(&args.url) {
+        return Err(CommandError::Validation {
+            field: "url".into(),
+            reason: "must use https:// or local http://".into(),
+        });
+    }
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()

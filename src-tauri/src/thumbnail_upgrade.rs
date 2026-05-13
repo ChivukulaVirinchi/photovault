@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use smriti::services::path_util::safe_join_relative;
 use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
 
 /// One row of input — fields needed to generate (or look up) a
@@ -43,12 +44,18 @@ pub async fn upgrade_covers_to_medium(
                 ".photovault/thumbnails/medium/v2/{}/{}.jpg",
                 subdir, file_hash
             );
-            let abs_thumb = drive_root.join(&rel);
+            let Ok(abs_thumb) = safe_join_relative(&drive_root, &rel) else {
+                out.push((idx, None));
+                continue;
+            };
             if abs_thumb.exists() {
                 out.push((idx, Some(rel)));
                 continue;
             }
-            let abs_src = drive_root.join(&file_path);
+            let Ok(abs_src) = safe_join_relative(&drive_root, &file_path) else {
+                out.push((idx, None));
+                continue;
+            };
             match svc.generate_thumbnail(&abs_src, &file_hash, orientation, ThumbnailSize::Medium) {
                 Ok(_) => out.push((idx, Some(rel))),
                 Err(e) => {
