@@ -543,12 +543,11 @@ impl FaceProcessor {
                         };
                     }
 
-                    // Embed each detected face (after quality filter)
-                    let mut face_inserts = Vec::new();
-                    for face in &detected {
-                        // Cancel between embedding calls — group photos
-                        // can have many faces and embedding is the
-                        // single most expensive per-face step.
+                    // Collect faces that pass quality gates, then embed as a single
+                    // batch. Group photos can have 8+ faces; batching eliminates
+                    // 3-5 separate ONNX sessions into one.
+                    let mut qualifying: Vec<(usize, &image::RgbImage)> = Vec::new();
+                    for (fi, face) in detected.iter().enumerate() {
                         if cancel.load(Ordering::Relaxed) {
                             break;
                         }
@@ -561,18 +560,15 @@ impl FaceProcessor {
                             rejected_lowconf.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
-
                         let aligned = match face.aligned_face.as_ref() {
                             Some(a) => a,
                             None => continue,
                         };
-
                         let sharpness = Self::laplacian_variance(aligned);
                         if sharpness < Self::MIN_LAPLACIAN_VAR {
                             rejected_blurry.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
-
                         let yaw = crate::ml::face_detector::estimate_yaw_from_landmarks(
                             &face.landmarks,
                         );
@@ -580,17 +576,32 @@ impl FaceProcessor {
                             rejected_yaw.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
+                        qualifying.push((fi, aligned));
+                    }
 
-                        let embedding = EMBEDDER.with(|e| {
+                    let crops: Vec<image::RgbImage> = qualifying
+                        .iter()
+                        .map(|(_, a)| (*a).clone())
+                        .collect();
+                    let batch_embs = if crops.is_empty() {
+                        Vec::new()
+                    } else {
+                        EMBEDDER.with(|e| {
                             let mut borrow = e.borrow_mut();
-                            borrow.as_mut().and_then(|emb| emb.embed(aligned))
-                        });
-                        if let Some(embedding) = embedding {
+                            borrow
+                                .as_mut()
+                                .map_or(Vec::new(), |emb| emb.embed_batch(&crops))
+                        })
+                    };
+
+                    let mut face_inserts = Vec::new();
+                    for (bi, &(fi, _aligned)) in qualifying.iter().enumerate() {
+                        if let Some(embedding) = batch_embs.get(bi).and_then(|e: &Option<FaceEmbedding>| e.clone()) {
                             face_inserts.push(FaceInsert {
-                                bbox_normalized: face.bbox_normalized,
-                                confidence: face.confidence,
+                                bbox_normalized: detected[fi].bbox_normalized,
+                                confidence: detected[fi].confidence,
                                 embedding,
-                                aligned_face: aligned.clone(),
+                                aligned_face: detected[fi].aligned_face.clone().unwrap_or_default(),
                             });
                         }
                     }

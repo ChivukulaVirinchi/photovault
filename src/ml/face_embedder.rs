@@ -83,25 +83,58 @@ impl FaceEmbedder {
 
     /// Generate embedding for an aligned face image (112x112)
     pub fn embed(&mut self, aligned_face: &RgbImage) -> Option<FaceEmbedding> {
-        if aligned_face.width() != 112 || aligned_face.height() != 112 {
-            tracing::warn!(
-                "Face image must be 112x112, got {}x{}",
-                aligned_face.width(),
-                aligned_face.height()
-            );
-            return None;
+        self.embed_batch(std::slice::from_ref(aligned_face))
+            .into_iter()
+            .next()
+            .flatten()
+    }
+
+    /// Generate embeddings for a batch of aligned face images.
+    /// Returns one Option per input; None if that input was invalid.
+    pub fn embed_batch(&mut self, faces: &[RgbImage]) -> Vec<Option<FaceEmbedding>> {
+        let n = faces.len();
+        if n == 0 {
+            return Vec::new();
         }
 
-        // Preprocess
-        let input_data = self.preprocess(aligned_face);
+        // Validate dimensions and preprocess each face into a flat [3*112*112] row.
+        let mut valid_indices: Vec<usize> = Vec::with_capacity(n);
+        let mut batch_data: Vec<f32> = Vec::with_capacity(n * 3 * 112 * 112);
+        for (i, face) in faces.iter().enumerate() {
+            if face.width() != 112 || face.height() != 112 {
+                continue;
+            }
+            valid_indices.push(i);
+            let row = self.preprocess(face);
+            batch_data.extend_from_slice(&row);
+        }
 
-        // Run inference
-        let embedding = self.run_inference(&input_data).ok()?;
+        if valid_indices.is_empty() {
+            return vec![None; n];
+        }
 
-        // Normalize embedding (L2)
-        let normalized = self.normalize(&embedding);
+        let batch_n = valid_indices.len();
+        let raw_outputs = match self.run_inference_batch(&batch_data, batch_n as i64) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Batch embedding inference failed: {}", e);
+                return vec![None; n];
+            }
+        };
 
-        Some(FaceEmbedding::new(normalized))
+        // Each output row is 512 floats. L2-normalize each.
+        let mut embeddings: Vec<Option<FaceEmbedding>> = vec![None; n];
+        for (out_i, orig_i) in valid_indices.iter().enumerate() {
+            let start = out_i * 512;
+            let end = start + 512;
+            if end > raw_outputs.len() {
+                break;
+            }
+            let row = Array1::from_vec(raw_outputs[start..end].to_vec());
+            let normalized = self.normalize(&row);
+            embeddings[*orig_i] = Some(FaceEmbedding::new(normalized));
+        }
+        embeddings
     }
 
     /// Preprocess face image for ArcFace: normalize to [-1, 1], produce NCHW vec
@@ -122,23 +155,25 @@ impl FaceEmbedder {
         input
     }
 
-    /// Run ONNX inference and return raw embedding
-    fn run_inference(&mut self, input_data: &[f32]) -> ort::Result<Array1<f32>> {
+    /// Run ONNX inference with a batch of faces [N, 3, 112, 112].
+    /// Returns a flat Vec<f32> of N * 512 floats.
+    fn run_inference_batch(
+        &mut self,
+        input_data: &[f32],
+        batch_size: i64,
+    ) -> ort::Result<Vec<f32>> {
         let input_tensor =
-            TensorRef::<f32>::from_array_view((vec![1i64, 3, 112, 112], input_data))?;
+            TensorRef::<f32>::from_array_view((vec![batch_size, 3, 112, 112], input_data))?;
 
         let outputs = self.session.run(ort::inputs![input_tensor])?;
 
-        // Get first output (the embedding)
-        let (name, output) = outputs
+        let (_name, output) = outputs
             .iter()
             .next()
             .ok_or_else(|| ort::Error::new("No output tensor from ArcFace model".to_string()))?;
 
         let (_shape, data) = output.try_extract_tensor::<f32>()?;
-        let _ = name;
-
-        Ok(Array1::from_vec(data.to_vec()))
+        Ok(data.to_vec())
     }
 
     /// L2 normalize the embedding vector
