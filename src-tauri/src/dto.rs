@@ -1011,6 +1011,7 @@ pub struct SettingsDto {
     pub thumbnail_cache_gb: f64,
     pub face_gpu_bridge_url: Option<String>,
     pub face_gpu_bridge_enabled: bool,
+    pub face_embedder_model: String,
 }
 
 impl From<&AppConfig> for SettingsDto {
@@ -1050,6 +1051,7 @@ impl From<&AppConfig> for SettingsDto {
             thumbnail_cache_gb: c.thumbnail_cache_gb,
             face_gpu_bridge_url: c.face_gpu_bridge_url.clone(),
             face_gpu_bridge_enabled: c.face_gpu_bridge_enabled,
+            face_embedder_model: c.face_embedder_model.clone(),
         }
     }
 }

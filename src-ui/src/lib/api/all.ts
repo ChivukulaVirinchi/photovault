@@ -424,6 +424,7 @@ export interface Settings {
   thumbnail_cache_gb: number;
   face_gpu_bridge_url: string | null;
   face_gpu_bridge_enabled: boolean;
+  face_embedder_model: string;
 }
 export const settings = {
   get: () => call<Settings>("settings_get"),

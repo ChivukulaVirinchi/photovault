@@ -101,6 +101,11 @@ pub struct AppConfig {
     /// changes and existing installs need a one-time pick-up.
     #[serde(default)]
     pub config_version: u32,
+
+    /// Face embedding model filename (relative to the models directory).
+    /// "adaface_ir101_webface12m.onnx" (default, SOTA) or "glintr100.onnx" (legacy fallback).
+    #[serde(default = "default_face_embedder_model")]
+    pub face_embedder_model: String,
 }
 
 /// Bumped any time the EXIF date fallback chain changes. Stored in
@@ -143,13 +148,17 @@ fn default_thumbnail_cache_gb() -> f64 {
     5.0
 }
 
+fn default_face_embedder_model() -> String {
+    "adaface_ir101_webface12m.onnx".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: AppTheme::Dark,
             thumbnail_size: 500,
             face_detection_confidence: 0.25,
-            face_clustering_threshold: 0.28,
+            face_clustering_threshold: 0.30,
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
@@ -171,9 +180,10 @@ impl Default for AppConfig {
             date_logic_version: 0,
             geonames_warning_seen: false,
             thumbnail_cache_gb: default_thumbnail_cache_gb(),
+            config_version: 2,
+            face_embedder_model: default_face_embedder_model(),
             face_gpu_bridge_url: None,
             face_gpu_bridge_enabled: false,
-            config_version: 1,
         }
     }
 }
@@ -225,6 +235,13 @@ impl AppConfig {
             }
             self.config_version = 1;
         }
+        if self.config_version < 2 {
+            // v2: bump to 0.30 for AdaFace (tighter centroids).
+            if (self.face_clustering_threshold - 0.28).abs() < 0.001 {
+                self.face_clustering_threshold = 0.30;
+            }
+            self.config_version = 2;
+        }
     }
 
     /// Clamp all values to valid ranges.
@@ -252,6 +269,9 @@ impl AppConfig {
         self.weight_temporal = self.weight_temporal.clamp(0.0, 2.0);
         self.map_cache_limit_mb = self.map_cache_limit_mb.clamp(50, 10_000);
         self.thumbnail_cache_gb = self.thumbnail_cache_gb.clamp(0.5, 100.0);
+        if self.face_embedder_model.is_empty() {
+            self.face_embedder_model = default_face_embedder_model();
+        }
     }
 
     /// Save config to disk.

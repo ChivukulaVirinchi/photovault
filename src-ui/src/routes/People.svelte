@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { people } from "../lib/api/all";
+  import { people, settings } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -13,6 +13,26 @@
   let pendingPhotos = $state(0);
   let unconfirmedTotal = $state(0);
   let clustersWithUnconfirmed = $state(0);
+  let showModelUpgradeBanner = $state(false);
+  async function checkModelUpgrade() {
+    try {
+      const s = await settings.get();
+      if (s.face_embedder_model === "adaface_ir101_webface12m.onnx" &&
+          !localStorage.getItem("smriti_model_upgrade_dismissed")) {
+        showModelUpgradeBanner = true;
+      }
+    } catch {}
+  }
+  async function reRunFacesFromScratch() {
+    try { await people.resetClusters(); } catch {}
+    localStorage.setItem("smriti_model_upgrade_dismissed", "1");
+    showModelUpgradeBanner = false;
+    startFaceProcessing();
+  }
+  function dismissModelUpgrade() {
+    localStorage.setItem("smriti_model_upgrade_dismissed", "1");
+    showModelUpgradeBanner = false;
+  }
   // Engine emits a `chunks_flushed` counter that bumps every time the
   // writer thread commits a batch to disk. We track the last value the
   // page reloaded against and refetch whenever it advances — that's how
@@ -116,6 +136,7 @@
   onMount(() => {
     load();
     loadPending();
+    checkModelUpgrade();
   });
 
   // Refresh pending count when a face job completes (so the banner
@@ -145,6 +166,18 @@
 {#if running && facesJob && progressPct != null}
   <div class="progress" aria-label="Face detection progress">
     <div class="bar"><div class="fill" style="width: {progressPct}%"></div></div>
+  </div>
+{/if}
+
+{#if !running && showModelUpgradeBanner}
+  <div class="resume-banner" style="border-color: var(--accent); background: color-mix(in oklab, var(--bg-card) 80%, var(--accent) 15%)">
+    <div class="resume-text">
+      <strong>Model upgraded</strong>
+      We've upgraded the face recognition model to AdaFace.
+      Re-run face detection to apply the improved embeddings.
+    </div>
+    <button class="primary" onclick={reRunFacesFromScratch}>Re-run detection</button>
+    <button class="ghost" onclick={dismissModelUpgrade}>Dismiss</button>
   </div>
 {/if}
 

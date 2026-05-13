@@ -185,7 +185,8 @@ impl FaceProcessor {
         })?;
 
         let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
-        let embedder_path = model_dir.join("glintr100.onnx");
+        let cfg = crate::config::AppConfig::load();
+        let embedder_path = model_dir.join(&cfg.face_embedder_model);
 
         if !detector_path.exists() {
             return Err(
