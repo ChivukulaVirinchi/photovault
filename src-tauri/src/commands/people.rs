@@ -92,14 +92,26 @@ pub async fn people_clustering_diagnostics(
         })
         .unwrap_or(0);
 
+    // Pull the last-run rejection counts from face_processing_stats.
+    // Missing row → all zeroes (no run has completed yet on this DB).
+    let (rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw): (i64, i64, i64, i64) =
+        db.conn
+            .query_row(
+                "SELECT rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw \
+                 FROM face_processing_stats WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap_or((0, 0, 0, 0));
+
     Ok(ClusteringDiagnosticsDto {
         faces_detected: total_faces as usize,
         clusters_created: clusters.len(),
         photos_processed: photos_with_faces as usize,
-        rejected_small: 0,
-        rejected_lowconf: 0,
-        rejected_blurry: 0,
-        rejected_yaw: 0,
+        rejected_small: rejected_small.max(0) as usize,
+        rejected_lowconf: rejected_lowconf.max(0) as usize,
+        rejected_blurry: rejected_blurry.max(0) as usize,
+        rejected_yaw: rejected_yaw.max(0) as usize,
     })
 }
 
@@ -694,6 +706,34 @@ pub async fn people_start_processing(
             ),
             Err(_) => (0, 0, 0, 0),
         };
+
+        // Persist the rejection counts so people_clustering_diagnostics
+        // can answer "why did face_count drop?" after an app restart.
+        // Only on success — failure keeps the previous run's stats.
+        if pipeline_result.is_ok() {
+            let st: tauri::State<AppState> = app_clone.state();
+            let lib_guard = st.library.read().await;
+            if let Some(lib) = lib_guard.as_ref() {
+                let db = lib.db.lock().await;
+                let _ = db.conn.execute(
+                    "INSERT INTO face_processing_stats \
+                       (id, rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw, completed_at) \
+                     VALUES (1, ?1, ?2, ?3, ?4, strftime('%s','now')) \
+                     ON CONFLICT(id) DO UPDATE SET \
+                       rejected_small=excluded.rejected_small, \
+                       rejected_lowconf=excluded.rejected_lowconf, \
+                       rejected_blurry=excluded.rejected_blurry, \
+                       rejected_yaw=excluded.rejected_yaw, \
+                       completed_at=excluded.completed_at",
+                    rusqlite::params![
+                        rej_small as i64,
+                        rej_lowconf as i64,
+                        rej_blurry as i64,
+                        rej_yaw as i64,
+                    ],
+                );
+            }
+        }
         emit(
             &app_clone,
             EV_FACES_COMPLETE,

@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 20;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 21;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -118,6 +118,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 20 {
         migrate_v19_to_v20(conn)?;
     }
+    if current_version < 21 {
+        migrate_v20_to_v21(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
     Ok(())
@@ -184,6 +187,26 @@ fn migrate_v19_to_v20(conn: &Connection) -> SqliteResult<()> {
     )?;
     tx.commit()?;
     tracing::info!("Migrated database to schema version 20 (face_negatives)");
+    Ok(())
+}
+
+fn migrate_v20_to_v21(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS face_processing_stats (
+            id                INTEGER PRIMARY KEY CHECK (id = 1),
+            rejected_small    INTEGER NOT NULL DEFAULT 0,
+            rejected_lowconf  INTEGER NOT NULL DEFAULT 0,
+            rejected_blurry   INTEGER NOT NULL DEFAULT 0,
+            rejected_yaw      INTEGER NOT NULL DEFAULT 0,
+            completed_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        INSERT INTO schema_version (version) VALUES (21);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 21 (face_processing_stats)");
     Ok(())
 }
 

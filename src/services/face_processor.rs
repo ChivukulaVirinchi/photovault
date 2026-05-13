@@ -15,7 +15,7 @@ use crate::db::face_repo::FaceRepo;
 use crate::db::Database;
 use crate::db::InferredIdentityRepo;
 use crate::ml::{
-    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, LocalEmbedder,
+    ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding,
     OnnxRuntime,
 };
 use crate::services::image_utils::apply_exif_orientation;
@@ -187,6 +187,10 @@ impl FaceProcessor {
         let detector_path = model_dir.join("scrfd_10g_bnkps.onnx");
         let cfg = crate::config::AppConfig::load();
         let embedder_path = model_dir.join(&cfg.face_embedder_model);
+        // Captured per-worker so the embedder can be built once per
+        // thread. Cloned cheaply via Arc<String>.
+        let gpu_bridge_url: Option<String> = cfg.face_gpu_bridge_url.clone();
+        let embedder_model_name: String = cfg.face_embedder_model.clone();
 
         if !detector_path.exists() {
             return Err(
@@ -386,9 +390,15 @@ impl FaceProcessor {
                     });
                     EMBEDDER.with(|e| {
                         if e.borrow().is_none() {
-                            match LocalEmbedder::new_with_threads(&runtime, emb_path.as_ref(), intra_threads) {
+                            let embedder_cfg = crate::ml::EmbedderConfig {
+                                model_path: emb_path.as_ref().clone(),
+                                gpu_bridge_url: gpu_bridge_url.clone(),
+                                expected_model: embedder_model_name.clone(),
+                                intra_threads,
+                            };
+                            match FaceEmbedder::from_config(&runtime, &embedder_cfg) {
                                 Ok(emb) => {
-                                    *e.borrow_mut() = Some(FaceEmbedder::Local(emb));
+                                    *e.borrow_mut() = Some(emb);
                                 }
                                 Err(e_err) => {
                                     tracing::error!("Failed to init embedder in worker: {}", e_err);

@@ -50,7 +50,7 @@ impl FaceClusterer {
         }
         #[cfg(not(feature = "hnsw_clustering"))]
         {
-            self.cluster_complete_link(faces)
+            self.cluster_complete_link(faces, negatives)
         }
     }
 
@@ -58,7 +58,11 @@ impl FaceClusterer {
     /// `hnsw_clustering` is off so we can A/B against the new
     /// implementation on a real library by toggling features.
     #[cfg(not(feature = "hnsw_clustering"))]
-    fn cluster_complete_link(&self, faces: &[ClusterInput]) -> HashMap<i64, i32> {
+    fn cluster_complete_link(
+        &self,
+        faces: &[ClusterInput],
+        negatives: Option<&std::collections::HashSet<(i64, i64)>>,
+    ) -> HashMap<i64, i32> {
         if faces.is_empty() {
             return HashMap::new();
         }
@@ -79,6 +83,9 @@ impl FaceClusterer {
                     let mut merged = clusters[i].clone();
                     merged.extend_from_slice(&clusters[j]);
                     if Self::has_same_photo_conflict(&merged, faces) {
+                        continue;
+                    }
+                    if Self::has_negative_conflict(&clusters[i], &clusters[j], faces, negatives) {
                         continue;
                     }
 
@@ -138,6 +145,36 @@ impl FaceClusterer {
             let pid = faces[idx].photo_id;
             if !seen.insert(pid) {
                 return true;
+            }
+        }
+        false
+    }
+
+    /// If any face in cluster A has a (face_id, current_cluster_id-of-some-face-in-B)
+    /// pair in `negatives` — or vice versa — the merge is forbidden.
+    #[cfg(not(feature = "hnsw_clustering"))]
+    fn has_negative_conflict(
+        a: &[usize],
+        b: &[usize],
+        faces: &[ClusterInput],
+        negatives: Option<&std::collections::HashSet<(i64, i64)>>,
+    ) -> bool {
+        let neg = match negatives {
+            Some(n) if !n.is_empty() => n,
+            _ => return false,
+        };
+        for &ai in a {
+            for &bi in b {
+                if let Some(bc) = faces[bi].current_cluster_id {
+                    if neg.contains(&(faces[ai].face_id, bc)) {
+                        return true;
+                    }
+                }
+                if let Some(ac) = faces[ai].current_cluster_id {
+                    if neg.contains(&(faces[bi].face_id, ac)) {
+                        return true;
+                    }
+                }
             }
         }
         false

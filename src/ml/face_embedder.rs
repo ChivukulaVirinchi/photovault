@@ -71,45 +71,94 @@ impl FaceEmbedding {
 pub struct EmbedderConfig {
     pub model_path: PathBuf,
     pub gpu_bridge_url: Option<String>,
+    /// Name of the model the desktop is configured to use (e.g.
+    /// `adaface_ir101_webface12m.onnx`). Passed to the bridge so it
+    /// can refuse if its loaded model is different — mismatched models
+    /// produce embeddings in different metric spaces and would corrupt
+    /// clustering.
+    pub expected_model: String,
     pub intra_threads: usize,
 }
 
 /// Dispatch enum — either local ONNX or remote GPU bridge.
+///
+/// The `Remote` variant always carries a `LocalEmbedder` alongside it.
+/// When the remote bridge fails for a batch, we fall back to local for
+/// just that batch instead of dropping the faces silently. The remote's
+/// own 3-strikes / unhealthy check still applies; this is the per-batch
+/// safety net while it's nominally healthy.
 pub enum FaceEmbedder {
     Local(LocalEmbedder),
-    Remote(RemoteEmbedder),
+    Remote {
+        remote: RemoteEmbedder,
+        local_fallback: LocalEmbedder,
+    },
 }
 
 impl FaceEmbedder {
-    /// Build the configured embedder. Always creates a local instance
-    /// (required for fallback and single-face path). If a remote bridge
-    /// URL is provided *and* healthy, a Remote variant is returned
-    /// instead to handle batch embedding.
+    /// Build the configured embedder. Always constructs a local
+    /// instance — it's required as a fallback even when the bridge is
+    /// healthy. If a remote bridge URL is configured AND the bridge
+    /// passes its initial health check (including model match), the
+    /// returned embedder routes batches through the remote first.
     pub fn from_config(rt: &OnnxRuntime, cfg: &EmbedderConfig) -> Result<Self, ort::Error> {
-        if let Some(ref url) = cfg.gpu_bridge_url {
-            let remote = RemoteEmbedder::new(url.clone());
-            if remote.is_healthy() {
-                return Ok(FaceEmbedder::Remote(remote));
-            }
-        }
         let local = LocalEmbedder::new_with_threads(rt, &cfg.model_path, cfg.intra_threads)?;
+        if let Some(ref url) = cfg.gpu_bridge_url {
+            let remote = RemoteEmbedder::new(url.clone(), cfg.expected_model.clone());
+            if remote.is_healthy() {
+                tracing::info!("Face embedding routed to remote GPU bridge at {}", url);
+                return Ok(FaceEmbedder::Remote {
+                    remote,
+                    local_fallback: local,
+                });
+            }
+            tracing::info!("Remote GPU bridge unavailable; using local embedder");
+        }
         Ok(FaceEmbedder::Local(local))
     }
 
     /// Generate embedding for an aligned face image (112x112).
     pub fn embed(&mut self, aligned_face: &RgbImage) -> Option<FaceEmbedding> {
-        match self {
-            FaceEmbedder::Local(e) => e.embed(aligned_face),
-            FaceEmbedder::Remote(e) => e.embed(aligned_face),
-        }
+        self.embed_batch(std::slice::from_ref(aligned_face))
+            .into_iter()
+            .next()
+            .flatten()
     }
 
     /// Generate embeddings for a batch of aligned face images.
-    /// Returns one Option per input; None if that input was invalid.
+    /// Returns one Option per input; None only if both remote and
+    /// local-fallback produced no embedding for that input.
     pub fn embed_batch(&mut self, faces: &[RgbImage]) -> Vec<Option<FaceEmbedding>> {
         match self {
             FaceEmbedder::Local(e) => e.embed_batch(faces),
-            FaceEmbedder::Remote(e) => e.embed_batch(faces),
+            FaceEmbedder::Remote {
+                remote,
+                local_fallback,
+            } => {
+                let mut out = remote.embed_batch(faces);
+                if out.len() != faces.len() {
+                    // Defensive: should never happen, but if it does,
+                    // recompute fully on local.
+                    return local_fallback.embed_batch(faces);
+                }
+                let missing: Vec<usize> = out
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| if r.is_none() { Some(i) } else { None })
+                    .collect();
+                if missing.is_empty() {
+                    return out;
+                }
+                let crops: Vec<RgbImage> =
+                    missing.iter().map(|&i| faces[i].clone()).collect();
+                let fb = local_fallback.embed_batch(&crops);
+                for (k, &orig_i) in missing.iter().enumerate() {
+                    if let Some(emb) = fb.get(k).cloned().flatten() {
+                        out[orig_i] = Some(emb);
+                    }
+                }
+                out
+            }
         }
     }
 }

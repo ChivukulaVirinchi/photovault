@@ -6,8 +6,20 @@ strictly additive and **never required**.
 
 ## What it sends
 
-Only 112×112 aligned face JPEG crops (~5 KB each). No photos, no metadata,
-no telemetry. You control the endpoint URL.
+Only 112×112 aligned face JPEG crops (~5 KB each, quality 85). No photos,
+no metadata, no telemetry. You control the endpoint URL.
+
+## Model must match
+
+The notebook's `/health` advertises which face-embedding model it has loaded.
+Smriti refuses to send work when the bridge's model differs from the one
+configured in Settings — embeddings from different models live in incompatible
+metric spaces, and mixing them would corrupt clustering.
+
+- Default: **AdaFace** (`adaface_ir101_webface12m`). Notebook downloads it
+  by default; nothing to change.
+- If you switched Smriti to `glintr100` in Settings: set `MODEL_NAME='glintr100'`
+  in cell 2 of the notebook and re-run all cells.
 
 ## Setup paths
 
@@ -76,8 +88,11 @@ completes normally — just slower.
 - Verify the ngrok URL hasn't changed (free ngrok URLs rotate on restart).
 
 **Embedding is slow — still on CPU**
-- Check the Smriti logs (Help → Open logs folder). You should see
-  "Remote GPU bridge at <url> is not healthy" if the bridge failed.
+- Check the Smriti logs (Help → Open logs folder). You should see either
+  "Remote GPU bridge at <url> unhealthy or wrong model" or "Remote bridge
+  model mismatch" if the bridge failed.
+- The most common cause is a model mismatch — see the **Model must match**
+  section above.
 - Restart the notebook. Get a fresh ngrok URL. Update in Settings.
 
 **ngrok free plan limits**

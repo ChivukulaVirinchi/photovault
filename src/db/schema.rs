@@ -214,6 +214,18 @@ CREATE TABLE IF NOT EXISTS face_negatives (
     FOREIGN KEY (not_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE
 );
 
+-- Single-row table: rejection counts from the most recent face-processing
+-- run. Lets people_clustering_diagnostics report "we dropped 12k blurry
+-- faces" after a restart instead of only on the live `complete` event.
+CREATE TABLE IF NOT EXISTS face_processing_stats (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    rejected_small    INTEGER NOT NULL DEFAULT 0,
+    rejected_lowconf  INTEGER NOT NULL DEFAULT 0,
+    rejected_blurry   INTEGER NOT NULL DEFAULT 0,
+    rejected_yaw      INTEGER NOT NULL DEFAULT 0,
+    completed_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
 -- ============================================================
 -- MEMORY BLOCKS
 -- User preferences for the Memories feature: hide memories involving
