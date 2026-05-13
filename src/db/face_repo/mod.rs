@@ -43,6 +43,24 @@ pub struct ReviewItem {
     pub score: f32,
 }
 
+/// Face confirmation status filter for queries.
+#[derive(Debug, Clone)]
+pub enum FaceStatus {
+    Confirmed,
+    Unconfirmed,
+    All,
+}
+
+/// A face row with related metadata, used by face-list views.
+#[derive(Debug, Clone)]
+pub struct FaceDetail {
+    pub face_id: i64,
+    pub photo_id: i64,
+    pub cluster_id: Option<i64>,
+    pub confidence: f32,
+    pub user_confirmed: i32,
+}
+
 /// Face database repository
 pub struct FaceRepo<'a> {
     pub(crate) conn: &'a Connection,

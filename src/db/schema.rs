@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (19);
+INSERT INTO schema_version (version) VALUES (20);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -203,6 +203,15 @@ CREATE TABLE IF NOT EXISTS face_review_queue (
     FOREIGN KEY (face_id) REFERENCES faces(id) ON DELETE CASCADE,
     FOREIGN KEY (candidate_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE,
     UNIQUE(face_id, candidate_cluster_id)
+);
+
+CREATE TABLE IF NOT EXISTS face_negatives (
+    face_id        INTEGER NOT NULL,
+    not_cluster_id INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (face_id, not_cluster_id),
+    FOREIGN KEY (face_id)        REFERENCES faces(id)         ON DELETE CASCADE,
+    FOREIGN KEY (not_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE
 );
 
 -- ============================================================
@@ -398,6 +407,7 @@ CREATE INDEX IF NOT EXISTS idx_review_queue_face ON face_review_queue(face_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_cluster ON face_review_queue(candidate_cluster_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_unresolved ON face_review_queue(resolved_at)
     WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_face_negatives_cluster ON face_negatives(not_cluster_id);
 CREATE INDEX IF NOT EXISTS idx_memory_blocks_kind ON memory_blocks(kind);
 -- Duplicate and burst group members
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(group_id);

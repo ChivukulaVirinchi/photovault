@@ -16,7 +16,7 @@ use smriti::db::album_repo::AlbumRecord;
 use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
 use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
 use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
-use smriti::db::face_repo::{FaceClusterRecord, ReviewItem};
+use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::trash_repo::TrashedPhotoRecord;
 use smriti::models::{ContentCategory, Photo};
@@ -314,6 +314,46 @@ impl From<ReviewItem> for ReviewItemDto {
             score: r.score,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FaceDetailDto {
+    pub face_id: i64,
+    pub photo_id: i64,
+    pub cluster_id: Option<i64>,
+    pub cluster_name: Option<String>,
+    pub confidence: f32,
+    pub user_confirmed: i32,
+    pub thumbnail_path: Option<String>,
+}
+
+impl From<FaceDetail> for FaceDetailDto {
+    fn from(f: FaceDetail) -> Self {
+        Self {
+            face_id: f.face_id,
+            photo_id: f.photo_id,
+            cluster_id: f.cluster_id,
+            cluster_name: None,
+            confidence: f.confidence,
+            user_confirmed: f.user_confirmed,
+            thumbnail_path: Some(format!(".photovault/faces/{}.jpg", f.face_id)),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusterSuggestionDto {
+    pub cluster_id: i64,
+    pub name: String,
+    pub score: f32,
+    pub face_count: i64,
+    pub representative_face_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReviewFaceCountDto {
+    pub unconfirmed_total: i64,
+    pub clusters_with_unconfirmed: i64,
 }
 
 // ---------- albums ----------

@@ -361,6 +361,192 @@ impl<'a> FaceRepo<'a> {
         Ok(())
     }
 
+    /// Confirm a face: set user_confirmed=1. Add to gallery if not already.
+    pub fn confirm_face(&self, face_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "UPDATE faces SET user_confirmed = 1 WHERE id = ?1",
+            params![face_id],
+        )?;
+
+        let (cluster_id, embedding_bytes, confidence): (i64, Vec<u8>, Option<f32>) = tx.query_row(
+            "SELECT cluster_id, embedding, confidence FROM faces WHERE id = ?1",
+            params![face_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        tx.execute(
+            r#"
+            INSERT INTO person_gallery_embeddings
+                (cluster_id, face_id, embedding, quality_score, source)
+            VALUES (?1, ?2, ?3, ?4, 'user_confirmed')
+            ON CONFLICT(cluster_id, face_id) DO UPDATE SET
+                source = 'user_confirmed',
+                quality_score = excluded.quality_score
+            "#,
+            params![
+                cluster_id,
+                face_id,
+                embedding_bytes,
+                confidence.unwrap_or(0.0)
+            ],
+        )?;
+
+        Self::refresh_cluster_stats_tx(&tx, cluster_id)?;
+        Self::refresh_gallery_tx(&tx, cluster_id)?;
+
+        tx.commit()
+    }
+
+    /// Reject face to unknown: set cluster_id=NULL, user_confirmed=0. Write negative.
+    pub fn reject_face_to_unknown(&self, face_id: i64, prev_cluster_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "INSERT OR IGNORE INTO face_negatives (face_id, not_cluster_id) VALUES (?1, ?2)",
+            params![face_id, prev_cluster_id],
+        )?;
+
+        tx.execute(
+            "UPDATE faces SET cluster_id = NULL, user_confirmed = 0 WHERE id = ?1",
+            params![face_id],
+        )?;
+
+        Self::refresh_cluster_stats_tx(&tx, prev_cluster_id)?;
+        Self::refresh_gallery_tx(&tx, prev_cluster_id)?;
+
+        tx.commit()
+    }
+
+    /// Hide face: set cluster_id=NULL, user_confirmed=-1. Excluded from future clustering.
+    pub fn hide_face(&self, face_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        let cluster_id: Option<i64> = tx
+            .query_row(
+                "SELECT cluster_id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        tx.execute(
+            "UPDATE faces SET cluster_id = NULL, user_confirmed = -1 WHERE id = ?1",
+            params![face_id],
+        )?;
+
+        if let Some(cid) = cluster_id {
+            Self::refresh_cluster_stats_tx(&tx, cid)?;
+            Self::refresh_gallery_tx(&tx, cid)?;
+        }
+
+        tx.commit()
+    }
+
+    /// Reassign a face to a different cluster. Marks user_confirmed=1, writes negative
+    /// against the old cluster_id so it won't come back.
+    pub fn reassign_face(
+        &self,
+        face_id: i64,
+        new_cluster_id: i64,
+        old_cluster_id: i64,
+    ) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "INSERT OR IGNORE INTO face_negatives (face_id, not_cluster_id) VALUES (?1, ?2)",
+            params![face_id, old_cluster_id],
+        )?;
+
+        tx.execute(
+            "UPDATE faces SET cluster_id = ?1, user_confirmed = 1 WHERE id = ?2",
+            params![new_cluster_id, face_id],
+        )?;
+
+        let embedding_bytes: Vec<u8> = tx.query_row(
+            "SELECT embedding FROM faces WHERE id = ?1",
+            params![face_id],
+            |row| row.get(0),
+        )?;
+        let confidence: Option<f32> = tx
+            .query_row(
+                "SELECT confidence FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        tx.execute(
+            r#"
+            INSERT INTO person_gallery_embeddings
+                (cluster_id, face_id, embedding, quality_score, source)
+            VALUES (?1, ?2, ?3, ?4, 'user_confirmed')
+            ON CONFLICT(cluster_id, face_id) DO UPDATE SET
+                source = 'user_confirmed',
+                quality_score = excluded.quality_score
+            "#,
+            params![
+                new_cluster_id,
+                face_id,
+                embedding_bytes,
+                confidence.unwrap_or(0.0)
+            ],
+        )?;
+
+        Self::refresh_cluster_stats_tx(&tx, old_cluster_id)?;
+        Self::refresh_gallery_tx(&tx, old_cluster_id)?;
+        Self::refresh_cluster_stats_tx(&tx, new_cluster_id)?;
+        Self::refresh_gallery_tx(&tx, new_cluster_id)?;
+
+        tx.commit()
+    }
+
+    /// Confirm a currently-unassigned face into a cluster (used by K-similar flow).
+    pub fn confirm_face_to_cluster(&self, face_id: i64, cluster_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "UPDATE faces SET cluster_id = ?1, user_confirmed = 1 WHERE id = ?2",
+            params![cluster_id, face_id],
+        )?;
+
+        let embedding_bytes: Vec<u8> = tx.query_row(
+            "SELECT embedding FROM faces WHERE id = ?1",
+            params![face_id],
+            |row| row.get(0),
+        )?;
+        let confidence: Option<f32> = tx
+            .query_row(
+                "SELECT confidence FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        tx.execute(
+            r#"
+            INSERT INTO person_gallery_embeddings
+                (cluster_id, face_id, embedding, quality_score, source)
+            VALUES (?1, ?2, ?3, ?4, 'user_confirmed')
+            ON CONFLICT(cluster_id, face_id) DO UPDATE SET
+                source = 'user_confirmed',
+                quality_score = excluded.quality_score
+            "#,
+            params![
+                cluster_id,
+                face_id,
+                embedding_bytes,
+                confidence.unwrap_or(0.0)
+            ],
+        )?;
+
+        Self::refresh_cluster_stats_tx(&tx, cluster_id)?;
+        Self::refresh_gallery_tx(&tx, cluster_id)?;
+
+        tx.commit()
+    }
+
     /// Reverse a prior review resolution (for undo).
     pub fn unresolve_review(&self, queue_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;

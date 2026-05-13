@@ -55,6 +55,7 @@ fn build_fixture(total_faces: usize, identities: usize) -> Vec<ClusterInput> {
             out.push(ClusterInput {
                 face_id: id_counter,
                 photo_id: id_counter,
+                current_cluster_id: None,
                 embedding: synthesize(axis, &mut rng, 0.05),
             });
         }
@@ -70,7 +71,7 @@ fn bench_clusterer(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &faces, |b, faces| {
             let clusterer = FaceClusterer::new();
             b.iter(|| {
-                let _ = black_box(clusterer.cluster(black_box(faces)));
+                let _ = black_box(clusterer.cluster(black_box(faces), None));
             });
         });
     }

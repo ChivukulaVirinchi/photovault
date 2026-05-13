@@ -64,6 +64,7 @@ fn build_fixture(identities: &[usize], faces_per_identity: usize, noise: f32) ->
             out.push(ClusterInput {
                 face_id,
                 photo_id,
+                current_cluster_id: None,
                 embedding: synthesize_embedding(axis, &mut rng, noise),
             });
         }
@@ -88,7 +89,7 @@ fn three_identities_form_three_clusters() {
     let faces = build_fixture(&[0, 100, 200], 5, 0.01);
     let clusterer = FaceClusterer::new();
 
-    let assignments = clusterer.cluster(&faces);
+    let assignments = clusterer.cluster(&faces, None);
     let sizes = cluster_sizes(&assignments);
 
     assert_eq!(
@@ -111,8 +112,8 @@ fn clustering_is_idempotent_for_the_same_input() {
     let faces = build_fixture(&[0, 100, 200], 4, 0.01);
     let clusterer = FaceClusterer::new();
 
-    let run_a = clusterer.cluster(&faces);
-    let run_b = clusterer.cluster(&faces);
+    let run_a = clusterer.cluster(&faces, None);
+    let run_b = clusterer.cluster(&faces, None);
 
     let sizes_a = cluster_sizes(&run_a);
     let sizes_b = cluster_sizes(&run_b);
@@ -133,8 +134,8 @@ fn looser_threshold_produces_fewer_clusters() {
     let strict = FaceClusterer::new().with_max_distance(0.2);
     let loose = FaceClusterer::new().with_max_distance(0.9);
 
-    let strict_count = cluster_sizes(&strict.cluster(&faces)).len();
-    let loose_count = cluster_sizes(&loose.cluster(&faces)).len();
+    let strict_count = cluster_sizes(&strict.cluster(&faces, None)).len();
+    let loose_count = cluster_sizes(&loose.cluster(&faces, None)).len();
 
     assert!(
         loose_count <= strict_count,
@@ -155,7 +156,7 @@ fn strict_threshold_leaves_noisy_faces_unmerged() {
     let faces = build_fixture(&[0, 100, 200], 4, 0.15);
     let clusterer = FaceClusterer::new();
 
-    let assignments = clusterer.cluster(&faces);
+    let assignments = clusterer.cluster(&faces, None);
     let sizes = cluster_sizes(&assignments);
     assert!(
         sizes.len() >= 3,
@@ -167,6 +168,6 @@ fn strict_threshold_leaves_noisy_faces_unmerged() {
 #[test]
 fn empty_input_returns_empty_assignments() {
     let clusterer = FaceClusterer::new();
-    let assignments = clusterer.cluster(&[]);
+    let assignments = clusterer.cluster(&[], None);
     assert!(assignments.is_empty());
 }

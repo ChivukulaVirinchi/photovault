@@ -39,7 +39,7 @@ pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
 pub use connection::{db_path_for, open_secondary, tile_cache_dir, Database};
 pub use document_repo::DocumentRepo;
 pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo};
-pub use face_repo::{FaceClusterRecord, FaceRepo, ReviewItem};
+pub use face_repo::{FaceClusterRecord, FaceDetail, FaceRepo, FaceStatus, ReviewItem};
 pub use inferred_identity_repo::InferredIdentityRepo;
 pub use photo_repo::PhotoRepo;
 pub use recent_search_repo::{RecentSearch, RecentSearchRepo};

@@ -4,7 +4,7 @@ use rusqlite::{params, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
-use super::{FaceClusterRecord, FaceRepo, GalleryEmbedding, ReviewItem};
+use super::{FaceClusterRecord, FaceDetail, FaceRepo, FaceStatus, GalleryEmbedding, ReviewItem};
 
 type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
 /// (id, file_path, orientation, taken_ts, file_hash)
@@ -509,5 +509,184 @@ impl<'a> FaceRepo<'a> {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Get faces for a cluster filtered by status.
+    pub fn get_faces_by_cluster(
+        &self,
+        cluster_id: i64,
+        status: FaceStatus,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> SqliteResult<Vec<FaceDetail>> {
+        let (where_clause, params_slice): (String, Vec<rusqlite::types::Value>) = match status {
+            FaceStatus::Confirmed => (
+                "f.cluster_id = ?1 AND f.user_confirmed = 1".to_string(),
+                vec![rusqlite::types::Value::from(cluster_id)],
+            ),
+            FaceStatus::Unconfirmed => (
+                "f.cluster_id = ?1 AND f.user_confirmed = 0".to_string(),
+                vec![rusqlite::types::Value::from(cluster_id)],
+            ),
+            FaceStatus::All => (
+                "f.cluster_id = ?1".to_string(),
+                vec![rusqlite::types::Value::from(cluster_id)],
+            ),
+        };
+
+        let mut sql = format!(
+            "SELECT f.id, f.photo_id, f.cluster_id, f.confidence, f.user_confirmed
+             FROM faces f
+             WHERE {} ",
+            where_clause
+        );
+
+        let mut params: Vec<rusqlite::types::Value> = params_slice;
+        if let Some(c) = cursor {
+            sql.push_str("AND f.id > ?2 ");
+            params.push(rusqlite::types::Value::from(c));
+        }
+        sql.push_str("ORDER BY f.id ASC LIMIT ?3");
+        params.push(rusqlite::types::Value::from(limit as i64));
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok(FaceDetail {
+                face_id: row.get(0)?,
+                photo_id: row.get(1)?,
+                cluster_id: row.get(2)?,
+                confidence: row.get(3)?,
+                user_confirmed: row.get(4)?,
+            })
+        })?;
+
+        let mut faces = Vec::new();
+        for row in rows {
+            faces.push(row?);
+        }
+        Ok(faces)
+    }
+
+    /// Count unconfirmed faces in a cluster.
+    pub fn count_unconfirmed_in_cluster(&self, cluster_id: i64) -> SqliteResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM faces WHERE cluster_id = ?1 AND user_confirmed = 0",
+            params![cluster_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Count unconfirmed faces across all clusters.
+    /// Returns (total_unconfirmed, clusters_with_unconfirmed).
+    pub fn count_unconfirmed_global(&self) -> SqliteResult<(i64, i64)> {
+        let total: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM faces WHERE cluster_id IS NOT NULL AND user_confirmed = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let cluster_count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT cluster_id) FROM faces WHERE cluster_id IS NOT NULL AND user_confirmed = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((total, cluster_count))
+    }
+
+    /// Get negatives for a face (clusters it should NOT be in).
+    pub fn get_negatives_for_face(&self, face_id: i64) -> SqliteResult<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT not_cluster_id FROM face_negatives WHERE face_id = ?1")?;
+        let rows = stmt.query_map(params![face_id], |row| row.get::<_, i64>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// K-similar: find K nearest unassigned faces to a cluster's confirmed gallery centroid.
+    pub fn k_similar_to_cluster(&self, cluster_id: i64, k: usize) -> SqliteResult<Vec<(i64, f32)>> {
+        // Gather confirmed gallery embeddings for centroid.
+        let mut stmt = self.conn.prepare(
+            "SELECT embedding FROM person_gallery_embeddings WHERE cluster_id = ?1 AND source = 'user_confirmed'",
+        )?;
+        let rows = stmt.query_map(params![cluster_id], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut embeddings: Vec<FaceEmbedding> = Vec::new();
+        for row in rows {
+            let bytes = row?;
+            if let Some(emb) = FaceEmbedding::from_bytes(&bytes) {
+                embeddings.push(emb);
+            }
+        }
+
+        // If no user-confirmed gallery, fall back to auto gallery.
+        if embeddings.is_empty() {
+            let mut stmt2 = self
+                .conn
+                .prepare("SELECT embedding FROM person_gallery_embeddings WHERE cluster_id = ?1")?;
+            let rows2 = stmt2.query_map(params![cluster_id], |row| row.get::<_, Vec<u8>>(0))?;
+            for row in rows2 {
+                let bytes = row?;
+                if let Some(emb) = FaceEmbedding::from_bytes(&bytes) {
+                    embeddings.push(emb);
+                }
+            }
+        }
+
+        if embeddings.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Compute centroid (mean of all gallery vectors).
+        let dim = embeddings[0].vector.len();
+        let mut centroid = ndarray::Array1::<f32>::zeros(dim);
+        for emb in &embeddings {
+            centroid += &emb.vector;
+        }
+        centroid /= embeddings.len() as f32;
+
+        // Normalize the centroid.
+        let norm = centroid.dot(&centroid).sqrt();
+        if norm > 0.0 {
+            centroid /= norm;
+        }
+        let centroid_emb = FaceEmbedding::new(centroid);
+
+        // Load candidate faces: unassigned (cluster_id IS NULL OR user_confirmed = 0),
+        // excluding faces with a negative against this cluster.
+        let mut cand_stmt = self.conn.prepare(
+            r#"
+            SELECT f.id, f.embedding
+            FROM faces f
+            WHERE (f.cluster_id IS NULL OR (f.cluster_id IS NOT NULL AND f.user_confirmed = 0))
+              AND f.id NOT IN (
+                  SELECT face_id FROM face_negatives WHERE not_cluster_id = ?1
+              )
+            "#,
+        )?;
+        let cand_rows = cand_stmt.query_map(params![cluster_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+
+        let mut scored: Vec<(i64, f32)> = Vec::new();
+        for row in cand_rows {
+            let (face_id, bytes) = row?;
+            if let Some(emb) = FaceEmbedding::from_bytes(&bytes) {
+                let sim = centroid_emb.cosine_similarity(&emb);
+                scored.push((face_id, sim));
+            }
+        }
+
+        // Sort descending by similarity, take top K.
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+
+        Ok(scored)
     }
 }

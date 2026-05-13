@@ -6,10 +6,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use smriti::db::face_repo::FaceRepo;
+use smriti::db::face_repo::{FaceDetail, FaceRepo};
 
 use crate::dto::{
-    ClusteringDiagnosticsDto, JobIdDto, PendingFaceCountDto, PersonDto, ReviewItemDto,
+    ClusterSuggestionDto, ClusteringDiagnosticsDto, FaceDetailDto, JobIdDto, Page,
+    PendingFaceCountDto, PersonDto, ReviewFaceCountDto, ReviewItemDto,
 };
 use crate::events::{EV_FACES_COMPLETE, EV_FACES_PROGRESS};
 use crate::jobs::{self, emit};
@@ -99,6 +100,272 @@ pub async fn people_clustering_diagnostics(
         rejected_lowconf: 0,
         rejected_blurry: 0,
         rejected_yaw: 0,
+    })
+}
+
+// ---------- face-level commands (Phase B) ----------
+
+#[derive(Debug, Deserialize)]
+pub struct FaceListArgs {
+    pub person_id: i64,
+    pub status: String,
+    pub cursor: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn people_face_list(
+    state: State<'_, AppState>,
+    args: FaceListArgs,
+) -> CommandResult<Page<FaceDetailDto>> {
+    use smriti::db::face_repo::FaceStatus;
+
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = FaceRepo::new(&db.conn);
+
+    let status = match args.status.as_str() {
+        "confirmed" => FaceStatus::Confirmed,
+        "unconfirmed" => FaceStatus::Unconfirmed,
+        _ => FaceStatus::All,
+    };
+
+    let limit = args.limit.unwrap_or(50).min(200) as usize;
+    let faces = repo.get_faces_by_cluster(args.person_id, status, args.cursor, limit)?;
+
+    // Populate cluster names.
+    let mut cluster_name: Option<String> = None;
+    if let Ok(clusters) = repo.get_all_clusters() {
+        cluster_name = clusters
+            .iter()
+            .find(|c| c.id == args.person_id)
+            .and_then(|c| c.name.clone());
+    }
+
+    let has_more = faces.len() == limit;
+    let next_cursor = faces.last().map(|f| f.face_id);
+    let total = Some(faces.len() as u64);
+
+    let items: Vec<FaceDetailDto> = faces
+        .into_iter()
+        .map(|mut f| {
+            f.cluster_id = Some(args.person_id);
+            let mut dto: FaceDetailDto = f.into();
+            dto.cluster_name = cluster_name.clone();
+            dto
+        })
+        .collect();
+
+    Ok(Page {
+        items,
+        next_cursor: next_cursor.map(|c| c.to_string()),
+        has_more,
+        total,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FaceActionArgs {
+    pub face_id: i64,
+}
+
+#[tauri::command]
+pub async fn people_face_confirm(
+    state: State<'_, AppState>,
+    args: FaceActionArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    FaceRepo::new(&db.conn).confirm_face(args.face_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn people_face_reject(
+    state: State<'_, AppState>,
+    args: FaceActionArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+
+    let cluster_id: i64 = db.conn.query_row(
+        "SELECT cluster_id FROM faces WHERE id = ?1",
+        rusqlite::params![args.face_id],
+        |row| row.get(0),
+    )?;
+    FaceRepo::new(&db.conn).reject_face_to_unknown(args.face_id, cluster_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn people_face_hide(
+    state: State<'_, AppState>,
+    args: FaceActionArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    FaceRepo::new(&db.conn).hide_face(args.face_id)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FaceReassignArgs {
+    pub face_id: i64,
+    pub target_cluster_id: i64,
+}
+
+#[tauri::command]
+pub async fn people_face_reassign(
+    state: State<'_, AppState>,
+    args: FaceReassignArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+
+    let old_cluster_id: i64 = db.conn.query_row(
+        "SELECT cluster_id FROM faces WHERE id = ?1",
+        rusqlite::params![args.face_id],
+        |row| row.get(0),
+    )?;
+    FaceRepo::new(&db.conn).reassign_face(args.face_id, args.target_cluster_id, old_cluster_id)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FaceSuggestArgs {
+    pub face_id: i64,
+    pub top_k: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn people_face_suggest_clusters(
+    state: State<'_, AppState>,
+    args: FaceSuggestArgs,
+) -> CommandResult<Vec<ClusterSuggestionDto>> {
+    use smriti::ml::{retrieve_candidates, FaceEmbedding};
+
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = FaceRepo::new(&db.conn);
+
+    // Load the face's embedding.
+    let embedding_bytes: Vec<u8> = db.conn.query_row(
+        "SELECT embedding FROM faces WHERE id = ?1",
+        rusqlite::params![args.face_id],
+        |row| row.get(0),
+    )?;
+    let query_emb =
+        FaceEmbedding::from_bytes(&embedding_bytes).ok_or_else(|| CommandError::Internal {
+            message: "Corrupted face embedding".into(),
+        })?;
+
+    // Load gallery embeddings grouped by cluster.
+    let galleries = repo.get_gallery_embeddings()?;
+    let mut grouped: std::collections::HashMap<i64, Vec<(i64, FaceEmbedding)>> =
+        std::collections::HashMap::new();
+    for g in galleries {
+        grouped
+            .entry(g.cluster_id)
+            .or_default()
+            .push((g.face_id, g.embedding));
+    }
+    let grouped_vec: Vec<(i64, Vec<(i64, FaceEmbedding)>)> = grouped.into_iter().collect();
+
+    // Exclude clusters this face has negatives against.
+    let negatives = repo.get_negatives_for_face(args.face_id)?;
+    let exclude: std::collections::HashSet<i64> = negatives.into_iter().collect();
+
+    let top_k = args.top_k.unwrap_or(3) as usize;
+    let hits = retrieve_candidates(&query_emb, &grouped_vec, top_k, 0.3, &exclude);
+
+    // Enrich with cluster names and face counts.
+    let clusters = repo.get_all_clusters().unwrap_or_default();
+    let suggestions: Vec<ClusterSuggestionDto> = hits
+        .into_iter()
+        .take(top_k)
+        .map(|hit| {
+            let cluster = clusters.iter().find(|c| c.id == hit.cluster_id);
+            ClusterSuggestionDto {
+                cluster_id: hit.cluster_id,
+                name: cluster
+                    .and_then(|c| c.name.clone())
+                    .unwrap_or_else(|| format!("Person {}", hit.cluster_id)),
+                score: hit.score,
+                face_count: cluster.map(|c| c.photo_count).unwrap_or(0),
+                representative_face_id: cluster.and_then(|c| c.representative_face_id),
+            }
+        })
+        .collect();
+
+    Ok(suggestions)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KSimilarArgs {
+    pub cluster_id: i64,
+    pub k: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn people_k_similar_to_cluster(
+    state: State<'_, AppState>,
+    args: KSimilarArgs,
+) -> CommandResult<Vec<FaceDetailDto>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = FaceRepo::new(&db.conn);
+
+    let k = args.k.unwrap_or(20).min(100) as usize;
+    let scored = repo.k_similar_to_cluster(args.cluster_id, k)?;
+
+    // Build FaceDetail for each scored face.
+    let mut cluster_name: Option<String> = None;
+    if let Ok(clusters) = repo.get_all_clusters() {
+        cluster_name = clusters
+            .iter()
+            .find(|c| c.id == args.cluster_id)
+            .and_then(|c| c.name.clone());
+    }
+
+    let items: Vec<FaceDetailDto> = scored
+        .into_iter()
+        .map(|(face_id, _score)| {
+            let mut dto: FaceDetailDto = FaceDetail {
+                face_id,
+                photo_id: 0,
+                cluster_id: None,
+                confidence: 0.0,
+                user_confirmed: 0,
+            }
+            .into();
+            dto.thumbnail_path = Some(format!(".photovault/faces/{}.jpg", face_id));
+            dto.cluster_name = cluster_name.clone();
+            dto
+        })
+        .collect();
+
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn people_review_face_count(
+    state: State<'_, AppState>,
+) -> CommandResult<ReviewFaceCountDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let (unconfirmed_total, clusters_with_unconfirmed) =
+        FaceRepo::new(&db.conn).count_unconfirmed_global()?;
+    Ok(ReviewFaceCountDto {
+        unconfirmed_total,
+        clusters_with_unconfirmed,
     })
 }
 

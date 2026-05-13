@@ -174,12 +174,30 @@ impl FaceProcessor {
             .map(|(face_id, photo_id, emb)| ClusterInput {
                 face_id: *face_id,
                 photo_id: *photo_id,
+                current_cluster_id: None,
                 embedding: emb.clone(),
             })
             .collect();
 
+        // Load face_negatives so the clusterer can honour user rejections.
+        let negatives: std::collections::HashSet<(i64, i64)> = {
+            let mut stmt = face_repo
+                .conn
+                .prepare("SELECT face_id, not_cluster_id FROM face_negatives")
+                .map_err(|e| format!("Failed to load negatives: {}", e))?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+                .map_err(|e| format!("Failed to query negatives: {}", e))?;
+            let mut set = std::collections::HashSet::new();
+            for row in rows {
+                let pair = row.map_err(|e| format!("Failed to read negative row: {}", e))?;
+                set.insert(pair);
+            }
+            set
+        };
+
         let clusterer = FaceClusterer::new().with_max_distance(strict_max_distance);
-        let assignments = clusterer.cluster(&inputs);
+        let assignments = clusterer.cluster(&inputs, Some(&negatives));
 
         let mut cluster_groups: HashMap<i32, Vec<i64>> = HashMap::new();
         for (face_id, cluster_id) in assignments {

@@ -11,6 +11,9 @@ use super::FaceEmbedding;
 pub struct ClusterInput {
     pub face_id: i64,
     pub photo_id: i64,
+    /// Current cluster assignment (if any) — used with face_negatives to
+    /// avoid clustering a face back into a cluster it was rejected from.
+    pub current_cluster_id: Option<i64>,
     pub embedding: FaceEmbedding,
 }
 
@@ -32,10 +35,18 @@ impl FaceClusterer {
     }
 
     /// Cluster faces and return map of face_id -> cluster_label (-1 = singleton/noise).
-    pub fn cluster(&self, faces: &[ClusterInput]) -> HashMap<i64, i32> {
+    ///
+    /// `negatives` is an optional set of (face_id, not_cluster_id) pairs from
+    /// the `face_negatives` table. When present, two faces whose current clusters
+    /// are blocked by a negative constraint will not be merged.
+    pub fn cluster(
+        &self,
+        faces: &[ClusterInput],
+        negatives: Option<&std::collections::HashSet<(i64, i64)>>,
+    ) -> HashMap<i64, i32> {
         #[cfg(feature = "hnsw_clustering")]
         {
-            cluster_hnsw(faces, self.max_distance)
+            cluster_hnsw(faces, self.max_distance, negatives)
         }
         #[cfg(not(feature = "hnsw_clustering"))]
         {
@@ -143,8 +154,13 @@ impl FaceClusterer {
 ///    conflict get unioned via union-find.
 /// 4. Each connected component with ≥ 2 members becomes a cluster.
 #[cfg(feature = "hnsw_clustering")]
-fn cluster_hnsw(faces: &[ClusterInput], max_distance: f32) -> HashMap<i64, i32> {
+fn cluster_hnsw(
+    faces: &[ClusterInput],
+    max_distance: f32,
+    negatives: Option<&std::collections::HashSet<(i64, i64)>>,
+) -> HashMap<i64, i32> {
     use hnsw_rs::prelude::*;
+    use std::collections::HashSet;
     if faces.is_empty() {
         return HashMap::new();
     }
@@ -225,6 +241,51 @@ fn cluster_hnsw(faces: &[ClusterInput], max_distance: f32) -> HashMap<i64, i32> 
             if photos_a.intersection(&photos_b).next().is_some() {
                 continue;
             }
+
+            // Check face_negatives constraints: if any face in component A
+            // has a negative against the current cluster of any face in
+            // component B (or vice versa), skip the merge.
+            if let Some(neg) = negatives {
+                // Collect face_ids in each component.
+                let faces_a: HashSet<i64> = faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, _)| find(&mut parent, *fi) == ra)
+                    .map(|(_, f)| f.face_id)
+                    .collect();
+                let faces_b: HashSet<i64> = faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, _)| find(&mut parent, *fi) == rb)
+                    .map(|(_, f)| f.face_id)
+                    .collect();
+
+                // Check A→B: any face in A has negative against B's cluster?
+                let conflict_a_to_b = faces_a.iter().any(|fa| {
+                    faces_b.iter().any(|fb| {
+                        let fb_cluster = faces
+                            .iter()
+                            .find(|f| f.face_id == *fb)
+                            .and_then(|f| f.current_cluster_id);
+                        fb_cluster.is_some_and(|cid| neg.contains(&(*fa, cid)))
+                    })
+                });
+                // Check B→A: any face in B has negative against A's cluster?
+                let conflict_b_to_a = faces_b.iter().any(|fb| {
+                    faces_a.iter().any(|fa| {
+                        let fa_cluster = faces
+                            .iter()
+                            .find(|f| f.face_id == *fa)
+                            .and_then(|f| f.current_cluster_id);
+                        fa_cluster.is_some_and(|cid| neg.contains(&(*fb, cid)))
+                    })
+                });
+
+                if conflict_a_to_b || conflict_b_to_a {
+                    continue;
+                }
+            }
+
             union(&mut parent, ra, rb);
             // Move the smaller set into the larger; track on the new root.
             let new_root = find(&mut parent, ra);
@@ -278,6 +339,7 @@ mod tests {
         let mk = |id: i64, p: i64, vec: Vec<f32>| ClusterInput {
             face_id: id,
             photo_id: p,
+            current_cluster_id: None,
             embedding: emb(&vec),
         };
         let a = mk(1, 11, vec![1.0, 0.0, 0.0]);
@@ -285,7 +347,7 @@ mod tests {
         let c = mk(3, 13, vec![0.0, 1.0, 0.0]);
 
         let clusterer = FaceClusterer::new().with_max_distance(0.35);
-        let labels = clusterer.cluster(&[a, b, c]);
+        let labels = clusterer.cluster(&[a, b, c], None);
         // Should not place all three in one non-negative cluster.
         let vals: Vec<i32> = labels.values().copied().filter(|v| *v >= 0).collect();
         assert!(vals.len() < 3);
@@ -296,11 +358,12 @@ mod tests {
         let mk = |id: i64, p: i64| ClusterInput {
             face_id: id,
             photo_id: p,
+            current_cluster_id: None,
             embedding: emb(&[1.0, 0.0, 0.0]),
         };
 
         let clusterer = FaceClusterer::new();
-        let labels = clusterer.cluster(&[mk(1, 42), mk(2, 42)]);
+        let labels = clusterer.cluster(&[mk(1, 42), mk(2, 42)], None);
         assert_eq!(labels[&1], -1);
         assert_eq!(labels[&2], -1);
     }
