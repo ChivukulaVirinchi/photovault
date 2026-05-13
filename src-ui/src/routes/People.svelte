@@ -11,11 +11,15 @@
   let clusters = $state<PersonDto[]>([]);
   let error = $state<string | null>(null);
   let pendingPhotos = $state(0);
+  let unconfirmedTotal = $state(0);
+  let clustersWithUnconfirmed = $state(0);
   // Engine emits a `chunks_flushed` counter that bumps every time the
   // writer thread commits a batch to disk. We track the last value the
   // page reloaded against and refetch whenever it advances — that's how
   // newly-found faces stream into the grid mid-run.
   let lastSeenChunks = $state(0);
+  // Track last seen faces_found for the "new faces" toast
+  let lastFacesFound = $state(0);
 
   // Live state from the global jobs store. The job runs in tokio::spawn
   // and is independent of this component's lifecycle, so reading from
@@ -38,8 +42,13 @@
 
   async function loadPending() {
     try {
-      const r = await people.pendingFaceCount();
+      const [r, review] = await Promise.all([
+        people.pendingFaceCount(),
+        people.reviewFaceCount(),
+      ]);
       pendingPhotos = r.pending_photos;
+      unconfirmedTotal = review.unconfirmed_total;
+      clustersWithUnconfirmed = review.clusters_with_unconfirmed;
     } catch {
       // silent — banner just hides
     }
@@ -94,6 +103,16 @@
     }
   });
 
+  // Toast when new faces are found during a running job
+  $effect(() => {
+    const currentFound = facesJob?.faces_found ?? 0;
+    if (currentFound > lastFacesFound) {
+      const diff = currentFound - lastFacesFound;
+      lastFacesFound = currentFound;
+      toasts.success(`+${diff.toLocaleString()} new face${diff === 1 ? "" : "s"} found`);
+    }
+  });
+
   onMount(() => {
     load();
     loadPending();
@@ -118,7 +137,7 @@
     </span>
     <button class="ghost" disabled>Finding…</button>
   {:else}
-    <a class="ghost review-link" href="#/people/review">Review faces</a>
+    <a class="ghost review-link" href="#/review-faces">Review faces</a>
     <button class="primary" onclick={startFaceProcessing}>Find faces</button>
   {/if}
 </PageHeader>
@@ -139,6 +158,19 @@
       </span>
     </div>
     <button class="primary" onclick={startFaceProcessing}>Resume detection</button>
+  </div>
+{/if}
+
+{#if !running && unconfirmedTotal > 0}
+  <div class="resume-banner verify-banner">
+    <div class="resume-text">
+      <strong>{unconfirmedTotal.toLocaleString()}</strong>
+      face{unconfirmedTotal === 1 ? "" : "s"} need verification across {clustersWithUnconfirmed} {clustersWithUnconfirmed === 1 ? "person" : "people"}.
+      <span class="hint">
+        Confirm or reject faces that might not belong to their assigned person.
+      </span>
+    </div>
+    <a class="primary" href="#/review-faces" style="text-decoration:none;display:inline-flex;align-items:center;padding:7px 14px;border-radius:var(--r-md);font-weight:600">Verify now</a>
   </div>
 {/if}
 

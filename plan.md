@@ -1,1373 +1,537 @@
-# Smriti — Streaming scanner pipeline + Intel iGPU path
+# Smriti — Face rec: accuracy gates, K-similar review, batched + remote GPU
 
-A complete, step-by-step implementation plan to replace the current batch-mode scanner with a streaming, multi-stage pipeline, and to broaden GPU acceleration so Intel integrated GPUs (and any DirectML/CoreML/CUDA target) can engage automatically.
+## Context
 
-The instructions are intentionally exhaustive: file paths, line-level diffs, SQL, and acceptance checks for every step. A new contributor should be able to start at "Phase 0" and finish at "Phase 9" without needing any architectural decision from the author.
+After running on a real 91k-photo library, two pain points dominate:
 
----
+1. **Accuracy** — many false positives at scale. "Categorised photos as having a person when he wasn't in it." The current pipeline ships clean-dataset thresholds (clustering at cosine ≥ 0.65, blur Laplacian ≥ 10, confidence ≥ 0.3) that work on 5k photos but fail on 200k+ faces, where 0.1% of pairs misclassified means thousands of bridge edges in union-find. Worse: user rejections in the existing review UI evaporate — there's no record that face X is **not** person Y, so the same misclassification can recur on the next clustering run.
 
-## 0. Problem statement (read first)
+2. **Speed** — i7-7567U + 91k photos = hours. Local pipeline already has two-stage decode, HNSW clustering, rayon parallelism, and per-chunk streaming. Remaining single-machine wins (~3–5×) are batched ONNX inference. Beyond that, hardware is the ceiling.
 
-### What's wrong today
+This plan covers six ship-independent phases. Phases A–C and E–F harden the **default** CPU / local-GPU-EP workflow — every user gets a more accurate and faster scan. Phase D adds an **opt-in, additive** Kaggle/Colab GPU bridge for power users who want 10–50× speed-ups on free remote silicon; default flows are untouched.
 
-`src/services/scanner.rs:117` runs in three sequential phases:
+### User constraints applied
+- **Local-first stays first-class.** Kaggle bridge is strictly additive — never required, always falls back to local.
+- **Privacy-respecting.** GPU bridge sends only 112×112 aligned face crops (not photos, not metadata) to a notebook URL the user controls.
+- **No silent automation.** Build cleanup is a documented rule + script, not a hook.
+- **AdaFace swap is in scope** as Phase F.
 
-1. **Walk** — collect every supported file path into a `Vec<FileCandidate>` in memory (fast, ~30s for 91k photos).
-2. **Hash + EXIF** — `candidates.par_iter().collect()` at line 212 — reads **every byte of every file** through SHA-256 (`calculate_hash` at line 399 streams a 64 KB buffer through `Sha2::Sha256`), plus extracts EXIF. **Nothing is emitted to the UI during this pass.**
-3. **Geocode + DB insert** — drains the collected `Vec<Option<PhotoInsert>>` serially, batching inserts of 100, emitting progress every 50 photos.
-
-On a 91 k photo external drive at ~5 MB/photo:
-- Total bytes hashed ≈ **450 GB**. USB 3 HDD ≈ 1 hour just for reads; USB 2 ≈ 4 hours.
-- Phase 2 emits nothing → UI shows "Processing 91 074 files… 0%" for the entire hash pass.
-- The library is **completely unavailable** during the scan because `library_start_scan` in `src-tauri/src/commands/library.rs:248-274` literally `take()`s the `Database` out of the AppState and moves it into the scanner thread. Other tabs render the "library closed" placeholder for the entire scan duration. The comment at line 237 already says "M3 will refactor scanner to take `&Connection` so this dance goes away." This is M3.
-
-### Goals of this plan
-
-1. **Photos appear in the timeline within ~30 seconds** of starting a scan, even on a 100 k-photo cold drive. Thumbnails fill in over the following minutes; faces over the half hour after that.
-2. **Bounded memory** regardless of library size (current code is O(N) in candidates Vec + processed Vec; target is O(channel_depth) ≈ 1 MB).
-3. **The library is *never* closed during a scan** — other tabs (People, Map, Albums, Search) remain queryable.
-4. **Every stage is independently resumable**, just like face detection already is. Move a drive between machines mid-scan and Smriti picks up exactly where it left off.
-5. **Stop full-file SHA-256 at scan time.** Use fast-hash (first 64 KB + size + mtime) as primary identity; defer full hash to a background "duplicates" sweep that runs only when the user clicks "find duplicates" or as the lowest-priority background pass.
-6. **Make execution-provider discovery dynamic** so Intel iGPUs engage via OpenVINO when present, with no regression on Windows / macOS / Nvidia paths and no extra disk weight when not present.
-
-### Non-goals (explicit)
-
-- Rewriting the face-recognition pipeline. The face job already uses the right pattern (`faces_processed` flag, idempotent per-photo work, pause/resume). Leave it.
-- Changing the on-wire IPC contract beyond appending two job kinds. The frontend already handles unknown job kinds gracefully.
-- Bundling OpenVINO runtime with Smriti's installer in this iteration — that's a packaging decision tracked separately. This plan enables OpenVINO if it's already present on the host; it does not ship it.
-- Replacing the ONNX runtime crate (`ort`). It works; we just need to extend the EP list.
+### Research touchstones
+- **digiKam People view** — three-state (Unknown / Unconfirmed / Confirmed) + per-face ✓ / ↺ / ✕. *docs.digikam.org/en/left_sidebar/people_view.html*
+- **Apple Photos "Confirm Additional Photos"** — yes/no per face, auto-advance. *discussions.apple.com/thread/254474800*
+- **Google Photos face grouping** — K-similar prompt on confirmed exemplars. *support.google.com/photos/answer/6128838*
+- **Immich** — every embedding stored individually (we already do this in `person_gallery_embeddings`). *docs.immich.app/features/facial-recognition/*
+- **immich-face-fix** — keyboard Y/N/S/Z review. *github.com/pabera/immich-face-fix*
+- **AdaFace (CVPR 2022, updated 2024 WebFace12M)** — SOTA on hard poses; drop-in 112×112→512-d replacement for glintr100. *github.com/mk-minchul/AdaFace*
 
 ---
 
-## 1. Architecture overview
+## Phases (each ships independently)
 
-### Pipeline diagram
+| # | Phase | Effort | Ships? |
+|---|---|---|---|
+| A | Accuracy quick wins (gates + threshold) | ~2 hrs | Standalone |
+| B | `face_negatives` + per-face review + K-similar | ~3 days | Standalone (depends on A) |
+| C | Batched local embedding | ~half day | Standalone |
+| D | Kaggle/Colab GPU bridge (opt-in) | ~2 days | Standalone (depends on C) |
+| E | Disk hygiene rule + cleanup script | ~30 min | Standalone |
+| F | AdaFace embedder swap | ~1 hr | Standalone |
 
-```
-┌────────────┐         ┌─────────────────────────┐         ┌────────────────────┐
-│  walkdir   │  paths  │   ENQUEUE writer        │  bulk   │   photos table     │
-│  (1 thread)├────────►│   (1 thread,            ├────────►│   stub rows        │
-│            │ (chan A)│    batches of 200       │ INSERT  │   metadata_extracted=0│
-│            │         │     INSERT OR IGNORE)   │         │   thumbnailed=0    │
-└────────────┘         └─────────────────────────┘         │   faces_processed=0│
-                                                           └─────────┬──────────┘
-                                                                     │
-                                                                     ▼
-                                                           ┌─────────────────────────────┐
-                                                           │  METADATA worker            │
-                                                           │  WHERE metadata_extracted=0 │
-                                                           │  par_iter — open header,    │
-                                                           │  read EXIF, geocode,        │
-                                                           │  UPDATE row, flag=1         │
-                                                           └─────────────┬───────────────┘
-                                                                         │
-                                                                         ▼
-                                                           ┌─────────────────────────────┐
-                                                           │  THUMBNAIL worker           │
-                                                           │  WHERE thumbnailed=0        │
-                                                           │  par_iter — decode, resize, │
-                                                           │  write JPEG, flag=1         │
-                                                           └─────────────┬───────────────┘
-                                                                         │
-                                                                         ▼
-                                                           ┌─────────────────────────────┐
-                                                           │  FACE worker (unchanged)    │
-                                                           │  WHERE faces_processed=0    │
-                                                           └─────────────────────────────┘
-```
-
-Channels are `async_channel::bounded(1000)`. The walker is the slowest producer (single thread + filesystem syscalls); the writer is the slowest sink for stub rows (one SQLite writer). The metadata, thumbnail, and face workers each pull batches off the photos table and run independently — they don't actually consume from a Rust channel, they consume from a SQL view ("photos WHERE stage_flag=0"). This is the same pattern face detection already uses (`get_unclustered_faces_with_photo_embeddings`).
-
-### Three reasons to use SQL views, not Rust channels, between stages 1→4
-
-1. **Resumable.** The flag column IS the queue. Crash recovery is automatic; no checkpoint code.
-2. **Cross-machine.** Move the drive, plug it into another OS, the next Smriti continues exactly where the last one stopped.
-3. **Observable.** `SELECT COUNT(*) WHERE thumbnailed = 0` returns honest progress to the UI at any time.
-
-The only place we use Rust channels is the walker → writer (Phase 1A→1B), because the source of truth is the filesystem and we want to start writing rows ASAP without buffering all paths in memory.
-
-### Why "stage flags" and not "stages table"
-
-A separate `photo_stages(photo_id, stage, status, finished_at)` table would be more normalized but more expensive to query. The current schema already has `faces_processed BOOLEAN`. We extend that pattern with `metadata_extracted BOOLEAN` and `thumbnailed BOOLEAN`. Each is one bit per photo per stage. For 1 M photos that's 3 MB total — trivial.
+Recommended order: A → B → C → D → F. E can land anywhere.
 
 ---
 
-## 2. Stage definitions (canonical)
+## Phase A — Accuracy quick wins
 
-| # | Stage | Source filter | Output | Job kind | Avg. cost on this hardware |
-|---|---|---|---|---|---|
-| 1A | **Walk** | `walkdir(root)` | path strings into `chan_paths` | (part of `JobKind::Scan`) | ~10 µs / file |
-| 1B | **Stub insert** | drain `chan_paths` | rows in `photos` with everything but EXIF + thumbnail; `metadata_extracted=0`, `thumbnailed=0`, `faces_processed=0`, `file_hash=fast_hash(first 64KB + size + mtime)` | (part of `JobKind::Scan`) | ~50 µs / file (DB write) |
-| 2 | **Metadata** | `WHERE metadata_extracted = 0` | EXIF columns + reverse-geocoded city/country | `JobKind::MetadataExtraction` (new) | ~3-10 ms / file (header read) |
-| 3 | **Thumbnail** | `WHERE thumbnailed = 0` | `<drive>/.photovault/thumbnails/...` + `thumbnail_path` column | `JobKind::Thumbnails` (extend) | ~30-80 ms / file (full decode + resize) |
-| 4 | **Face** | `WHERE faces_processed = 0` (existing) | faces rows + face crops | `JobKind::FaceProcessing` (existing) | ~80-200 ms / file (ONNX CPU); 5-15 ms / file (Intel iGPU via OpenVINO) |
-| 5 | **Full hash** (deferred) | `WHERE file_hash LIKE 'fh:%'` | replace fast hash with `sha256:<digest>` | `JobKind::FullHash` (new, optional) | ~200 ms / file (full read) |
-
-Stage 5 only runs if the user explicitly opens the **Duplicates** tab for the first time (where it currently relies on the full hash), or if they enable an "always full-hash" preference. **Most users will never need it** — fast hash + size + mtime is unique enough for normal libraries, and our duplicate detection can use phash (already on the photos table at schema.rs:70) for the visual-near-duplicate flow.
-
-### Stage entry / exit invariants
-
-Every photo row goes through exactly one state machine:
-
-```
-no row                       (filesystem-only)
-  │ Stage 1B INSERT OR IGNORE
-  ▼
-metadata_extracted=0, thumbnailed=0, faces_processed=0, file_hash="fh:abc…"
-  │ Stage 2 UPDATE
-  ▼
-metadata_extracted=1                                      (timeline shows date + GPS)
-  │ Stage 3 UPDATE
-  ▼
-thumbnailed=1                                             (timeline shows thumbnail)
-  │ Stage 4 UPDATE
-  ▼
-faces_processed=1                                         (People page shows faces)
-  │ Stage 5 UPDATE (optional, lazy)
-  ▼
-file_hash="sha256:…"                                      (duplicates fully accurate)
-```
-
-Important: stages 2, 3, 4, 5 are **all idempotent**. Re-running stage 3 on a photo that already has `thumbnailed=1` is a no-op (the worker filters them out). This lets you safely cancel and restart any job.
-
----
-
-## 3. Phase 0 — Database migration
-
-### 3.1 Add a migration
-
-**File**: `src/db/migrations.rs`. Find the existing migration list (a `&[Migration]` table). Add a new entry at the end:
+### Tighten quality gates (`src/services/face_processor.rs:838–846`)
 
 ```rust
-Migration {
-    version: 15,
-    name: "scanner_pipeline_stages",
-    sql: r#"
-        ALTER TABLE photos ADD COLUMN metadata_extracted BOOLEAN DEFAULT FALSE;
-        ALTER TABLE photos ADD COLUMN thumbnailed BOOLEAN DEFAULT FALSE;
-
-        -- Existing rows: anything inserted by the legacy scanner already
-        -- has EXIF and (if successful) a thumbnail. Mark them done so the
-        -- new workers don't re-process them.
-        UPDATE photos SET metadata_extracted = TRUE
-            WHERE date_taken IS NOT NULL OR camera_make IS NOT NULL;
-        UPDATE photos SET thumbnailed = TRUE
-            WHERE thumbnail_path IS NOT NULL;
-
-        CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
-            ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;
-        CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed
-            ON photos(thumbnailed) WHERE thumbnailed = FALSE;
-    "#,
-},
+const MIN_FACE_AREA_PX2: f32  = 900.0;   // was 400 (≈30×30 vs 20×20)
+const MIN_FACE_CONFIDENCE: f32 = 0.55;    // was 0.3
+const MIN_LAPLACIAN_VAR: f32  = 40.0;    // was 10.0
+const MAX_FACE_YAW_DEG: f32   = 35.0;    // NEW
 ```
 
-### 3.2 Update the inline schema for new libraries
+### Add yaw gate (NEW helper)
 
-**File**: `src/db/schema.rs:36-85`. Find the photos table DDL. Add two columns right after `faces_processed BOOLEAN DEFAULT FALSE`:
+New `fn estimate_yaw_from_landmarks(landmarks: &[Landmark; 5]) -> f32` in `src/ml/face_detector.rs`. Uses the 5-point landmarks SCRFD already emits: yaw ≈ `atan2(nose_x_offset_from_eyes_midpoint, inter_ocular_distance)`. ~30 LoC. Reject |yaw| > 35° in `face_processor.rs` between the existing gates and the embed call (`face_processor.rs:547`).
+
+### Tighten clustering threshold (`src/ml/clustering.rs:26`)
+
+```rust
+const DEFAULT_MAX_DISTANCE: f32 = 0.28;  // was 0.35 (cosine sim ≥ 0.72 vs ≥ 0.65)
+```
+
+Also bump the default in `src/config/mod.rs:face_clustering_threshold`. A migration sets existing installs to the new default *only if* they're still on the old default (don't clobber user overrides).
+
+### Surface the rejection counters
+
+The face_processor already logs counts ("dropped N blurry / M small") at `face_processor.rs:655–665`. Expose them via the existing `people_clustering_diagnostics` IPC so the user can see why their face count is lower after the upgrade.
+
+### Expected effect
+- 25–35% fewer faces enter clustering → cleaner inputs.
+- Far fewer cross-person bridge edges (root cause of the user's complaint).
+- More singletons land in the Unknown pool → Phase B's K-similar review converts them to supervision.
+
+### Critical files (Phase A)
+- `src/services/face_processor.rs` — gate constants + yaw check
+- `src/ml/face_detector.rs` — `estimate_yaw_from_landmarks`
+- `src/ml/clustering.rs` — threshold constant
+- `src/config/mod.rs` — default value bump
+- `src/db/migrations.rs` — conditional default update (v19→v20 alongside Phase B's table)
+- `src-tauri/src/commands/people.rs` — surface rejection counts in `people_clustering_diagnostics`
+
+---
+
+## Phase B — `face_negatives` + K-similar review
+
+### Schema (migration v19 → v20)
 
 ```sql
-    metadata_extracted BOOLEAN DEFAULT FALSE,
-    thumbnailed BOOLEAN DEFAULT FALSE,
+CREATE TABLE face_negatives (
+  face_id        INTEGER NOT NULL,
+  not_cluster_id INTEGER NOT NULL,
+  created_at     INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  PRIMARY KEY (face_id, not_cluster_id),
+  FOREIGN KEY (face_id)        REFERENCES faces(id)         ON DELETE CASCADE,
+  FOREIGN KEY (not_cluster_id) REFERENCES face_clusters(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_face_negatives_cluster ON face_negatives(not_cluster_id);
 ```
 
-And bump line 29:
+This is the missing supervision channel — every user rejection writes a row, and clustering refuses any merge that violates a row. Reviews **compound** instead of evaporating.
 
-```sql
-INSERT INTO schema_version (version) VALUES (15);
+### Backend (`src/db/face_repo/`)
+
+**`read.rs`** — new functions:
+- `get_faces_by_cluster(cluster_id, status: FaceStatus, cursor, limit) -> Vec<FaceDetail>` where `FaceStatus = Confirmed | Unconfirmed | All`
+- `count_unconfirmed_in_cluster(cluster_id) -> i64`
+- `count_unconfirmed_global() -> { total, clusters }`
+- `get_negatives_for_face(face_id) -> Vec<i64>`
+- `k_similar_to_cluster(cluster_id, k) -> Vec<(face_id, score)>` — uses the centroid of confirmed gallery embeddings; queries HNSW for K nearest among `cluster_id IS NULL OR user_confirmed = 0`; filters out faces with a `face_negatives` row against this cluster.
+
+**`write.rs`** — five mutations, each one transaction (reusing `refresh_cluster_stats_tx` + `refresh_gallery_tx`):
+- `confirm_face(face_id)` — `UPDATE faces SET user_confirmed=1`. Adds to gallery if not already.
+- `reject_face_to_unknown(face_id)` — `UPDATE faces SET cluster_id=NULL, user_confirmed=0`. **Writes** `INSERT INTO face_negatives(face_id, not_cluster_id) VALUES (?, prev_cluster_id)`.
+- `hide_face(face_id)` — `UPDATE faces SET cluster_id=NULL, user_confirmed=-1`. Excluded from future clustering (existing read filter `user_confirmed >= 0`).
+- `reassign_face(face_id, new_cluster_id)` — moves face, `user_confirmed=1`, writes negative against old cluster.
+- `confirm_face_to_cluster(face_id, cluster_id)` — used by K-similar flow when face was unassigned.
+
+### Clustering respects negatives
+
+`src/ml/clustering.rs` already rejects same-photo merges in both HNSW path (lines 220–227) and complete-link path (lines 124–133). Add a parallel check: at the start of each clustering run, `SELECT face_id, not_cluster_id FROM face_negatives` into a `HashSet<(i64, i64)>`. Reject any merge that would place a face into a cluster it has a negative against.
+
+For HNSW: when a face's candidate cluster has any member with `(face_id, cluster_id)` in the negative set, skip that edge. For complete-link: same check before union.
+
+### IPCs (`src-tauri/src/commands/people.rs`)
+
+| Command | Args | Returns |
+|---|---|---|
+| `people_face_list` | `{ person_id, status, cursor, limit }` | `Page<FaceDetailDto>` |
+| `people_face_confirm` | `{ face_id }` | `()` |
+| `people_face_reject` | `{ face_id }` | `()` (records negative) |
+| `people_face_hide` | `{ face_id }` | `()` (false positive) |
+| `people_face_reassign` | `{ face_id, target_cluster_id }` | `()` (records negative against old) |
+| `people_face_suggest_clusters` | `{ face_id, top_k }` | `Vec<ClusterSuggestionDto>` |
+| `people_k_similar_to_cluster` | `{ cluster_id, k }` | `Vec<FaceDetailDto>` |
+| `people_review_face_count` | `{}` | `{ unconfirmed_total, clusters_with_unconfirmed }` |
+| `people_pending_face_count` | `{}` | `{ pending_photos }` (also used by Phase A resume banner) |
+
+DTOs in `src-tauri/src/dto.rs`: `FaceDetailDto`, `ClusterSuggestionDto`, `ReviewFaceCountDto`, `PendingFaceCountDto`. Register in `src-tauri/src/lib.rs`. Document in `docs/COMMAND_SURFACE.md`.
+
+### Frontend
+
+**`src-ui/src/lib/components/FaceCell.svelte` (NEW ~120 LOC)** — 80×80 face crop. Hover reveals three buttons (digiKam pattern): ✓ Confirm (only when unconfirmed) / ↻ Move / ✕ Reject. Click crop → PhotoDetail. Multi-select via existing `handleCellClick` in `selection.svelte.ts`. Subtle ochre ring on unconfirmed faces.
+
+**`src-ui/src/lib/components/ReassignFaceDialog.svelte` (NEW ~180 LOC)** — based on `MergePersonDialog.svelte`. Section 1: top 5 suggested clusters (face thumbnail + name + score) from `people_face_suggest_clusters`. Section 2: autocomplete over all people. One-click move.
+
+**`src-ui/src/lib/components/KSimilarDialog.svelte` (NEW ~150 LOC)** — the Google-Photos flow. Triggered from PersonDetail's "Find more like this" button. Loads `people_k_similar_to_cluster(person_id, 20)`. 4×5 grid of `FaceCell` (always-visible buttons). ✓ → `people_face_confirm_to_cluster`. ✕ → `people_face_reject` (writes negative). On finish, kicks off a targeted propagation pass over the cluster's neighborhood.
+
+**`src-ui/src/routes/PersonDetail.svelte`** — restructure:
+- Main grid: `<FaceCell>` over `people.faceList(personId, "confirmed", ...)`.
+- "Verify these" strip above (max 12 unconfirmed faces, always-visible action buttons, horizontally scrollable).
+- Header: "Find more like this" button (opens `KSimilarDialog`).
+- Remove the old × badge from photo cells (revert prior bad UX). The `removePhotoFromCluster` API stays as an internal helper for bulk reassignment.
+
+**`src-ui/src/routes/FaceReview.svelte` (NEW route `#/review-faces`)** — full-screen global review:
+```
+Person: Aanya     12 of 47 faces
+[ large face crop ]
+[✓ Yes — same person]  [✕ Not same]
+Skip   Undo   Esc to close
+Confirmed exemplars: [horizontal strip]
+```
+Keyboard: `Y` confirm, `N` reject, `S` skip, `Z` undo (one-step stack), `Esc`/`Q` close. Auto-advances to next cluster when current cluster's unconfirmed pool empties.
+
+**`src-ui/src/routes/People.svelte`** — two banners (only when relevant):
+1. **Pending detection**: "1,234 photos still need face detection — Resume" → calls existing `people.startProcessing`.
+2. **Pending verification**: "47 faces need verification across 3 people — Verify now" → opens FaceReview.
+
+Plus a **streaming "new faces" toast**: subscribe to `face:progress` events during a job. When `new_faces_in_chunk > 0`, show "+12 new faces" toast for 3s. Reuses existing toast component.
+
+**`src-ui/src/lib/components/JobsIndicator.svelte`** — for `j.kind === "faces"`, rename "Cancel" → "Pause" with tooltip: "Stops safely. Resume later — even after moving the drive."
+
+**`src-ui/src/lib/components/SelectionBar.svelte`** — bulk actions in cluster context: "Confirm all" / "Move to…" / "Reject all". Parallel `Promise.all` over face IDs.
+
+### Critical files (Phase B)
+- `src/db/schema.rs`, `src/db/migrations.rs` — `face_negatives` (v19→v20)
+- `src/db/face_repo/{read,write,gallery}.rs` — new functions
+- `src/ml/clustering.rs` — negatives-aware merge in both HNSW and complete-link paths
+- `src-tauri/src/commands/people.rs` — 9 new commands
+- `src-tauri/src/dto.rs` — 4 new DTOs
+- `src-tauri/src/lib.rs`, `docs/COMMAND_SURFACE.md`
+- `src-ui/src/lib/api/people.ts` — typed clients
+- 4 new Svelte files: `FaceCell.svelte`, `ReassignFaceDialog.svelte`, `KSimilarDialog.svelte`, `FaceReview.svelte`
+- Edits: `People.svelte`, `PersonDetail.svelte`, `JobsIndicator.svelte`, `SelectionBar.svelte`
+
+### Reuse
+- `populate_face_thumbnails` (`src/db/face_repo/gallery.rs:239`) — face crop file format `.photovault/faces/<id>.jpg`
+- `crate::ml::retrieve_candidates` (`src/ml/retrieval.rs:82`) — for suggest-clusters
+- `refresh_cluster_stats_tx` (`gallery.rs:164`), `refresh_gallery_tx` (`gallery.rs:28`) — call after every mutation
+- `selection.svelte.ts`, `SelectionBar.svelte`, `MergePersonDialog.svelte` — reuse patterns
+
+---
+
+## Phase C — Batched local embedding (3–5× speed-up)
+
+### Why
+
+Today, `src/services/face_processor.rs:567` calls `embedder.embed(&aligned_face)` once per face. A photo with 8 faces does 8 separate ONNX sessions. `glintr100.onnx` already has a dynamic batch dimension; we just don't use it.
+
+### Refactor
+
+**`src/ml/face_embedder.rs`** — add `embed_batch`:
+
+```rust
+pub fn embed_batch(&mut self, faces: &[RgbImage]) -> Vec<Option<FaceEmbedding>> {
+    // Build [N, 3, 112, 112] tensor, single ONNX run, L2-normalize each output row.
+    // Returns one Option per input (None if input was malformed; rare).
+}
 ```
 
-### 3.3 Update the partial-index list in schema.rs
+Existing `embed(face)` becomes `embed_batch(&[face]).into_iter().next().flatten()` for back-compat.
 
-Append the same `CREATE INDEX` statements to `SCHEMA_SQL` so new libraries get them too. Place after the existing photos-table indexes.
+**`src/services/face_processor.rs:567`** — collect all aligned crops + landmarks for the chunk (5 photos × ~3 faces avg = ~15 crops), single `embed_batch` call, write embeddings back in the same DB transaction. Locking pattern unchanged.
 
-### 3.4 Acceptance for Phase 0
+### Expected effect
+- 3–5× faster on face-dense photos (group shots).
+- ~2× faster on typical libraries.
+- No accuracy change — same model, same crops, same L2 normalization.
+
+### Critical files (Phase C)
+- `src/ml/face_embedder.rs` — `embed_batch`
+- `src/services/face_processor.rs` — call site
+
+---
+
+## Phase D — Kaggle/Colab GPU bridge (OPT-IN, additive)
+
+### Architecture
+
+Default behavior unchanged. Local CPU + GPU-EP path stays primary. If the user enables "Cloud face acceleration" in Settings and provides a bridge URL, embedding goes remote. **Detection stays local** (fast on CPU; sending full photos would cost 10× bandwidth).
+
+```
+                              ┌────────────────────────┐
+                              │  user-owned Colab T4   │
+                              │  FastAPI + ArcFace ONNX│
+                              │     (GPU runtime)      │
+                              └────────▲───────────────┘
+                                       │ HTTPS (ngrok / cloudflared)
+┌──────────────────────────────────────┴───────────────┐
+│  Smriti (Linux/Windows/macOS desktop)                │
+│                                                       │
+│  Detector (SCRFD, LOCAL)                              │
+│       │                                               │
+│       ▼                                               │
+│  aligned 112×112 crops (~5 KB each, JPEG quality 85)  │
+│       │                                               │
+│       ▼                                               │
+│  FaceEmbedder::Remote → POST /embed → 512-d back     │
+│         │  on 5xx / timeout / >3 consecutive failures │
+│         └──fallback──▶ FaceEmbedder::Local            │
+└───────────────────────────────────────────────────────┘
+```
+
+### Backend
+
+**`src/ml/face_embedder.rs`** — convert struct to enum dispatch:
+
+```rust
+pub enum FaceEmbedder {
+    Local(LocalEmbedder),      // current code, renamed
+    Remote(RemoteEmbedder),    // new (Phase D)
+}
+
+pub struct EmbedderConfig {
+    pub model_path:      PathBuf,        // required (fallback path)
+    pub gpu_bridge_url:  Option<String>, // optional (preferred when set + reachable)
+    pub intra_threads:   usize,
+}
+
+impl FaceEmbedder {
+    pub fn from_config(rt: &OnnxRuntime, cfg: &EmbedderConfig) -> Result<Self> {
+        if let Some(url) = &cfg.gpu_bridge_url {
+            // GET <url>/health with 2s timeout; if 200 OK and {gpu: "GPU"}, use Remote
+            // Else fall through to Local with a warning
+        }
+        Ok(FaceEmbedder::Local(LocalEmbedder::new(...)?))
+    }
+    pub fn embed_batch(&mut self, faces: &[RgbImage]) -> Vec<Option<FaceEmbedding>>;
+}
+```
+
+**`src/ml/remote_embedder.rs` (NEW ~150 LOC)**:
+- `reqwest::blocking::Client` with 30s timeout (existing dep — already used for geocoding)
+- `embed_batch`: JPEG-encode each crop (quality 85), multipart POST to `<url>/embed`, parse JSON `{ "embeddings": [[f32; 512], ...] }`
+- Auto-fallback: on any error in a batch, return `Vec<None>` for that batch and signal the caller; `face_processor` keeps a `LocalEmbedder` warm on each thread and re-runs the failed batch locally
+- Heartbeat: every 30s POST to `/health`; if 3 consecutive failures, the embedder marks remote dead for the rest of the job and switches all subsequent batches to local
+
+**`src/config/mod.rs`** — two new fields:
+```rust
+pub face_gpu_bridge_url:     Option<String>,  // default None
+pub face_gpu_bridge_enabled: bool,            // default false (explicit opt-in)
+```
+
+**`src-tauri/src/commands/settings.rs`** — `SettingsUpdateArgs` gains both fields; `settings_update` validates URL format if provided.
+
+**`src-tauri/src/commands/system.rs`** — new `system_test_gpu_bridge(url: String) -> { ok: bool, latency_ms: u32, gpu_name: String }` for the "Test connection" button.
+
+### Frontend
+
+**`src-ui/src/routes/Settings.svelte`** — new collapsible section "Cloud face acceleration (advanced)":
+- Toggle: "Use a remote GPU for face embedding"
+- Text input: "Bridge URL" (e.g., `https://abc.ngrok.io`)
+- "Test connection" button → calls `system_test_gpu_bridge`; shows "✓ T4 GPU @ 45ms" or "✕ unreachable"
+- Warning box: "Sends 112×112 face crops (not photos) to a notebook URL you provide. Only enable if you control the endpoint. Falls back to local CPU on failure."
+- Link to `docs/face-gpu-bridge.md`: "How to set up a free Kaggle / Colab notebook →"
+
+### Notebook (`notebooks/face_bridge.ipynb` NEW)
+
+Single-file, runnable on Kaggle or Colab. Cells:
+
+1. **Install**: `!pip install fastapi uvicorn nest-asyncio python-multipart onnxruntime-gpu==1.18.0 pyngrok`
+2. **Download model**: `!wget -q <stable mirror>/glintr100.onnx -O /content/model.onnx` (same mirror as `setup_assets.sh`)
+3. **GPU verify**:
+   ```python
+   import onnxruntime as ort
+   sess = ort.InferenceSession("/content/model.onnx", providers=["CUDAExecutionProvider"])
+   print("GPU:", sess.get_providers())
+   ```
+4. **Server (FastAPI)** — defines `/embed` (multipart POST → JSON embeddings) and `/health` (GPU info).
+5. **Tunnel — ngrok (default)**:
+   ```python
+   from pyngrok import ngrok
+   ngrok.set_auth_token("YOUR_TOKEN_HERE")  # free signup at ngrok.com
+   public_url = ngrok.connect(8000, "http")
+   print(f"BRIDGE URL → {public_url}")
+   ```
+6. **Tunnel — cloudflared (alternative, commented out)**:
+   ```python
+   # !wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+   # !chmod +x cloudflared
+   # import subprocess; subprocess.Popen(["./cloudflared", "tunnel", "--url", "http://localhost:8000"])
+   # The URL prints to cloudflared's stdout — tail the log file.
+   ```
+7. **Run**: `nest_asyncio.apply(); uvicorn.run(app, host="0.0.0.0", port=8000)`
+
+User flow: open notebook → ngrok token (one-time free signup) → run all → copy URL → paste in Smriti → Test → enable. ~2.5 min for 300k faces on a free T4.
+
+### Documentation
+
+**`docs/face-gpu-bridge.md` (NEW)** — covers:
+- What it does, what it sends (112×112 face crops only)
+- Privacy notes (no photos, no metadata, no telemetry; user controls the endpoint)
+- Three setup paths: **Kaggle** (free, 30 hrs/week, T4×2), **Colab** (free with limits / Pro $10/mo for A100), **local LAN GPU server** (no internet — same notebook, no tunnel)
+- Step-by-step walkthroughs for Kaggle and Colab
+- ngrok auth token setup (60-second flow)
+- cloudflared alternative (no account needed)
+- Troubleshooting: session reset, token rotation, automatic fallback to CPU
+- Cost expectations: free for Kaggle/Colab basic; $10/mo Colab Pro for unmetered
+
+**`README.md`** — add "Optional: Cloud GPU acceleration" subsection under Features, with one paragraph + link to the doc.
+
+**`CLAUDE.md`** — single line under "Key Dependencies" or a new "Optional integrations" mini-section: "Face embedding can optionally be offloaded to a user-owned Kaggle/Colab notebook (see `docs/face-gpu-bridge.md`). The default flow uses local ONNX Runtime."
+
+### Critical files (Phase D)
+- `src/ml/face_embedder.rs` — enum + `from_config` + `embed_batch` dispatch
+- `src/ml/remote_embedder.rs` — **new**
+- `src/config/mod.rs` — two new fields
+- `src-tauri/src/commands/settings.rs` — extend `SettingsUpdateArgs`
+- `src-tauri/src/commands/system.rs` — `system_test_gpu_bridge`
+- `src-tauri/src/lib.rs` — register
+- `src-ui/src/routes/Settings.svelte` — new section
+- `notebooks/face_bridge.ipynb` — **new**
+- `docs/face-gpu-bridge.md` — **new**
+- `README.md`, `CLAUDE.md` — small additions
+
+### Reuse
+- `OnnxRuntime` (`src/ml/runtime.rs`) — local path unchanged
+- `reqwest` — already in workspace deps (used for geocoding)
+- Existing `settings_update` IPC pattern
+
+---
+
+## Phase E — Disk hygiene rule + cleanup script
+
+### `CLAUDE.md` addition
+
+Insert a new `## Disk hygiene` section in `CLAUDE.md`, immediately after the "Build & Run" section (line 107) and before "Push gate (mandatory)":
+
+````markdown
+## Disk hygiene
+
+The `target/` tree grows by 1–3 GB per build and easily hits 14 GB on a busy
+session. After **every ~3 builds**, and **always after bundling a release**,
+run the cleanup script:
 
 ```bash
-cargo test -p smriti db::migrations
+./scripts/clean_builds.sh        # Linux / WSL
+scripts\clean_builds.ps1         # Windows PowerShell
 ```
 
-The migration test (you'll add one) opens a v14 in-memory DB with a populated `photos` row, runs the migration, then asserts:
+It keeps the most recent release artifacts and removes stale debug deps,
+incremental caches, and old bundles. Don't `cargo clean` unless disk is
+critically low — full rebuild costs ~5 min vs the script's ~2 seconds.
 
-- New columns exist (`PRAGMA table_info(photos)`).
-- Rows with `date_taken IS NOT NULL` have `metadata_extracted = 1`.
-- Rows with `thumbnail_path IS NOT NULL` have `thumbnailed = 1`.
-- Rows with neither have both flags = 0.
+**Rule for Claude:** track build count mentally per session. After running
+`cargo build` / `cargo tauri build` ~3 times — or any time after bundling
+a release — run the cleanup script. Confirm with the user only if free disk
+is critical (<2 GB); otherwise just run it.
+````
+
+### `scripts/clean_builds.sh` (NEW)
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+before=$(du -sh target/ 2>/dev/null | cut -f1 || echo "0")
+echo "Before: $before"
+
+# Stale incremental caches
+rm -rf target/debug/incremental target/release/incremental
+
+# Old bundles: keep the most recent of each format
+if [ -d target/release/bundle ]; then
+  for fmt in deb rpm appimage msi dmg; do
+    find target/release/bundle -type f -name "*.${fmt}" \
+      -printf '%T@ %p\n' 2>/dev/null \
+      | sort -nr | tail -n +2 | cut -d' ' -f2- | xargs -r rm -f
+  done
+fi
+
+# Old build dirs (rust-incremental output for hashes no longer needed)
+find target/debug/build -maxdepth 1 -type d -mtime +3 -exec rm -rf {} + 2>/dev/null || true
+
+after=$(du -sh target/ 2>/dev/null | cut -f1 || echo "0")
+echo "After:  $after"
+```
+
+### `scripts/clean_builds.ps1` (NEW)
+PowerShell equivalent: same operations using `Remove-Item` and `Get-ChildItem` with `-Recurse -Force -ErrorAction SilentlyContinue`.
+
+### Critical files (Phase E)
+- `CLAUDE.md` — new "Disk hygiene" section
+- `scripts/clean_builds.sh` — **new**
+- `scripts/clean_builds.ps1` — **new**
 
 ---
 
-## 4. Phase 1 — New scanner: streaming walk + stub insert
+## Phase F — AdaFace embedder swap
 
-This is the largest single change. Replace `run_scan()` in `src/services/scanner.rs:117-366` with a streaming producer + consumer.
+### Why
 
-### 4.1 New constants
+AdaFace IR-101 (CVPR 2022, updated 2024 on WebFace12M) is the current SOTA on hard pose / occlusion / age distributions. ~3–5% accuracy gain on harder splits vs glintr100. Same input shape (112×112 RGB), same output shape (512-d L2-normalized) — drop-in replacement.
 
-At the top of `src/services/scanner.rs`, alongside the existing `DB_BATCH_SIZE`:
+### Changes
 
-```rust
-/// How many file paths we buffer between the walker and the stub-writer.
-/// 1000 keeps memory under ~200 KB even on libraries that average 200-byte paths.
-const WALKER_CHANNEL_DEPTH: usize = 1000;
+1. **Download model** — extend `scripts/setup_assets.sh` and `scripts/setup_assets.ps1` to also fetch `adaface_ir101_webface12m.onnx` from a stable mirror (same pattern as glintr100). Keep glintr100 as the legacy fallback.
 
-/// Bytes used for the fast-hash prefix. 64 KB is enough that JPEG/HEIC
-/// markers + first scanline diverge for distinct photos, while staying
-/// well within typical disk read-ahead (so it's effectively free).
-const FAST_HASH_PREFIX_BYTES: usize = 64 * 1024;
+2. **Config switch** — `src/config/mod.rs` gains `pub face_embedder_model: String` (default `"adaface_ir101_webface12m.onnx"`). AdaFace centroids tend to be tighter — bump `face_clustering_threshold` to **0.30** for AdaFace (vs 0.28 for glintr100, which Phase A picks).
 
-/// How often the stub writer emits a progress event (in files written).
-const STUB_PROGRESS_EVERY: u64 = 200;
-```
+3. **Loader** — `src/services/face_processor.rs:179` reads the model name from config instead of hardcoding `"glintr100.onnx"`.
 
-### 4.2 Add a `FastHash` helper
+4. **Re-run banner** — first launch after upgrade, `People.svelte` shows: "We've upgraded the face recognition model. Re-run face detection to apply." Button chains `people_reset_clusters` + `people.startProcessing`.
 
-In `scanner.rs`, near the existing `calculate_hash`:
-
-```rust
-/// Cheap identity fingerprint for the scan stage.
-///
-/// Reads the first 64 KB of the file, hashes (size, mtime, prefix bytes)
-/// with SHA-256, and prefixes the digest with `fh:` to make it distinguishable
-/// at a glance from a `sha256:` full-file hash. The full hash is recomputed
-/// lazily by Phase 5 if duplicate-detection actually needs it.
-///
-/// Collisions: in practice essentially zero for organic photo libraries.
-/// Two photos would have to be byte-identical in their first 64 KB AND
-/// have the same file size AND the same mtime. Even bursts from the same
-/// camera diverge in the first few EXIF bytes (timestamp).
-pub(crate) fn calculate_fast_hash<P: AsRef<Path>>(
-    path: P,
-    file_size: u64,
-    mtime: Option<i64>,
-) -> std::io::Result<String> {
-    use std::io::Read;
-
-    let mut file = std::fs::File::open(&path)?;
-    let mut buf = vec![0u8; FAST_HASH_PREFIX_BYTES];
-    let n = file.read(&mut buf)?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(file_size.to_le_bytes());
-    hasher.update(mtime.unwrap_or(0).to_le_bytes());
-    hasher.update(&buf[..n]);
-    Ok(format!("fh:{:x}", hasher.finalize()))
-}
-```
-
-**Do not delete** `calculate_hash`. Phase 5 uses it. Mark it `#[allow(dead_code)]` for now if clippy complains; the new full-hash worker will call it.
-
-### 4.3 New scan entry point: signature change
-
-The current `start_scan` moves a `Database` in and returns it via `ScanResult`. We want to invert that: the scanner borrows a `&Connection` for the duration of stub inserts, then completes — and Phases 2-4 run as **independent jobs** triggered after Phase 1 completes.
-
-Change the signature in `scanner.rs:90-114`:
-
-```rust
-pub fn start_scan(
-    root_path: PathBuf,
-    db: Arc<tokio::sync::Mutex<Database>>,    // shared, not moved
-    cancel: Arc<AtomicBool>,                  // pre-provided by caller (jobs.rs)
-    scan_hidden_folders: bool,
-) -> (Receiver<ScanProgress>, tokio::task::JoinHandle<ScanReport>) {
-    let (progress_tx, progress_rx) = bounded::<ScanProgress>(64);
-    let handle = tokio::task::spawn(async move {
-        let result = run_scan_streaming(
-            root_path,
-            db,
-            cancel,
-            scan_hidden_folders,
-            progress_tx,
-        )
-        .await;
-        result.unwrap_or_else(|e| ScanReport {
-            files_inserted: 0,
-            errors: vec![format!("scan failed: {e}")],
-            elapsed_seconds: 0.0,
-        })
-    });
-    (progress_rx, handle)
-}
-
-#[derive(Debug, Clone)]
-pub struct ScanReport {
-    pub files_inserted: u64,
-    pub errors: Vec<String>,
-    pub elapsed_seconds: f64,
-}
-```
-
-### 4.4 New `run_scan_streaming` (the heart of Phase 1)
-
-```rust
-async fn run_scan_streaming(
-    root_path: PathBuf,
-    db: Arc<tokio::sync::Mutex<Database>>,
-    cancel: Arc<AtomicBool>,
-    scan_hidden_folders: bool,
-    progress_tx: Sender<ScanProgress>,
-) -> Result<ScanReport, String> {
-    let start = Instant::now();
-    let (paths_tx, paths_rx) = bounded::<FileCandidate>(WALKER_CHANNEL_DEPTH);
-
-    // ----- Producer: walker thread -----
-    let walker_cancel = cancel.clone();
-    let walker_root = root_path.clone();
-    let walker = tokio::task::spawn_blocking(move || -> u64 {
-        let mut count: u64 = 0;
-        let walker = WalkDir::new(&walker_root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !should_skip(e, scan_hidden_folders));
-
-        for entry in walker {
-            if walker_cancel.load(Ordering::Relaxed) {
-                tracing::info!("Scan cancelled during walk");
-                break;
-            }
-            let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_file() { continue; }
-            if !is_supported_file(&entry) { continue; }
-            let Ok(metadata) = entry.metadata() else { continue };
-            if metadata.len() < MIN_FILE_SIZE { continue; }
-
-            let relative_path = entry
-                .path()
-                .strip_prefix(&walker_root)
-                .map(crate::services::path_util::relative_path_for_storage)
-                .unwrap_or_else(|_| {
-                    crate::services::path_util::relative_path_for_storage(entry.path())
-                });
-
-            let mtime = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64);
-
-            let candidate = FileCandidate {
-                path: entry.path().to_path_buf(),
-                relative_path,
-                file_name: entry.file_name().to_string_lossy().to_string(),
-                file_size: metadata.len() as i64,
-                mtime,
-            };
-
-            // send_blocking is OK here — this whole closure is on a blocking thread.
-            if paths_tx.send_blocking(candidate).is_err() {
-                break; // receiver dropped (consumer ended early)
-            }
-            count += 1;
-        }
-        drop(paths_tx);
-        count
-    });
-
-    // ----- Consumer: stub-row writer + fast-hash batcher -----
-    let writer_cancel = cancel.clone();
-    let writer_db = db.clone();
-    let writer_progress = progress_tx.clone();
-    let writer = tokio::task::spawn(async move {
-        let mut errors: Vec<String> = Vec::new();
-        let mut buf: Vec<PhotoInsert> = Vec::with_capacity(DB_BATCH_SIZE);
-        let mut files_inserted: u64 = 0;
-
-        // Channel receives are async; the actual fast-hash + insert is blocking.
-        // We do them in chunks of DB_BATCH_SIZE so the SQLite writer is hit
-        // in bursts, not one row at a time.
-        loop {
-            if writer_cancel.load(Ordering::Relaxed) { break; }
-
-            let Ok(candidate) = paths_rx.recv().await else { break };
-
-            // Fast-hash on this async task is fine — it's tiny I/O (64 KB).
-            // Doing it on a tokio worker thread would be marginally faster
-            // but adds spawn overhead.
-            let hash = match calculate_fast_hash(
-                &candidate.path,
-                candidate.file_size as u64,
-                candidate.mtime,
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    errors.push(format!("fast-hash {}: {e}", candidate.path.display()));
-                    continue;
-                }
-            };
-
-            buf.push(PhotoInsert {
-                relative_path: candidate.relative_path,
-                file_name: candidate.file_name,
-                file_hash: hash,
-                file_size: candidate.file_size,
-                file_mtime: candidate.mtime,
-                // Everything else stays None / default. Phase 2 fills it in.
-                date_taken: None,
-                date_taken_source: None,
-                gps_latitude: None,
-                gps_longitude: None,
-                location_city: None,
-                location_country: None,
-                camera_make: None,
-                camera_model: None,
-                iso: None,
-                aperture: None,
-                shutter_speed: None,
-                focal_length: None,
-                lens_model: None,
-                flash: None,
-                gps_altitude: None,
-                width: None,
-                height: None,
-                orientation: 1,
-            });
-
-            if buf.len() >= DB_BATCH_SIZE {
-                let inserted = flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
-                files_inserted += inserted;
-
-                if files_inserted.is_multiple_of(STUB_PROGRESS_EVERY) {
-                    let _ = writer_progress.try_send(ScanProgress {
-                        files_found: files_inserted,
-                        files_processed: files_inserted,
-                        bytes_processed: 0,
-                        current_directory: String::new(),
-                        current_file: format!("Indexed {files_inserted} files…"),
-                        errors: errors.clone(),
-                        is_complete: false,
-                        elapsed_seconds: start.elapsed().as_secs_f64(),
-                    });
-                }
-            }
-        }
-
-        // Drain final batch.
-        if !buf.is_empty() {
-            files_inserted += flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
-        }
-        (files_inserted, errors)
-    });
-
-    let total_walked = walker.await.map_err(|e| format!("walker join: {e}"))?;
-    let (files_inserted, errors) = writer.await.map_err(|e| format!("writer join: {e}"))?;
-    tracing::info!("Phase 1 done: walked {total_walked}, inserted {files_inserted}");
-
-    let report = ScanReport {
-        files_inserted,
-        errors,
-        elapsed_seconds: start.elapsed().as_secs_f64(),
-    };
-
-    // Emit final progress; the IPC wrapper interprets is_complete=true.
-    let _ = progress_tx
-        .send(ScanProgress {
-            files_found: report.files_inserted,
-            files_processed: report.files_inserted,
-            bytes_processed: 0,
-            current_directory: String::new(),
-            current_file: format!("Indexed {} files", report.files_inserted),
-            errors: report.errors.clone(),
-            is_complete: true,
-            elapsed_seconds: report.elapsed_seconds,
-        })
-        .await;
-
-    Ok(report)
-}
-
-async fn flush_stub_batch(
-    db: &Arc<tokio::sync::Mutex<Database>>,
-    buf: &mut Vec<PhotoInsert>,
-    errors: &mut Vec<String>,
-) -> u64 {
-    let guard = db.lock().await;
-    let repo = PhotoRepo::new(&guard.conn);
-    let inserted = match repo.insert_batch(buf) {
-        Ok(n) => n as u64,
-        Err(e) => {
-            errors.push(format!("stub batch insert: {e}"));
-            0
-        }
-    };
-    buf.clear();
-    inserted
-}
-```
-
-### 4.5 Adjust `PhotoRepo::insert_batch` to be `INSERT OR IGNORE`
-
-**File**: `src/db/photo_repo.rs:49-…`. The current `insert_batch` likely uses `INSERT OR REPLACE` (re-scan would overwrite EXIF the user has). Change to `INSERT OR IGNORE` and make it skip rows whose `file_path` already exists. Rationale: an idempotent re-scan must not blow away metadata that later stages already filled in.
-
-If `insert_batch` already does `INSERT OR REPLACE`, audit every column it sets to ensure the replace doesn't downgrade a Phase-2-completed row back to a Phase-1 stub.
-
-Concretely: the SQL should look like:
-
-```sql
-INSERT INTO photos (
-    file_path, file_name, file_hash, file_size, file_mtime,
-    orientation, metadata_extracted, thumbnailed, faces_processed
-) VALUES (?, ?, ?, ?, ?, ?, FALSE, FALSE, FALSE)
-ON CONFLICT(file_path) DO NOTHING;
-```
-
-The Phase 2/3/4 workers all use `UPDATE` statements, so they never trip `ON CONFLICT`.
-
-### 4.6 Wire the new signature into `library_start_scan`
-
-**File**: `src-tauri/src/commands/library.rs:239-351`. Stop calling `Arc::try_unwrap` on the database. Instead:
-
-```rust
-#[tauri::command]
-pub async fn library_start_scan(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    args: LibraryStartScanArgs,
-) -> CommandResult<JobIdDto> {
-    let job = jobs::start_job(&state, JobKind::Scan).await?;
-    let job_id = job.id.clone();
-
-    // Read the drive_root + clone the db Arc. No more take()/try_unwrap dance.
-    let (drive_root, db) = {
-        let guard = state.library.read().await;
-        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
-    };
-
-    let cancel = job.cancel.clone();
-    let app_clone = app.clone();
-    let started = job.started_at;
-    let job_id_clone = job_id.clone();
-
-    tokio::spawn(async move {
-        let (rx, handle) = smriti::services::scanner::start_scan(
-            drive_root.clone(),
-            db.clone(),
-            cancel,
-            args.scan_hidden_folders,
-        );
-
-        while let Ok(p) = rx.recv().await {
-            let dto = ScanProgressDto { /* unchanged */ };
-            if p.is_complete {
-                emit(&app_clone, EV_SCAN_COMPLETE, dto);
-            } else {
-                emit(&app_clone, EV_SCAN_PROGRESS, dto);
-            }
-        }
-
-        if let Ok(report) = handle.await {
-            tracing::info!("Scan complete: inserted {}", report.files_inserted);
-        }
-
-        // Always release the job slot.
-        let st: tauri::State<AppState> = app_clone.state();
-        jobs::finish_job(&st, &job_id_clone).await;
-
-        // Kick off the downstream stages. Each is its own job_id, with its
-        // own JobsIndicator progress chip. Order matters: metadata first
-        // (cheap, makes timeline useful), then thumbnails, then faces.
-        let app_for_post = app_clone.clone();
-        let drive_for_post = drive_root.clone();
-        tokio::spawn(async move {
-            run_post_scan_pipeline(app_for_post, drive_for_post).await;
-        });
-    });
-
-    Ok(JobIdDto { job_id })
-}
-```
-
-Note: the `Arc::try_unwrap` block (currently lines 257-273) and the "Conflict / another command is using DB" branch go away entirely.
-
-### 4.7 Acceptance for Phase 1
-
-Manual:
-1. Start `cargo tauri dev`. Open a fresh library on the 91k-photo drive.
-2. Click "Scan". Within **30 seconds**, the Timeline page should start showing photos (date-less placeholders are fine at this point).
-3. Open the Map tab during the scan. It should render (empty or partial), NOT show "library closed".
-4. The JobsIndicator should show a "Scanning" job with a progress count climbing every second.
-5. Cancel the scan from JobsIndicator. Resume. The next click on "Scan" should pick up where it left off (most files already in DB, only the unscanned ones get hashed).
-
-Automated: `cargo test -p smriti services::scanner::streaming` — see Phase 7 below for tests to add.
+### Critical files (Phase F)
+- `scripts/setup_assets.{sh,ps1}` — extra download
+- `src/config/mod.rs` — model selector + threshold default
+- `src/services/face_processor.rs` — read model from config
+- `src-ui/src/routes/People.svelte` — upgrade banner
 
 ---
 
-## 5. Phase 2 — Metadata extraction worker
+## Build gates (mandatory before every push)
 
-A new background job, structurally identical to `face_processor`. Reads photos with `metadata_extracted = 0`, opens each in parallel for EXIF, updates the row.
-
-### 5.1 New file: `src/services/metadata_processor.rs`
-
-```rust
-//! Background EXIF + geocoding pass.
-//!
-//! Reads photos with `metadata_extracted = 0`, runs `ExifExtractor::extract`
-//! on each (header read only, ~10 KB per file), reverse-geocodes any GPS
-//! coordinates, and updates the row in place. Idempotent and resumable.
-
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
-
-use async_channel::{bounded, Receiver, Sender};
-use rayon::prelude::*;
-use rusqlite::params;
-
-use crate::db::Database;
-use crate::services::{ExifExtractor, GeocodingService};
-
-const METADATA_CHUNK_SIZE: usize = 50;
-
-#[derive(Debug, Clone)]
-pub struct MetadataProgress {
-    pub total: u64,
-    pub done: u64,
-    pub is_complete: bool,
-    pub elapsed_seconds: f64,
-}
-
-pub fn start_metadata_job(
-    drive_root: PathBuf,
-    db: Arc<tokio::sync::Mutex<Database>>,
-    cancel: Arc<AtomicBool>,
-) -> (Receiver<MetadataProgress>, tokio::task::JoinHandle<()>) {
-    let (progress_tx, progress_rx) = bounded::<MetadataProgress>(32);
-    let handle = tokio::spawn(async move {
-        run_metadata_job(drive_root, db, cancel, progress_tx).await;
-    });
-    (progress_rx, handle)
-}
-
-async fn run_metadata_job(
-    drive_root: PathBuf,
-    db: Arc<tokio::sync::Mutex<Database>>,
-    cancel: Arc<AtomicBool>,
-    progress_tx: Sender<MetadataProgress>,
-) {
-    let start = Instant::now();
-
-    let total: u64 = {
-        let guard = db.lock().await;
-        guard.conn.query_row(
-            "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
-            [], |row| row.get(0),
-        ).unwrap_or(0)
-    };
-    let total = total as u64;
-    let mut done = 0u64;
-
-    let geonames_path = crate::db::geonames::geonames_db_path();
-    let geocoder = if geonames_path.exists() {
-        GeocodingService::new(&geonames_path).ok()
-    } else {
-        None
-    };
-
-    loop {
-        if cancel.load(Ordering::Relaxed) { break; }
-
-        // Pull the next chunk of unprocessed photo ids + paths.
-        let chunk: Vec<(i64, String)> = {
-            let guard = db.lock().await;
-            let mut stmt = match guard.conn.prepare(
-                "SELECT id, file_path FROM photos
-                 WHERE metadata_extracted = FALSE AND is_trashed = FALSE
-                 LIMIT ?"
-            ) { Ok(s) => s, Err(_) => break };
-            stmt.query_map([METADATA_CHUNK_SIZE as i64], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
-            .unwrap_or_default()
-        };
-
-        if chunk.is_empty() { break; }
-
-        // Parallel EXIF + geocode. No DB lock held here.
-        let extracted: Vec<(i64, crate::services::exif_extractor::ImageMetadata)> = chunk
-            .par_iter()
-            .map(|(id, rel_path)| {
-                let abs = drive_root.join(rel_path);
-                let meta = ExifExtractor::extract(&abs);
-                (*id, meta)
-            })
-            .collect();
-
-        // Single-threaded transactional update.
-        let mut errors_this_chunk = 0usize;
-        {
-            let mut guard = db.lock().await;
-            let tx = match guard.conn.transaction() {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("metadata tx start: {e}");
-                    continue;
-                }
-            };
-
-            for (id, meta) in &extracted {
-                let (city, country) = match (meta.gps_latitude, meta.gps_longitude, &geocoder) {
-                    (Some(lat), Some(lon), Some(g)) => g
-                        .reverse_geocode(lat, lon)
-                        .map(|r| (Some(r.city), Some(r.country)))
-                        .unwrap_or((None, None)),
-                    _ => (None, None),
-                };
-
-                let res = tx.execute(
-                    "UPDATE photos SET
-                        date_taken = ?,
-                        date_taken_source = ?,
-                        gps_latitude = ?,
-                        gps_longitude = ?,
-                        location_city = ?,
-                        location_country = ?,
-                        camera_make = ?,
-                        camera_model = ?,
-                        iso = ?,
-                        aperture = ?,
-                        shutter_speed = ?,
-                        focal_length = ?,
-                        lens_model = ?,
-                        flash = ?,
-                        gps_altitude = ?,
-                        width = ?,
-                        height = ?,
-                        orientation = ?,
-                        metadata_extracted = TRUE
-                     WHERE id = ?",
-                    params![
-                        meta.date_taken.map(|d| d.to_rfc3339()),
-                        meta.date_taken_source,
-                        meta.gps_latitude,
-                        meta.gps_longitude,
-                        city,
-                        country,
-                        meta.camera_make,
-                        meta.camera_model,
-                        meta.iso,
-                        meta.aperture,
-                        meta.shutter_speed,
-                        meta.focal_length,
-                        meta.lens_model,
-                        meta.flash,
-                        meta.gps_altitude,
-                        meta.width.map(|v| v as i64),
-                        meta.height.map(|v| v as i64),
-                        meta.orientation.unwrap_or(1) as i64,
-                        id,
-                    ],
-                );
-                if res.is_err() { errors_this_chunk += 1; }
-            }
-            if let Err(e) = tx.commit() {
-                tracing::error!("metadata tx commit: {e}");
-                continue;
-            }
-        }
-
-        done += (chunk.len() - errors_this_chunk) as u64;
-        let _ = progress_tx.try_send(MetadataProgress {
-            total,
-            done,
-            is_complete: false,
-            elapsed_seconds: start.elapsed().as_secs_f64(),
-        });
-    }
-
-    let _ = progress_tx.send(MetadataProgress {
-        total,
-        done,
-        is_complete: true,
-        elapsed_seconds: start.elapsed().as_secs_f64(),
-    }).await;
-}
-```
-
-### 5.2 Export it
-
-**File**: `src/services/mod.rs`. Add `pub mod metadata_processor;` and a re-export.
-
-### 5.3 New JobKind + IPC
-
-**File**: `src-tauri/src/state.rs:97-112`. Add:
-
-```rust
-pub enum JobKind {
-    Scan,
-    MetadataExtraction,   // ← NEW
-    FaceProcessing,
-    Duplicates,
-    Bursts,
-    Documents,
-    Geocoding,
-    Thumbnails,
-    AssetInstall,
-    UpdateDownload,
-    AlbumSuggestions,
-}
-```
-
-**File**: `src-tauri/src/commands/library.rs`. Add a new command:
-
-```rust
-#[tauri::command]
-pub async fn library_start_metadata_extraction(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> CommandResult<JobIdDto> {
-    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
-
-    let (drive_root, db) = {
-        let guard = state.library.read().await;
-        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
-    };
-
-    let app_clone = app.clone();
-    let job_id_clone = job_id.clone();
-    tokio::spawn(async move {
-        let (rx, handle) = smriti::services::metadata_processor::start_metadata_job(
-            drive_root, db, cancel,
-        );
-        while let Ok(p) = rx.recv().await {
-            let dto = MetadataProgressDto {
-                job_id: job_id_clone.clone(),
-                total: p.total,
-                done: p.done,
-                elapsed_ms: (p.elapsed_seconds * 1000.0) as u64,
-                is_complete: p.is_complete,
-            };
-            if p.is_complete {
-                emit(&app_clone, "metadata:complete", dto);
-            } else {
-                emit(&app_clone, "metadata:progress", dto);
-            }
-        }
-        let _ = handle.await;
-        let st: tauri::State<AppState> = app_clone.state();
-        jobs::finish_job(&st, &job_id_clone).await;
-    });
-
-    Ok(JobIdDto { job_id })
-}
-```
-
-**File**: `src-tauri/src/dto.rs`. Add:
-
-```rust
-#[derive(Debug, serde::Serialize)]
-pub struct MetadataProgressDto {
-    pub job_id: String,
-    pub total: u64,
-    pub done: u64,
-    pub elapsed_ms: u64,
-    pub is_complete: bool,
-}
-```
-
-**File**: `src-tauri/src/lib.rs`. Register `library_start_metadata_extraction` in `invoke_handler!`.
-
-### 5.4 Acceptance for Phase 2
-
-- After scan completes (Phase 1), `library_start_metadata_extraction` runs automatically.
-- Within 1-2 minutes on 91 k photos, every Timeline cell has its date and GPS pin.
-- Pause / resume works: cancel the job, restart it later, only un-extracted rows are touched.
+- `cargo fmt --all --check`
+- `cargo clippy --all-targets -p smriti -p smriti-tauri -- -D warnings`
+- `cargo test --no-run`
+- `(cd src-ui && npm run check && npm run build)`
 
 ---
 
-## 6. Phase 3 — Thumbnail worker (extend existing)
+## Verification
 
-The thumbnail service already exists at `src/services/thumbnail.rs`. The infrastructure here is already partially there — `library_regenerate_thumbnails` at `src-tauri/src/commands/library.rs:385` uses `JobKind::Thumbnails`. We're upgrading it from "regen-on-demand" to "stream-as-stage".
+### Phase A — accuracy gates
+1. Open a real library (~20k photos). Run face detection.
+2. Compare `people_clustering_diagnostics` before/after — faces entering clustering should drop 25–35%; the rejection breakdown shows blurry / small / high-yaw counts.
+3. Visually spot-check: a person known to have profile shots should have its side-profile faces dropped (yaw gate working).
+4. Top 20 clusters: false-merge clusters (mixed identity) should be visibly fewer.
 
-### 6.1 New DB column already in place
+### Phase B — review pipeline + negatives
+1. Open any cluster in PersonDetail. Verify face crops fill the grid; no × badge on photo cells.
+2. Hover a face → ✓ / ↻ / ✕ appear. Click ✕ on a misclassified face. Face vanishes; `SELECT * FROM face_negatives WHERE face_id = X` returns a row.
+3. Run face detection again. Open PersonDetail. The previously-rejected face does **not** reappear in this cluster.
+4. From PersonDetail, click "Find more like this" → 4×5 grid appears via `people_k_similar_to_cluster`. Confirm 5 (✓), reject 5 (✕). Confirmed faces appear in main grid next refresh; negatives written for the rejected ones.
+5. Verify FaceReview (`#/review-faces`): Y/N/S/Z keyboard works; auto-advances clusters.
+6. People page banner counts match `people_review_face_count`.
+7. Streaming toast: kick off a face job. "+N new faces" toast appears every few seconds.
 
-`thumbnailed BOOLEAN DEFAULT FALSE` added in Phase 0.
+### Phase C — batched embedding
+1. Run face detection on the same library twice — once on commit before this phase, once after. Compare wall-clock time.
+2. Expect 2–3× faster on average libraries, 3–5× on dense (group photo) libraries.
+3. Cluster output identical (same model, same crops, same L2). Diff `face_clusters` table rows before/after.
 
-### 6.2 Add `library_start_thumbnail_pass`
+### Phase D — GPU bridge
+1. Run `notebooks/face_bridge.ipynb` on Colab. ngrok prints URL.
+2. Settings → Cloud face acceleration → paste URL → Test. See "✓ T4 GPU @ XXms".
+3. Enable. Run face detection on a 10k-photo library. Notebook logs show batch POSTs. Embedding completes in ~30s (vs ~5min CPU).
+4. **Fallback test**: stop the notebook mid-run. Smriti logs "remote bridge unhealthy; falling back to local"; job completes without error.
+5. Repeat on Kaggle (cloudflared variant — uncomment that cell).
+6. **Privacy audit**: instrument notebook to log POST body sizes. Confirm each upload = N × ~5 KB JPEGs (face crops), never any larger image.
 
-Pattern is identical to Phase 2's metadata command. The loop body:
+### Phase E — cleanup script
+1. Run `cargo build` 3×; `du -sh target/`.
+2. `scripts/clean_builds.sh`; `du -sh target/` should drop 30–50% with no broken next build.
+3. `cargo build` once more — incremental cache for current toolchain is preserved (build is fast, not full rebuild).
 
-```rust
-loop {
-    if cancel.load(Ordering::Relaxed) { break; }
-    let chunk: Vec<(i64, String, String, i32)> = {
-        let g = db.lock().await;
-        let mut stmt = g.conn.prepare(
-            "SELECT id, file_path, file_hash, orientation FROM photos
-             WHERE thumbnailed = FALSE AND is_trashed = FALSE
-             LIMIT 20"
-        )?;
-        stmt.query_map([], |r| Ok((
-            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?
-        )))?.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    if chunk.is_empty() { break; }
-
-    let svc = thumbnail_service.clone();
-    let updates: Vec<(i64, Option<String>)> = chunk.par_iter().map(|(id, path, hash, orient)| {
-        let abs = drive_root.join(path);
-        match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Medium) {
-            Ok(rel) => (*id, Some(rel)),
-            Err(_)  => (*id, None),
-        }
-    }).collect();
-
-    let mut g = db.lock().await;
-    let tx = g.conn.transaction()?;
-    for (id, rel) in &updates {
-        tx.execute(
-            "UPDATE photos SET thumbnail_path = ?, thumbnailed = TRUE WHERE id = ?",
-            params![rel, id],
-        )?;
-    }
-    tx.commit()?;
-}
-```
-
-### 6.3 Important: emit a `thumbnail_ready` Tauri event per chunk
-
-So the Timeline can update the affected cells in place without a full re-fetch:
-
-```rust
-emit(&app, "thumbnail:ready", ThumbnailReadyDto {
-    photo_ids: updates.iter().map(|(id, _)| *id).collect(),
-});
-```
-
-Frontend listens (see Phase 7 below) and forces a thumbnail-tag refresh on those cells.
-
-### 6.4 Acceptance for Phase 3
-
-- After metadata completes, thumbnails begin streaming.
-- Watching Timeline: cells visually fill in as you scroll, NOT after a full reload.
-- On 91 k photos, all thumbnails should be done in ~15-25 minutes (CPU-bound).
+### Phase F — AdaFace
+1. Run `scripts/setup_assets.sh`. New ONNX file in `models/`.
+2. Launch Smriti → "model upgraded" banner appears.
+3. Click rerun. Detection completes. Spot-check: visually-similar people (twins, family) distinguish better; cluster count typically increases slightly (tighter embeddings).
 
 ---
 
-## 7. Phase 4 — Face detection: no changes
-
-The existing `face_processor` already reads `WHERE faces_processed = FALSE` and is the model the other stages were patterned after. Leave it.
-
-The only thing to do here is **start the face job automatically** after thumbnails complete — see "Pipeline orchestration" below.
-
----
-
-## 8. Phase 5 — Lazy full-hash (optional)
-
-If a user actually opens the Duplicates tab, and we detect that some photos still have `file_hash LIKE 'fh:%'`, run a background job to upgrade them to `sha256:...`. Reuses `calculate_hash` from `scanner.rs`. Single-file change; new command `library_start_full_hash`. Skip in v1 — Duplicates can use phash + size + first-128-bytes for now.
-
----
-
-## 9. Pipeline orchestration (auto-chain)
-
-Replace the existing `run_post_scan_detection` in `src-tauri/src/commands/library.rs` with a new `run_post_scan_pipeline` that fires the stages in order:
-
-```rust
-async fn run_post_scan_pipeline(app: AppHandle, drive_root: PathBuf) {
-    // Stage 2
-    let _ = library_start_metadata_extraction(app.clone(), app.state()).await;
-    wait_for_job(&app, JobKind::MetadataExtraction).await;
-
-    // Stage 3
-    let _ = library_start_thumbnail_pass(app.clone(), app.state()).await;
-    wait_for_job(&app, JobKind::Thumbnails).await;
-
-    // Stage 4 (existing)
-    let _ = people_start_processing(app.clone(), app.state()).await;
-    // No wait — face job runs in background; the user can pause it.
-
-    // Existing post-scan detections (duplicates, bursts) — already idempotent
-    let _ = duplicates_start(app.clone(), app.state()).await;
-    let _ = bursts_start(app.clone(), app.state()).await;
-}
-
-async fn wait_for_job(app: &AppHandle, kind: JobKind) {
-    loop {
-        let st: tauri::State<AppState> = app.state();
-        let active = st.jobs.lock().await.has_any_of_kind(kind);
-        if !active { break; }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-```
-
-`JobRegistry::has_any_of_kind` is a one-liner that scans `inner.values()` for a matching kind.
-
-The user can pause at any point. Pausing Stage 2 means stages 3 & 4 won't auto-start, but the next "Resume" button or app launch picks up where it stopped (the existing resume-banner UX from c8a7e50 already handles this for the face stage; we wire the same banner for metadata + thumbnails).
-
----
-
-## 10. Frontend changes
-
-### 10.1 Timeline progressive rendering
-
-**File**: `src-ui/src/routes/Timeline.svelte`. Add a Tauri event listener:
-
-```ts
-import { listen } from "@tauri-apps/api/event";
-
-onMount(() => {
-    const unlistenThumb = listen<{ photo_ids: number[] }>(
-        "thumbnail:ready",
-        ({ payload }) => {
-            // Force a thumbnail-cache-busting re-render on the affected cells
-            for (const id of payload.photo_ids) {
-                bumpThumbnailVersion(id);
-            }
-        },
-    );
-    const unlistenMeta = listen("metadata:progress", () => {
-        // Periodic refresh of timeline groupings (date headers).
-        // Throttle to ≤1/sec.
-        throttledRefreshHeaders();
-    });
-    return () => {
-        unlistenThumb.then((u) => u());
-        unlistenMeta.then((u) => u());
-    };
-});
-```
-
-`bumpThumbnailVersion` is a small store mutation that appends `?v=<n>` to thumbnail URLs to bypass the browser cache. Implement in `src-ui/src/lib/stores/thumbnails.svelte.ts`.
-
-### 10.2 JobsIndicator: show pipeline stages
-
-**File**: `src-ui/src/lib/components/JobsIndicator.svelte`. The component already renders one chip per active job. With four pipeline stages now possible, no code change needed — they'll naturally appear stacked. Just verify the chip labels:
-
-```ts
-const KIND_LABELS = {
-    scan: "Indexing",
-    metadata: "Reading metadata",
-    thumbnails: "Generating thumbnails",
-    faces: "Detecting faces",
-    // ...
-};
-```
-
-### 10.3 Resume detection banner already exists
-
-`src-ui/src/routes/People.svelte`'s "Resume face detection" banner template (from commit c8a7e50) gets duplicated for metadata + thumbnails. New banners on the Timeline page when:
-
-```
-metadata_pending = await library.pendingMetadataCount();
-thumbnails_pending = await library.pendingThumbnailCount();
-```
-
-both `> 0` AND no active job of the corresponding kind. Tiny IPCs to add:
-`library_pending_metadata_count`, `library_pending_thumbnail_count`. Mirrors of `people_pending_face_count`.
-
----
-
-## 11. Phase 6 — GPU acceleration (Intel iGPU + universal probe)
-
-### 11.1 What's there today
-
-`src/ml/runtime.rs:194-211` registers EPs in this priority:
-
-| Platform | First EP tried | Hardware coverage |
-|---|---|---|
-| Windows | DirectMLExecutionProvider | NVIDIA, AMD, Intel, Qualcomm (via D3D12) |
-| Linux | CUDAExecutionProvider | NVIDIA only |
-| macOS | CoreMLExecutionProvider | Apple Silicon + AMD Intel Macs |
-| any | CPUExecutionProvider | fallback |
-
-**This box** (Linux + Intel Iris Plus 650 + no Nvidia) only ever hits the CPU branch — the EP probe at line 241 returns `false` for CUDA because there's no CUDA driver. **No GPU acceleration is engaged.**
-
-### 11.2 What the i7-7567U + Iris Plus 650 actually supports
-
-| Path | Works? | Cost |
-|---|---|---|
-| CUDA EP | ❌ no Nvidia | — |
-| ROCm EP | ❌ no AMD | — |
-| DirectML EP | ❌ Linux only sees this on Windows | — |
-| CoreML EP | ❌ macOS only | — |
-| **OpenVINO EP** | ✅ **maps to Iris Plus 650 via Intel Level Zero / compute-runtime** | Needs OpenVINO toolkit installed + custom-built `libonnxruntime.so` with `--use_openvino` |
-| **OneDNN EP** | ✅ AVX2/AVX-512 vectorized CPU | Built into standard ORT binary; we just need to register it |
-| **XNNPACK EP** | ✅ optimized CPU kernels for face-detection-class models | Built into standard ORT binary |
-
-**Realistic conclusion**: OpenVINO is the only path to the iGPU and it requires a non-standard `libonnxruntime.so`. That's deployment burden we're not paying in v0.3. **OneDNN + XNNPACK are free wins on CPU** — register them and measure.
-
-The standard MS ORT 1.23.0 Linux x64 tarball does include OneDNN and XNNPACK EPs (verified against the [ONNX Runtime release notes](https://github.com/microsoft/onnxruntime/releases/tag/v1.23.0)). They engage automatically when registered.
-
-### 11.3 Concrete changes to `src/ml/runtime.rs`
-
-Update `load_model_with_threads` (lines 186-224):
-
-```rust
-pub fn load_model_with_threads<P: AsRef<Path>>(
-    &self,
-    path: P,
-    intra_threads: usize,
-) -> ort::Result<Session> {
-    let mut providers: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
-
-    // 1. Platform-native GPU EPs (existing priority, unchanged).
-    #[cfg(target_os = "windows")]
-    providers.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
-
-    #[cfg(target_os = "linux")]
-    {
-        // CUDA first (NVIDIA), then OpenVINO if available (Intel iGPU / dGPU / VPU).
-        providers.push(ort::execution_providers::CUDAExecutionProvider::default().build());
-
-        // OpenVINO EP: only engages if the host has a custom-built libonnxruntime.so
-        // with --use_openvino AND OpenVINO toolkit installed. On a stock install
-        // this dispatch silently fails-over to the next EP, which is exactly what
-        // we want — no crash, no warning spam.
-        providers.push(
-            ort::execution_providers::OpenVINOExecutionProvider::default()
-                .with_device_type("GPU") // tries iGPU; falls back to AUTO inside OV
-                .build(),
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    providers.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
-
-    // 2. CPU-side accelerators — included in the standard ORT binary.
-    //    Both are silently skipped if their kernels don't apply.
-    providers.push(
-        ort::execution_providers::OneDNNExecutionProvider::default()
-            .with_use_arena(true)
-            .build(),
-    );
-    providers.push(ort::execution_providers::XnnpackExecutionProvider::default().build());
-
-    // 3. Vanilla CPU last.
-    providers.push(ort::execution_providers::CPUExecutionProvider::default().build());
-
-    if !EP_LOGGED.swap(true, Ordering::Relaxed) {
-        Self::probe_and_log_providers();
-    }
-
-    Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(intra_threads)?
-        .with_execution_providers(providers)?
-        .commit_from_file(path)
-}
-```
-
-Update `probe_and_log_providers` (lines 228-271) to test all the new EPs the same way and update the `ACTIVE_PROVIDER` label. For the OpenVINO EP, `is_available()` returns `true` only if the host has OpenVINO toolkit + `libonnxruntime.so` was built with it — exactly the gate we want.
-
-### 11.4 ort crate feature flags
-
-**File**: `Cargo.toml` at workspace root. Find the `ort` entry:
-
-```toml
-ort = { version = "2.0.0-rc.11", default-features = false, features = [
-    "load-dynamic",
-    "ndarray",
-    # Existing platform features:
-    "cuda",
-    "directml",
-    "coreml",
-    # New:
-    "openvino",
-    "onednn",
-    "xnnpack",
-] }
-```
-
-These are *capability* features — they only generate code that calls the EP API. The actual EP only engages if the underlying native library is present at load time. Adding them costs ~50 KB of binary size each and zero runtime cost when inactive.
-
-### 11.5 Surface the active provider in Settings
-
-`src-tauri/src/commands/system.rs` likely already has a "device info" command. Add `active_inference_provider` → call `smriti::ml::runtime::active_execution_provider()`. Display in Settings.svelte as:
-
-```
-Face inference:  CPU + OneDNN + XNNPACK
-                 (no GPU EP detected — see docs/GPU.md for OpenVINO setup)
-```
-
-### 11.6 Document the OpenVINO opt-in
-
-New file: `docs/architecture/GPU_ACCELERATION.md`. Three sections:
-
-1. **What's automatic**: OneDNN + XNNPACK on CPU. DirectML on Windows. CUDA on Linux (Nvidia). CoreML on macOS.
-2. **What requires opt-in**: OpenVINO on Linux (Intel iGPU). Instructions to install Intel OpenVINO toolkit, set `ORT_DYLIB_PATH` to a custom-built `libonnxruntime.so`.
-3. **How to verify**: `Settings → System → Face inference provider` shows the chosen EP.
-
-### 11.7 Acceptance for Phase 6
-
-On this box (Intel iGPU, Linux):
-- Settings shows `Face inference: CPU + OneDNN + XNNPACK` instead of `Face inference: CPU`.
-- A timed benchmark of `face_processor` on 1000 photos shows **at least 30% wall-clock reduction** vs. plain CPU. (OneDNN typically delivers 1.5-2× on AVX2 hardware for conv-heavy graphs like SCRFD.)
-
-On a Nvidia + Linux box (not this one): CUDA engages automatically, ~5-10× speedup on inference.
-
-On a Windows + Intel iGPU box: DirectML engages automatically, ~3-5× speedup.
-
----
-
-## 12. Testing plan
-
-### 12.1 New unit tests in `src/services/scanner.rs`
-
-- `fast_hash_changes_with_mtime` — different mtime → different hash.
-- `fast_hash_changes_with_size` — same prefix, different size → different hash.
-- `fast_hash_stable_on_repeat` — re-run on same file → same hash.
-- `fast_hash_distinguishes_burst_frames` — two near-identical JPEGs with different EXIF timestamps in the first 64 KB get different hashes.
-
-### 12.2 Integration test: `tests/scanner_streaming.rs`
-
-```rust
-#[tokio::test]
-async fn streaming_scan_inserts_stub_rows_immediately() {
-    // Create 50 fake .jpg files in a tempdir (1 KB each — under MIN_FILE_SIZE
-    // for real photos but the test path skips the size filter via env var).
-    let dir = tempdir().unwrap();
-    for i in 0..50 { write_fake_jpeg(dir.path().join(format!("photo_{i}.jpg"))); }
-    let db = Database::open_in_memory().unwrap();
-    let db = Arc::new(tokio::sync::Mutex::new(db));
-    let cancel = Arc::new(AtomicBool::new(false));
-
-    let (rx, handle) = scanner::start_scan(dir.path().to_path_buf(), db.clone(), cancel, false);
-
-    // Listen for progress events while the scan runs.
-    let progress_count = Arc::new(AtomicU64::new(0));
-    let pc = progress_count.clone();
-    let listener = tokio::spawn(async move {
-        while let Ok(p) = rx.recv().await {
-            pc.fetch_add(1, Ordering::Relaxed);
-            if p.is_complete { break; }
-        }
-    });
-
-    handle.await.unwrap();
-    listener.await.unwrap();
-
-    // Should have emitted progress every 200 inserts; with 50 inserts we
-    // get at least the initial + completion event.
-    assert!(progress_count.load(Ordering::Relaxed) >= 2);
-
-    let g = db.lock().await;
-    let count: i64 = g.conn.query_row("SELECT COUNT(*) FROM photos", [], |r| r.get(0)).unwrap();
-    assert_eq!(count, 50);
-
-    let pending_meta: i64 = g.conn.query_row(
-        "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE", [], |r| r.get(0)
-    ).unwrap();
-    assert_eq!(pending_meta, 50);
-}
-```
-
-### 12.3 Integration test: pipeline orchestration
-
-`tests/pipeline_orchestration.rs` — kicks scan + metadata + thumbnail in sequence, asserts that final state has all four flags set on every row.
-
-### 12.4 Manual smoke test (must pass before commit)
-
-1. Fresh `cargo tauri dev`. Open a fresh library.
-2. Click "Scan". Within 30 s, Timeline shows photos (no thumbnails yet).
-3. Open Map tab. Renders, doesn't say "library closed".
-4. JobsIndicator stays usable. Pause the scan — JobsIndicator chip disappears. The photos already in DB remain.
-5. Click Scan again — only un-indexed photos get processed.
-6. Let it run. Watch metadata + thumbnail chips appear in JobsIndicator.
-7. Settings → Inference provider — shows non-`CPU`-only label on this box.
-
----
-
-## 13. Rollback strategy
-
-Each phase is independently revertable:
-
-| Phase | Rollback |
-|---|---|
-| 0 (schema) | `DELETE FROM schema_version WHERE version=15;` and column removals — but schema 15 is harmless even if unused. Leave it. |
-| 1 (streaming scanner) | Restore `run_scan()` from the prior commit. New columns become ignored. |
-| 2 (metadata worker) | Don't register `library_start_metadata_extraction`. EXIF is just never extracted; photos still appear with fast hash + filename. |
-| 3 (thumbnail worker) | Already covered by existing on-demand thumbnail generation in `prewarm_small`. |
-| 4-6 | Cosmetic frontend changes; revert files independently. |
-| 7 (GPU EPs) | Comment out the new `providers.push(...)` lines. Existing CPU fallback stays. |
-
-Feature flag for the streaming scanner: add `SMRITI_LEGACY_SCANNER=1` env var that takes the old code path. Useful for one release while we shake out bugs:
-
-```rust
-if std::env::var("SMRITI_LEGACY_SCANNER").is_ok() {
-    return run_scan_legacy(...);
-}
-```
-
-Then delete after one cycle.
-
----
-
-## 14. Acceptance criteria (top-level)
-
-A reviewer should be able to check all of these:
-
-- [ ] On a fresh 91 k-photo external HDD, the first photo appears in Timeline within 30 s of clicking Scan.
-- [ ] During scan, Map / People / Albums / Search tabs render normally (not "library closed").
-- [ ] Memory of `smriti-tauri` during scan stays under 300 MB (was ~200 MB just from holding Vec<PhotoInsert>).
-- [ ] Scan can be paused, the drive moved to another machine, and resumed there — no re-indexing of already-inserted photos.
-- [ ] Thumbnails fill in progressively while user browses Timeline; cells update in place without forcing a scroll-reset.
-- [ ] After full pipeline (scan → metadata → thumbnails → faces), `SELECT COUNT(*) WHERE metadata_extracted=0 OR thumbnailed=0 OR faces_processed=0` is 0.
-- [ ] On Intel iGPU + Linux, Settings shows OneDNN/XNNPACK engaged.
-- [ ] On Nvidia + Linux, CUDA still engages (no regression).
-- [ ] Existing tests pass: `cargo test --no-run` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `npm run check && npm run build` ✓.
-
----
-
-## 15. Suggested sequencing (what to ship first)
-
-If you want to land this incrementally:
-
-1. **Day 1**: Phase 0 (schema migration). Lands alone. Zero behavior change. Future-proofs the DB.
-2. **Day 2-3**: Phase 1 (streaming scanner + library never closed). Biggest UX win — Timeline becomes responsive during scans even before metadata/thumbnails stages exist.
-3. **Day 4**: Phase 2 (metadata worker). Photos get their dates and GPS.
-4. **Day 5**: Phase 3 (thumbnail worker). Photos get their thumbnails.
-5. **Day 6**: Phase 6 (GPU EPs). Free perf win.
-6. **Day 7**: Tests + docs + commit.
-
-If you want to land everything at once: each phase's code is independent enough that they all merge cleanly into a single PR. Suggested PR title: `feat: streaming scanner pipeline + Intel-friendly inference EPs`.
-
----
-
-## 16. Files touched (summary)
-
-```
-src/db/schema.rs                      ← +2 columns + 2 indexes (Phase 0)
-src/db/migrations.rs                  ← +1 migration entry (Phase 0)
-src/db/photo_repo.rs                  ← insert_batch uses INSERT OR IGNORE (Phase 1)
-src/services/scanner.rs               ← rewrite run_scan → run_scan_streaming + fast hash (Phase 1)
-src/services/metadata_processor.rs    ← NEW (Phase 2)
-src/services/mod.rs                   ← +pub mod metadata_processor (Phase 2)
-src/ml/runtime.rs                     ← register OneDNN + XNNPACK + OpenVINO (Phase 6)
-Cargo.toml                            ← +ort features (Phase 6)
-
-src-tauri/src/state.rs                ← +JobKind::MetadataExtraction (Phase 2)
-src-tauri/src/dto.rs                  ← +MetadataProgressDto + ThumbnailReadyDto (Phase 2/3)
-src-tauri/src/commands/library.rs     ← rewrite library_start_scan, +library_start_metadata_extraction,
-                                         +library_start_thumbnail_pass, +run_post_scan_pipeline (Phase 1/2/3)
-src-tauri/src/commands/system.rs      ← +active_inference_provider (Phase 6)
-src-tauri/src/lib.rs                  ← register new commands
-
-src-ui/src/lib/api/all.ts             ← +metadata + thumbnail + inferenceProvider typed clients
-src-ui/src/lib/components/JobsIndicator.svelte  ← +chip labels for new kinds
-src-ui/src/lib/stores/thumbnails.svelte.ts      ← NEW (bumpThumbnailVersion store)
-src-ui/src/routes/Timeline.svelte               ← listen for thumbnail:ready + metadata:progress
-src-ui/src/routes/People.svelte                 ← extend resume banner for metadata + thumbnails
-
-docs/architecture/GPU_ACCELERATION.md ← NEW (Phase 6)
-docs/COMMAND_SURFACE.md               ← document new IPCs
-
-tests/scanner_streaming.rs            ← NEW (Phase 7)
-tests/pipeline_orchestration.rs       ← NEW (Phase 7)
-```
-
-Roughly **15 production files touched, 4 new files, ~800 LOC added, ~250 LOC removed (legacy `run_scan`)**.
-
----
-
-## 17. Open questions for the author
-
-These are the only judgment calls left to you; everything else is mechanical:
-
-1. **Should auto-pipeline run after every scan, or wait for explicit user click?** Recommendation: auto. UX surveys of digiKam/Immich users show "make it just work" wins. The pause/resume already lets users stop it.
-2. **Should we ship OpenVINO instructions for users, or stay quiet for v0.3?** Recommendation: ship a single-page doc explaining how to opt in. Don't bundle the toolkit; let users install Intel's package manager.
-3. **What's the right `intra_threads` default?** Currently set elsewhere in the codebase. For face inference on this 4-core CPU, 4 threads + OneDNN often beats 8 + plain CPU (OneDNN itself parallelizes internally). Worth re-measuring after Phase 6.
-
-Pick answers when you're ready to implement. Everything else in this plan is decided.
+## Out of scope (explicitly)
+
+- **DBSCAN/HDBSCAN replacement of threshold-merge clustering**: HNSW + tightened threshold + negatives is enough for v1. Re-evaluate after a real-world run.
+- **Detection on the GPU bridge**: bandwidth cost too high; detection is the fast stage anyway.
+- **Hosted "Smriti Cloud" service**: conflicts with offline-first ethos.
+- **Drag-and-drop face reassignment**: dialog covers v1.
+- **Reason picker on rejection**: low value offline.
+- **Automated build-cleanup hook**: user chose documented rule + script.
+- **Slideshow** — deferred from earlier.
+
+## Sources
+
+- [SCRFD / ArcFace (InsightFace)](https://github.com/deepinsight/insightface) — base models
+- [AdaFace (CVPR 2022)](https://github.com/mk-minchul/AdaFace) — Phase F embedder
+- [digiKam People view](https://docs.digikam.org/en/left_sidebar/people_view.html) — three-state UX
+- [Apple Photos Confirm Additional Photos](https://discussions.apple.com/thread/254474800) — verify-additional pattern
+- [Google Photos face grouping](https://support.google.com/photos/answer/6128838) — K-similar prompt
+- [Immich facial recognition](https://docs.immich.app/features/facial-recognition/) — per-face embedding precedent
+- [immich-face-fix Y/N/S/Z](https://github.com/pabera/immich-face-fix) — keyboard review precedent
+- [pyngrok](https://pyngrok.readthedocs.io/) — default tunnel
+- [cloudflared quick-start](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/) — alternative tunnel
+- [ONNX Runtime dynamic batch dim](https://onnxruntime.ai/docs/performance/) — batched inference
+- [Photoprism face management discussion](https://github.com/photoprism/photoprism/issues/2401) — competitor reference

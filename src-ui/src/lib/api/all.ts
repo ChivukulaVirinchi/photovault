@@ -62,6 +62,43 @@ export const people = {
   /// Photos that haven't yet had face detection — drives the resume banner.
   pendingFaceCount: () =>
     call<{ pending_photos: number }>("people_pending_face_count"),
+  faceList: (
+    personId: number,
+    status: string,
+    cursor?: string | null,
+    limit?: number,
+  ) =>
+    call<Page<FaceDetailDto>>("people_face_list", {
+      person_id: personId,
+      status,
+      cursor: cursor ?? null,
+      limit: limit ?? 100,
+    }),
+  faceConfirm: (faceId: number) =>
+    call<null>("people_face_confirm", { face_id: faceId }),
+  faceReject: (faceId: number) =>
+    call<null>("people_face_reject", { face_id: faceId }),
+  faceHide: (faceId: number) =>
+    call<null>("people_face_hide", { face_id: faceId }),
+  faceReassign: (faceId: number, targetClusterId: number) =>
+    call<null>("people_face_reassign", {
+      face_id: faceId,
+      target_cluster_id: targetClusterId,
+    }),
+  faceSuggestClusters: (faceId: number, topK?: number) =>
+    call<ClusterSuggestionDto[]>("people_face_suggest_clusters", {
+      face_id: faceId,
+      top_k: topK ?? 5,
+    }),
+  kSimilarToCluster: (clusterId: number, k?: number) =>
+    call<FaceDetailDto[]>("people_k_similar_to_cluster", {
+      cluster_id: clusterId,
+      k: k ?? 20,
+    }),
+  reviewFaceCount: () =>
+    call<ReviewFaceCountDto>("people_review_face_count"),
+  clusteringDiagnostics: () =>
+    call<unknown>("people_clustering_diagnostics"),
 };
 
 export interface ReviewItem {
@@ -72,6 +109,29 @@ export interface ReviewItem {
   candidate_cluster_size: number;
   candidate_sample_face_ids: number[];
   score: number;
+}
+
+export interface FaceDetailDto {
+  face_id: number;
+  photo_id: number;
+  cluster_id: number | null;
+  cluster_name: string | null;
+  confidence: number;
+  user_confirmed: number;
+  thumbnail_path: string | null;
+}
+
+export interface ClusterSuggestionDto {
+  cluster_id: number;
+  name: string;
+  score: number;
+  face_count: number;
+  representative_face_id: number | null;
+}
+
+export interface ReviewFaceCountDto {
+  unconfirmed_total: number;
+  clusters_with_unconfirmed: number;
 }
 
 // ---------- albums ----------

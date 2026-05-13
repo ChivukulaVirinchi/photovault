@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderMinus, FolderPlus, Trash2, X } from "lucide-svelte";
+  import { FolderMinus, FolderPlus, Trash2, X, Check } from "lucide-svelte";
 
   interface Props {
     count: number;
@@ -11,8 +11,11 @@
     /// contexts (Timeline, MemoryDetail, PersonDetail) don't get a
     /// non-applicable button.
     onRemoveFromAlbum?: () => void;
+    /// Optional bulk face actions (shown in PersonDetail cluster context).
+    onConfirmAll?: () => void;
+    onRejectAll?: () => void;
   }
-  let { count, onAddToAlbum, onTrash, onCancel, onRemoveFromAlbum }: Props = $props();
+  let { count, onAddToAlbum, onTrash, onCancel, onRemoveFromAlbum, onConfirmAll, onRejectAll }: Props = $props();
 </script>
 
 <div class="bar" role="region" aria-label="Selection actions">
@@ -32,6 +35,19 @@
     <button class="action" onclick={onRemoveFromAlbum} title="Remove from this album">
       <FolderMinus size={15} strokeWidth={1.75} />
       <span>Remove from album</span>
+    </button>
+  {/if}
+
+  {#if onConfirmAll}
+    <button class="action keep" onclick={onConfirmAll} title="Confirm selected faces">
+      <Check size={15} strokeWidth={1.75} />
+      <span>Confirm all</span>
+    </button>
+  {/if}
+  {#if onRejectAll}
+    <button class="action danger" onclick={onRejectAll} title="Reject selected faces">
+      <X size={15} strokeWidth={1.75} />
+      <span>Reject all</span>
     </button>
   {/if}
 
@@ -99,6 +115,7 @@
                 color var(--t-fast) var(--ease);
   }
   .action:hover { background: var(--bg-card); color: var(--ink); }
+  .action.keep:hover { color: var(--keep, var(--accent)); }
   .action.danger:hover { color: var(--danger, #d96363); }
   .action.ghost { padding: 6px; }
 </style>

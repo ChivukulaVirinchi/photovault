@@ -106,7 +106,7 @@ fn test_v15_composite_indexes_present_and_used() {
         .conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert!(schema_version >= 15, "schema_version should be >= 15");
+    assert!(schema_version >= 20, "schema_version should be >= 20");
 
     // Verify SQLite's planner picks idx_photos_trashed_date for the
     // timeline's paginated query.
@@ -126,18 +126,19 @@ fn test_v15_composite_indexes_present_and_used() {
     );
 
     // Idempotent re-run should not error or double-insert version rows.
+    // v20 is the baseline schema now, so check version 20.
     smriti::db::migrations::run_migrations(&db.conn).unwrap();
     let version_count: i32 = db
         .conn
         .query_row(
-            "SELECT COUNT(*) FROM schema_version WHERE version = 15",
+            "SELECT COUNT(*) FROM schema_version WHERE version = 20",
             [],
             |r| r.get(0),
         )
         .unwrap();
     assert_eq!(
         version_count, 1,
-        "migration should record version 15 exactly once even on re-run"
+        "migration should record version 20 exactly once even on re-run"
     );
 }
 

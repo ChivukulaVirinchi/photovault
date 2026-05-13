@@ -8,6 +8,7 @@
   import People from "./routes/People.svelte";
   import PersonDetail from "./routes/PersonDetail.svelte";
   import PersonReview from "./routes/PersonReview.svelte";
+  import FaceReview from "./routes/FaceReview.svelte";
   import Albums from "./routes/Albums.svelte";
   import AlbumDetail from "./routes/AlbumDetail.svelte";
   import Search from "./routes/Search.svelte";
@@ -89,6 +90,8 @@
         <People />
       {:else if route.path === "/people/review"}
         <PersonReview />
+      {:else if route.path === "/review-faces"}
+        <FaceReview />
       {:else if route.path === "/person"}
         <PersonDetail id={Number(route.params.id)} />
       {:else if route.path === "/albums"}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { people, trash } from "../lib/api/all";
+  import { people, trash, type FaceDetailDto } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -10,7 +10,10 @@
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import MergePersonDialog from "../lib/components/MergePersonDialog.svelte";
-  import { Check } from "lucide-svelte";
+  import ReassignFaceDialog from "../lib/components/ReassignFaceDialog.svelte";
+  import KSimilarDialog from "../lib/components/KSimilarDialog.svelte";
+  import FaceCell from "../lib/components/FaceCell.svelte";
+  import { Check, Search } from "lucide-svelte";
   import type { PersonDto, PhotoSummaryDto } from "../lib/api/types";
 
   interface Props { id: number }
@@ -23,6 +26,10 @@
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
   let showMergeDialog = $state(false);
+  let showReassignDialog = $state<number | null>(null);
+  let showKSimilarDialog = $state(false);
+  let unconfirmedFaces = $state<FaceDetailDto[]>([]);
+  let verifyBusy = $state(false);
 
   async function notAPerson() {
     if (!person) return;
@@ -81,10 +88,38 @@
     try {
       person = await people.get(id);
       editName = person.name ?? "";
-      const page = await people.photosByPerson(id);
-      photos = page.items;
+      const [photoPage, facePage] = await Promise.all([
+        people.photosByPerson(id),
+        people.faceList(id, "unconfirmed", null, 12),
+      ]);
+      photos = photoPage.items;
+      unconfirmedFaces = facePage.items;
       browseContext.set(`person:${id}`, photos.map((p) => p.id));
     } catch (e) { error = JSON.stringify(e); }
+  }
+
+  async function confirmFace(faceId: number) {
+    if (verifyBusy) return;
+    verifyBusy = true;
+    try {
+      await people.faceConfirm(faceId);
+      unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
+    } catch (e) { error = String(e); }
+    finally { verifyBusy = false; }
+  }
+
+  async function rejectFace(faceId: number) {
+    if (verifyBusy) return;
+    verifyBusy = true;
+    try {
+      await people.faceReject(faceId);
+      unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
+    } catch (e) { error = String(e); }
+    finally { verifyBusy = false; }
+  }
+
+  async function reassignFace(faceId: number) {
+    showReassignDialog = faceId;
   }
 
   async function save() {
@@ -140,6 +175,10 @@
               {p.name ? "Rename" : "Name them"}
             </button>
             <button class="ghost" onclick={() => (showMergeDialog = true)}>Merge…</button>
+            <button class="ghost" onclick={() => (showKSimilarDialog = true)}>
+              <Search size={14} strokeWidth={1.75} />
+              Find more like this
+            </button>
             <button class="danger" onclick={notAPerson}>Not a person</button>
           {/if}
         {/snippet}
@@ -149,6 +188,26 @@
 {/if}
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
+
+{#if unconfirmedFaces.length > 0}
+  <div class="verify-strip">
+    <span class="verify-header">
+      <span class="label">Verify these</span>
+      <span class="hint">These faces might not belong to this person</span>
+    </span>
+    <div class="verify-scroll">
+      {#each unconfirmedFaces as f (f.face_id)}
+        <FaceCell
+          face={{ face_id: f.face_id, user_confirmed: f.user_confirmed, thumbnail_path: f.thumbnail_path }}
+          onConfirm={confirmFace}
+          onReject={rejectFace}
+          onReassign={reassignFace}
+          busy={verifyBusy}
+        />
+      {/each}
+    </div>
+  </div>
+{/if}
 
 <div class="page-scroll">
   <div class="pv-photo-grid">
@@ -199,6 +258,21 @@
   />
 {/if}
 
+{#if showReassignDialog != null}
+  <ReassignFaceDialog
+    faceId={showReassignDialog}
+    onclose={() => (showReassignDialog = null)}
+    onsuccess={() => { showReassignDialog = null; load(); }}
+  />
+{/if}
+
+{#if showKSimilarDialog}
+  <KSimilarDialog
+    clusterId={id}
+    onclose={() => (showKSimilarDialog = false)}
+  />
+{/if}
+
 <style>
   .hero {
     display: grid;
@@ -243,6 +317,38 @@
     pointer-events: none;
   }
   .dim { color: var(--ink-faint); }
+
+  .verify-strip {
+    padding: var(--s-3) var(--s-7);
+    border-bottom: 1px solid var(--line-soft);
+    background: color-mix(in oklab, var(--bg-card) 50%, var(--bg));
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .verify-header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-3);
+  }
+  .verify-header .label {
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .verify-header .hint {
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+  }
+  .verify-scroll {
+    display: flex;
+    gap: var(--s-2);
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
 
   @media (max-width: 720px) {
     .hero { grid-template-columns: 1fr; }

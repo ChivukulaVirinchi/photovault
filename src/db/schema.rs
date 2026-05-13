@@ -390,10 +390,19 @@ CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
     ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed
     ON photos(thumbnailed) WHERE thumbnailed = FALSE;
+CREATE INDEX IF NOT EXISTS idx_photos_trashed_date
+    ON photos(is_trashed, date_taken DESC);
+CREATE INDEX IF NOT EXISTS idx_photos_faces_processed_trashed
+    ON photos(faces_processed, is_trashed, date_taken DESC);
+CREATE INDEX IF NOT EXISTS idx_photos_phash ON photos(phash) WHERE phash IS NOT NULL;
 
 -- Faces
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+CREATE INDEX IF NOT EXISTS idx_faces_cluster_confidence
+    ON faces(cluster_id, confidence DESC, id);
+CREATE INDEX IF NOT EXISTS idx_faces_photo_cluster
+    ON faces(photo_id, cluster_id);
 CREATE INDEX IF NOT EXISTS idx_face_clusters_name ON face_clusters(name);
 CREATE INDEX IF NOT EXISTS idx_inferred_photo ON photo_inferred_identities(photo_id);
 CREATE INDEX IF NOT EXISTS idx_inferred_cluster ON photo_inferred_identities(cluster_id);
