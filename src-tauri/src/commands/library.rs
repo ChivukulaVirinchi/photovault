@@ -67,7 +67,11 @@ pub async fn library_resolve_path(
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = lib.drive_root.join(&photo.file_path);
+    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path)
+        .map_err(|e| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason: e,
+        })?;
     Ok(ResolvedPath {
         absolute_path: abs.display().to_string(),
     })

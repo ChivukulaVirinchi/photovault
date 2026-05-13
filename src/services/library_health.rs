@@ -15,6 +15,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, Result as SqliteResult};
 
+use crate::services::path_util::safe_join_relative;
+
 #[derive(Debug, Clone, Default)]
 pub struct LibraryHealth {
     pub total_photos: i64,
@@ -97,8 +99,10 @@ pub fn compute(conn: &Connection, drive_root: &Path) -> SqliteResult<LibraryHeal
         )?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         for row in rows.flatten() {
-            let p = drive_root.join(&row);
-            if !p.exists() {
+            if safe_join_relative(drive_root, &row)
+                .map(|p| !p.exists())
+                .unwrap_or(true)
+            {
                 stat_misses += 1;
             }
         }

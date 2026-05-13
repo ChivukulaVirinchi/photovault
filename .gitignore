@@ -11,6 +11,7 @@
 /src-ui/dist/
 /src-ui/node_modules/
 /src-ui/.svelte-kit/
+/src-ui/.test-out/
 
 # Claude Code session state
 /.claude/

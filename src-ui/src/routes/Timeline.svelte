@@ -14,8 +14,9 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check } from "lucide-svelte";
+  import { Check, Play } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
+  import { slideshow } from "../lib/stores/slideshow.svelte";
 
   /// Zoom levels — Apple-Photos-style. `day` is default; `all` is the
   /// densest packed view with no headers.
@@ -602,6 +603,22 @@
     setZoom(ZOOM_ORDER[next]);
   }
 
+  function startTimelineSlideshow() {
+    const selected = selection.active()
+      ? items.filter((p) => selection.has(p.id))
+      : items;
+    if (selected.length === 0) return;
+    const scoped = selection.active();
+    slideshow.start({
+      kind: "timeline",
+      label: scoped ? "Selected photos" : "Timeline",
+      ids: selected.map((p) => p.id),
+      nextCursor: scoped ? null : nextCursor,
+      hasMore: scoped ? false : hasMore,
+      loadMore: scoped ? undefined : (cursor) => photos.list({ cursor, limit: 240 }),
+    });
+  }
+
   // ----------- on-demand thumbnail generation -----------
   // A cell that scrolls into view without a thumbnail_path triggers a
   // generation request. We cap parallelism implicitly via the server's
@@ -722,6 +739,9 @@
 </script>
 
 <PageHeader title="Timeline">
+  <button class="icon-action" onclick={startTimelineSlideshow} disabled={items.length === 0} title="Start slideshow" aria-label="Start timeline slideshow">
+    <Play size={15} strokeWidth={2} />
+  </button>
   <div class="zoom-pill" role="tablist" aria-label="Zoom level">
     <button class:on={zoom === "year"}  onclick={() => setZoom("year")}  aria-label="Years">Year</button>
     <button class:on={zoom === "month"} onclick={() => setZoom("month")} aria-label="Months">Month</button>
@@ -1118,6 +1138,25 @@
     color: var(--ink-soft);
   }
   .scan-status { color: var(--accent); }
+
+  .icon-action {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: var(--r-sm);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-soft);
+  }
+  .icon-action:hover:not(:disabled) {
+    color: var(--ink);
+    background: var(--bg-card);
+  }
+  .icon-action:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
 
   .resume-banners {
     display: flex;

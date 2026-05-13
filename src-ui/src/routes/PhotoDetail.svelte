@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Maximize2,
-    RotateCcw, RotateCw, FolderOpen, FolderPlus, Trash2, X,
+    RotateCcw, RotateCw, FolderOpen, FolderPlus, Play, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras } from "../lib/api/photos";
   import { library } from "../lib/api/library";
@@ -11,6 +11,7 @@
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
@@ -223,6 +224,17 @@
     else          { zoomApi.actual(); atActual = true;  }
   }
 
+  function startSlideshow() {
+    if (!photo) return;
+    const ids = browseContext.ids.includes(photo.id) ? browseContext.ids : [photo.id];
+    slideshow.start({
+      kind: "photo",
+      label: "Viewer",
+      ids,
+      startId: photo.id,
+    });
+  }
+
   async function trashAndAdvance() {
     if (!photo) return;
     const id = photo.id;
@@ -375,6 +387,9 @@
         <span class="sep"></span>
         <button class="tool" onclick={() => (showAddDialog = true)} title="Add to album (A)" aria-label="Add to album">
           <FolderPlus size={16} strokeWidth={1.75} />
+        </button>
+        <button class="tool" onclick={startSlideshow} title="Start slideshow" aria-label="Start slideshow">
+          <Play size={16} strokeWidth={1.75} />
         </button>
         <button class="tool" onclick={revealInFolder} title="Show in folder" aria-label="Show in folder">
           <FolderOpen size={16} strokeWidth={1.75} />

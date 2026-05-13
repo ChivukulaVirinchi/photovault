@@ -148,7 +148,6 @@ Run broader checks only when the work is complete or before a commit/push:
 
 ```bash
 scripts/ci_local.sh ci
-scripts/ci_local.sh release
 ```
 
 Do not set a one-off `CARGO_TARGET_DIR` unless there is a lock/contention
@@ -158,8 +157,7 @@ does use one, it owns cleanup before finishing.
 ## Disk Hygiene
 
 The `target/` tree grows by 1–3 GB per build and easily hits 14 GB on a busy
-session. After **every ~3 Rust builds/checks**, and **always after bundling a
-release**, run the cleanup script:
+session. After **every ~3 Rust builds/checks**, run the cleanup script:
 
 ```bash
 ./scripts/clean_builds.sh        # Linux / WSL
@@ -199,12 +197,6 @@ preflight:
 
 ```bash
 scripts/ci_local.sh ci
-```
-
-Before pushing a release tag, run:
-
-```bash
-scripts/ci_local.sh release
 ```
 
 Do not push if these fail. Full suites belong at the end of the task; focused

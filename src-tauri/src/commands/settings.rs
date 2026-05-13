@@ -109,10 +109,10 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     }
     if let Some(v) = args.face_gpu_bridge_url {
         if let Some(ref url) = v {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
+            if !smriti::config::is_allowed_gpu_bridge_url(url) {
                 return Err(CommandError::Validation {
                     field: "face_gpu_bridge_url".into(),
-                    reason: "must start with http:// or https://".into(),
+                    reason: "must use https:// or local http://".into(),
                 });
             }
         }

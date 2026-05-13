@@ -28,10 +28,6 @@ smriti = { path = ".." }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-os = "2"
-tauri-plugin-clipboard-manager = "2"
 
 serde.workspace = true
 serde_json.workspace = true

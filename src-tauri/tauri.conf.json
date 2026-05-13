@@ -27,9 +27,6 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "**",
-          "**/.*",
-          "**/.*/**",
           "$HOME/**",
           "$HOME/**/.*/**",
           "/media/**",

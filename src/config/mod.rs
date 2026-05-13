@@ -246,11 +246,12 @@ impl AppConfig {
 
     /// Clamp all values to valid ranges.
     fn validate(&mut self) {
-        // Sanity-check GPU bridge URL if set
+        // Sanity-check GPU bridge URL if set. Plain HTTP is allowed
+        // only for local notebooks / tunnels bound to loopback.
         if let Some(ref url) = self.face_gpu_bridge_url {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
+            if !is_allowed_gpu_bridge_url(url) {
                 tracing::warn!(
-                    "Invalid face_gpu_bridge_url '{}' — must start with http:// or https://. Disabling.",
+                    "Invalid face_gpu_bridge_url '{}' — must use https:// or local http://. Disabling.",
                     url
                 );
                 self.face_gpu_bridge_url = None;
@@ -308,6 +309,22 @@ impl AppConfig {
             self.remembered_drives.push(path);
         }
     }
+}
+
+pub fn is_allowed_gpu_bridge_url(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let host_port = rest.split('/').next().unwrap_or_default();
+    let host = host_port
+        .strip_prefix('[')
+        .and_then(|s| s.split(']').next())
+        .unwrap_or_else(|| host_port.split(':').next().unwrap_or_default());
+
+    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.")
 }
 
 /// Theme setting.

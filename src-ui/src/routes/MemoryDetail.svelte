@@ -9,9 +9,10 @@
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check } from "lucide-svelte";
+  import { Check, Play } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
+  import { slideshow } from "../lib/stores/slideshow.svelte";
 
   interface Props { id: string }
   let { id }: Props = $props();
@@ -80,6 +81,15 @@
     savedAlbumId = a.id;
   }
 
+  function startMemorySlideshow() {
+    if (!card || photos.length === 0) return;
+    slideshow.start({
+      kind: "memory",
+      label: card.title,
+      ids: photos.map((p) => p.id),
+    });
+  }
+
   $effect(() => { void id; load(); });
 </script>
 
@@ -94,6 +104,9 @@
       <span class="kind">{c.kind}</span>
     {/snippet}
     {#snippet actions()}
+      <button class="ghost icon-action" onclick={startMemorySlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start memory slideshow">
+        <Play size={15} strokeWidth={2} />
+      </button>
       {#if savedAlbumId}
         <a class="saved-link" href="#/album?id={savedAlbumId}">Saved as album →</a>
       {:else}
@@ -157,6 +170,14 @@
     padding-bottom: 2px;
   }
   .saved-link:hover { border-bottom-color: var(--accent); }
+  .icon-action {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
 
   .page-scroll {
     flex: 1;

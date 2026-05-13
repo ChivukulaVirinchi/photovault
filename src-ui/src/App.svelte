@@ -31,6 +31,7 @@
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ToastHost from "./lib/components/ToastHost.svelte";
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
+  import Slideshow from "./lib/components/Slideshow.svelte";
   import { jobs } from "./lib/stores/jobs.svelte";
 
   let route = $state<{ path: string; params: Record<string, string> }>({
@@ -139,6 +140,7 @@
 
 <ToastHost />
 <JobsIndicator />
+<Slideshow />
 
 <style>
   .shell {
