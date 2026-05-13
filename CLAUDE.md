@@ -129,6 +129,26 @@ cargo clippy --all-targets -p smriti -p smriti-tauri
 cd src-ui && npm run check && npm run build
 ```
 
+## Disk hygiene
+
+The `target/` tree grows by 1–3 GB per build and easily hits 14 GB on a busy
+session. After **every ~3 builds**, and **always after bundling a release**,
+run the cleanup script:
+
+```bash
+./scripts/clean_builds.sh        # Linux / WSL
+scripts\clean_builds.ps1         # Windows PowerShell
+```
+
+It keeps the most recent release artifacts and removes stale debug deps,
+incremental caches, and old bundles. Don't `cargo clean` unless disk is
+critically low — full rebuild costs ~5 min vs the script's ~2 seconds.
+
+**Rule for Claude:** track build count mentally per session. After running
+`cargo build` / `cargo tauri build` ~3 times — or any time after bundling
+a release — run the cleanup script. Confirm with the user only if free disk
+is critical (<2 GB); otherwise just run it.
+
 ## Push gate (mandatory)
 
 Before pushing any commit to remote, the local workspace must pass:
