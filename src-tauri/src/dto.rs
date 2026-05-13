@@ -281,6 +281,17 @@ pub struct PendingFaceCountDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusteringDiagnosticsDto {
+    pub faces_detected: usize,
+    pub clusters_created: usize,
+    pub photos_processed: usize,
+    pub rejected_small: usize,
+    pub rejected_lowconf: usize,
+    pub rejected_blurry: usize,
+    pub rejected_yaw: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReviewItemDto {
     pub queue_id: i64,
     pub face_id: i64,

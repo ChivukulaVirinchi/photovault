@@ -23,7 +23,7 @@ pub struct FaceClusterer {
 impl FaceClusterer {
     /// Strict default to reduce false merges.
     pub fn new() -> Self {
-        Self { max_distance: 0.35 }
+        Self { max_distance: 0.28 }
     }
 
     pub fn with_max_distance(mut self, max_distance: f32) -> Self {

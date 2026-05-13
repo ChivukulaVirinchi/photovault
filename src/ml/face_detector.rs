@@ -519,6 +519,36 @@ impl FaceDetector {
     }
 }
 
+/// Estimate yaw angle (degrees) from 5-point SCRFD landmarks.
+///
+/// Uses the nose offset from the eyes-midpoint, normalised by
+/// inter-ocular distance. Positive = right-facing, negative = left-facing.
+/// The absolute value indicates how far the face is turned from frontal.
+pub fn estimate_yaw_from_landmarks(landmarks: &[(f32, f32); 5]) -> f32 {
+    let left_eye = landmarks[0];
+    let right_eye = landmarks[1];
+    let nose = landmarks[2];
+
+    let eye_center_x = (left_eye.0 + right_eye.0) / 2.0;
+    let eye_center_y = (left_eye.1 + right_eye.1) / 2.0;
+    let iod = ((right_eye.0 - left_eye.0).powi(2) + (right_eye.1 - left_eye.1).powi(2)).sqrt();
+
+    if iod < 1.0 {
+        return 0.0; // degenerate landmarks
+    }
+
+    let nose_offset_x = nose.0 - eye_center_x;
+    let _nose_offset_y = nose.1 - eye_center_y;
+
+    // The yaw is roughly the horizontal offset normalised by IOD.
+    // A small vertical correction accounts for head tilt.
+    let yaw_rad = (nose_offset_x / iod).atan();
+    let yaw_deg = yaw_rad.to_degrees();
+
+    // Return absolute yaw for gating purposes.
+    yaw_deg.abs()
+}
+
 #[cfg(test)]
 mod tests {
     /// Helper to create a FaceDetector-like struct for testing IoU
@@ -570,5 +600,35 @@ mod tests {
         let iou = IouTester::calculate_iou(&box1, &box2);
         // Intersection: 50x50 = 2500, Union: 10000 + 10000 - 2500 = 17500
         assert!((iou - 2500.0 / 17500.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_estimate_yaw_frontal() {
+        use super::estimate_yaw_from_landmarks;
+        // Frontal face: eyes level, nose centered
+        let lmks = [
+            (100.0, 100.0), // left eye
+            (200.0, 100.0), // right eye
+            (150.0, 150.0), // nose (centered)
+            (120.0, 200.0), // left mouth
+            (180.0, 200.0), // right mouth
+        ];
+        let yaw = estimate_yaw_from_landmarks(&lmks);
+        assert!(yaw < 5.0, "frontal face yaw={} should be <5", yaw);
+    }
+
+    #[test]
+    fn test_estimate_yaw_profile() {
+        use super::estimate_yaw_from_landmarks;
+        // Right-facing face: nose offset to the right
+        let lmks = [
+            (100.0, 100.0), // left eye
+            (200.0, 100.0), // right eye
+            (220.0, 140.0), // nose (right offset)
+            (120.0, 200.0), // left mouth
+            (180.0, 200.0), // right mouth
+        ];
+        let yaw = estimate_yaw_from_landmarks(&lmks);
+        assert!(yaw > 10.0, "profile face yaw={} should be >10", yaw);
     }
 }

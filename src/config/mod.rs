@@ -88,6 +88,11 @@ pub struct AppConfig {
     /// down, big-library users up.
     #[serde(default = "default_thumbnail_cache_gb")]
     pub thumbnail_cache_gb: f64,
+
+    /// Version of config migrations applied. Bumped each time a default
+    /// changes and existing installs need a one-time pick-up.
+    #[serde(default)]
+    pub config_version: u32,
 }
 
 /// Bumped any time the EXIF date fallback chain changes. Stored in
@@ -136,7 +141,7 @@ impl Default for AppConfig {
             theme: AppTheme::Dark,
             thumbnail_size: 500,
             face_detection_confidence: 0.25,
-            face_clustering_threshold: 0.42,
+            face_clustering_threshold: 0.28,
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
@@ -158,6 +163,7 @@ impl Default for AppConfig {
             date_logic_version: 0,
             geonames_warning_seen: false,
             thumbnail_cache_gb: default_thumbnail_cache_gb(),
+            config_version: 1,
         }
     }
 }
@@ -183,6 +189,7 @@ impl AppConfig {
             Ok(content) => match serde_json::from_str::<Self>(&content) {
                 Ok(mut cfg) => {
                     cfg.validate();
+                    cfg.migrate_config_defaults();
                     cfg
                 }
                 Err(e) => {
@@ -194,6 +201,19 @@ impl AppConfig {
                 tracing::warn!("Failed to read config {}: {}", read_path.display(), e);
                 Self::default()
             }
+        }
+    }
+
+    /// Apply one-time config migrations when defaults change.
+    /// Bumps `config_version` after each migration so it doesn't re-run.
+    fn migrate_config_defaults(&mut self) {
+        if self.config_version < 1 {
+            // v1: tightened clustering threshold (0.42 → 0.28).
+            // Only bump if the user never changed the old default.
+            if (self.face_clustering_threshold - 0.42).abs() < 0.001 {
+                self.face_clustering_threshold = 0.28;
+            }
+            self.config_version = 1;
         }
     }
 

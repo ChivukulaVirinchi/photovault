@@ -69,6 +69,10 @@ pub struct FaceProcessingResult {
     pub photos_processed: usize,
     pub faces_detected: usize,
     pub clusters_created: usize,
+    pub rejected_small: usize,
+    pub rejected_lowconf: usize,
+    pub rejected_blurry: usize,
+    pub rejected_yaw: usize,
 }
 
 /// Result of processing a single photo (collected from parallel workers)
@@ -157,6 +161,10 @@ impl FaceProcessor {
                 photos_processed: 0,
                 faces_detected: 0,
                 clusters_created,
+                rejected_small: 0,
+                rejected_lowconf: 0,
+                rejected_blurry: 0,
+                rejected_yaw: 0,
             });
         }
 
@@ -228,6 +236,7 @@ impl FaceProcessor {
         let rejected_small = Arc::new(AtomicUsize::new(0));
         let rejected_lowconf = Arc::new(AtomicUsize::new(0));
         let rejected_blurry = Arc::new(AtomicUsize::new(0));
+        let rejected_yaw = Arc::new(AtomicUsize::new(0));
         let cancel = cancel_flag
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
@@ -564,6 +573,14 @@ impl FaceProcessor {
                             continue;
                         }
 
+                        let yaw = crate::ml::face_detector::estimate_yaw_from_landmarks(
+                            &face.landmarks,
+                        );
+                        if yaw > Self::MAX_FACE_YAW_DEG {
+                            rejected_yaw.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+
                         let embedding = EMBEDDER.with(|e| {
                             let mut borrow = e.borrow_mut();
                             borrow.as_mut().and_then(|emb| emb.embed(aligned))
@@ -655,12 +672,14 @@ impl FaceProcessor {
         let rej_small = rejected_small.load(Ordering::Relaxed);
         let rej_lowconf = rejected_lowconf.load(Ordering::Relaxed);
         let rej_blurry = rejected_blurry.load(Ordering::Relaxed);
-        if rej_small + rej_lowconf + rej_blurry > 0 {
+        let rej_yaw = rejected_yaw.load(Ordering::Relaxed);
+        if rej_small + rej_lowconf + rej_blurry + rej_yaw > 0 {
             tracing::info!(
-                "Quality filter: rejected {} small, {} low-confidence, {} blurry faces",
+                "Quality filter: rejected {} small, {} low-confidence, {} blurry, {} high-yaw faces",
                 rej_small,
                 rej_lowconf,
-                rej_blurry
+                rej_blurry,
+                rej_yaw
             );
         }
 
@@ -741,6 +760,10 @@ impl FaceProcessor {
             photos_processed,
             faces_detected: total_faces,
             clusters_created,
+            rejected_small: rej_small,
+            rejected_lowconf: rej_lowconf,
+            rejected_blurry: rej_blurry,
+            rejected_yaw: rej_yaw,
         })
     }
 
@@ -834,16 +857,20 @@ impl FaceProcessor {
     }
 
     /// Minimum bbox area (pixels^2) for a face to be worth embedding.
-    /// 20x20 px = 400.
-    const MIN_FACE_AREA_PX2: f32 = 400.0;
+    /// 30x30 px = 900.
+    const MIN_FACE_AREA_PX2: f32 = 900.0;
 
     /// Minimum detection confidence to accept a face for embedding, even if the
     /// detector's own threshold is looser.
-    const MIN_FACE_CONFIDENCE: f32 = 0.3;
+    const MIN_FACE_CONFIDENCE: f32 = 0.55;
 
     /// Minimum Laplacian variance on the 112x112 aligned crop. Below this the
     /// face is too blurry to produce a reliable embedding.
-    const MIN_LAPLACIAN_VAR: f32 = 10.0;
+    const MIN_LAPLACIAN_VAR: f32 = 40.0;
+
+    /// Maximum absolute yaw angle (degrees) for face embedding. Side-profile
+    /// faces produce unreliable embeddings and create bridge edges in clustering.
+    const MAX_FACE_YAW_DEG: f32 = 35.0;
 
     /// Laplacian-of-gaussian-style blur measure on a 112x112 aligned crop.
     /// Higher = sharper. Very blurry faces score near 0.

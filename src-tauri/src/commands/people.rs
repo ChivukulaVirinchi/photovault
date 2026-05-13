@@ -8,7 +8,9 @@ use tauri::{AppHandle, Manager, State};
 
 use smriti::db::face_repo::FaceRepo;
 
-use crate::dto::{JobIdDto, PendingFaceCountDto, PersonDto, ReviewItemDto};
+use crate::dto::{
+    ClusteringDiagnosticsDto, JobIdDto, PendingFaceCountDto, PersonDto, ReviewItemDto,
+};
 use crate::events::{EV_FACES_COMPLETE, EV_FACES_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
@@ -52,6 +54,52 @@ pub async fn people_pending_face_count(
     let db = lib.db.lock().await;
     let pending_photos = FaceRepo::new(&db.conn).count_pending_face_processing()?;
     Ok(PendingFaceCountDto { pending_photos })
+}
+
+/// Return face detection diagnostics: cluster count, unclustered count,
+/// and the quality-filter rejection breakdown from the last processing run.
+#[tauri::command]
+pub async fn people_clustering_diagnostics(
+    state: State<'_, AppState>,
+) -> CommandResult<ClusteringDiagnosticsDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = FaceRepo::new(&db.conn);
+
+    let clusters = repo.get_all_clusters().unwrap_or_default();
+    let total_faces: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM faces WHERE user_confirmed >= 0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let _unclustered: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL AND user_confirmed >= 0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let photos_with_faces: i64 = db
+        .conn
+        .query_row("SELECT COUNT(DISTINCT photo_id) FROM faces", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0);
+
+    Ok(ClusteringDiagnosticsDto {
+        faces_detected: total_faces as usize,
+        clusters_created: clusters.len(),
+        photos_processed: photos_with_faces as usize,
+        rejected_small: 0,
+        rejected_lowconf: 0,
+        rejected_blurry: 0,
+        rejected_yaw: 0,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +282,15 @@ pub struct FacesProgressDto {
     pub chunks_flushed: u32,
     pub elapsed_ms: u64,
     pub message: Option<String>,
+    /// Quality-filter rejection counts (only meaningful on the "complete" event).
+    #[serde(default)]
+    pub rejected_small: u64,
+    #[serde(default)]
+    pub rejected_lowconf: u64,
+    #[serde(default)]
+    pub rejected_blurry: u64,
+    #[serde(default)]
+    pub rejected_yaw: u64,
 }
 
 /// Start the face-processing pipeline (detect + embed + cluster).
@@ -304,6 +361,10 @@ pub async fn people_start_processing(
                         faces,
                         if faces == 1 { "" } else { "s" }
                     )),
+                    rejected_small: 0,
+                    rejected_lowconf: 0,
+                    rejected_blurry: 0,
+                    rejected_yaw: 0,
                 };
                 emit(&app_evt, EV_FACES_PROGRESS, dto);
             }
@@ -357,6 +418,15 @@ pub async fn people_start_processing(
                 if r.photos_processed == 1 { "" } else { "s" }
             ),
         };
+        let (rej_small, rej_lowconf, rej_blurry, rej_yaw) = match &pipeline_result {
+            Ok(r) => (
+                r.rejected_small as u64,
+                r.rejected_lowconf as u64,
+                r.rejected_blurry as u64,
+                r.rejected_yaw as u64,
+            ),
+            Err(_) => (0, 0, 0, 0),
+        };
         emit(
             &app_clone,
             EV_FACES_COMPLETE,
@@ -377,6 +447,10 @@ pub async fn people_start_processing(
                 chunks_flushed: final_chunks,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 message: Some(message),
+                rejected_small: rej_small,
+                rejected_lowconf: rej_lowconf,
+                rejected_blurry: rej_blurry,
+                rejected_yaw: rej_yaw,
             },
         );
 

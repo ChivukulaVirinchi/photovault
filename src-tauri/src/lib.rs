@@ -73,6 +73,7 @@ pub fn run() {
             commands::people::people_reset_all,
             commands::people::people_reset_clusters,
             commands::people::people_pending_face_count,
+            commands::people::people_clustering_diagnostics,
             // albums
             commands::albums::albums_list,
             commands::albums::albums_get,
