@@ -22,6 +22,9 @@
 
   let photo = $state<PhotoDto | null>(null);
   let imageUrl = $state<string | null>(null);
+  let incomingPhoto = $state<PhotoDto | null>(null);
+  let incomingUrl = $state<string | null>(null);
+  let incomingReady = $state(false);
   let loadError = $state<string | null>(null);
   let imageReady = $state(false);
   let chromeActive = $state(true);
@@ -106,17 +109,24 @@
 
   async function loadSlide(id: number) {
     const seq = ++loadSeq;
-    photo = null;
-    imageUrl = null;
     loadError = null;
-    imageReady = false;
+    incomingPhoto = null;
+    incomingUrl = null;
+    incomingReady = false;
+    if (!imageUrl) imageReady = false;
     try {
       const p = await photos.get(id);
       if (seq !== loadSeq) return;
-      photo = p;
       const { absolute_path } = await library.resolvePath(id);
       if (seq !== loadSeq) return;
-      imageUrl = convertFileSrc(absolute_path);
+      const url = convertFileSrc(absolute_path);
+      if (imageUrl) {
+        incomingPhoto = p;
+        incomingUrl = url;
+      } else {
+        photo = p;
+        imageUrl = url;
+      }
       void preloadNeighbors();
       void slideshow.ensureMoreAhead();
     } catch (e) {
@@ -124,6 +134,16 @@
       loadError = typeof e === "string" ? e : JSON.stringify(e);
       imageReady = true;
     }
+  }
+
+  function promoteIncoming() {
+    if (!incomingPhoto || !incomingUrl) return;
+    photo = incomingPhoto;
+    imageUrl = incomingUrl;
+    imageReady = true;
+    incomingPhoto = null;
+    incomingUrl = null;
+    incomingReady = false;
   }
 
   async function preloadNeighbors() {
@@ -197,6 +217,28 @@
             imageReady = true;
           }}
         />
+        {#if incomingUrl && incomingPhoto}
+          <img
+            class="slide-image incoming"
+            class:ready={incomingReady}
+            src={incomingUrl}
+            alt={incomingPhoto.file_name}
+            decoding="async"
+            onload={(e) => {
+              const loadedUrl = (e.currentTarget as HTMLImageElement).src;
+              incomingReady = true;
+              setTimeout(() => {
+                if (incomingUrl === loadedUrl) promoteIncoming();
+              }, 180);
+            }}
+            onerror={() => {
+              loadError = "Image decoder could not open this file.";
+              incomingPhoto = null;
+              incomingUrl = null;
+              incomingReady = false;
+            }}
+          />
+        {/if}
       {:else}
         <div class="slide-loading mono">loading...</div>
       {/if}
@@ -322,6 +364,9 @@
   .slide-image.ready {
     opacity: 1;
     transform: scale(1);
+  }
+  .slide-image.incoming {
+    position: absolute;
   }
   .slide-loading,
   .slide-error {

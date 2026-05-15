@@ -5,6 +5,7 @@
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof duplicates.list>>>([]);
@@ -39,6 +40,12 @@
       error = msg;
       toasts.error(`Couldn't start: ${msg}`);
     }
+  }
+
+  function patchThumbnail(groupId: number, thumbnailPath: string) {
+    groups = groups.map((g) => (
+      g.id === groupId ? { ...g, cover_thumbnail_path: thumbnailPath } : g
+    ));
   }
 
   $effect(() => {
@@ -88,6 +95,11 @@
             class="card-link"
             href="#/duplicate?id={g.id}"
             aria-label="Compare {g.member_count} duplicates"
+            use:thumbnailOnVisible={{
+              id: g.cover_photo_id ?? 0,
+              thumbnailPath: g.cover_thumbnail_path,
+              onReady: (path) => patchThumbnail(g.id, path),
+            }}
           >
             <span class="thumb">
               {#if g.cover_thumbnail_path}

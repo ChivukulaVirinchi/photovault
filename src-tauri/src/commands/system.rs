@@ -199,10 +199,28 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 #[cfg(target_os = "windows")]
 fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     use std::process::Command;
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let parent = abs
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| abs.clone());
     // explorer.exe accepts /select with the target path as a single
     // comma-joined argument. The combined token is one CLI arg.
-    let arg = format!("/select,{}", path.display());
-    Command::new("explorer.exe").arg(arg).status().map(|_| ())
+    let arg = format!("/select,{}", abs.display());
+    let status = Command::new("explorer.exe").arg(arg).status();
+    if matches!(status, Ok(s) if s.success()) {
+        return Ok(());
+    }
+    Command::new("explorer.exe")
+        .arg(parent)
+        .status()
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("explorer.exe failed to open the containing folder"))
+            }
+        })
 }
 
 #[derive(Debug, Serialize)]

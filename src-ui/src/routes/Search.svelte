@@ -4,6 +4,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { SearchResults } from "../lib/api/all";
 
@@ -35,6 +36,16 @@
   function onInput() {
     if (debounceId) window.clearTimeout(debounceId);
     debounceId = window.setTimeout(run, 250);
+  }
+
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    if (!results) return;
+    results = {
+      ...results,
+      photos: results.photos.map((p) => (
+        p.photo_id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
+      )),
+    };
   }
 
   onMount(() => {
@@ -126,7 +137,16 @@
         <h3 class="section-title">Photos · {results.photos.length}</h3>
         <div class="pv-photo-grid">
           {#each results.photos.slice(0, 200) as p (p.photo_id)}
-            <a class="pv-photo-cell" href="#/photo?id={p.photo_id}" title="#{p.photo_id}">
+            <a
+              class="pv-photo-cell"
+              href="#/photo?id={p.photo_id}"
+              title="#{p.photo_id}"
+              use:thumbnailOnVisible={{
+                id: p.photo_id,
+                thumbnailPath: p.thumbnail_path,
+                onReady: (path) => patchThumbnail(p.photo_id, path),
+              }}
+            >
               {#if p.thumbnail_path}
                 <img
                   src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""}

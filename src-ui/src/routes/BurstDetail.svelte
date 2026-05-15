@@ -3,6 +3,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { photos as photosApi } from "../lib/api/photos";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import type { BurstMember } from "../lib/api/all";
   import type { PhotoSummaryDto } from "../lib/api/types";
@@ -28,6 +29,14 @@
   async function setBest(photoId: number) {
     try { group = await bursts.setBest(id, photoId); }
     catch (e) { error = JSON.stringify(e); }
+  }
+
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    const current = summaries.get(photoId);
+    if (!current) return;
+    const next = new Map(summaries);
+    next.set(photoId, { ...current, thumbnail_path: thumbnailPath });
+    summaries = next;
   }
 
   async function trashRest() {
@@ -65,7 +74,16 @@
     {#each group.members as m (m.photo_id)}
       {@const summary = summaries.get(m.photo_id)}
       <div class="card" class:best={m.is_suggested_best}>
-        <a class="frame" href="#/photo?id={m.photo_id}" aria-label="Open photo">
+        <a
+          class="frame"
+          href="#/photo?id={m.photo_id}"
+          aria-label="Open photo"
+          use:thumbnailOnVisible={{
+            id: m.photo_id,
+            thumbnailPath: summary?.thumbnail_path ?? null,
+            onReady: (path) => patchThumbnail(m.photo_id, path),
+          }}
+        >
           {#if summary?.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, summary.thumbnail_path) ?? ""} alt="" />
           {/if}

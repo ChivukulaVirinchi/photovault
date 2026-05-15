@@ -6,6 +6,7 @@
   import { map as mapApi } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { installTileCache } from "../lib/tile-cache";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import { X, ZoomIn } from "lucide-svelte";
@@ -218,6 +219,12 @@
     drawerPhotos = [];
   }
 
+  function patchDrawerThumbnail(photoId: number, thumbnailPath: string) {
+    drawerPhotos = drawerPhotos.map((p) => (
+      p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
+    ));
+  }
+
   function zoomIntoCluster() {
     if (!map || !drawerRef) return;
     map.flyTo({
@@ -319,7 +326,15 @@
           <div class="loading-state mono">loading…</div>
         {:else}
           {#each drawerPhotos as p (p.id)}
-            <a class="cell" href="#/photo?id={p.id}">
+            <a
+              class="cell"
+              href="#/photo?id={p.id}"
+              use:thumbnailOnVisible={{
+                id: p.id,
+                thumbnailPath: p.thumbnail_path,
+                onReady: (path) => patchDrawerThumbnail(p.id, path),
+              }}
+            >
               {#if p.thumbnail_path}
                 <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
               {/if}

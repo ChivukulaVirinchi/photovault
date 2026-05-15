@@ -4,6 +4,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let items = $state<Awaited<ReturnType<typeof trash.list>>["items"]>([]);
@@ -24,6 +25,12 @@
     const s = new Set(selected);
     if (s.has(id)) s.delete(id); else s.add(id);
     selected = s;
+  }
+
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    items = items.map((t) => (
+      t.photo_id === photoId ? { ...t, thumbnail_path: thumbnailPath } : t
+    ));
   }
 
   async function restore() {
@@ -76,6 +83,11 @@
         <button
           class="pv-photo-cell trash-cell"
           class:sel={selected.has(t.photo_id)}
+          use:thumbnailOnVisible={{
+            id: t.photo_id,
+            thumbnailPath: t.thumbnail_path,
+            onReady: (path) => patchThumbnail(t.photo_id, path),
+          }}
           onclick={() => toggle(t.photo_id)}
         >
           {#if t.thumbnail_path}
