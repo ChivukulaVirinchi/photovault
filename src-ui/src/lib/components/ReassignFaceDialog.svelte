@@ -225,11 +225,13 @@
     max-height: 75vh;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
   }
   header {
     padding: var(--s-4) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   header h3 {
     margin: 0;
@@ -253,6 +255,7 @@
   .tabs {
     display: flex;
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   .tab {
     flex: 1;
@@ -280,6 +283,7 @@
     gap: var(--s-2);
     padding: var(--s-3) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   .search :global(svg) {
     color: var(--ink-muted);
@@ -300,7 +304,8 @@
     margin: 0;
     padding: 6px 0;
     overflow-y: auto;
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .list .empty {
     padding: var(--s-4);

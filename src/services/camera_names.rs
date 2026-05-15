@@ -28,8 +28,10 @@ use std::sync::OnceLock;
 /// Resolve `make` + `model` (raw EXIF) into a friendly display name.
 /// Returns `None` only when both are empty.
 pub fn friendly_camera_name(make: Option<&str>, model: Option<&str>) -> Option<String> {
-    let make = make.map(str::trim).filter(|s| !s.is_empty());
-    let model = model.map(str::trim).filter(|s| !s.is_empty());
+    let make_clean = make.and_then(clean_component);
+    let model_clean = model.and_then(clean_component);
+    let make = make_clean.as_deref();
+    let model = model_clean.as_deref();
 
     if make.is_none() && model.is_none() {
         return None;
@@ -54,6 +56,26 @@ pub fn friendly_camera_name(make: Option<&str>, model: Option<&str>) -> Option<S
 
     // Smart fallback.
     Some(combine_make_model(make, model))
+}
+
+fn clean_component(raw: &str) -> Option<String> {
+    let parts: Vec<&str> = if raw.contains("\",") || raw.contains(", \"") {
+        raw.split(',').collect()
+    } else {
+        vec![raw]
+    };
+    for part in parts {
+        let clean = part
+            .replace('\0', "")
+            .trim()
+            .trim_matches('"')
+            .trim()
+            .to_string();
+        if !clean.is_empty() {
+            return Some(clean);
+        }
+    }
+    None
 }
 
 fn pattern_transform(make: Option<&str>, model: Option<&str>) -> Option<String> {
@@ -267,6 +289,7 @@ fn lookup_curated(model: &str) -> Option<&'static str> {
         "IN2010" | "IN2013" | "IN2015" | "IN2017" | "IN2019" => "OnePlus 8",
         "IN2020" | "IN2023" | "IN2025" => "OnePlus 8 Pro",
         "KB2000" | "KB2001" | "KB2003" | "KB2005" | "KB2007" => "OnePlus 8T",
+        "ONEPLUS A6010" | "ONEPLUS A6013" => "OnePlus 6T",
         "LE2110" | "LE2111" | "LE2113" | "LE2115" | "LE2117" | "LE2119" | "LE2121" => "OnePlus 9",
         "LE2120" | "LE2123" | "LE2125" | "LE2127" => "OnePlus 9 Pro",
         "NE2210" | "NE2211" | "NE2213" | "NE2215" => "OnePlus 10 Pro",
@@ -487,6 +510,18 @@ mod tests {
         assert_eq!(
             friendly_camera_name(Some("UnknownMaker"), Some("xyz123abc")).unwrap(),
             "UnknownMaker XYZ123ABC"
+        );
+    }
+
+    #[test]
+    fn comma_quoted_empty_exif_noise_is_ignored() {
+        assert_eq!(
+            friendly_camera_name(
+                Some(r#""OnePlus", "", "", "", """#),
+                Some(r#""ONEPLUS A6010", "", """#)
+            )
+            .unwrap(),
+            "OnePlus 6T"
         );
     }
 

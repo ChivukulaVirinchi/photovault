@@ -41,6 +41,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 open = "5"
 async-channel = "2"
 kamadak-exif = "0.5"
@@ -50,6 +51,20 @@ kamadak-exif = "0.5"
 # need a fresh session so glib's gio launcher doesn't wrap them in a
 # systemd `--scope --user` unit that inherits a non-absolute cwd.
 libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Win32 shell APIs for the reveal-in-folder fix. We use
+# SHOpenFolderAndSelectItems via the `windows` crate — explorer.exe
+# /select,<path> command-line invocation is unreliable on paths with
+# spaces / unusual characters / long paths, even with raw_arg quoting.
+# The shell API takes a PIDL and is the documented Microsoft way to
+# "open Explorer with this file selected".
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
 
 [dev-dependencies]
 tempfile = "3"

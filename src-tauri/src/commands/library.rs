@@ -369,6 +369,24 @@ pub async fn library_regenerate_thumbnails(
         (lib.drive_root.clone(), lib.db.clone())
     };
 
+    // Full regenerate semantics: wipe every photo's thumbnail_path +
+    // thumbnailed flag so `run_thumbnail_pass` (which selects rows
+    // with thumbnailed = FALSE) reprocesses the entire library at the
+    // current ThumbnailSize. Without this, the pass would skip rows
+    // that already have a stored path — even if those rows point at
+    // smaller legacy thumbnails the user wants to upgrade. The
+    // existing JPEG files on disk are overwritten in place by the
+    // generator, so no separate cleanup is needed.
+    {
+        let guard = db.lock().await;
+        if let Err(e) = guard.conn.execute(
+            "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE is_trashed = FALSE",
+            [],
+        ) {
+            tracing::error!("regen wipe failed: {e}");
+        }
+    }
+
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
@@ -574,7 +592,7 @@ async fn run_thumbnail_pass(
             .iter()
             .map(|(id, path, hash, orient)| {
                 let abs = drive.join(path);
-                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Small) {
+                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Medium) {
                     Ok(_) => (*id, Some(relative_thumbnail_path(hash))),
                     Err(_) => (*id, None),
                 }
@@ -660,6 +678,14 @@ async fn run_thumbnail_pass(
 fn relative_thumbnail_path(file_hash: &str) -> String {
     let subdir = &file_hash[..2.min(file_hash.len())];
     format!(
+        ".photovault/thumbnails/medium/v2/{}/{}.jpg",
+        subdir, file_hash
+    )
+}
+
+fn legacy_thumbnail_path(file_hash: &str) -> String {
+    let subdir = &file_hash[..2.min(file_hash.len())];
+    format!(
         ".photovault/thumbnails/small/v2/{}/{}.jpg",
         subdir, file_hash
     )
@@ -682,8 +708,14 @@ fn repair_thumbnail_paths(database: &Database, drive_root: &std::path::Path) -> 
 
     let mut repaired = 0usize;
     for (id, hash, stored) in rows {
+        // A stored path is usable if it matches either the current
+        // (medium) layout or the legacy (small) layout AND the file
+        // exists on disk. Anything else (orphaned row pointing at a
+        // missing file) gets cleared so the thumbnail pass regenerates.
         let expected = relative_thumbnail_path(&hash);
-        let usable = stored == expected && drive_root.join(&expected).exists();
+        let legacy = legacy_thumbnail_path(&hash);
+        let usable = (stored == expected || stored == legacy)
+            && drive_root.join(&stored).exists();
         if usable {
             continue;
         }
@@ -695,7 +727,7 @@ fn repair_thumbnail_paths(database: &Database, drive_root: &std::path::Path) -> 
     }
 
     if repaired > 0 {
-        tracing::info!("Repaired {} stale thumbnail_path rows", repaired);
+        tracing::info!("Cleared {} stale thumbnail_path rows", repaired);
     }
     Ok(())
 }

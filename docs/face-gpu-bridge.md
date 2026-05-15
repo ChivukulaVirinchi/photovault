@@ -16,8 +16,8 @@ Smriti refuses to send work when the bridge's model differs from the one
 configured in Settings — embeddings from different models live in incompatible
 metric spaces, and mixing them would corrupt clustering.
 
-- Default: **AdaFace** (`adaface_ir101_webface12m`). Notebook downloads it
-  by default; nothing to change.
+- Default: **AdaFace** (`adaface_ir101_webface12m`). Notebook downloads the
+  same ONNX model as `scripts/setup_assets.*`; nothing to change.
 - If you switched Smriti to `glintr100` in Settings: set `MODEL_NAME='glintr100'`
   in cell 2 of the notebook and re-run all cells.
 

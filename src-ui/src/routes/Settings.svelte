@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { albums, geocoding, health, people, systemEx } from "../lib/api/all";
+  import { library } from "../lib/api/library";
+  import { devMode } from "../lib/stores/devMode.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
@@ -80,6 +82,32 @@
       const r = await geocoding.backfill(force);
       jobs.dismiss(placeholderId);
       jobs.register(r.job_id, "geocoding");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
+  /// Wipe every photo's thumbnail_path and re-run the thumbnail pass.
+  /// Used to upgrade legacy small thumbnails to the current default
+  /// size after that default changed. Long-running on big libraries
+  /// — progress shows in the global JobsIndicator.
+  const regeneratingThumbs = $derived(jobs.isRunning("thumbnails"));
+  async function regenerateThumbs() {
+    if (regeneratingThumbs) return;
+    if (
+      !confirm(
+        "Re-generate every thumbnail at the current quality?\n\nThis overwrites the cached JPEGs on disk and takes a while on big libraries (each photo is decoded + resampled once). You can keep using the app while it runs.",
+      )
+    )
+      return;
+    const placeholderId = `pending-thumbs-${Date.now()}`;
+    jobs.register(placeholderId, "thumbnails");
+    toasts.success("Regenerating thumbnails…");
+    try {
+      const r = await library.regenerateThumbnails();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "thumbnails");
     } catch (e) {
       jobs.dismiss(placeholderId);
       toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
@@ -261,16 +289,18 @@
       </label>
       <p class="hint blurb">
         Tighter clustering threshold = more "different" decisions; looser = more "same".
-        Adjust then use Reset clusters below to re-group existing faces.
+        {#if devMode.enabled}Adjust then use Reset clusters below to re-group existing faces.{/if}
       </p>
-      <div class="action-row">
-        <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting}>
-          Reset face clusters only
-        </button>
-        <button class="ghost danger" onclick={runFacesFromScratch} disabled={acting}>
-          Run faces from scratch
-        </button>
-      </div>
+      {#if devMode.enabled}
+        <div class="action-row">
+          <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting}>
+            Reset face clusters only
+          </button>
+          <button class="ghost danger" onclick={runFacesFromScratch} disabled={acting}>
+            Run faces from scratch
+          </button>
+        </div>
+      {/if}
     </section>
 
     <section>
@@ -316,15 +346,17 @@
         <input value={s.home_city_override ?? ""}
           onchange={(e) => patch({ home_city_override: ((e.target as HTMLInputElement).value || null) })} />
       </label>
-      <div class="action-row">
-        <button class="ghost danger-soft" onclick={resetSuggestions} disabled={acting}>
-          Reset all suggestions
-        </button>
-      </div>
-      <p class="hint blurb">
-        "Reset all suggestions" wipes both pending and dismissed suggestion records.
-        Use it after detector improvements so previously-dismissed runs can return.
-      </p>
+      {#if devMode.enabled}
+        <div class="action-row">
+          <button class="ghost danger-soft" onclick={resetSuggestions} disabled={acting}>
+            Reset all suggestions
+          </button>
+        </div>
+        <p class="hint blurb">
+          "Reset all suggestions" wipes both pending and dismissed suggestion records.
+          Use it after detector improvements so previously-dismissed runs can return.
+        </p>
+      {/if}
     </section>
 
     <section>
@@ -337,21 +369,27 @@
         <button class="primary" onclick={() => backfillGeocoding(false)} disabled={backfilling}>
           {backfilling ? "Resolving…" : "Fill in place names"}
         </button>
-        <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling}
-          title="Re-resolve every GPS-tagged photo, overwriting stale matches">
-          Refresh all
-        </button>
+        {#if devMode.enabled}
+          <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling}
+            title="Re-resolve every GPS-tagged photo, overwriting stale matches">
+            Refresh all
+          </button>
+        {/if}
       </div>
     </section>
 
-    {#if healthData}
+    {#if devMode.enabled && healthData}
       {@const h = healthData}
       <section class="full-width">
         <h3 class="section-title">Library health</h3>
+        <!-- "Missing thumbnails" used to live here but the count was
+             misleading: on-demand thumbnail generation makes "missing"
+             a transient state, not an actionable defect. Removed to
+             reduce noise. Dev mode now has a dedicated Regenerate
+             button below for the use case it was hinting at. -->
         <ul class="counters">
           {#each [
             { n: h.total_photos, label: "Total photos", tone: "neutral" },
-            { n: h.missing_thumbnails, label: "Missing thumbnails", tone: h.missing_thumbnails > 0 ? "warn" : "ok" },
             { n: h.inaccurate_dates, label: "Inaccurate dates", tone: h.inaccurate_dates > 0 ? "warn" : "ok", note: "Pulled from mtime — possibly wrong year." },
             { n: h.missing_dates, label: "No date at all", tone: h.missing_dates > 0 ? "warn" : "ok" },
             { n: h.heic_count, label: "HEIC photos", tone: h.heic_decoder_available || h.heic_count === 0 ? "ok" : "warn", note: h.heic_decoder_available ? "Decoder available." : "Decoder NOT available — these won't render." },
@@ -367,6 +405,22 @@
       </section>
     {/if}
 
+    {#if devMode.enabled}
+      <section>
+        <h3 class="section-title">Maintenance</h3>
+        <p class="hint blurb">
+          Re-generate every cached thumbnail at the current quality.
+          Useful after upgrading from a version that produced smaller
+          thumbs, or if the cache files have rotted on disk.
+        </p>
+        <div class="action-row">
+          <button class="ghost" onclick={regenerateThumbs} disabled={regeneratingThumbs}>
+            {regeneratingThumbs ? "Regenerating…" : "Regenerate thumbnails"}
+          </button>
+        </div>
+      </section>
+    {/if}
+
     <section>
       <h3 class="section-title">Updates</h3>
       <label class="checkbox">
@@ -376,6 +430,7 @@
       </label>
     </section>
 
+    {#if devMode.enabled}
     <section>
       <h3 class="section-title">Cloud face acceleration (advanced)</h3>
       <p class="hint blurb">
@@ -415,6 +470,25 @@
           </p>
         {/if}
       {/if}
+    </section>
+    {/if}
+
+    <!-- Always-visible: the developer-mode toggle lives at the bottom
+         so people who want it can find it, but it never gets in the
+         way of the simple settings the rest of the time. -->
+    <section>
+      <h3 class="section-title">Developer</h3>
+      <label class="checkbox">
+        <input type="checkbox" checked={devMode.enabled}
+          onchange={(e) => devMode.set((e.target as HTMLInputElement).checked)} />
+        <span class="label-text">Developer mode</span>
+      </label>
+      <p class="hint blurb">
+        Reveals advanced controls: regenerate thumbnails, reset face
+        clusters, run faces from scratch, refresh all places, the
+        cloud-GPU bridge, and library health counters. Off by default
+        — most users never need these.
+      </p>
     </section>
   {/if}
 </div>

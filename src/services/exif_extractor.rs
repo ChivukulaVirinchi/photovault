@@ -182,14 +182,12 @@ impl ExifExtractor {
 
         // Camera make
         if let Some(field) = exif.get_field(Tag::Make, In::PRIMARY) {
-            let val: String = field.display_value().to_string();
-            metadata.camera_make = Some(val.trim_matches('"').to_string());
+            metadata.camera_make = Self::clean_exif_text(field);
         }
 
         // Camera model
         if let Some(field) = exif.get_field(Tag::Model, In::PRIMARY) {
-            let val: String = field.display_value().to_string();
-            metadata.camera_model = Some(val.trim_matches('"').to_string());
+            metadata.camera_model = Self::clean_exif_text(field);
         }
 
         // Image dimensions
@@ -271,11 +269,7 @@ impl ExifExtractor {
 
         // Lens model
         if let Some(field) = exif.get_field(Tag::LensModel, In::PRIMARY) {
-            let val: String = field.display_value().to_string();
-            let clean = val.trim_matches('"').to_string();
-            if !clean.is_empty() {
-                metadata.lens_model = Some(clean);
-            }
+            metadata.lens_model = Self::clean_exif_text(field);
         }
 
         // Flash
@@ -310,6 +304,42 @@ impl ExifExtractor {
         }
 
         Some((metadata, datetime_candidate))
+    }
+
+    fn clean_exif_text(field: &exif::Field) -> Option<String> {
+        if let Value::Ascii(chunks) = &field.value {
+            for chunk in chunks {
+                let s = String::from_utf8_lossy(chunk);
+                if let Some(clean) = Self::clean_text_candidate(&s) {
+                    return Some(clean);
+                }
+            }
+        }
+
+        Self::clean_text_candidate(&field.display_value().to_string())
+    }
+
+    fn clean_text_candidate(raw: &str) -> Option<String> {
+        let mut best: Option<String> = None;
+        let parts: Vec<&str> = if raw.contains("\",") || raw.contains(", \"") {
+            raw.split(',').collect()
+        } else {
+            vec![raw]
+        };
+        for part in parts {
+            let clean = part
+                .replace('\0', "")
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .to_string();
+            if clean.is_empty() {
+                continue;
+            }
+            best = Some(clean);
+            break;
+        }
+        best
     }
 
     /// Extract GPS coordinate from EXIF

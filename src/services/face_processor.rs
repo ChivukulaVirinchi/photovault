@@ -34,6 +34,29 @@ pub enum FaceProcessingStage {
     Done,
 }
 
+/// Where face embeddings are being computed for this run.
+///
+/// Detection is always local — only the embedding (112×112 → 512-d
+/// step) can be offloaded. This is surfaced to the frontend so the
+/// user can confirm at a glance whether their cloud bridge is
+/// actually carrying load, vs silently falling back to local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedderRoute {
+    /// Local ONNX session — the default path.
+    Local,
+    /// Configured remote bridge — embeddings POSTed as 112×112 crops.
+    Bridge,
+}
+
+impl EmbedderRoute {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EmbedderRoute::Local => "local",
+            EmbedderRoute::Bridge => "bridge",
+        }
+    }
+}
+
 /// Progress information for face processing
 #[derive(Debug, Clone)]
 pub struct FaceProcessingProgress {
@@ -48,6 +71,13 @@ pub struct FaceProcessingProgress {
     /// increments — that's how new clusters appear during a long run
     /// instead of only at the end.
     pub chunks_flushed: u32,
+    /// Where embeddings are running for this job. Set at job start
+    /// based on `face_gpu_bridge_enabled` + URL + a one-shot /health
+    /// probe; doesn't track runtime fallback (the 3-strikes circuit
+    /// breaker inside RemoteEmbedder will silently switch to local
+    /// without flipping this flag). Use the Test Connection button
+    /// in Settings if you need a live health check.
+    pub embedder_route: EmbedderRoute,
 }
 
 impl Default for FaceProcessingProgress {
@@ -59,6 +89,7 @@ impl Default for FaceProcessingProgress {
             elapsed_secs: 0.0,
             stage: FaceProcessingStage::Detecting,
             chunks_flushed: 0,
+            embedder_route: EmbedderRoute::Local,
         }
     }
 }
@@ -194,6 +225,17 @@ impl FaceProcessor {
             None
         };
         let embedder_model_name: String = cfg.face_embedder_model.clone();
+        // Snapshot intended routing so the UI can show whether
+        // embedding is heading to the bridge or running locally for
+        // this run. We don't probe /health here — workers do that on
+        // their own when they construct the embedder, and per-thread
+        // results would be racy to aggregate. The chip on the UI
+        // reflects intent; live health is the Test Connection button.
+        let embedder_route = if gpu_bridge_url.is_some() {
+            EmbedderRoute::Bridge
+        } else {
+            EmbedderRoute::Local
+        };
 
         if !detector_path.exists() {
             return Err(
@@ -300,6 +342,7 @@ impl FaceProcessor {
                             elapsed_secs: start_time.elapsed().as_secs_f64(),
                             stage,
                             chunks_flushed: chunks_flushed_atomic.load(Ordering::Relaxed) as u32,
+                            embedder_route,
                         });
                     }
                     // Exit only when the pipeline is fully done OR cancelled.
@@ -751,6 +794,7 @@ impl FaceProcessor {
                 elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
                 stage: FaceProcessingStage::Finishing,
                 chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
+                embedder_route,
             });
         }
 
@@ -769,6 +813,7 @@ impl FaceProcessor {
                 elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
                 stage: FaceProcessingStage::Done,
                 chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
+                embedder_route,
             });
         }
 

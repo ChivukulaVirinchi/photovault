@@ -166,6 +166,7 @@
     max-height: 70vh;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
     animation: pop 180ms var(--ease) both;
   }
@@ -176,6 +177,7 @@
   header {
     padding: var(--s-4) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   header h3 {
     margin: 0;
@@ -196,6 +198,7 @@
     gap: var(--s-2);
     padding: var(--s-3) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   .search :global(svg), .create :global(svg) { color: var(--ink-muted); flex-shrink: 0; }
   .search input, .create input {
@@ -212,7 +215,8 @@
     margin: 0;
     padding: 6px 0;
     overflow-y: auto;
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .list li.empty {
     padding: var(--s-4);

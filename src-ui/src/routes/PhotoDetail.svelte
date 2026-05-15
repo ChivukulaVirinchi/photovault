@@ -44,6 +44,8 @@
   /// internal scale of ZoomImage directly, so we mirror the "double-click
   /// toggles fit ↔ 1:1" intent here. Default is "fit" (image just loaded).
   let atActual = $state(false);
+  let loadSeq = 0;
+  const resolvedImageCache = new Map<number, string>();
 
   // Mouse-activity fade for viewer chrome (toolbar, chevrons, position,
   // filename, cursor). Resets on every mousemove inside the viewer; if
@@ -120,26 +122,72 @@
     return mapping[ext] ?? ext.toUpperCase();
   }
 
+  async function decodeImage(url: string): Promise<void> {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    if (img.decode) {
+      try {
+        await img.decode();
+        return;
+      } catch {
+        // Fall through to the event path; some WebView decoders reject
+        // decode() even though the image still paints.
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("image decode failed"));
+    });
+  }
+
+  async function imageUrlFor(photoId: number): Promise<string> {
+    const cached = resolvedImageCache.get(photoId);
+    if (cached) return cached;
+    const { absolute_path } = await library.resolvePath(photoId);
+    const url = convertFileSrc(absolute_path);
+    resolvedImageCache.set(photoId, url);
+    return url;
+  }
+
+  async function preloadPhoto(photoId: number | null) {
+    if (photoId == null || resolvedImageCache.has(photoId)) return;
+    try {
+      const url = await imageUrlFor(photoId);
+      await decodeImage(url);
+    } catch {}
+  }
+
   async function load() {
+    const seq = ++loadSeq;
     error = null;
-    imageUrl = null;
     people = [];
     albums = [];
     extras = null;
     tint = null;
     manualRotate = 0;
+    atActual = false;
     destroyMini();
     try {
-      photo = await photos.get(id);
+      // Parallelise the two IPC calls — they're independent. As soon
+      // as BOTH the photo row and the resolved URL are in hand, drop
+      // them into state. We deliberately do NOT await decode here:
+      // ZoomImage owns the decode wait (its dimsKnown gate keeps the
+      // img hidden until pixels are ready) and the thumbnail-as-
+      // background fallback covers the visible transition. Awaiting
+      // decode used to gate the entire UI update on a 100-500ms
+      // image read which made arrow-key nav feel sticky on big RAWs.
+      const [p, url] = await Promise.all([photos.get(id), imageUrlFor(id)]);
+      if (seq !== loadSeq) return;
+      photo = p;
+      imageUrl = url;
       try {
-        const { absolute_path } = await library.resolvePath(id);
-        imageUrl = convertFileSrc(absolute_path);
+        const nextPeople = await call<PersonDto[]>("photos_people_in_photo", { photo_id: id });
+        if (seq === loadSeq) people = nextPeople;
       } catch {}
       try {
-        people = await call<PersonDto[]>("photos_people_in_photo", { photo_id: id });
-      } catch {}
-      try {
-        albums = await call<AlbumDto[]>("photos_albums_for_photo", { photo_id: id });
+        const nextAlbums = await call<AlbumDto[]>("photos_albums_for_photo", { photo_id: id });
+        if (seq === loadSeq) albums = nextAlbums;
       } catch {}
       // Tier-2 EXIF — re-parsed off the file at request time. Non-blocking.
       photos.exifExtras(id).then((e) => { if (photo?.id === id) extras = e; }).catch(() => {});
@@ -285,7 +333,6 @@
 
   onMount(() => {
     window.addEventListener("keydown", onKey);
-    load();
     return () => window.removeEventListener("keydown", onKey);
   });
 
@@ -295,6 +342,21 @@
   });
 
   $effect(() => { void id; load(); });
+
+  $effect(() => {
+    if (!photo) return;
+    // Preload ±2 photos so two rapid arrow presses still hit cached
+    // pixels. Browser decoder is fast enough that we don't need to
+    // gate this on each step; resolvedImageCache + the browser HTTP
+    // cache dedupe duplicate requests.
+    const me = photo.id;
+    void preloadPhoto(prevId);
+    void preloadPhoto(nextId);
+    const after = nextId != null ? browseContext.next(nextId) : null;
+    const before = prevId != null ? browseContext.prev(prevId) : null;
+    if (after != null && after !== me) void preloadPhoto(after);
+    if (before != null && before !== me) void preloadPhoto(before);
+  });
 
   $effect(() => {
     const pid = photo?.id;
@@ -347,6 +409,15 @@
       {#if error}
         <p class="error">{error}</p>
       {:else if photo && imageUrl}
+        <!-- ZoomImage double-buffers internally: the visible <img>
+             keeps showing the previous photo until the next one is
+             paint-ready, then swaps src + naturalW/H + scale in one
+             tick. No blank gap during nav, so no backdrop is needed —
+             we removed the blurred thumb-bg that previously sat
+             behind. The viewer's background-color + radial vignette
+             still cover the FIRST photo load (the very first time the
+             user lands here from Timeline) for the ~50 ms before the
+             initial decode completes. -->
         <ZoomImage
           src={imageUrl}
           alt={photo.file_name}

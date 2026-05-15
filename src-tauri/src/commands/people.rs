@@ -570,6 +570,14 @@ pub struct FacesProgressDto {
     pub rejected_blurry: u64,
     #[serde(default)]
     pub rejected_yaw: u64,
+    /// Where embeddings are being computed for this run. "bridge" =
+    /// configured cloud GPU, "local" = on-device ONNX session. Surfaced
+    /// to the UI so the user can confirm cloud bridge is actually
+    /// carrying load. Reflects intent (bridge enabled + URL set), not
+    /// per-batch runtime health — use Test Connection in Settings for
+    /// live status.
+    #[serde(default)]
+    pub embedder_route: String,
 }
 
 /// Start the face-processing pipeline (detect + embed + cluster).
@@ -602,6 +610,15 @@ pub async fn people_start_processing(
         cooccurrence: cfg.weight_cooccurrence,
         temporal: cfg.weight_temporal,
         ..Default::default()
+    };
+    // Snapshot the intended embedder route for the EV_FACES_COMPLETE
+    // payload — the engine reports it per progress tick too, but the
+    // completion event is emitted on this side and doesn't get the
+    // last in-flight value.
+    let route_str: String = if cfg.face_gpu_bridge_enabled && cfg.face_gpu_bridge_url.is_some() {
+        "bridge".to_string()
+    } else {
+        "local".to_string()
     };
 
     tokio::spawn(async move {
@@ -644,6 +661,7 @@ pub async fn people_start_processing(
                     rejected_lowconf: 0,
                     rejected_blurry: 0,
                     rejected_yaw: 0,
+                    embedder_route: p.embedder_route.as_str().to_string(),
                 };
                 emit(&app_evt, EV_FACES_PROGRESS, dto);
             }
@@ -758,6 +776,7 @@ pub async fn people_start_processing(
                 rejected_lowconf: rej_lowconf,
                 rejected_blurry: rej_blurry,
                 rejected_yaw: rej_yaw,
+                embedder_route: route_str.clone(),
             },
         );
 

@@ -417,6 +417,7 @@
     max-height: 88vh;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
   }
   .modal header {
@@ -425,6 +426,7 @@
     flex-direction: column;
     gap: 4px;
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   .modal header .kind {
     font-size: var(--t-xs);

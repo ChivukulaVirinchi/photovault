@@ -198,29 +198,44 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
-    use std::process::Command;
-    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let parent = abs
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| abs.clone());
-    // explorer.exe accepts /select with the target path as a single
-    // comma-joined argument. The combined token is one CLI arg.
-    let arg = format!("/select,{}", abs.display());
-    let status = Command::new("explorer.exe").arg(arg).status();
-    if matches!(status, Ok(s) if s.success()) {
-        return Ok(());
+    // We tried two command-line approaches and both had failure modes:
+    //   1. `explorer.exe /select,<path>` via Command::arg — Rust quotes
+    //      the whole token, Explorer falls back to opening Documents.
+    //   2. raw_arg with `/select,"<path>"` — better, but on paths with
+    //      certain characters Explorer still opens the parent folder
+    //      WITHOUT selecting the file.
+    // The reliable path is `SHOpenFolderAndSelectItems`. It takes a
+    // shell PIDL (item identifier list), which the shell parses with
+    // full UNC / extended-length / long-path support and selects the
+    // item atomically — no string-parsing quirks, no fallback paths.
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+
+    let normalized = path.display().to_string().replace('/', "\\");
+    let mut wide: Vec<u16> = normalized.encode_utf16().collect();
+    wide.push(0);
+
+    // SAFETY: CoInitializeEx + COM calls are safe so long as we pair
+    // initialise/uninitialise on the same thread. The Tauri command is
+    // already on a tokio worker thread; the COM apartment is per-thread,
+    // so re-initialising here is harmless (returns RPC_E_CHANGED_MODE
+    // or S_FALSE if already inited, both fine). Errors from CoInit are
+    // non-fatal — the shell APIs work without it on most systems.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let pidl = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
+        if pidl.is_null() {
+            CoUninitialize();
+            return Err(std::io::Error::other(
+                "ILCreateFromPathW returned NULL — path may not exist or be accessible",
+            ));
+        }
+        let result = SHOpenFolderAndSelectItems(pidl, None, 0);
+        ILFree(Some(pidl));
+        CoUninitialize();
+        result.map_err(|e| std::io::Error::other(format!("SHOpenFolderAndSelectItems: {}", e)))
     }
-    Command::new("explorer.exe")
-        .arg(parent)
-        .status()
-        .and_then(|s| {
-            if s.success() {
-                Ok(())
-            } else {
-                Err(std::io::Error::other("explorer.exe failed to open the containing folder"))
-            }
-        })
 }
 
 #[derive(Debug, Serialize)]
