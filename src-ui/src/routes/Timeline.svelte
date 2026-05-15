@@ -56,24 +56,15 @@
   // scan / metadata / thumbnail job completes; computed once on mount
   // too so users who land on Timeline mid-pipeline see the right CTA.
   let pendingMetadata = $state<number>(0);
-  let pendingThumbnails = $state<number>(0);
   const metadataRunning = $derived(jobs.isRunning("metadata"));
-  const thumbnailsRunning = $derived(jobs.isRunning("thumbnails"));
   const showResumeMetadata = $derived(
     !metadataRunning && !scanRunning && pendingMetadata > 0,
-  );
-  const showResumeThumbnails = $derived(
-    !thumbnailsRunning && !scanRunning && pendingThumbnails > 0,
   );
 
   async function refreshPendingCounts() {
     try {
-      const [m, t] = await Promise.all([
-        library.pendingMetadataCount(),
-        library.pendingThumbnailCount(),
-      ]);
+      const m = await library.pendingMetadataCount();
       pendingMetadata = m.pending_photos;
-      pendingThumbnails = t.pending_photos;
     } catch {
       // library not open yet, ignore
     }
@@ -88,16 +79,6 @@
       toasts.error(`Couldn't resume metadata: ${msg}`);
     }
   }
-  async function resumeThumbnails() {
-    try {
-      const r = await library.startThumbnailPass();
-      jobs.register(r.job_id, "thumbnails");
-    } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      toasts.error(`Couldn't resume thumbnails: ${msg}`);
-    }
-  }
-
   // Today's memories — surfaced as a horizontal strip above the
   // timeline. Hidden when the library has no qualifying memories.
   let memoryCards = $state<MemoryCard[]>([]);
@@ -157,6 +138,24 @@
       items = items.concat(page.items);
       if (nextCursor === null) browseContext.set("timeline", fresh);
       else                     browseContext.extend(fresh);
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      if (page.total !== null) total = page.total;
+    } catch (e: unknown) {
+      error = JSON.stringify(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function refreshFirstPage() {
+    if (loading) return;
+    loading = true;
+    error = null;
+    try {
+      const page = await photos.list({ cursor: null, limit: 240 });
+      items = page.items;
+      browseContext.set("timeline", page.items.map((p) => p.id));
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
@@ -392,12 +391,25 @@
       }),
     );
     unlistens.push(listen("metadata:complete", () => refreshPendingCounts()));
-    unlistens.push(listen("thumbnails:complete", () => refreshPendingCounts()));
-    unlistens.push(listen("scan:complete", () => refreshPendingCounts()));
+    let scanRefresh: ReturnType<typeof setTimeout> | null = null;
+    unlistens.push(
+      listen<{ files_processed?: number }>("scan:progress", () => {
+        if (scanRefresh != null) return;
+        scanRefresh = setTimeout(() => {
+          scanRefresh = null;
+          refreshFirstPage();
+        }, 1200);
+      }),
+    );
+    unlistens.push(listen("scan:complete", () => {
+      refreshPendingCounts();
+      refreshFirstPage();
+    }));
 
     return () => {
       window.removeEventListener("keydown", onGlobalKey);
       if (throttle != null) clearTimeout(throttle);
+      if (scanRefresh != null) clearTimeout(scanRefresh);
       Promise.all(unlistens).then((fns) => fns.forEach((f) => f()));
     };
   });
@@ -762,7 +774,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-{#if showResumeMetadata || showResumeThumbnails}
+{#if showResumeMetadata}
   <div class="resume-banners">
     {#if showResumeMetadata}
       <div class="resume-banner">
@@ -770,14 +782,6 @@
           {pendingMetadata.toLocaleString()} photos still need EXIF + place data.
         </span>
         <button class="primary" onclick={resumeMetadata}>Resume reading metadata</button>
-      </div>
-    {/if}
-    {#if showResumeThumbnails}
-      <div class="resume-banner">
-        <span class="msg">
-          {pendingThumbnails.toLocaleString()} photos still need thumbnails generated.
-        </span>
-        <button class="primary" onclick={resumeThumbnails}>Resume generating thumbnails</button>
       </div>
     {/if}
   </div>

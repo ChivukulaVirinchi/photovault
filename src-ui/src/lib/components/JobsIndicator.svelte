@@ -151,9 +151,15 @@
   }
   .icon-btn:hover { background: var(--bg-card); color: var(--ink); }
   .icon-btn.cancel {
-    width: 18px; height: 18px;
+    width: 22px; height: 22px;
+    color: var(--hot, #d05a4a);
+    background: color-mix(in oklab, var(--hot, #d05a4a) 12%, transparent);
+    border: 1px solid color-mix(in oklab, var(--hot, #d05a4a) 36%, transparent);
   }
-  .icon-btn.cancel:hover { color: var(--hot, #d05a4a); }
+  .icon-btn.cancel:hover {
+    color: var(--bg);
+    background: var(--hot, #d05a4a);
+  }
 
   .list {
     list-style: none;

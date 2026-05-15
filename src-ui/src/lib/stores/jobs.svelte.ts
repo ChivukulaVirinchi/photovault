@@ -97,7 +97,9 @@ class JobsStore {
       const processed =
         p.files_processed ?? p.processed ?? p.photos_processed ?? p.done ?? 0;
       const total =
-        p.files_found ?? p.total ?? p.total_photos ?? null;
+        kind === "scan" && !complete
+          ? null
+          : (p.files_found ?? p.total ?? p.total_photos ?? null);
       const facesFound = p.faces_found ?? p.faces_detected ?? 0;
       const message =
         p.message ??

@@ -7,6 +7,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 /// before converting so the webview can load it via the asset protocol.
 export function thumbUrl(driveRoot: string | null, path: string | null): string | null {
   if (!path) return null;
+  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\") || path.startsWith("/")) {
+    return convertFileSrc(path);
+  }
   if (!driveRoot) return null;
   // Forward-slash join works on both platforms when paths use absolute
   // styles. driveRoot is already in the host's native form.

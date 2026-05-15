@@ -113,5 +113,6 @@ Download-File $AdafaceModelUrl (Join-Path $ModelsDir "adaface_ir101_webface12m.o
 Write-Host "Installed models:"
 Write-Host "- $(Join-Path $ModelsDir 'scrfd_10g_bnkps.onnx')"
 Write-Host "- $(Join-Path $ModelsDir 'glintr100.onnx')"
+Write-Host "- $(Join-Path $ModelsDir 'adaface_ir101_webface12m.onnx')"
 
 Write-Host "`nDone."

@@ -52,10 +52,11 @@ check_appimage() {
 check_assets_pack() {
   rm -rf assets-pack-local Smriti-Assets-local.zip
   mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
-  if [[ -f libs/onnxruntime/libonnxruntime.so ]] && [[ -f models/scrfd_10g_bnkps.onnx ]] && [[ -f models/glintr100.onnx ]] && [[ -f data/geonames.db ]]; then
+  if [[ -f libs/onnxruntime/libonnxruntime.so ]] && [[ -f models/scrfd_10g_bnkps.onnx ]] && [[ -f models/glintr100.onnx ]] && [[ -f models/adaface_ir101_webface12m.onnx ]] && [[ -f data/geonames.db ]]; then
     cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ 2>/dev/null || true
     cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
     cp models/glintr100.onnx assets-pack-local/models/
+    cp models/adaface_ir101_webface12m.onnx assets-pack-local/models/
     cp data/geonames.db assets-pack-local/data/
     (cd assets-pack-local && zip -r ../Smriti-Assets-local.zip . >/dev/null)
     status_line "assets pack (linux)" "PASS (Smriti-Assets-local.zip)"

@@ -126,6 +126,7 @@ pub async fn library_open(
     smriti::db::migrations::run_migrations(&database.conn).map_err(|e| CommandError::Database {
         message: e.to_string(),
     })?;
+    repair_thumbnail_paths(&database, &drive_root)?;
 
     let photo_count = {
         let repo = smriti::db::PhotoRepo::new(&database.conn);
@@ -302,7 +303,7 @@ pub async fn library_start_scan(
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
 
-        // Kick off the downstream pipeline (metadata, thumbnails, etc.)
+        // Kick off the downstream pipeline (metadata + lightweight detections).
         // in the background. Each stage is its own job with its own
         // progress chip.
         let app_for_post = app_clone.clone();
@@ -354,30 +355,24 @@ pub async fn library_regenerate_thumbnails(
     state: State<'_, AppState>,
     _args: LibraryRegenerateThumbnailsArgs,
 ) -> CommandResult<JobIdDto> {
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
+        return Err(CommandError::Conflict {
+            reason: "thumbnail generation is already in progress".into(),
+        });
+    }
     let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
     let job_id = job.id.clone();
-    let app_clone = app.clone();
-    let started = job.started_at;
-    let job_id_for_evt = job_id.clone();
+    let cancel = job.cancel.clone();
+    let (drive_root, db) = {
+        let guard = state.library.read().await;
+        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
 
-    // For now: emit a "started" then a "complete" event without per-photo
-    // progress; the real work is wired into the existing rotated-data
-    // regen service in M3. The frontend can already treat this as a
-    // long-running op.
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        emit(
-            &app_clone,
-            EV_THUMBNAILS_PROGRESS,
-            crate::events::JobProgress {
-                job_id: job_id_for_evt.clone(),
-                stage: "regenerate".into(),
-                processed: 0,
-                total: None,
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                eta_ms: None,
-                message: Some("regen scaffolding — wired in M3".into()),
-            },
-        );
+        run_thumbnail_pass(drive_root, db, cancel, app_clone, job_id_clone).await;
     });
 
     Ok(JobIdDto { job_id })
@@ -533,7 +528,16 @@ async fn run_thumbnail_pass(
         }
     };
 
+    let total_pending: Option<u64> = {
+        let guard = db.lock().await;
+        smriti::db::photo_repo::PhotoRepo::new(&guard.conn)
+            .count_pending_thumbnails()
+            .ok()
+            .map(|n| n.max(0) as u64)
+    };
+    let started = std::time::Instant::now();
     let mut total_done: u64 = 0;
+    let mut failed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     loop {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -549,11 +553,15 @@ async fn run_thumbnail_pass(
                 Ok(s) => s,
                 Err(_) => break,
             };
-            stmt.query_map([chunk_size as i64], |row| {
+            stmt.query_map([(chunk_size * 4) as i64], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
             .unwrap_or_default()
+            .into_iter()
+            .filter(|(id, _, _, _)| !failed_ids.contains(id))
+            .take(chunk_size)
+            .collect()
         };
 
         if chunk.is_empty() {
@@ -566,8 +574,8 @@ async fn run_thumbnail_pass(
             .iter()
             .map(|(id, path, hash, orient)| {
                 let abs = drive.join(path);
-                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Medium) {
-                    Ok(rel) => (*id, Some(rel.to_string_lossy().to_string())),
+                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Small) {
+                    Ok(_) => (*id, Some(relative_thumbnail_path(hash))),
                     Err(_) => (*id, None),
                 }
             })
@@ -588,10 +596,14 @@ async fn run_thumbnail_pass(
                 }
             };
             for (id, rel) in &updates {
-                let _ = tx.execute(
-                    "UPDATE photos SET thumbnail_path = ?, thumbnailed = TRUE WHERE id = ?",
-                    rusqlite::params![rel, id],
-                );
+                if let Some(rel) = rel {
+                    let _ = tx.execute(
+                        "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2",
+                        rusqlite::params![rel, id],
+                    );
+                } else {
+                    failed_ids.insert(*id);
+                }
             }
             if let Err(e) = tx.commit() {
                 tracing::error!("thumbnail tx commit: {e}");
@@ -615,9 +627,9 @@ async fn run_thumbnail_pass(
                 job_id: job_id.clone(),
                 stage: "generate".into(),
                 processed: total_done,
-                total: None,
-                elapsed_ms: 0,
-                eta_ms: None,
+                total: total_pending,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: estimate_eta_ms(total_done, total_pending, started.elapsed()),
                 message: None,
             },
         );
@@ -634,8 +646,8 @@ async fn run_thumbnail_pass(
             job_id: job_id.clone(),
             stage: "generate".into(),
             processed: total_done,
-            total: None,
-            elapsed_ms: 0,
+            total: total_pending,
+            elapsed_ms: started.elapsed().as_millis() as u64,
             eta_ms: None,
             message: None,
         },
@@ -645,14 +657,72 @@ async fn run_thumbnail_pass(
     jobs::finish_job(&st, &job_id).await;
 }
 
+fn relative_thumbnail_path(file_hash: &str) -> String {
+    let subdir = &file_hash[..2.min(file_hash.len())];
+    format!(
+        ".photovault/thumbnails/small/v2/{}/{}.jpg",
+        subdir, file_hash
+    )
+}
+
+fn repair_thumbnail_paths(database: &Database, drive_root: &std::path::Path) -> CommandResult<()> {
+    let mut stmt = database.conn.prepare(
+        "SELECT id, file_hash, thumbnail_path FROM photos WHERE thumbnail_path IS NOT NULL",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut repaired = 0usize;
+    for (id, hash, stored) in rows {
+        let expected = relative_thumbnail_path(&hash);
+        let usable = stored == expected && drive_root.join(&expected).exists();
+        if usable {
+            continue;
+        }
+        database.conn.execute(
+            "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        repaired += 1;
+    }
+
+    if repaired > 0 {
+        tracing::info!("Repaired {} stale thumbnail_path rows", repaired);
+    }
+    Ok(())
+}
+
+fn estimate_eta_ms(
+    processed: u64,
+    total: Option<u64>,
+    elapsed: std::time::Duration,
+) -> Option<u64> {
+    let total = total?;
+    if processed == 0 || processed >= total {
+        return None;
+    }
+    let elapsed_ms = elapsed.as_millis() as u64;
+    if elapsed_ms < 1_000 {
+        return None;
+    }
+    Some((elapsed_ms / processed).saturating_mul(total - processed))
+}
+
 use std::sync::Arc;
 
-/// Auto-chain after a Scan completes: metadata → thumbnails → existing
+/// Auto-chain after a Scan completes: metadata → existing
 /// duplicates/bursts detection. Face detection is deliberately NOT
 /// auto-chained — it's heavy enough that users should opt in via the
-/// People page. The two stages we DO chain share their bodies with the
-/// public Resume-banner IPCs above; the difference is just where the
-/// cancel flag and job_id come from.
+/// People page. Thumbnails are viewport-driven from the UI, so we do
+/// not run a full-library thumbnail pass here.
 async fn run_post_scan_pipeline(
     app: AppHandle,
     drive_root: PathBuf,
@@ -674,19 +744,6 @@ async fn run_post_scan_pipeline(
                 let cancel = job.cancel.clone();
                 let job_id = job.id.clone();
                 run_metadata_stage(app.clone(), job_id, drive_root.clone(), db.clone(), cancel)
-                    .await;
-            }
-        }
-    }
-
-    // Stage 3: thumbnails.
-    {
-        let state: tauri::State<AppState> = app.state();
-        if !state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
-            if let Ok(job) = jobs::start_job(&state, JobKind::Thumbnails).await {
-                let job_id = job.id.clone();
-                let cancel = job.cancel.clone();
-                run_thumbnail_pass(drive_root.clone(), db.clone(), cancel, app.clone(), job_id)
                     .await;
             }
         }

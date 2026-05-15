@@ -179,7 +179,9 @@ impl RemoteEmbedder {
                 .file_name(format!("{}.jpg", i))
                 .mime_str("image/jpeg")
                 .map_err(|e| format!("mime error: {}", e))?;
-            form = form.part(format!("face_{}", i), part);
+            // FastAPI's `files: list[UploadFile] = File(...)` expects
+            // repeated multipart fields with the same name.
+            form = form.part("files", part);
         }
 
         let resp = self
