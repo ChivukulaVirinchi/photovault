@@ -4,6 +4,7 @@
     ChevronLeft,
     ChevronRight,
     Gauge,
+    LocateFixed,
     Maximize2,
     Pause,
     Play,
@@ -20,23 +21,37 @@
   import { libraryStore } from "../stores/library.svelte";
   import type { PhotoDto } from "../api/types";
 
-  let photo = $state<PhotoDto | null>(null);
-  let imageUrl = $state<string | null>(null);
-  let incomingPhoto = $state<PhotoDto | null>(null);
-  let incomingUrl = $state<string | null>(null);
-  let incomingReady = $state(false);
+  // Stable double-buffer. We keep two <img> elements mounted at all
+  // times — one visible (front), one hidden (back). On advance, the
+  // back gets the new src, we await decode(), then crossfade by
+  // flipping `frontIdx`. The previous front then becomes the back,
+  // ready for the next slide. Elements never unmount mid-slideshow,
+  // which eliminates the "loading..." flash users were seeing.
+  type Slot = { photo: PhotoDto | null; url: string | null };
+  let slots = $state<[Slot, Slot]>([
+    { photo: null, url: null },
+    { photo: null, url: null },
+  ]);
+  let frontIdx = $state(0);
   let loadError = $state<string | null>(null);
-  let imageReady = $state(false);
   let chromeActive = $state(true);
+  /// True once at least one image has been shown — gates auto-advance
+  /// and lets the cold-start "loading..." disappear permanently.
+  let booted = $state(false);
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let advanceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadSeq = 0;
+  const urlCache = new Map<number, string>();
 
   const currentId = $derived(slideshow.currentId());
   const position = $derived(slideshow.position());
+  const frontPhoto = $derived(slots[frontIdx].photo);
+  const frontUrl = $derived(slots[frontIdx].url);
+  const backPhoto = $derived(slots[1 - frontIdx].photo);
+  const backUrl = $derived(slots[1 - frontIdx].url);
   const thumb = $derived(
-    photo?.thumbnail_path
-      ? thumbUrl(libraryStore.driveRoot, photo.thumbnail_path)
+    frontPhoto?.thumbnail_path
+      ? thumbUrl(libraryStore.driveRoot, frontPhoto.thumbnail_path)
       : null,
   );
 
@@ -48,6 +63,13 @@
 
   function close() {
     slideshow.close();
+  }
+
+  function showInTimeline() {
+    const id = currentId;
+    if (id == null) return;
+    slideshow.close();
+    window.location.hash = `/timeline?photo=${id}`;
   }
 
   async function toggleFullscreen() {
@@ -107,56 +129,74 @@
     }
   }
 
+  async function resolveUrl(id: number): Promise<string> {
+    const cached = urlCache.get(id);
+    if (cached) return cached;
+    const { absolute_path } = await library.resolvePath(id);
+    const url = convertFileSrc(absolute_path);
+    urlCache.set(id, url);
+    return url;
+  }
+
+  /// Decode an image off-screen so paint is instant when we mount it.
+  /// img.decode() resolves AFTER bitmap decode — load alone isn't enough
+  /// on large RAWs / HEIC files where decode can lag download by seconds.
+  async function decodeOffscreen(url: string): Promise<void> {
+    const img = new Image();
+    img.src = url;
+    if (img.decode) {
+      try {
+        await img.decode();
+        return;
+      } catch {
+        // Fall through — some webview decoders reject .decode() even
+        // when the file paints fine. The onload below catches those.
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("decode failed"));
+    });
+  }
+
   async function loadSlide(id: number) {
     const seq = ++loadSeq;
     loadError = null;
-    incomingPhoto = null;
-    incomingUrl = null;
-    incomingReady = false;
-    if (!imageUrl) imageReady = false;
     try {
-      const p = await photos.get(id);
+      const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
       if (seq !== loadSeq) return;
-      const { absolute_path } = await library.resolvePath(id);
+      await decodeOffscreen(url);
       if (seq !== loadSeq) return;
-      const url = convertFileSrc(absolute_path);
-      if (imageUrl) {
-        incomingPhoto = p;
-        incomingUrl = url;
-      } else {
-        photo = p;
-        imageUrl = url;
-      }
+      // Promote: assign the NEW slide to the back slot, then flip the
+      // front pointer. Svelte's reactivity drives the crossfade via
+      // class:ready bound to whether this slot is currently in front.
+      const backSlot = 1 - frontIdx;
+      slots[backSlot] = { photo: p, url };
+      frontIdx = backSlot;
+      booted = true;
       void preloadNeighbors();
       void slideshow.ensureMoreAhead();
     } catch (e) {
       if (seq !== loadSeq) return;
       loadError = typeof e === "string" ? e : JSON.stringify(e);
-      imageReady = true;
+      booted = true;
     }
-  }
-
-  function promoteIncoming() {
-    if (!incomingPhoto || !incomingUrl) return;
-    photo = incomingPhoto;
-    imageUrl = incomingUrl;
-    imageReady = true;
-    incomingPhoto = null;
-    incomingUrl = null;
-    incomingReady = false;
   }
 
   async function preloadNeighbors() {
     const ids = slideshow.ids;
     const i = slideshow.index;
-    const candidates = [ids[i + 1], ids[i - 1]].filter((id): id is number => id != null);
-    await Promise.all(candidates.map(async (id) => {
-      try {
-        const { absolute_path } = await library.resolvePath(id);
-        const img = new Image();
-        img.src = convertFileSrc(absolute_path);
-      } catch {}
-    }));
+    const candidates = [ids[i + 1], ids[i - 1], ids[i + 2]].filter(
+      (id): id is number => id != null,
+    );
+    await Promise.all(
+      candidates.map(async (id) => {
+        try {
+          const url = await resolveUrl(id);
+          await decodeOffscreen(url);
+        } catch {}
+      }),
+    );
   }
 
   $effect(() => {
@@ -164,9 +204,28 @@
     void loadSlide(currentId);
   });
 
+  // Reset booted state when slideshow opens/closes so a re-open
+  // shows the loading screen briefly until the first decode lands.
   $effect(() => {
+    if (!slideshow.active) {
+      booted = false;
+      loadError = null;
+      slots = [
+        { photo: null, url: null },
+        { photo: null, url: null },
+      ];
+      urlCache.clear();
+    }
+  });
+
+  // Auto-advance — re-runs whenever `currentId` changes (new slide is
+  // up) so a fresh timer is set for each photo. Without depending on
+  // currentId the timer only fired once and the slideshow stalled
+  // after the first transition.
+  $effect(() => {
+    void currentId;
     clearAdvanceTimer();
-    if (!slideshow.active || !slideshow.playing || !imageReady) return;
+    if (!slideshow.active || !slideshow.playing || !booted) return;
     advanceTimer = setTimeout(() => void goNext(), slideshow.intervalMs);
     return clearAdvanceTimer;
   });
@@ -204,42 +263,24 @@
           <strong>Couldn't load this photo</strong>
           <span>{loadError}</span>
         </div>
-      {:else if imageUrl && photo}
-        <img
-          class="slide-image"
-          class:ready={imageReady}
-          src={imageUrl}
-          alt={photo.file_name}
-          decoding="async"
-          onload={() => (imageReady = true)}
-          onerror={() => {
-            loadError = "Image decoder could not open this file.";
-            imageReady = true;
-          }}
-        />
-        {#if incomingUrl && incomingPhoto}
+      {/if}
+
+      <!-- Two stable buffers. The one whose index matches `frontIdx`
+           is visible (opacity 1); the other sits ready underneath. We
+           never unmount, so there's no flash window. -->
+      {#each slots as slot, idx (idx)}
+        {#if slot.url && slot.photo}
           <img
-            class="slide-image incoming"
-            class:ready={incomingReady}
-            src={incomingUrl}
-            alt={incomingPhoto.file_name}
+            class="slide-image"
+            class:visible={idx === frontIdx && !loadError}
+            src={slot.url}
+            alt={slot.photo.file_name}
             decoding="async"
-            onload={(e) => {
-              const loadedUrl = (e.currentTarget as HTMLImageElement).src;
-              incomingReady = true;
-              setTimeout(() => {
-                if (incomingUrl === loadedUrl) promoteIncoming();
-              }, 180);
-            }}
-            onerror={() => {
-              loadError = "Image decoder could not open this file.";
-              incomingPhoto = null;
-              incomingUrl = null;
-              incomingReady = false;
-            }}
           />
         {/if}
-      {:else}
+      {/each}
+
+      {#if !booted && !loadError}
         <div class="slide-loading mono">loading...</div>
       {/if}
     </div>
@@ -250,12 +291,15 @@
       </button>
       <div class="title">
         <strong>{slideshow.label}</strong>
-        {#if photo}
-          <span class="mono" title={photo.file_name}>{photo.file_name}</span>
+        {#if frontPhoto}
+          <span class="mono" title={frontPhoto.file_name}>{frontPhoto.file_name}</span>
         {/if}
       </div>
       <button class="tool" onclick={toggleFullscreen} title="Fullscreen (F)" aria-label="Toggle fullscreen">
         <Maximize2 size={17} strokeWidth={1.8} />
+      </button>
+      <button class="tool" onclick={showInTimeline} title="Show in timeline" aria-label="Show current photo in timeline">
+        <LocateFixed size={17} strokeWidth={1.8} />
       </button>
     </div>
 
@@ -327,8 +371,6 @@
   .stage {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-items: center;
     overflow: hidden;
   }
   .backdrop {
@@ -350,28 +392,35 @@
       linear-gradient(to bottom, rgba(0,0,0,0.35), transparent 18%, transparent 72%, rgba(0,0,0,0.45));
     pointer-events: none;
   }
+  /* Robust centering: top/left 50% + translate(-50%, -50%). Doesn't
+     depend on intrinsic dimensions being known at layout time, doesn't
+     interact with grid/flex parent semantics. max-width/max-height keep
+     the image inside the viewport while preserving aspect ratio. */
   .slide-image {
-    position: relative;
+    position: absolute;
+    top: 50%;
+    left: 50%;
     z-index: 1;
-    max-width: min(100vw, 100%);
-    max-height: min(100vh, 100%);
+    max-width: 100vw;
+    max-height: 100vh;
     object-fit: contain;
     opacity: 0;
-    transform: scale(0.985);
+    transform: translate(-50%, -50%) scale(0.985);
     transition: opacity 420ms var(--ease), transform 650ms var(--ease);
     box-shadow: 0 22px 80px rgba(0,0,0,0.42);
+    pointer-events: none;
   }
-  .slide-image.ready {
+  .slide-image.visible {
     opacity: 1;
-    transform: scale(1);
-  }
-  .slide-image.incoming {
-    position: absolute;
+    transform: translate(-50%, -50%) scale(1);
   }
   .slide-loading,
   .slide-error {
-    position: relative;
-    z-index: 2;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
     color: rgba(255,255,255,0.76);
   }
   .slide-error {
@@ -419,7 +468,7 @@
     right: var(--s-4);
     z-index: 4;
     display: grid;
-    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    grid-template-columns: 38px minmax(0, 1fr) 38px 38px;
     align-items: center;
     gap: var(--s-3);
   }

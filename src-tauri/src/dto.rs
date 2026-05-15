@@ -187,10 +187,14 @@ impl From<Photo> for PhotoDto {
             || p.shutter_speed.is_some()
             || p.focal_length.is_some()
             || p.flash.is_some();
+        let camera_name = smriti::services::camera_names::friendly_camera_name(
+            p.camera_make.as_deref(),
+            p.camera_model.as_deref(),
+        );
         let camera = if camera_present {
             Some(CameraDto {
-                make: p.camera_make,
-                model: p.camera_model,
+                make: camera_name.or(p.camera_make),
+                model: None,
                 lens: p.lens_model,
                 iso: p.iso,
                 aperture: p.aperture,

@@ -82,6 +82,18 @@
             {/if}
             <div class="sub">
               {#if eta}<span class="eta mono">{eta}</span>{/if}
+              {#if j.kind === "faces" && j.embedder_route}
+                <!-- Confirms at a glance whether embeddings are
+                     routing to the cloud bridge or running locally
+                     for this run. Reflects the configured intent at
+                     job start, not per-batch runtime health. -->
+                <span class="chip" data-route={j.embedder_route}
+                  title={j.embedder_route === "bridge"
+                    ? "Embeddings routed to the configured Cloud GPU bridge. Detection still runs locally on every photo."
+                    : "Embeddings running on the local ONNX session (CPU / local GPU). Enable a healthy bridge in Settings to offload them."}>
+                  {j.embedder_route === "bridge" ? "Cloud GPU" : "Local CPU"}
+                </span>
+              {/if}
               {#if j.message}<span class="msg">{j.message}</span>{/if}
             </div>
           </li>
@@ -201,6 +213,28 @@
     overflow: hidden;
   }
   .eta { color: var(--accent); font-weight: 500; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    cursor: help;
+    flex-shrink: 0;
+  }
+  .chip[data-route="bridge"] {
+    color: var(--accent);
+    background: color-mix(in oklab, var(--accent) 16%, transparent);
+    border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+  }
+  .chip[data-route="local"] {
+    color: var(--ink-muted);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+  }
   .msg {
     flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

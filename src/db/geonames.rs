@@ -75,6 +75,36 @@ pub fn geonames_db_exists() -> bool {
     geonames_db_path().exists()
 }
 
+/// Schema version stamp. Bump whenever the column layout changes so
+/// `geonames_schema_is_current` can detect a stale on-disk DB and
+/// trigger a rebuild.
+///   v2: added `feature_code` (PPLC / PPLA / PPLA2 / PPL / …). Lets us
+///       prefer real cities over GeoNames "PPL" entries that inherit
+///       a metro-wide population — e.g. Rasapudipalem (PPL, pop
+///       1,728,128 in upstream data) shouldn't outrank Visakhapatnam
+///       (PPLA2, pop 1,063,178).
+pub const GEONAMES_SCHEMA_VERSION: i64 = 2;
+
+/// Returns `true` when the on-disk geonames.db matches the current
+/// schema. False if the file is missing OR built against an older
+/// layout. Callers (asset setup, the geocoder) should rebuild when
+/// this returns false.
+pub fn geonames_schema_is_current() -> bool {
+    let path = geonames_db_path();
+    if !path.exists() {
+        return false;
+    }
+    let Ok(conn) = Connection::open(&path) else {
+        return false;
+    };
+    // Probe for the v2 column. If the query errors (older table) or
+    // returns the wrong shape, the schema is stale.
+    let has_feature_code = conn
+        .prepare("SELECT feature_code FROM cities LIMIT 1")
+        .is_ok();
+    has_feature_code
+}
+
 pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
     let data_dir = project_root.join("data");
     let countries_path = data_dir.join("country_codes.txt");
@@ -83,6 +113,14 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create db dir: {}", e))?;
+    }
+
+    // If a stale schema is on disk, blow it away. Building from
+    // scratch is cheap (~30s) compared to maintaining migration code
+    // for a derived dataset. The text source (cities1000.txt) is
+    // authoritative.
+    if db_path.exists() && !geonames_schema_is_current() {
+        let _ = std::fs::remove_file(&db_path);
     }
 
     let conn = Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
@@ -98,6 +136,7 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
             country_code TEXT NOT NULL,
             country_name TEXT NOT NULL,
             population INTEGER,
+            feature_code TEXT,
             timezone TEXT
         );
 
@@ -107,6 +146,7 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_cities_coords ON cities(latitude, longitude);
+        CREATE INDEX IF NOT EXISTS idx_cities_feature ON cities(feature_code);
         "#,
     )
     .map_err(|e| format!("Failed creating schema: {}", e))?;
@@ -131,9 +171,9 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
         .prepare(
             r#"
             INSERT OR IGNORE INTO cities
-                (id, name, ascii_name, latitude, longitude, country_code, country_name, population, timezone)
+                (id, name, ascii_name, latitude, longitude, country_code, country_name, population, feature_code, timezone)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, (SELECT name FROM countries WHERE code = ?6), ?7, ?8)
+                (?1, ?2, ?3, ?4, ?5, ?6, (SELECT name FROM countries WHERE code = ?6), ?7, ?8, ?9)
             "#,
         )
         .map_err(|e| format!("Failed preparing statement: {}", e))?;
@@ -141,6 +181,11 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
     for line in reader.lines() {
         let line = line.map_err(|e| format!("Failed reading cities line: {}", e))?;
         let parts: Vec<&str> = line.split('\t').collect();
+        // cities1000.txt columns (tab-separated):
+        //   0=id 1=name 2=ascii_name 3=alt_names 4=lat 5=lng
+        //   6=feature_class 7=feature_code 8=country_code 9=cc2
+        //   10..13=admin codes 14=population 15=elevation 16=dem
+        //   17=timezone 18=mod_date
         if parts.len() >= 18 {
             let id: i64 = parts[0].parse().unwrap_or(0);
             let name = parts[1];
@@ -149,6 +194,7 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
             let lon: f64 = parts[5].parse().unwrap_or(0.0);
             let country_code = parts[8];
             let population: i64 = parts[14].parse().unwrap_or(0);
+            let feature_code = parts[7];
             let timezone = parts[17];
 
             stmt.execute(rusqlite::params![
@@ -159,6 +205,7 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
                 lon,
                 country_code,
                 population,
+                feature_code,
                 timezone
             ])
             .map_err(|e| format!("Failed inserting city row: {}", e))?;

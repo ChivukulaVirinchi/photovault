@@ -33,7 +33,8 @@ pub use document_detector::DocumentDetector;
 pub use drive_detector::{DriveDetector, DriveInfo};
 pub use duplicate_detector::DuplicateDetector;
 pub use face_processor::{
-    FaceProcessingProgress, FaceProcessingResult, FaceProcessingStage, FaceProcessor,
+    EmbedderRoute, FaceProcessingProgress, FaceProcessingResult, FaceProcessingStage,
+    FaceProcessor,
 };
 pub use geocoding::GeocodingService;
 pub use library_health::LibraryHealth;

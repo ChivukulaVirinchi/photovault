@@ -144,12 +144,14 @@
     max-height: 80vh;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
   }
   header {
     padding: var(--s-4) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
     position: relative;
+    flex-shrink: 0;
   }
   header h3 {
     margin: 0;
@@ -197,7 +199,8 @@
     margin: 0;
   }
   .grid-scroll {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     padding: var(--s-4) var(--s-5);
   }
@@ -219,6 +222,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
   }
   .count {
     color: var(--ink-muted);

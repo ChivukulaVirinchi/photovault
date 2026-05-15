@@ -545,8 +545,10 @@ impl<'a> FaceRepo<'a> {
         if let Some(c) = cursor {
             sql.push_str("AND f.id > ?2 ");
             params.push(rusqlite::types::Value::from(c));
+            sql.push_str("ORDER BY f.id ASC LIMIT ?3");
+        } else {
+            sql.push_str("ORDER BY f.id ASC LIMIT ?2");
         }
-        sql.push_str("ORDER BY f.id ASC LIMIT ?3");
         params.push(rusqlite::types::Value::from(limit as i64));
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
@@ -688,5 +690,77 @@ impl<'a> FaceRepo<'a> {
         scored.truncate(k);
 
         Ok(scored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::{params, Connection};
+
+    use super::*;
+    use crate::db::create_schema;
+
+    fn seeded_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, face_count, photo_count) VALUES (10, 'Person', 3, 3)",
+            [],
+        )
+        .unwrap();
+
+        for id in 1..=3 {
+            conn.execute(
+                "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+                 VALUES (?1, ?2, ?3, ?4, 100)",
+                params![
+                    id,
+                    format!("photos/{id}.jpg"),
+                    format!("{id}.jpg"),
+                    format!("hash-{id}")
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO faces (
+                    id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                    embedding, cluster_id, confidence, user_confirmed
+                 )
+                 VALUES (?1, ?2, 0.1, 0.1, 0.2, 0.2, ?3, 10, 0.99, ?4)",
+                params![id, id, vec![id as u8; 16], if id == 3 { 1 } else { 0 }],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn get_faces_by_cluster_first_page_uses_valid_limit_parameter() {
+        let conn = seeded_conn();
+        let repo = FaceRepo::new(&conn);
+
+        let faces = repo
+            .get_faces_by_cluster(10, FaceStatus::Unconfirmed, None, 10)
+            .unwrap();
+
+        assert_eq!(
+            faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn get_faces_by_cluster_cursor_uses_valid_limit_parameter() {
+        let conn = seeded_conn();
+        let repo = FaceRepo::new(&conn);
+
+        let faces = repo
+            .get_faces_by_cluster(10, FaceStatus::All, Some(1), 10)
+            .unwrap();
+
+        assert_eq!(
+            faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 }

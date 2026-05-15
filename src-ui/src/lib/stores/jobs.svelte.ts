@@ -22,6 +22,11 @@ export interface Job {
   chunks_flushed?: number;
   /// Face-pipeline only: cumulative count of faces detected so far.
   faces_found?: number;
+  /// Face-pipeline only: "bridge" means embeddings are routed to the
+  /// configured cloud GPU bridge for this run; "local" means on-device.
+  /// Drives the small status chip in JobsIndicator so the user can
+  /// confirm at a glance which path is being used.
+  embedder_route?: "local" | "bridge";
 }
 
 export type JobKind =
@@ -79,6 +84,7 @@ class JobsStore {
       // faces-specific
       chunks_flushed?: number;
       faces_found?: number;
+      embedder_route?: string;
       // metadata-extraction-specific
       done?: number;
       // legacy fallbacks: older binaries used these names. Reading them
@@ -110,6 +116,10 @@ class JobsStore {
       const id = p.job_id;
       const next = new Map(this.jobs);
       const prev = next.get(id);
+      const route =
+        p.embedder_route === "bridge" || p.embedder_route === "local"
+          ? p.embedder_route
+          : prev?.embedder_route;
       next.set(id, {
         id,
         kind,
@@ -121,6 +131,7 @@ class JobsStore {
         status: complete ? "complete" : "running",
         chunks_flushed: p.chunks_flushed ?? prev?.chunks_flushed ?? 0,
         faces_found: facesFound > 0 ? facesFound : (prev?.faces_found ?? 0),
+        embedder_route: route,
       });
       this.jobs = next;
       if (complete) {

@@ -32,11 +32,32 @@
   let ty = $state(0);
 
   let containerEl = $state<HTMLDivElement | undefined>(undefined);
-  let imgEl       = $state<HTMLImageElement | undefined>(undefined);
   let naturalW    = $state(0);
   let naturalH    = $state(0);
   let containerW  = $state(0);
   let containerH  = $state(0);
+
+  /// Src actually bound to the visible <img>. Diverges from the `src`
+  /// prop while a new image is decoding off-screen: we keep showing
+  /// the previous photo until the next is paint-ready, then swap
+  /// src + naturalW/H + scale atomically in a single tick. No fade,
+  /// no blank gap, no wrong-scale frame — what you see is the old
+  /// photo, then instantly the new photo at the correct fit. Used to
+  /// be a `dimsKnown` opacity gate that produced visible flicker when
+  /// the decode races the 120ms fade; the double-buffer approach is
+  /// the same pattern Slideshow uses.
+  ///
+  /// Initialised to empty so the swap effect below also handles the
+  /// first render — that keeps the "what's currently displayed" rule
+  /// in one place. Svelte 5 would otherwise warn that reading a $props
+  /// value in a $state initializer only captures the initial value.
+  let displayedSrc = $state("");
+  let displayedAlt = $state("");
+  /// Bumped each time `src` changes. The off-screen-decode effect
+  /// stamps the current value before yielding to await, then ignores
+  /// the result if the stamp doesn't match — that's how rapid nav
+  /// avoids late-arriving decodes clobbering a newer current src.
+  let loadSeq = 0;
 
   let dragging = $state(false);
   let dragStart = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -153,21 +174,55 @@
     containerH = r.height;
   }
 
-  function onImgLoad() {
-    if (!imgEl) return;
-    naturalW = imgEl.naturalWidth;
-    naturalH = imgEl.naturalHeight;
-    applyPreferredMode();
-  }
-
-  // Reset whenever src or rotation changes.
+  /// Pre-decode the new src off-screen, then swap the visible img.
+  /// Three things have to happen in the SAME tick on swap to avoid the
+  /// jitter the old `dimsKnown` gate produced:
+  ///   1. naturalW/H updated to the new image's dimensions (so
+  ///      fitScale recomputes against the right ratio).
+  ///   2. scale reset via applyPreferredMode (so the img doesn't
+  ///      render at the old image's fitScale for a frame).
+  ///   3. displayedSrc updated (so the <img> swaps pixels).
+  /// Doing all three in one synchronous block means the browser sees
+  /// the new src already at the correct transform — no visible
+  /// reflow, no opacity fade, no flash.
   $effect(() => {
-    void src;
-    void rotate;
-    void preferredMode;
-    // Defer to next tick so naturalW/H reflect the new image after load.
-    setTimeout(applyPreferredMode, 0);
+    const target = src;
+    if (target === displayedSrc) return;
+    const seq = ++loadSeq;
+    const probe = new Image();
+    probe.src = target;
+    const swap = () => {
+      if (seq !== loadSeq) return;
+      // Mutating these state vars in a single synchronous block lets
+      // Svelte batch them — the DOM updates once, with all four
+      // changes applied together.
+      naturalW = probe.naturalWidth;
+      naturalH = probe.naturalHeight;
+      tx = 0;
+      ty = 0;
+      applyPreferredMode();
+      displayedSrc = target;
+      displayedAlt = alt;
+    };
+    if (probe.decode) {
+      probe.decode().then(swap).catch(() => {
+        // Some webview codecs reject decode() even when paint succeeds —
+        // fall back to onload, which fires once the bitmap is ready.
+        probe.onload = swap;
+        probe.onerror = () => {
+          /* leave the old image visible; nothing we can do */
+        };
+      });
+    } else {
+      probe.onload = swap;
+    }
   });
+
+  // preferredMode is read at swap time and on toolbar calls. We don't
+  // re-apply it when the prop alone changes — the parent flips it as
+  // a side-effect of the user clicking the fit/actual toggle, which
+  // already calls api.fit() / api.actual() directly. Re-applying on
+  // mode change here would undo any manual zoom the user did since.
 
   onMount(() => {
     measure();
@@ -219,10 +274,8 @@
   tabindex="-1"
 >
   <img
-    bind:this={imgEl}
-    {src}
-    {alt}
-    onload={onImgLoad}
+    src={displayedSrc}
+    alt={displayedAlt}
     draggable="false"
     style:transform="translate({tx}px, {ty}px) scale({scale}) rotate({rotate}deg)"
     style:will-change={dragging ? "transform" : "auto"}
@@ -245,7 +298,11 @@
     max-width: none;
     max-height: none;
     transform-origin: center center;
-    transition: transform 50ms linear;
+    /* No transitions. The double-buffer above guarantees we only ever
+       swap the src after the new image is paint-ready, so there's
+       nothing to animate — adding opacity/transform transitions here
+       just creates jitter when the user navigates rapidly. */
+    transition: none;
     pointer-events: none;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45),
                 0 4px 16px rgba(0, 0, 0, 0.30);

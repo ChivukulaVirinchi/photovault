@@ -360,7 +360,7 @@ pub async fn photos_request_thumbnail(
             &abs,
             &hash_for_thread,
             orientation,
-            smriti::services::thumbnail::ThumbnailSize::Small,
+            smriti::services::thumbnail::ThumbnailSize::Medium,
         )
     })
     .await
@@ -406,7 +406,7 @@ pub async fn photos_request_thumbnail(
 fn relative_thumbnail_path(file_hash: &str) -> String {
     let subdir = &file_hash[..2.min(file_hash.len())];
     format!(
-        ".photovault/thumbnails/small/v2/{}/{}.jpg",
+        ".photovault/thumbnails/medium/v2/{}/{}.jpg",
         subdir, file_hash
     )
 }

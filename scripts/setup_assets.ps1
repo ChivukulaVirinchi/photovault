@@ -13,7 +13,7 @@ $GeonamesCitiesUrl = "https://download.geonames.org/export/dump/cities1000.zip"
 $GeonamesCountryUrl = "https://download.geonames.org/export/dump/countryInfo.txt"
 $ScrfdModelUrl = if ($env:SCRFD_MODEL_URL) { $env:SCRFD_MODEL_URL } else { "https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx" }
 $GlintrModelUrl = if ($env:GLINTR_MODEL_URL) { $env:GLINTR_MODEL_URL } else { "https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx" }
-$AdafaceModelUrl = if ($env:ADAFACE_MODEL_URL) { $env:ADAFACE_MODEL_URL } else { "https://huggingface.co/MonsterMMORPG/tools/resolve/main/adaface_ir101_webface12m.onnx" }
+$AdafaceModelUrl = if ($env:ADAFACE_MODEL_URL) { $env:ADAFACE_MODEL_URL } else { "https://drive.usercontent.google.com/download?id=1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1&export=download&confirm=t" }
 $OrtUrl = if ($env:ORT_URL) { $env:ORT_URL } else { "https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip" }
 
 # Create directories
@@ -32,6 +32,14 @@ function Download-File {
     Write-Host "Downloading: $Url"
     $ProgressPreference = 'SilentlyContinue'
     Invoke-WebRequest -Uri $Url -OutFile $OutPath -UseBasicParsing
+}
+
+function Test-GeonamesDbReady {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    # A fully-populated cities1000 database is ~18 MB. Treat tiny DBs as
+    # incomplete so an interrupted first setup gets rebuilt.
+    return ((Get-Item $Path).Length -gt 1MB)
 }
 
 # --- GeoNames ---
@@ -68,7 +76,7 @@ if (-not (Test-Path $CountryCodes) -or (Get-Item $CountryCodes).Length -eq 0) {
 
 # Build GeoNames DB
 $GeonamesDb = Join-Path $DataDir "geonames.db"
-if (-not (Test-Path $GeonamesDb) -or (Get-Item $GeonamesDb).Length -eq 0) {
+if (-not (Test-GeonamesDbReady $GeonamesDb)) {
     Write-Host "Building geonames SQLite DB..."
     Push-Location $RootDir
     cargo run --bin build_geonames

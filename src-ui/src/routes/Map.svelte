@@ -49,6 +49,7 @@
   let drawerRef = $state<ClusterRef | null>(null);
   let drawerPhotos = $state<PhotoSummaryDto[]>([]);
   let drawerLoading = $state(false);
+  const DRAWER_LIMIT = 500;
 
   /// Cluster appearance:
   ///   far zoom (≤6): big count-only bubble
@@ -63,6 +64,8 @@
     zoom: number,
     onClick: () => void,
   ): HTMLElement {
+    const anchor = document.createElement("div");
+    anchor.className = "pv-pin-anchor";
     const wrap = document.createElement("button");
     wrap.type = "button";
     wrap.className = "pv-pin pv-pin-cluster";
@@ -93,10 +96,13 @@
       e.stopPropagation();
       onClick();
     };
-    return wrap;
+    anchor.appendChild(wrap);
+    return anchor;
   }
 
   function buildSingleElement(photoId: number, thumb: string | null): HTMLElement {
+    const anchor = document.createElement("div");
+    anchor.className = "pv-pin-anchor";
     const el = document.createElement("a");
     el.className = "pv-pin pv-pin-single";
     el.href = `#/photo?id=${photoId}`;
@@ -105,7 +111,8 @@
       const url = thumbUrl(libraryStore.driveRoot, thumb);
       if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
     }
-    return el;
+    anchor.appendChild(el);
+    return anchor;
   }
 
   /// Render the visible clusters/points. Synchronous — no IPC roundtrip.
@@ -138,7 +145,7 @@
         const leaves = cluster!.getLeaves(clusterId, 1, 0) as PinFeature[];
         const repThumb = leaves[0]?.properties.thumbnail_path ?? null;
         el = buildClusterElement(count, repThumb, map.getZoom(), () => {
-          openClusterDrawer(clusterId, lat, lng);
+          openClusterDrawer(clusterId, count, lat, lng);
         });
         visible += count;
       } else {
@@ -194,13 +201,11 @@
     map.flyTo({ center: [0, 20], zoom: 2, speed: 1.4 });
   }
 
-  async function openClusterDrawer(clusterId: number, lat: number, lng: number) {
+  async function openClusterDrawer(clusterId: number, count: number, lat: number, lng: number) {
     if (!cluster) return;
-    // Cap leaves at 500 — any more and the filmstrip becomes useless;
-    // user can zoom in to break the cluster apart.
-    const leaves = cluster.getLeaves(clusterId, 500, 0) as PinFeature[];
+    const leaves = cluster.getLeaves(clusterId, Math.min(count, DRAWER_LIMIT), 0) as PinFeature[];
     const photoIds = leaves.map((l) => l.properties.photo_id);
-    drawerRef = { lat, lng, count: photoIds.length, photo_ids: photoIds };
+    drawerRef = { lat, lng, count, photo_ids: photoIds };
     drawerOpen = true;
     drawerLoading = true;
     drawerPhotos = [];
@@ -276,6 +281,7 @@
     map.on("load", loadAllPins);
     map.on("move", scheduleRender);
     map.on("zoom", scheduleRender);
+    map.on("click", closeDrawer);
     window.addEventListener("keydown", onKey);
   });
 
@@ -305,44 +311,53 @@
 
   {#if drawerOpen && drawerRef}
     {@const dp = drawerRef}
-    <aside class="drawer" aria-label="Photos at this location">
-      <header>
-        <div class="title-row">
-          <h3>
-            <span class="num mono">{dp.count}</span>
-            <span class="label">{dp.count === 1 ? "photo" : "photos"} here</span>
-          </h3>
-          <button class="icon-btn" onclick={closeDrawer} aria-label="Close" title="Close (Esc)">
-            <X size={14} strokeWidth={1.75} />
+    <!-- The outer .drawer-shell owns position + scroll layout; the
+         inner .drawer-anim runs the slide-in transform. Splitting the
+         two means the animated transform never sits on the flex
+         column that contains the scroll container — some Chromium
+         versions stop honouring overflow:auto on a descendant once an
+         ancestor carries a non-identity transform, which manifested
+         as "photos squeezed, no scroll". -->
+    <div class="drawer-shell">
+      <aside class="drawer-anim" aria-label="Photos at this location">
+        <header>
+          <div class="title-row">
+            <h3>
+              <span class="num mono">{dp.count}</span>
+              <span class="label">{dp.count === 1 ? "photo" : "photos"} here</span>
+            </h3>
+            <button class="icon-btn" onclick={closeDrawer} aria-label="Close" title="Close (Esc)">
+              <X size={14} strokeWidth={1.75} />
+            </button>
+          </div>
+          <button class="ghost zoom-cluster" onclick={zoomIntoCluster}>
+            <ZoomIn size={13} strokeWidth={1.75} />
+            <span>Zoom in</span>
           </button>
+        </header>
+        <div class="grid">
+          {#if drawerLoading}
+            <div class="loading-state mono">loading…</div>
+          {:else}
+            {#each drawerPhotos as p (p.id)}
+              <a
+                class="cell"
+                href="#/photo?id={p.id}"
+                use:thumbnailOnVisible={{
+                  id: p.id,
+                  thumbnailPath: p.thumbnail_path,
+                  onReady: (path) => patchDrawerThumbnail(p.id, path),
+                }}
+              >
+                {#if p.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+                {/if}
+              </a>
+            {/each}
+          {/if}
         </div>
-        <button class="ghost zoom-cluster" onclick={zoomIntoCluster}>
-          <ZoomIn size={13} strokeWidth={1.75} />
-          <span>Zoom in</span>
-        </button>
-      </header>
-      <div class="grid">
-        {#if drawerLoading}
-          <div class="loading-state mono">loading…</div>
-        {:else}
-          {#each drawerPhotos as p (p.id)}
-            <a
-              class="cell"
-              href="#/photo?id={p.id}"
-              use:thumbnailOnVisible={{
-                id: p.id,
-                thumbnailPath: p.thumbnail_path,
-                onReady: (path) => patchDrawerThumbnail(p.id, path),
-              }}
-            >
-              {#if p.thumbnail_path}
-                <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
-              {/if}
-            </a>
-          {/each}
-        {/if}
-      </div>
-    </aside>
+      </aside>
+    </div>
   {/if}
 </div>
 
@@ -380,37 +395,55 @@
   }
 
   /* ---- filmstrip drawer ---- */
-  .drawer {
+  /* Outer shell: positioning + the flex column that the scroll
+     container relies on. No transform here, ever. */
+  .drawer-shell {
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
     width: min(420px, 50vw);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* Inner element runs the slide-in animation. `forwards` keeps the
+     final keyframe applied; the keyframe ends at translateX(0) which
+     is the no-op state. The scroll-bearing descendants live INSIDE
+     this element so they see a transformed ancestor only at this
+     level — Chromium's overflow accounting is fine with that, the
+     bug only triggered when the transform sat on the same element as
+     the flex container plus position:absolute. */
+  .drawer-anim {
+    flex: 1;
     background: var(--bg-paper);
     border-left: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    z-index: 5;
+    min-height: 0;
     box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
-    animation: slide-in 220ms var(--ease) both;
+    animation: slide-in 220ms var(--ease) forwards;
   }
   @keyframes slide-in {
     from { transform: translateX(100%); }
     to   { transform: translateX(0); }
   }
-  .drawer header {
+  .drawer-anim header {
     padding: var(--s-4) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
+    flex-shrink: 0;
   }
   .title-row {
     display: flex;
     align-items: center;
     gap: var(--s-3);
   }
-  .drawer h3 {
+  .drawer-anim h3 {
     margin: 0;
     flex: 1;
     display: inline-flex;
@@ -419,12 +452,12 @@
     font-size: var(--t-base);
     font-weight: 600;
   }
-  .drawer .num {
+  .drawer-anim .num {
     font-size: var(--t-2xl);
     font-weight: 600;
     color: var(--ink);
   }
-  .drawer .label { font-size: var(--t-sm); color: var(--ink-muted); }
+  .drawer-anim .label { font-size: var(--t-sm); color: var(--ink-muted); }
   .icon-btn {
     width: 26px;
     height: 26px;
@@ -446,27 +479,38 @@
     font-size: var(--t-sm);
     padding: 4px 10px;
   }
-  .drawer .grid {
-    flex: 1;
+  .drawer-anim .grid {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     padding: var(--s-3) var(--s-4);
+    /* Fixed-size cells. We tried `auto-fill, minmax(96px, 1fr)` + cell
+       `aspect-ratio: 1`, and on Tauri's WebView2 build the grid track
+       sizer didn't honour `aspect-ratio` consistently — cells collapsed
+       to 0 height and visually stacked on top of each other. Hard-coded
+       100×100 squares + `justify-content: center` give a predictable
+       photo grid that always paints right and degrades gracefully when
+       the drawer narrows. */
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    grid-template-columns: repeat(auto-fill, 100px);
+    grid-auto-rows: 100px;
+    justify-content: center;
     gap: 4px;
   }
-  .drawer .cell {
-    aspect-ratio: 1;
+  .drawer-anim .cell {
+    width: 100px;
+    height: 100px;
     background: var(--bg-card);
     border-radius: var(--r-sm);
     overflow: hidden;
     transition: filter var(--t-fast) var(--ease),
                 box-shadow var(--t-fast) var(--ease);
   }
-  .drawer .cell:hover {
+  .drawer-anim .cell:hover {
     filter: brightness(1.08);
     box-shadow: inset 0 0 0 2px var(--accent);
   }
-  .drawer .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .drawer-anim .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .loading-state {
     grid-column: 1 / -1;
     text-align: center;
@@ -475,6 +519,14 @@
   }
 
   /* Pins use :global() because MapLibre owns the marker DOM. */
+  :global(.pv-pin-anchor) {
+    width: 52px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+  }
   :global(.pv-pin) {
     display: flex;
     align-items: center;
@@ -487,7 +539,7 @@
     transition: transform 140ms cubic-bezier(0.32, 0.72, 0.24, 1);
     position: relative;
   }
-  :global(.pv-pin:hover) { transform: scale(1.12); z-index: 2; }
+  :global(.pv-pin-anchor:hover .pv-pin) { transform: scale(1.12); }
   :global(.pv-pin:focus-visible) {
     outline: none;
     box-shadow: 0 0 0 3px var(--accent-soft);

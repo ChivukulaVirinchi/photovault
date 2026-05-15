@@ -317,30 +317,52 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         }
     }
 
-    // 11. Top 3 cameras (by make||model, hidden if only 1 camera)
+    // 11. Top cameras. Group raw EXIF make/model first, then collapse
+    // known codenames into user-facing names.
     let mut top_cameras = Vec::new();
     {
         let mut stmt = conn.prepare(&format!(
-            "SELECT COALESCE(camera_make, '') || ' ' || COALESCE(camera_model, '') AS cam,
+            "SELECT NULLIF(TRIM(camera_make), '') AS make,
+                    NULLIF(TRIM(camera_model), '') AS model,
                     COUNT(*) AS cnt
              FROM photos
              WHERE is_trashed = FALSE
-               AND (camera_make IS NOT NULL OR camera_model IS NOT NULL){}
-             GROUP BY cam
-             HAVING TRIM(cam) != ''
+               AND (NULLIF(TRIM(camera_make), '') IS NOT NULL
+                    OR NULLIF(TRIM(camera_model), '') IS NOT NULL){}
+             GROUP BY make, model
              ORDER BY cnt DESC
-             LIMIT 3",
+             LIMIT 100",
             yc
         ))?;
         let rows = stmt.query_map([], |row| {
-            Ok(CameraStat {
-                camera: row.get::<_, String>(0)?.trim().to_string(),
-                photo_count: row.get(1)?,
-            })
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })?;
-        for stat in rows.flatten() {
-            top_cameras.push(stat);
+        let mut grouped: HashMap<String, i64> = HashMap::new();
+        for (make, model, count) in rows.flatten() {
+            if let Some(name) = crate::services::camera_names::friendly_camera_name(
+                make.as_deref(),
+                model.as_deref(),
+            ) {
+                *grouped.entry(name).or_insert(0) += count;
+            }
         }
+        let mut cameras: Vec<CameraStat> = grouped
+            .into_iter()
+            .map(|(camera, photo_count)| CameraStat {
+                camera,
+                photo_count,
+            })
+            .collect();
+        cameras.sort_by(|a, b| {
+            b.photo_count
+                .cmp(&a.photo_count)
+                .then(a.camera.cmp(&b.camera))
+        });
+        top_cameras.extend(cameras.into_iter().take(3));
     }
 
     // 12. Available years (descending)

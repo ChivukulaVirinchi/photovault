@@ -33,6 +33,9 @@
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
   import Slideshow from "./lib/components/Slideshow.svelte";
   import { jobs } from "./lib/stores/jobs.svelte";
+  import { browseContext } from "./lib/stores/browseContext.svelte";
+  import { selection } from "./lib/stores/selection.svelte";
+  import { slideshow } from "./lib/stores/slideshow.svelte";
 
   let route = $state<{ path: string; params: Record<string, string> }>({
     path: "/timeline",
@@ -40,6 +43,7 @@
   });
 
   let showShortcuts = $state(false);
+  let lastDriveRoot = $state<string | null | undefined>(undefined);
 
   function parseHash() {
     const raw = window.location.hash.slice(1);
@@ -77,61 +81,77 @@
       window.removeEventListener("keydown", onKey);
     };
   });
+
+  $effect(() => {
+    const root = libraryStore.driveRoot;
+    const previousRoot = lastDriveRoot;
+    if (previousRoot !== undefined && root !== previousRoot) {
+      browseContext.clear();
+      selection.clear();
+      slideshow.close();
+      if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
+        window.location.hash = "/timeline";
+      }
+    }
+    lastDriveRoot = root;
+  });
 </script>
 
 {#if !libraryStore.isOpen}
   <Welcome />
 {:else}
-  <div class="shell">
-    <Sidebar current={route.path} />
-    <div class="main">
-      {#if route.path === "/photo"}
-        <PhotoDetail id={Number(route.params.id)} />
-      {:else if route.path === "/people"}
-        <People />
-      {:else if route.path === "/people/review"}
-        <PersonReview />
-      {:else if route.path === "/review-faces"}
-        <FaceReview />
-      {:else if route.path === "/person"}
-        <PersonDetail id={Number(route.params.id)} />
-      {:else if route.path === "/albums"}
-        <Albums />
-      {:else if route.path === "/album"}
-        <AlbumDetail id={Number(route.params.id)} />
-      {:else if route.path === "/search"}
-        <Search initialQuery={route.params.q ?? ""} />
-      {:else if route.path === "/memories"}
-        <Memories />
-      {:else if route.path === "/memory"}
-        <MemoryDetail id={route.params.id} />
-      {:else if route.path === "/duplicates"}
-        <Duplicates />
-      {:else if route.path === "/duplicate"}
-        <DuplicateDetail id={Number(route.params.id)} />
-      {:else if route.path === "/bursts"}
-        <Bursts />
-      {:else if route.path === "/burst"}
-        <BurstDetail id={Number(route.params.id)} />
-      {:else if route.path === "/trash"}
-        <Trash />
-      <!-- {:else if route.path === "/documents"}
-        <Documents /> -->
-      {:else if route.path === "/insights"}
-        <Insights />
-      {:else if route.path === "/health"}
-        <Settings />
-      {:else if route.path === "/settings"}
-        <Settings />
-      {:else if route.path === "/map"}
-        <MapView />
-      {:else if route.path === "/cull"}
-        <Cull />
-      {:else}
-        <Timeline />
-      {/if}
+  {#key libraryStore.driveRoot}
+    <div class="shell">
+      <Sidebar current={route.path} />
+      <div class="main">
+        {#if route.path === "/photo"}
+          <PhotoDetail id={Number(route.params.id)} />
+        {:else if route.path === "/people"}
+          <People />
+        {:else if route.path === "/people/review"}
+          <PersonReview />
+        {:else if route.path === "/review-faces"}
+          <FaceReview />
+        {:else if route.path === "/person"}
+          <PersonDetail id={Number(route.params.id)} />
+        {:else if route.path === "/albums"}
+          <Albums />
+        {:else if route.path === "/album"}
+          <AlbumDetail id={Number(route.params.id)} />
+        {:else if route.path === "/search"}
+          <Search initialQuery={route.params.q ?? ""} />
+        {:else if route.path === "/memories"}
+          <Memories />
+        {:else if route.path === "/memory"}
+          <MemoryDetail id={route.params.id} />
+        {:else if route.path === "/duplicates"}
+          <Duplicates />
+        {:else if route.path === "/duplicate"}
+          <DuplicateDetail id={Number(route.params.id)} />
+        {:else if route.path === "/bursts"}
+          <Bursts />
+        {:else if route.path === "/burst"}
+          <BurstDetail id={Number(route.params.id)} />
+        {:else if route.path === "/trash"}
+          <Trash />
+        <!-- {:else if route.path === "/documents"}
+          <Documents /> -->
+        {:else if route.path === "/insights"}
+          <Insights />
+        {:else if route.path === "/health"}
+          <Settings />
+        {:else if route.path === "/settings"}
+          <Settings />
+        {:else if route.path === "/map"}
+          <MapView />
+        {:else if route.path === "/cull"}
+          <Cull />
+        {:else}
+          <Timeline revealId={route.params.photo ? Number(route.params.photo) : null} />
+        {/if}
+      </div>
     </div>
-  </div>
+  {/key}
 {/if}
 
 {#if showShortcuts}

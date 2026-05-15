@@ -119,11 +119,13 @@
     width: min(440px, 92vw);
     max-height: 75vh;
     display: flex; flex-direction: column;
+    min-height: 0;
     overflow: hidden;
   }
   header {
     padding: var(--s-4) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   header h3 { margin: 0; font-size: var(--t-base); font-weight: 600; color: var(--ink); }
   .hint {
@@ -140,6 +142,7 @@
     display: flex; align-items: center; gap: var(--s-2);
     padding: var(--s-3) var(--s-5);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   .search :global(svg) { color: var(--ink-muted); }
   .search input {
@@ -147,7 +150,7 @@
     font-size: var(--t-sm); color: var(--ink); padding: 4px 0;
   }
   .search input:focus { outline: none; }
-  .list { list-style: none; margin: 0; padding: 6px 0; overflow-y: auto; flex: 1; }
+  .list { list-style: none; margin: 0; padding: 6px 0; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
   .list .empty {
     padding: var(--s-4);
     color: var(--ink-muted);

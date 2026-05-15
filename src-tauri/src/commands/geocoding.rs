@@ -95,6 +95,12 @@ pub async fn geocoding_backfill(
     state: State<'_, AppState>,
     args: GeocodingBackfillArgs,
 ) -> CommandResult<JobIdDto> {
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Geocoding) {
+        return Err(CommandError::Conflict {
+            reason: "geocoding is already in progress".into(),
+        });
+    }
+
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -108,6 +114,8 @@ pub async fn geocoding_backfill(
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     let force_refresh = args.force_refresh;
+    let finish_handle = tokio::runtime::Handle::current();
+    let app_for_finish = app.clone();
 
     tokio::task::spawn_blocking(move || {
         let result = backfill_inner(
@@ -135,14 +143,10 @@ pub async fn geocoding_backfill(
         };
         emit(&app_clone, EV_GEOCODING_COMPLETE, dto);
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let app_for_finish = app_clone.clone();
-            let job_id = job_id_clone.clone();
-            handle.spawn(async move {
-                let st: tauri::State<AppState> = app_for_finish.state();
-                jobs::finish_job(&st, &job_id).await;
-            });
-        }
+        finish_handle.spawn(async move {
+            let st: tauri::State<AppState> = app_for_finish.state();
+            jobs::finish_job(&st, &job_id_clone).await;
+        });
     });
 
     Ok(JobIdDto { job_id })
@@ -168,6 +172,40 @@ fn backfill_inner(
             elapsed_ms: started.elapsed().as_millis() as u64,
             message: build_message(0, 0, 0, false),
         });
+    }
+    // Schema check: older builds of geonames.db are missing the
+    // `feature_code` column, which the v2 reverse_geocode logic needs
+    // to rank city candidates. Rebuild from cities1000.txt in place
+    // when the schema is stale and the source file is still on disk
+    // (true for anyone who ran setup_assets at any point). Takes
+    // ~10-30s on a typical machine; far better than failing silently
+    // with a SQL error or asking the user to re-run setup_assets.
+    if !smriti::db::geonames::geonames_schema_is_current() {
+        tracing::info!(
+            "geonames.db schema is stale (no feature_code column) — rebuilding in place"
+        );
+        emit(
+            app,
+            EV_GEOCODING_PROGRESS,
+            JobProgress {
+                job_id: job_id.to_string(),
+                stage: "rebuild-geonames".into(),
+                processed: 0,
+                total: None,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some("Upgrading GeoNames database…".into()),
+            },
+        );
+        let project_root = smriti::bootstrap::project_root();
+        if let Err(e) = smriti::db::geonames::build_geonames_db(&project_root) {
+            tracing::error!("geonames rebuild failed: {}", e);
+            return Err(format!(
+                "GeoNames database is out of date and rebuild failed: {}. Run scripts/setup_assets.ps1 (or .sh) to refresh it.",
+                e
+            ));
+        }
+        tracing::info!("geonames.db rebuilt successfully");
     }
     let svc = GeocodingService::new(&path).map_err(|e| e.to_string())?;
     let db_path = smriti::db::db_path_for(drive_root);
@@ -211,6 +249,12 @@ fn backfill_inner(
     let mut updated = 0u64;
     let mut cleared = 0u64;
 
+    tracing::info!(
+        "geocoding backfill: {} candidate photos (force_refresh={})",
+        considered,
+        force_refresh
+    );
+
     emit(
         app,
         EV_GEOCODING_PROGRESS,
@@ -224,6 +268,12 @@ fn backfill_inner(
             message: Some(format!("0 / {} photos", considered)),
         },
     );
+
+    // Tally matched cities so we can include the top hits in the
+    // completion toast. Helps the user verify the geocoder is producing
+    // sensible results (and that the writes actually committed) without
+    // having to crack open SQLite themselves.
+    let mut city_counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
     let mut cancelled = false;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -240,6 +290,13 @@ fn backfill_inner(
         // Throttle progress events to one every 250 photos so we don't
         // flood the IPC channel on a 50k-photo library.
         let tick = considered.div_ceil(40).max(250);
+        // Log a few sample resolutions so it's possible to confirm from
+        // the dev console whether the geocoder is actually returning
+        // hits or returning None for everything (e.g. coords stored as
+        // null/zero, geonames.db missing rows for that region, etc.).
+        let mut samples_logged = 0u32;
+        const MAX_SAMPLES: u32 = 5;
+        let mut updates_executed = 0u64;
         for (id, lat, lng) in rows {
             // Honour the cancel flag at every iteration. The current
             // batch's already-resolved rows still get committed by the
@@ -250,9 +307,18 @@ fn backfill_inner(
             }
             match svc.reverse_geocode(lat, lng) {
                 Some(r) => {
-                    update_stmt
+                    if samples_logged < MAX_SAMPLES {
+                        tracing::info!(
+                            "geocode sample: photo_id={} ({:.4}, {:.4}) -> {} / {}",
+                            id, lat, lng, r.city, r.country
+                        );
+                        samples_logged += 1;
+                    }
+                    let rows_changed = update_stmt
                         .execute(rusqlite::params![r.city, r.country, id])
                         .map_err(|e| e.to_string())?;
+                    updates_executed += rows_changed as u64;
+                    *city_counts.entry(r.city.clone()).or_insert(0) += 1;
                     updated += 1;
                 }
                 None if force_refresh => {
@@ -261,7 +327,15 @@ fn backfill_inner(
                         .map_err(|e| e.to_string())?;
                     cleared += 1;
                 }
-                None => {}
+                None => {
+                    if samples_logged < MAX_SAMPLES {
+                        tracing::info!(
+                            "geocode sample: photo_id={} ({:.4}, {:.4}) -> NO MATCH",
+                            id, lat, lng
+                        );
+                        samples_logged += 1;
+                    }
+                }
             }
             processed += 1;
             if processed.is_multiple_of(tick) || processed == considered {
@@ -280,8 +354,26 @@ fn backfill_inner(
                 );
             }
         }
+        tracing::info!(
+            "geocoding pre-commit: matched={} updates_actually_changed_rows={} cleared={}",
+            updated,
+            updates_executed,
+            cleared
+        );
     }
-    tx.commit().map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| {
+        tracing::error!("geocoding transaction commit failed: {}", e);
+        e.to_string()
+    })?;
+    tracing::info!("geocoding transaction committed");
+
+    // Build a top-cities summary for the toast. Sort by count desc,
+    // take top 3.
+    let top: Vec<(String, u64)> = {
+        let mut v: Vec<(String, u64)> = city_counts.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.into_iter().take(3).collect()
+    };
 
     let message = if cancelled {
         format!(
@@ -289,7 +381,17 @@ fn backfill_inner(
             updated, cleared
         )
     } else {
-        build_message(considered, updated, cleared, true)
+        let base = build_message(considered, updated, cleared, true);
+        if !top.is_empty() {
+            let suffix = top
+                .iter()
+                .map(|(c, n)| format!("{} ({})", c, n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} Top: {}.", base, suffix)
+        } else {
+            base
+        }
     };
     Ok(GeocodingCompleteDto {
         job_id: job_id.to_string(),

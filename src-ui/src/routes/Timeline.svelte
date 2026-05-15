@@ -6,6 +6,7 @@
 
   let cachedTimeline:
     | {
+        driveRoot: string | null;
         items: CachedPhotoSummaryDto[];
         nextCursor: string | null;
         hasMore: boolean;
@@ -38,6 +39,14 @@
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
 
+  interface Props { revealId?: number | null }
+  let { revealId = null }: Props = $props();
+
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentTimelineCache =
+    cachedTimeline?.driveRoot === currentDriveRoot ? cachedTimeline : null;
+  const scrollStorageKey = `scroll:/timeline:${currentDriveRoot ?? "closed"}`;
+
   /// Zoom levels — Apple-Photos-style. `day` is default; `all` is the
   /// densest packed view with no headers.
   const TILE_PX: Record<ZoomLevel, number> = {
@@ -50,18 +59,26 @@
     day: 36, month: 32, year: 28,
   };
   const ZOOM_ORDER: ZoomLevel[] = ["year", "month", "day"];
+  /// Photos per page. Larger pages give the user a longer scroll
+  /// runway between loadMore calls — on big libraries (50k+) the old
+  /// 720 made the scrollbar feel like it was constantly catching up.
+  const PAGE_LIMIT = 2000;
+  /// Trigger loadMore when the virtualizer's `last` is within this
+  /// many rows of the end. Bigger than the page size of label rows
+  /// so we always start the next page well before the user runs out.
+  const LOAD_MORE_LEAD_ROWS = 40;
 
-  let items = $state<PhotoSummaryDto[]>(cachedTimeline?.items ?? []);
-  let nextCursor = $state<string | null>(cachedTimeline?.nextCursor ?? null);
-  let hasMore = $state(cachedTimeline?.hasMore ?? true);
-  let total = $state<number | null>(cachedTimeline?.total ?? null);
+  let items = $state<PhotoSummaryDto[]>(currentTimelineCache?.items ?? []);
+  let nextCursor = $state<string | null>(currentTimelineCache?.nextCursor ?? null);
+  let hasMore = $state(currentTimelineCache?.hasMore ?? true);
+  let total = $state<number | null>(currentTimelineCache?.total ?? null);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   let containerW = $state(0);
   let containerH = $state(0);
-  let zoom = $state<ZoomLevel>(cachedTimeline?.zoom ?? "day");
+  let zoom = $state<ZoomLevel>(currentTimelineCache?.zoom ?? "day");
 
   // Scan state derived from the global jobs store so it survives
   // page navigation. Earlier this lived in component-local $state and
@@ -99,13 +116,13 @@
   }
   // Today's memories — surfaced as a horizontal strip above the
   // timeline. Hidden when the library has no qualifying memories.
-  let memoryCards = $state<MemoryCard[]>(cachedTimeline?.memoryCards ?? []);
+  let memoryCards = $state<MemoryCard[]>(currentTimelineCache?.memoryCards ?? []);
 
   // Scrubber state
   let scrubHover = $state(false);
   let scrubDragging = $state(false);
   let scrubY = $state(0);                // mouse Y while hovering the track
-  let scrollTop = $state(cachedTimeline?.scrollTop ?? 0);
+  let scrollTop = $state(currentTimelineCache?.scrollTop ?? 0);
 
   // Multi-select dialog
   let showAddDialog = $state(false);
@@ -117,6 +134,7 @@
 
   function saveTimelineCache() {
     cachedTimeline = {
+      driveRoot: currentDriveRoot,
       items,
       nextCursor,
       hasMore,
@@ -165,12 +183,12 @@
     return Math.floor((containerW - gap * (cols - 1)) / cols);
   });
 
-  async function loadMore() {
-    if (loading || !hasMore) return;
+  async function loadMore(): Promise<boolean> {
+    if (loading || !hasMore) return false;
     loading = true;
     error = null;
     try {
-      const page = await photos.list({ cursor: nextCursor, limit: 240 });
+      const page = await photos.list({ cursor: nextCursor, limit: PAGE_LIMIT });
       const fresh = page.items.map((p) => p.id);
       items = items.concat(page.items);
       if (nextCursor === null) browseContext.set("timeline", fresh);
@@ -179,8 +197,10 @@
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
       saveTimelineCache();
+      return page.items.length > 0;
     } catch (e: unknown) {
       error = JSON.stringify(e);
+      return false;
     } finally {
       loading = false;
     }
@@ -191,7 +211,7 @@
     loading = true;
     error = null;
     try {
-      const page = await photos.list({ cursor: null, limit: 240 });
+      const page = await photos.list({ cursor: null, limit: PAGE_LIMIT });
       items = page.items;
       browseContext.set("timeline", page.items.map((p) => p.id));
       nextCursor = page.next_cursor;
@@ -315,7 +335,27 @@
   const v = createVirtualScroll<Row>({
     rows: () => rows,
     scrollEl: () => scrollEl,
-    overscan: 6,
+    overscan: 10,
+  });
+
+  const estimatedTotalHeight = $derived.by(() => {
+    if (total == null || total <= items.length || cols <= 0) return v.totalHeight;
+    const totalPhotoRows = Math.ceil(total / cols);
+    const loadedPhotoRows = Math.ceil(items.length / cols);
+    const extraPhotoRows = Math.max(0, totalPhotoRows - loadedPhotoRows);
+    // Each photo bucket gets a label row. Empirically there's roughly
+    // one label per ~3-5 photo rows in day-zoom; over-estimating here
+    // means the scrubber drags further than necessary on the first
+    // load but it's harmless once the real rows materialise (the
+    // virtualizer's actual offsets take over). Under-estimating used
+    // to make the scrollbar visibly snap upward each time a page came
+    // in. We add one label-row's height per ~4 photo rows estimated.
+    const extraLabelRows = Math.ceil(extraPhotoRows / 4);
+    const photoRowH = Math.max(1, rowH + GAP_PX[zoom]);
+    const labelH = LABEL_PX[zoom];
+    return (
+      v.totalHeight + extraPhotoRows * photoRowH + extraLabelRows * labelH
+    );
   });
 
   $effect(() => {
@@ -323,7 +363,7 @@
   });
 
   $effect(() => {
-    if (v.last >= rows.length - 4 && hasMore && !loading) {
+    if (v.last >= rows.length - LOAD_MORE_LEAD_ROWS && hasMore && !loading) {
       loadMore();
     }
   });
@@ -344,7 +384,7 @@
       saveTimelineCache();
       // Persist so that returning from PhotoDetail lands the user back
       // at the same row instead of the top of the timeline.
-      try { sessionStorage.setItem("scroll:/timeline", String(scrollTop)); } catch {}
+      try { sessionStorage.setItem(scrollStorageKey, String(scrollTop)); } catch {}
     };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
     return () => {
@@ -359,13 +399,13 @@
   let scrollRestored = $state(false);
   $effect(() => {
     if (scrollRestored || !scrollEl) return;
-    const raw = (() => { try { return sessionStorage.getItem("scroll:/timeline"); } catch { return null; } })();
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
     const target = raw ? parseInt(raw, 10) : 0;
     if (!Number.isFinite(target) || target <= 0) {
       scrollRestored = true;
       return;
     }
-    if (v.totalHeight >= target + 16) {
+    if (estimatedTotalHeight >= target + 16) {
       scrollEl.scrollTop = target;
       scrollRestored = true;
     } else if (hasMore && !loading) {
@@ -382,8 +422,8 @@
 
   onMount(() => {
     if (items.length === 0) loadMore();
-    if (cachedTimeline?.scrollTop && scrollEl) {
-      scrollEl.scrollTop = cachedTimeline.scrollTop;
+    if (currentTimelineCache?.scrollTop && scrollEl) {
+      scrollEl.scrollTop = currentTimelineCache.scrollTop;
       scrollRestored = true;
     }
     if (memoryCards.length === 0) {
@@ -630,34 +670,89 @@
   function pageRows(): number {
     return Math.max(1, Math.floor((containerH - 32) / Math.max(1, rowH + GAP_PX[zoom])));
   }
-  function scrollFocusedIntoView() {
+  /// Locate the virtualizer row that contains `photoId`. Returns -1
+  /// if not loaded yet. The row index walks the same `rows` derived
+  /// the virtualizer sees, so `v.offsets[idx]` is the exact pixel
+  /// offset to that row — no estimation, no off-by-label-row drift.
+  function rowIndexForPhoto(photoId: number): number {
+    const list = rows;
+    for (let i = 0; i < list.length; i++) {
+      const row = list[i];
+      if (row.kind !== "photos") continue;
+      for (const p of row.photos) {
+        if (p.id === photoId) return i;
+      }
+    }
+    return -1;
+  }
+
+  function scrollFocusedIntoView(opts: { smooth?: boolean } = {}) {
     if (!scrollEl || focusedIdx < 0) return;
-    // Compute approximate Y of the focused cell. The row index in the
-    // photo bucket plus any leading label rows isn't trivially known,
-    // so we read the DOM after reactivity settles. rAF lets the row
-    // render before we measure.
+    const id = items[focusedIdx]?.id;
+    if (id == null) return;
+    const behavior: ScrollBehavior = opts.smooth ? "smooth" : "auto";
+    const rowIdx = rowIndexForPhoto(id);
+    if (rowIdx >= 0) {
+      // Authoritative path: use the virtualizer's offset table for the
+      // exact y of the row, then center it in the viewport.
+      const rowOffset = v.offsets[rowIdx] ?? 0;
+      const rowHeight = rows[rowIdx]?.height ?? rowH;
+      const target = Math.max(0, rowOffset - (containerH - rowHeight) / 2);
+      scrollEl.scrollTo({ top: target, behavior });
+      return;
+    }
+    // Row not in `rows` yet (still paginating). Wait one frame and try
+    // again — by then loadMore should have grown `rows`.
     requestAnimationFrame(() => {
-      const id = items[focusedIdx]?.id;
-      if (id == null || !scrollEl) return;
-      const cell = scrollEl.querySelector<HTMLAnchorElement>(`a.cell[href="#/photo?id=${id}"]`);
-      if (!cell) {
-        // Cell isn't rendered yet (virtualized out). Estimate offset from
-        // total cells before it and scroll there; the next frame's render
-        // will bring it into view.
-        const rowIdx = Math.floor(focusedIdx / Math.max(1, cols));
-        const targetY = rowIdx * (rowH + GAP_PX[zoom]);
-        scrollEl.scrollTo({ top: Math.max(0, targetY - containerH / 2), behavior: "auto" });
-        return;
-      }
-      const cr = cell.getBoundingClientRect();
-      const sr = scrollEl.getBoundingClientRect();
-      if (cr.top < sr.top + 8) {
-        scrollEl.scrollBy({ top: cr.top - sr.top - 8, behavior: "smooth" });
-      } else if (cr.bottom > sr.bottom - 8) {
-        scrollEl.scrollBy({ top: cr.bottom - sr.bottom + 8, behavior: "smooth" });
-      }
+      if (!scrollEl) return;
+      const retryIdx = rowIndexForPhoto(id);
+      if (retryIdx < 0) return;
+      const rowOffset = v.offsets[retryIdx] ?? 0;
+      const rowHeight = rows[retryIdx]?.height ?? rowH;
+      const target = Math.max(0, rowOffset - (containerH - rowHeight) / 2);
+      scrollEl.scrollTo({ top: target, behavior });
     });
   }
+
+  let revealingId = $state<number | null>(null);
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function revealPhotoInTimeline(photoId: number) {
+    if (!Number.isFinite(photoId) || photoId <= 0 || revealingId === photoId) return;
+    revealingId = photoId;
+    try {
+      while (items.findIndex((p) => p.id === photoId) < 0 && hasMore) {
+        if (loading) {
+          await sleep(80);
+          continue;
+        }
+        const advanced = await loadMore();
+        if (!advanced) break;
+      }
+
+      const idx = items.findIndex((p) => p.id === photoId);
+      if (idx < 0) {
+        toasts.error("That photo is not in the loaded timeline.");
+        return;
+      }
+      focusedIdx = idx;
+      selection.set(photoId);
+      // Smooth scroll for "show in timeline" so the eye can track
+      // where the photo lives. Plain keyboard nav stays instant.
+      scrollFocusedIntoView({ smooth: true });
+      try {
+        history.replaceState({}, "", "#/timeline");
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      } catch {}
+    } finally {
+      revealingId = null;
+    }
+  }
+
+  $effect(() => {
+    if (revealId != null) void revealPhotoInTimeline(revealId);
+  });
+
   function onWheel(e: WheelEvent) {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
@@ -679,7 +774,7 @@
       ids: selected.map((p) => p.id),
       nextCursor: scoped ? null : nextCursor,
       hasMore: scoped ? false : hasMore,
-      loadMore: scoped ? undefined : (cursor) => photos.list({ cursor, limit: 240 }),
+      loadMore: scoped ? undefined : (cursor) => photos.list({ cursor, limit: PAGE_LIMIT }),
     });
   }
 
@@ -745,7 +840,7 @@
 
   // ----------- scrubber -----------
   const trackHeight = $derived(Math.max(containerH - 24, 80));
-  const scrollableMax = $derived(Math.max(0, v.totalHeight - containerH));
+  const scrollableMax = $derived(Math.max(0, estimatedTotalHeight - containerH));
   const thumbY = $derived.by(() => {
     if (scrollableMax <= 0) return 0;
     const ratio = Math.min(1, Math.max(0, scrollTop / scrollableMax));
@@ -852,7 +947,7 @@
     onpointerup={onScrollPointerUp}
     onpointercancel={onScrollPointerUp}
   >
-    <div class="inner" style="height: {v.totalHeight}px">
+    <div class="inner" style="height: {Math.max(v.totalHeight, estimatedTotalHeight)}px">
       {#each rows.slice(v.first, v.last) as row, idx (v.first + idx)}
         {@const i = v.first + idx}
         <div

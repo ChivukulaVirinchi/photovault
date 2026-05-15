@@ -81,8 +81,10 @@
     border: 1px solid var(--line);
     padding: var(--s-6);
     border-radius: var(--r-md);
-    min-width: 460px;
-    max-width: 90%;
+    width: min(460px, calc(100vw - 32px));
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.40),
                 0 4px 16px rgba(0, 0, 0, 0.30);
     display: flex;

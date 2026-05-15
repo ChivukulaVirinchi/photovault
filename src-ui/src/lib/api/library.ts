@@ -35,4 +35,14 @@ export const library = {
     call<{ pending_photos: number }>("library_pending_metadata_count"),
   pendingThumbnailCount: () =>
     call<{ pending_photos: number }>("library_pending_thumbnail_count"),
+
+  /// Wipe every photo's thumbnail_path + thumbnailed flag, then run
+  /// the thumbnail pass over the whole library. Used to upgrade
+  /// legacy small thumbnails to the current size after the default
+  /// changed. Long-running on big libraries — surfaces a thumbnail
+  /// job in the global indicator. The `args` payload is required by
+  /// Tauri (the command takes a struct param even though every field
+  /// in it is optional).
+  regenerateThumbnails: () =>
+    call<JobIdDto>("library_regenerate_thumbnails", { args: { photo_ids: null } }),
 };

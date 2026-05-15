@@ -115,7 +115,14 @@ cd src-ui && npm install && npm run build && cd ..
 
 # Run dev (opens native window with HMR via Vite)
 cargo install tauri-cli --version "^2" --locked   # one-time
-cargo tauri dev
+
+# Use the wrapper, NOT `cargo tauri dev` directly. The wrapper passes
+# `--no-watch`, which is the only thing that stops tauri-cli 2.11's
+# dev watcher from rebuilding the binary on every SQLite WAL/SHM
+# tick, every doc save, every script touch. Vite HMR still handles
+# the frontend; Rust changes need a Ctrl+C + restart.
+scripts\dev.ps1     # Windows PowerShell
+scripts/dev.sh      # Linux / macOS
 
 # Production bundle (.deb/AppImage on Linux, .msi on Windows, .dmg on macOS)
 cargo tauri build
