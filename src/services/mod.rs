@@ -19,6 +19,8 @@ pub mod memories;
 pub mod metadata_processor;
 pub mod ocr_processor;
 pub mod path_util;
+#[cfg(feature = "raw")]
+pub mod raw_preview;
 pub mod reindexer;
 pub mod scanner;
 pub mod search;

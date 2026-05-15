@@ -112,12 +112,25 @@
     if (!m) return "—";
     const ext = m[1];
     const mapping: Record<string, string> = {
+      // Stills
       jpg: "JPEG", jpeg: "JPEG", png: "PNG", gif: "GIF", webp: "WebP",
       heic: "HEIC", heif: "HEIF", avif: "AVIF",
       tif: "TIFF", tiff: "TIFF", bmp: "BMP",
-      raw: "RAW", nef: "NEF (Nikon RAW)", cr2: "CR2 (Canon RAW)",
-      cr3: "CR3 (Canon RAW)", arw: "ARW (Sony RAW)",
-      dng: "DNG", orf: "ORF (Olympus RAW)", rw2: "RW2 (Panasonic RAW)",
+      // RAW group (decoded via embedded JPEG preview — see
+      // services::raw_preview in the engine). The "(camera RAW)"
+      // suffix makes the info panel obvious at a glance.
+      raw: "RAW",
+      nef: "NEF (Nikon RAW)",
+      cr2: "CR2 (Canon RAW)",
+      cr3: "CR3 (Canon RAW)",
+      arw: "ARW (Sony RAW)",
+      dng: "DNG",
+      orf: "ORF (Olympus RAW)",
+      rw2: "RW2 (Panasonic RAW)",
+      pef: "PEF (Pentax RAW)",
+      rwl: "RWL (Leica RAW)",
+      srw: "SRW (Samsung RAW)",
+      raf: "RAF (Fujifilm RAW)",
     };
     return mapping[ext] ?? ext.toUpperCase();
   }

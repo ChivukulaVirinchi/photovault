@@ -70,9 +70,13 @@ windows = { version = "0.58", features = [
 tempfile = "3"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "raw"]
 custom-protocol = ["tauri/custom-protocol"]
 # Pass-through to smriti's heic feature (libheif-rs). Release builds set
 # this so shipped binaries decode HEIC out of the box; default omits it
 # so a fresh `cargo build` doesn't require libheif on the system.
 heic = ["smriti/heic"]
+# Pass-through to smriti's raw feature. Default-on because the
+# implementation is pure Rust (no native lib, no link-time risk) — see
+# the smriti crate's [features] block for full rationale.
+raw = ["smriti/raw"]
