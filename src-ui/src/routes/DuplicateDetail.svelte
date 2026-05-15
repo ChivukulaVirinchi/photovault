@@ -3,6 +3,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import { ZoomIn } from "lucide-svelte";
   import type { DupMember } from "../lib/api/all";
@@ -21,6 +22,16 @@
   async function setKeep(photoId: number) {
     try { group = await duplicates.setKeep(id, photoId); }
     catch (e) { error = JSON.stringify(e); }
+  }
+
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    if (!group) return;
+    group = {
+      ...group,
+      members: group.members.map((m) => (
+        m.photo_id === photoId ? { ...m, thumbnail_path: thumbnailPath } : m
+      )),
+    };
   }
 
   async function trashOthers() {
@@ -75,7 +86,14 @@
           viewing via a small "Open" pill in the corner. Keeps the
           two clearly distinct.
         -->
-        <div class="frame">
+        <div
+          class="frame"
+          use:thumbnailOnVisible={{
+            id: m.photo_id,
+            thumbnailPath: m.thumbnail_path,
+            onReady: (path) => patchThumbnail(m.photo_id, path),
+          }}
+        >
           {#if m.thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, m.thumbnail_path) ?? ""} alt="" />
           {/if}

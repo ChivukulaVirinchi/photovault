@@ -84,16 +84,6 @@
   /// EXIF orientation → degrees of CSS rotation.
   /// Mirror variants (2/4/5/7) aren't auto-flipped for v1; their rotation
   /// portion is still applied so e.g. "5" reads as a quarter-turn.
-  function orientationDegrees(o: number): number {
-    switch (o) {
-      case 3: return 180;
-      case 6: return 90;
-      case 8: return 270;
-      case 5: return 270;
-      case 7: return 90;
-      default: return 0;
-    }
-  }
   function orientationLabel(o: number): string {
     switch (o) {
       case 1: return "Normal";
@@ -109,8 +99,10 @@
   }
 
   const totalRotation = $derived.by(() => {
-    if (!photo) return manualRotate;
-    return (orientationDegrees(photo.orientation) + manualRotate + 360) % 360;
+    // Chromium/WebView already applies EXIF orientation when decoding
+    // the original image. Applying it again here double-rotates portrait
+    // files, so the viewer transform is reserved for user rotation.
+    return (manualRotate + 360) % 360;
   });
 
   function fileFormat(name: string): string {
@@ -201,7 +193,10 @@
   async function revealInFolder() {
     if (!photo) return;
     try { await system.openInExplorer(photo.id); }
-    catch (e) { error = JSON.stringify(e); }
+    catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      error = `Couldn't reveal this photo in the file manager: ${msg}`;
+    }
   }
 
   async function toggleFullscreen() {
@@ -270,9 +265,9 @@
       case "-": case "_":
         e.preventDefault(); zoomApi?.zoomOut(); break;
       case "0":
-        e.preventDefault(); zoomApi?.fit(); break;
+        e.preventDefault(); zoomApi?.fit(); atActual = false; break;
       case "1":
-        e.preventDefault(); zoomApi?.actual(); break;
+        e.preventDefault(); zoomApi?.actual(); atActual = true; break;
       case "[":
         e.preventDefault(); rotateCcw(); break;
       case "]":
@@ -299,7 +294,7 @@
     if (idleTimer) clearTimeout(idleTimer);
   });
 
-  $effect(() => { void id; load(); atActual = false; });
+  $effect(() => { void id; load(); });
 
   $effect(() => {
     const pid = photo?.id;
@@ -356,6 +351,7 @@
           src={imageUrl}
           alt={photo.file_name}
           rotate={totalRotation}
+          preferredMode={atActual ? "actual" : "fit"}
           bind:api={zoomApi}
         />
       {:else}

@@ -6,7 +6,7 @@
   /// - Drag-to-pan when zoomed past fit. Cursor changes to grab/grabbing.
   /// - Double-click toggles 1:1 ↔ fit.
   /// - Keyboard `+` / `-` zoom about image centre, `0` = fit, `1` = 1:1.
-  /// - Auto-resets fit on photo change (driven by the `src` prop).
+  /// - Preserves the current fit/actual intent across photo changes.
   /// - Honours an external `rotate` prop (degrees: 0 / 90 / 180 / 270);
   ///   the parent owns the rotation state so toolbar buttons can mutate
   ///   it without reaching inside.
@@ -19,10 +19,12 @@
     alt?: string;
     /// Rotation in degrees. 0 / 90 / 180 / 270.
     rotate?: number;
+    /// Preferred mode applied when a new image finishes decoding.
+    preferredMode?: "fit" | "actual";
     /// External handle so parent toolbars can drive zoom from buttons.
     api?: ZoomApi;
   }
-  let { src, alt = "", rotate = 0, api = $bindable() }: Props = $props();
+  let { src, alt = "", rotate = 0, preferredMode = "fit", api = $bindable() }: Props = $props();
 
   // Transform state — internal, driven by gestures + keyboard + toolbar API.
   let scale = $state(1);
@@ -61,6 +63,18 @@
     scale = fitScale;
     tx = 0;
     ty = 0;
+  }
+
+  function actual() {
+    scale = clampScale(1);
+    tx = 0;
+    ty = 0;
+    clampPan();
+  }
+
+  function applyPreferredMode() {
+    if (preferredMode === "actual") actual();
+    else reset();
   }
 
   /// Zoom around a viewport point (cx, cy) — keeps the image pixel under
@@ -143,22 +157,23 @@
     if (!imgEl) return;
     naturalW = imgEl.naturalWidth;
     naturalH = imgEl.naturalHeight;
-    reset();
+    applyPreferredMode();
   }
 
   // Reset whenever src or rotation changes.
   $effect(() => {
     void src;
     void rotate;
+    void preferredMode;
     // Defer to next tick so naturalW/H reflect the new image after load.
-    setTimeout(reset, 0);
+    setTimeout(applyPreferredMode, 0);
   });
 
   onMount(() => {
     measure();
     const ro = new ResizeObserver(() => {
       measure();
-      reset();
+      applyPreferredMode();
     });
     if (containerEl) ro.observe(containerEl);
     window.addEventListener("mousemove", onMouseMove);
@@ -183,16 +198,7 @@
       zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.25);
     },
     fit: reset,
-    actual: () => {
-      const r = containerEl?.getBoundingClientRect();
-      if (!r) return;
-      const target = 1;
-      const ratio = target / scale;
-      tx = -tx * ratio + tx;
-      ty = -ty * ratio + ty;
-      scale = target;
-      clampPan();
-    },
+    actual,
   };
 
   const cursor = $derived(

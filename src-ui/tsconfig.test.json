@@ -9,6 +9,8 @@
   },
   "include": [
     "src/lib/slideshowQueue.ts",
-    "src/lib/slideshowQueue.test.ts"
+    "src/lib/slideshowQueue.test.ts",
+    "src/lib/thumbnailQueue.ts",
+    "src/lib/thumbnailQueue.test.ts"
   ]
 }

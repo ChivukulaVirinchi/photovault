@@ -1,3 +1,22 @@
+<script module lang="ts">
+  import type { MemoryCard as CachedMemoryCard } from "../lib/api/all";
+  import type { PhotoSummaryDto as CachedPhotoSummaryDto } from "../lib/api/types";
+
+  type ZoomLevel = "day" | "month" | "year";
+
+  let cachedTimeline:
+    | {
+        items: CachedPhotoSummaryDto[];
+        nextCursor: string | null;
+        hasMore: boolean;
+        total: number | null;
+        zoom: ZoomLevel;
+        scrollTop: number;
+        memoryCards: CachedMemoryCard[];
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -10,6 +29,7 @@
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { createVirtualScroll } from "../lib/virtualizer.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
@@ -20,8 +40,6 @@
 
   /// Zoom levels — Apple-Photos-style. `day` is default; `all` is the
   /// densest packed view with no headers.
-  type ZoomLevel = "day" | "month" | "year";
-
   const TILE_PX: Record<ZoomLevel, number> = {
     day: 156, month: 112, year: 72,
   };
@@ -33,17 +51,17 @@
   };
   const ZOOM_ORDER: ZoomLevel[] = ["year", "month", "day"];
 
-  let items = $state<PhotoSummaryDto[]>([]);
-  let nextCursor = $state<string | null>(null);
-  let hasMore = $state(true);
-  let total = $state<number | null>(null);
+  let items = $state<PhotoSummaryDto[]>(cachedTimeline?.items ?? []);
+  let nextCursor = $state<string | null>(cachedTimeline?.nextCursor ?? null);
+  let hasMore = $state(cachedTimeline?.hasMore ?? true);
+  let total = $state<number | null>(cachedTimeline?.total ?? null);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   let containerW = $state(0);
   let containerH = $state(0);
-  let zoom = $state<ZoomLevel>("day");
+  let zoom = $state<ZoomLevel>(cachedTimeline?.zoom ?? "day");
 
   // Scan state derived from the global jobs store so it survives
   // page navigation. Earlier this lived in component-local $state and
@@ -81,13 +99,13 @@
   }
   // Today's memories — surfaced as a horizontal strip above the
   // timeline. Hidden when the library has no qualifying memories.
-  let memoryCards = $state<MemoryCard[]>([]);
+  let memoryCards = $state<MemoryCard[]>(cachedTimeline?.memoryCards ?? []);
 
   // Scrubber state
   let scrubHover = $state(false);
   let scrubDragging = $state(false);
   let scrubY = $state(0);                // mouse Y while hovering the track
-  let scrollTop = $state(0);
+  let scrollTop = $state(cachedTimeline?.scrollTop ?? 0);
 
   // Multi-select dialog
   let showAddDialog = $state(false);
@@ -96,6 +114,25 @@
   // Bumped on click so arrow nav picks up where the user left off; reset
   // when items reload from a fresh scan.
   let focusedIdx = $state(-1);
+
+  function saveTimelineCache() {
+    cachedTimeline = {
+      items,
+      nextCursor,
+      hasMore,
+      total,
+      zoom,
+      scrollTop,
+      memoryCards,
+    };
+  }
+
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    items = items.map((p) => (
+      p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
+    ));
+    saveTimelineCache();
+  }
 
   // Drag-marquee state (selection by rectangle)
   let marqueeStart = $state<{ x: number; y: number } | null>(null);
@@ -141,6 +178,7 @@
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
+      saveTimelineCache();
     } catch (e: unknown) {
       error = JSON.stringify(e);
     } finally {
@@ -159,6 +197,7 @@
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
+      saveTimelineCache();
     } catch (e: unknown) {
       error = JSON.stringify(e);
     } finally {
@@ -191,6 +230,7 @@
       items = [];
       nextCursor = null;
       hasMore = true;
+      saveTimelineCache();
       loadMore();
     }
   });
@@ -301,6 +341,7 @@
     containerH = r.height;
     const onScroll = () => {
       scrollTop = scrollEl!.scrollTop;
+      saveTimelineCache();
       // Persist so that returning from PhotoDetail lands the user back
       // at the same row instead of the top of the timeline.
       try { sessionStorage.setItem("scroll:/timeline", String(scrollTop)); } catch {}
@@ -340,8 +381,17 @@
   });
 
   onMount(() => {
-    loadMore();
-    memories.today().then((c) => (memoryCards = c)).catch(() => {});
+    if (items.length === 0) loadMore();
+    if (cachedTimeline?.scrollTop && scrollEl) {
+      scrollEl.scrollTop = cachedTimeline.scrollTop;
+      scrollRestored = true;
+    }
+    if (memoryCards.length === 0) {
+      memories.today().then((c) => {
+        memoryCards = c;
+        saveTimelineCache();
+      }).catch(() => {});
+    }
     refreshPendingCounts();
     window.addEventListener("keydown", onGlobalKey);
 
@@ -373,6 +423,7 @@
             if (!u) return p;
             return { ...p, thumbnail_path: u.thumbnail_path ?? p.thumbnail_path };
           });
+          saveTimelineCache();
         } catch {
           // best-effort — the on-demand thumbnail path covers misses
         }
@@ -427,6 +478,7 @@
     const newIdx = ZOOM_ORDER.indexOf(z);
     zoomDir = newIdx > oldIdx ? "in" : "out";
     zoom = z;
+    saveTimelineCache();
     if (zoomTimer) clearTimeout(zoomTimer);
     zoomTimer = setTimeout(() => (zoomDir = null), 320);
   }
@@ -840,7 +892,12 @@
                   class:focused={focusedIdx >= 0 && items[focusedIdx]?.id === photo.id}
                   href="#/photo?id={photo.id}"
                   title="#{photo.id}"
-                  use:cellAttach={photo}
+                  use:thumbnailOnVisible={{
+                    id: photo.id,
+                    thumbnailPath: photo.thumbnail_path,
+                    root: scrollEl,
+                    onReady: (path) => patchThumbnail(photo.id, path),
+                  }}
                   onclick={(e) => onCellClick(e, photo)}
                 >
                   {#if photo.thumbnail_path}

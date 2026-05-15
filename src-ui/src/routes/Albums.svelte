@@ -6,6 +6,7 @@
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { AlbumDto, AlbumSuggestionDto } from "../lib/api/types";
   import type { PhotoSummaryDto } from "../lib/api/types";
@@ -97,6 +98,12 @@
   function closePreview() {
     previewSugg = null;
     previewPhotos = [];
+  }
+
+  function patchPreviewThumbnail(photoId: number, thumbnailPath: string) {
+    previewPhotos = previewPhotos.map((p) => (
+      p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
+    ));
   }
 
   async function acceptSuggestion(id: number) {
@@ -230,6 +237,11 @@
               <a
                 class="m-cell"
                 href="#/photo?id={p.id}"
+                use:thumbnailOnVisible={{
+                  id: p.id,
+                  thumbnailPath: p.thumbnail_path,
+                  onReady: (path) => patchPreviewThumbnail(p.id, path),
+                }}
                 onclick={() =>
                   browseContext.set(
                     `suggestion:${s.id}`,

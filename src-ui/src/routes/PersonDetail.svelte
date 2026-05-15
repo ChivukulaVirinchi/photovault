@@ -6,6 +6,7 @@
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
@@ -43,6 +44,11 @@
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
+  }
+  function patchThumbnail(photoId: number, thumbnailPath: string) {
+    photos = photos.map((p) => (
+      p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
+    ));
   }
   async function bulkTrash() {
     const ids = selection.list();
@@ -216,6 +222,11 @@
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
         href="#/photo?id={p.id}"
+        use:thumbnailOnVisible={{
+          id: p.id,
+          thumbnailPath: p.thumbnail_path,
+          onReady: (path) => patchThumbnail(p.id, path),
+        }}
         onclick={(e) => onCellClick(e, p.id)}
       >
         {#if p.thumbnail_path}
