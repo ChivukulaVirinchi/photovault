@@ -91,7 +91,7 @@ pub enum FaceEmbedder {
     Local(LocalEmbedder),
     Remote {
         remote: RemoteEmbedder,
-        local_fallback: LocalEmbedder,
+        local_fallback: Option<LocalEmbedder>,
     },
 }
 
@@ -102,18 +102,31 @@ impl FaceEmbedder {
     /// passes its initial health check (including model match), the
     /// returned embedder routes batches through the remote first.
     pub fn from_config(rt: &OnnxRuntime, cfg: &EmbedderConfig) -> Result<Self, ort::Error> {
-        let local = LocalEmbedder::new_with_threads(rt, &cfg.model_path, cfg.intra_threads)?;
         if let Some(ref url) = cfg.gpu_bridge_url {
             let remote = RemoteEmbedder::new(url.clone(), cfg.expected_model.clone());
             if remote.is_healthy() {
+                let local_fallback = if cfg.model_path.exists() {
+                    Some(LocalEmbedder::new_with_threads(
+                        rt,
+                        &cfg.model_path,
+                        cfg.intra_threads,
+                    )?)
+                } else {
+                    tracing::warn!(
+                        "Local face embedder model {} missing; using remote bridge without local fallback",
+                        cfg.model_path.display()
+                    );
+                    None
+                };
                 tracing::info!("Face embedding routed to remote GPU bridge at {}", url);
                 return Ok(FaceEmbedder::Remote {
                     remote,
-                    local_fallback: local,
+                    local_fallback,
                 });
             }
             tracing::info!("Remote GPU bridge unavailable; using local embedder");
         }
+        let local = LocalEmbedder::new_with_threads(rt, &cfg.model_path, cfg.intra_threads)?;
         Ok(FaceEmbedder::Local(local))
     }
 
@@ -138,8 +151,10 @@ impl FaceEmbedder {
                 let mut out = remote.embed_batch(faces);
                 if out.len() != faces.len() {
                     // Defensive: should never happen, but if it does,
-                    // recompute fully on local.
-                    return local_fallback.embed_batch(faces);
+                    // recompute fully on local when available.
+                    return local_fallback
+                        .as_mut()
+                        .map_or_else(|| vec![None; faces.len()], |local| local.embed_batch(faces));
                 }
                 let missing: Vec<usize> = out
                     .iter()
@@ -149,11 +164,13 @@ impl FaceEmbedder {
                 if missing.is_empty() {
                     return out;
                 }
-                let crops: Vec<RgbImage> = missing.iter().map(|&i| faces[i].clone()).collect();
-                let fb = local_fallback.embed_batch(&crops);
-                for (k, &orig_i) in missing.iter().enumerate() {
-                    if let Some(emb) = fb.get(k).cloned().flatten() {
-                        out[orig_i] = Some(emb);
+                if let Some(local) = local_fallback.as_mut() {
+                    let crops: Vec<RgbImage> = missing.iter().map(|&i| faces[i].clone()).collect();
+                    let fb = local.embed_batch(&crops);
+                    for (k, &orig_i) in missing.iter().enumerate() {
+                        if let Some(emb) = fb.get(k).cloned().flatten() {
+                            out[orig_i] = Some(emb);
+                        }
                     }
                 }
                 out

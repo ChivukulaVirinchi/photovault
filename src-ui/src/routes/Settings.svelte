@@ -12,14 +12,14 @@
   let healthData = $state<LibraryHealthData | null>(null);
   let acting = $state(false);
   let testBusy = $state(false);
-  let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number } | null>(null);
+  let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
   async function testBridge() {
     if (!s?.face_gpu_bridge_url) return;
     testBusy = true;
     testResult = null;
     try {
       const r = await systemEx.testGpuBridge(s.face_gpu_bridge_url);
-      testResult = { ok: r.ok, gpu_name: r.gpu_name, latency_ms: r.latency_ms };
+      testResult = { ok: r.ok, gpu_name: r.gpu_name, latency_ms: r.latency_ms, model: r.model };
     } catch (e) {
       testResult = { ok: false, gpu_name: "Unreachable", latency_ms: 0 };
     } finally {
@@ -381,7 +381,7 @@
       <p class="hint blurb">
         Offload face embedding to a free GPU notebook you control.
         Sends only 112×112 face crops (not photos) to a URL you provide.
-        Falls back to local CPU on failure.
+        Uses local CPU as a fallback only when the matching local embedding model is installed.
         <a href="https://github.com/anomalyco/photovault/blob/main/docs/face-gpu-bridge.md" target="_blank" rel="noopener" class="inline-link">How to set up a free Kaggle / Colab notebook →</a>
       </p>
       <label class="checkbox" style="margin-bottom: var(--s-3)">
@@ -410,7 +410,7 @@
         {#if testResult}
           <p class="test-result" class:ok={testResult.ok} class:fail={!testResult.ok}>
             {testResult.ok
-              ? `✓ ${testResult.gpu_name} @ ${testResult.latency_ms}ms`
+              ? `✓ ${testResult.gpu_name} · ${testResult.model ?? "model ok"} @ ${testResult.latency_ms}ms`
               : `✕ ${testResult.gpu_name}`}
           </p>
         {/if}

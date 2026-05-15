@@ -4,6 +4,7 @@
 // without 13 tiny files.
 
 import { call } from "./index";
+import type { AssetHealthDto } from "./types";
 import type {
   AlbumDto,
   AlbumSuggestionDto,
@@ -476,6 +477,7 @@ export const geocoding = {
 
 // ---------- system ----------
 export const systemEx = {
+  assetHealth: () => call<AssetHealthDto>("system_asset_health"),
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
   copyPathToClipboard: (photoId: number) =>
@@ -491,7 +493,7 @@ export const systemEx = {
       body: string | null;
     }>("system_updates_check"),
   testGpuBridge: (url: string) =>
-    call<{ ok: boolean; latency_ms: number; gpu_name: string }>(
+    call<{ ok: boolean; latency_ms: number; gpu_name: string; model: string | null }>(
       "system_test_gpu_bridge",
       { url },
     ),

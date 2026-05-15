@@ -183,7 +183,7 @@ pub fn detector_model_path() -> PathBuf {
 }
 
 pub fn embedder_model_path() -> PathBuf {
-    model_dir().join("glintr100.onnx")
+    model_dir().join(crate::config::AppConfig::load().face_embedder_model)
 }
 
 pub fn has_face_models() -> bool {

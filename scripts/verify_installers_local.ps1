@@ -61,6 +61,7 @@ try {
     Copy-Item libs\onnxruntime\onnxruntime.dll assets-pack-local\libs\onnxruntime\onnxruntime.dll -Force
     Copy-Item models\scrfd_10g_bnkps.onnx assets-pack-local\models\scrfd_10g_bnkps.onnx -Force
     Copy-Item models\glintr100.onnx assets-pack-local\models\glintr100.onnx -Force
+    Copy-Item models\adaface_ir101_webface12m.onnx assets-pack-local\models\adaface_ir101_webface12m.onnx -Force
     Copy-Item data\geonames.db assets-pack-local\data\geonames.db -Force
 
     if (Test-Path "Smriti-Assets-local.zip") { Remove-Item "Smriti-Assets-local.zip" -Force }

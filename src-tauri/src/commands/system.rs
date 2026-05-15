@@ -276,6 +276,7 @@ pub struct BridgeTestResult {
     pub ok: bool,
     pub latency_ms: u64,
     pub gpu_name: String,
+    pub model: Option<String>,
 }
 
 #[tauri::command]
@@ -311,9 +312,38 @@ pub fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestR
         .and_then(|v: &serde_json::Value| v.as_str())
         .unwrap_or("unknown")
         .to_string();
+    let model = body
+        .get("model")
+        .and_then(|v: &serde_json::Value| v.as_str())
+        .map(|s| s.to_string());
+    let expected = smriti::config::AppConfig::load().face_embedder_model;
+    let model_ok = model
+        .as_deref()
+        .is_some_and(|served| bridge_models_match(served, &expected));
+    if !model_ok {
+        return Err(CommandError::Validation {
+            field: "model".into(),
+            reason: format!(
+                "bridge serves {:?}, but Smriti expects {}",
+                model.as_deref().unwrap_or("unknown"),
+                expected
+            ),
+        });
+    }
     Ok(BridgeTestResult {
         ok: true,
         latency_ms,
         gpu_name,
+        model,
     })
+}
+
+fn bridge_models_match(a: &str, b: &str) -> bool {
+    fn norm(s: &str) -> String {
+        s.trim()
+            .strip_suffix(".onnx")
+            .unwrap_or(s.trim())
+            .to_ascii_lowercase()
+    }
+    !a.is_empty() && !b.is_empty() && norm(a) == norm(b)
 }

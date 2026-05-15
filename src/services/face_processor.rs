@@ -188,7 +188,11 @@ impl FaceProcessor {
         let embedder_path = model_dir.join(&cfg.face_embedder_model);
         // Captured per-worker so the embedder can be built once per
         // thread. Cloned cheaply via Arc<String>.
-        let gpu_bridge_url: Option<String> = cfg.face_gpu_bridge_url.clone();
+        let gpu_bridge_url: Option<String> = if cfg.face_gpu_bridge_enabled {
+            cfg.face_gpu_bridge_url.clone()
+        } else {
+            None
+        };
         let embedder_model_name: String = cfg.face_embedder_model.clone();
 
         if !detector_path.exists() {
@@ -197,9 +201,9 @@ impl FaceProcessor {
                     .to_string(),
             );
         }
-        if !embedder_path.exists() {
+        if !embedder_path.exists() && gpu_bridge_url.is_none() {
             return Err(
-                "Face embedding model is missing. Run scripts/setup_assets.sh in the project root to download the SCRFD + ArcFace models."
+                "Face embedding model is missing. Run scripts/setup_assets.sh in the project root to download the face models, or enable a healthy remote GPU bridge."
                     .to_string(),
             );
         }
