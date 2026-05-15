@@ -54,8 +54,17 @@ impl Reindexer {
     }
 
     pub fn new_with_options(scan_hidden_folders: bool) -> Self {
+        // Keep this list in sync with scanner.rs's SUPPORTED_EXTENSIONS.
+        // The reindexer walks the same files as a fresh scan, so they
+        // need identical allowlists or the reindex misses formats the
+        // scanner indexes.
         let mut supported_extensions = HashSet::new();
-        for ext in ["jpg", "jpeg", "png", "heic", "heif", "webp"] {
+        for ext in [
+            // Stills
+            "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
+            // RAWs (TIFF-based, embedded-JPEG path)
+            "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
+        ] {
             supported_extensions.insert(ext.to_string());
         }
 

@@ -16,8 +16,21 @@ use walkdir::{DirEntry, WalkDir};
 use crate::db::photo_repo::{PhotoInsert, PhotoRepo};
 use crate::db::Database;
 
-/// Supported image extensions
-const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "webp"];
+/// Supported image extensions.
+///
+/// Two groups:
+///   1. Stills the `image` crate (or our HEIC arm) handles directly.
+///   2. TIFF-based RAWs, decoded via the camera's embedded full-res
+///      JPEG preview — see `services::image_io::open_image` and
+///      `services::raw_preview`. Files in this group don't need any
+///      special handling here at scan time; they go through the same
+///      hash + EXIF + thumbnail pipeline as ordinary JPEGs.
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    // Stills
+    "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
+    // RAWs (TIFF-based, embedded-JPEG path)
+    "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
+];
 
 /// Directories to skip during scanning
 const SKIP_DIRECTORIES: &[&str] = &[

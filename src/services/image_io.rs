@@ -1,8 +1,13 @@
 //! Format-aware image opening.
 //!
-//! Wraps `image::open` so HEIC/HEIF files (every modern iPhone photo)
-//! decode through `libheif` when the `heic` Cargo feature is enabled,
-//! and fail with a clear message otherwise.
+//! Wraps `image::open` so:
+//!   - HEIC/HEIF (every modern iPhone photo) decodes through libheif
+//!     when the `heic` Cargo feature is enabled, fails clearly
+//!     otherwise.
+//!   - TIFF-based RAW (NEF / CR2 / CR3 / ARW / DNG / ORF / RW2 /
+//!     PEF / RWL / SRW) decodes via the camera's embedded full-res
+//!     JPEG preview when the `raw` feature is on (default).
+//!   - Everything else falls through to the `image` crate.
 //!
 //! Call this from any code path that previously did `image::open(...)`
 //! — thumbnail generation, face detection, brightness sampling.
@@ -12,8 +17,12 @@ use std::path::Path;
 use image::DynamicImage;
 
 /// Open and decode an image. Returns a fully-decoded `DynamicImage`
-/// regardless of the on-disk format. HEIC/HEIF are routed through
-/// libheif when compiled in; everything else uses the `image` crate.
+/// regardless of the on-disk format. HEIC/HEIF route through libheif
+/// when compiled in; RAW files route through `raw_preview` to extract
+/// the embedded full-res JPEG preview (the camera's intended
+/// rendering, much better than software-debayered output without
+/// proprietary colour profiles); everything else uses the `image`
+/// crate's native decoders.
 pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
     let ext = path
         .extension()
@@ -22,8 +31,47 @@ pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
 
     match ext.as_deref() {
         Some("heic") | Some("heif") => decode_heic(path),
+        Some(e) if is_raw_extension(e) => decode_raw_via_preview(path),
         _ => image::open(path).map_err(|e| e.to_string()),
     }
+}
+
+/// Recognises every TIFF-based RAW we route through the embedded-JPEG
+/// path. Kept in sync with `scanner::SUPPORTED_EXTENSIONS` and
+/// `reindexer`'s extension allowlist — adding a new RAW extension
+/// means touching this list too.
+fn is_raw_extension(e: &str) -> bool {
+    matches!(
+        e,
+        "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw" | "raf"
+    )
+}
+
+#[cfg(feature = "raw")]
+fn decode_raw_via_preview(path: &Path) -> Result<DynamicImage, String> {
+    let jpeg_bytes = crate::services::raw_preview::extract_largest_preview(path)
+        .map_err(|e| format!("RAW preview lookup failed for {}: {}", path.display(), e))?
+        .ok_or_else(|| {
+            format!(
+                "RAW has no embedded JPEG preview: {}. Full-RAW Bayer decode is not supported in this build.",
+                path.display()
+            )
+        })?;
+    image::load_from_memory(&jpeg_bytes).map_err(|e| {
+        format!(
+            "embedded JPEG preview in {} is invalid: {}",
+            path.display(),
+            e
+        )
+    })
+}
+
+#[cfg(not(feature = "raw"))]
+fn decode_raw_via_preview(path: &Path) -> Result<DynamicImage, String> {
+    Err(format!(
+        "RAW support not compiled in (rebuild with --features raw to decode {})",
+        path.display()
+    ))
 }
 
 #[cfg(feature = "heic")]

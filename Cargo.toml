@@ -47,9 +47,19 @@ exclude = [
 # HNSW-based approximate nearest neighbor + union-find. Quadratic
 # cost goes away — clustering scales linearly past the legacy 800-face
 # cap. Default-on; can be disabled to A/B against the original.
-default = ["hnsw_clustering"]
+#
+# `raw` enables embedded-JPEG-preview decoding for TIFF-based RAW
+# formats (NEF, CR2, CR3, ARW, DNG, ORF, RW2, PEF, RWL, SRW, RAF).
+# No new crate dep — uses kamadak-exif (already on the dep graph) to
+# walk IFDs, then `image::load_from_memory` on the embedded JPEG.
+# Default-on because there's nothing to fail at link time: the
+# extraction is pure Rust + byte slicing. Disable to A/B against a
+# no-RAW build or to shrink the dispatch surface in a constrained
+# context (it's a single function arm, but the option exists).
+default = ["hnsw_clustering", "raw"]
 heic = ["dep:libheif-rs"]
 hnsw_clustering = ["dep:hnsw_rs"]
+raw = []
 
 [lib]
 # Library-only crate. The bin lives in src-tauri/.
