@@ -1,13 +1,16 @@
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/smriti-logo-dark.svg">
-    <img src="docs/smriti-logo.svg" alt="Smriti" width="280">
+    <img src="docs/smriti-logo.svg" alt="Smriti" width="240">
   </picture>
-  <p><strong>The offline photo library for your own drive.</strong></p>
-  <p><em>स्मृति (smriti) — Sanskrit, "that which is remembered."</em></p>
+
+  <h2><em>Photos without a server.</em></h2>
+  <p><em>स्मृति · Sanskrit for memory.</em></p>
+
   <p>
-    Lightning fast on hundreds of thousands of photos. Offline-first
-    by default. No cloud, no telemetry, no account required.
+    Smriti indexes any drive, recognises faces on-device, and surfaces
+    memories — without leaving your machine. No account, no cloud, no
+    server humming in a closet.
   </p>
 
   <p>
@@ -17,84 +20,133 @@
     <a href="https://github.com/ChivukulaVirinchi/photovault/actions/workflows/ci.yml">
       <img src="https://img.shields.io/github/actions/workflow/status/ChivukulaVirinchi/photovault/ci.yml?branch=master&label=CI" alt="CI">
     </a>
-    <a href="https://github.com/ChivukulaVirinchi/photovault/blob/master/Cargo.toml">
-      <img src="https://img.shields.io/badge/MSRV-1.88-blue" alt="MSRV 1.88">
-    </a>
     <a href="LICENSE">
-      <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache 2.0">
+      <img src="https://img.shields.io/badge/license-Apache--2.0-466996" alt="Apache 2.0">
     </a>
     <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">
-      <img src="https://img.shields.io/github/downloads/ChivukulaVirinchi/photovault/total?label=downloads" alt="Downloads">
+      <img src="https://img.shields.io/github/downloads/ChivukulaVirinchi/photovault/total?label=downloads&color=466996" alt="Downloads">
+    </a>
+    <a href="https://github.com/ChivukulaVirinchi/photovault/stargazers">
+      <img src="https://img.shields.io/github/stars/ChivukulaVirinchi/photovault?style=flat&color=466996" alt="Stars">
     </a>
   </p>
 
-  <img src="website/hero-screenshot.png" alt="Smriti screenshot" width="800">
+  <a href="https://chivukulavirinchi.github.io/photovault/">
+    <img src="website/demo-hero.webp" alt="Smriti in motion — 30 second loop showing indexing, timeline, face clustering, map, search, and slideshow" width="820">
+  </a>
+
+  <p>
+    <a href="https://github.com/ChivukulaVirinchi/photovault/releases/latest"><strong>Download</strong></a>
+    &nbsp;·&nbsp;
+    <a href="https://chivukulavirinchi.github.io/photovault/">Website</a>
+    &nbsp;·&nbsp;
+    <a href="https://chivukulavirinchi.github.io/photovault/docs/">Manual</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/ChivukulaVirinchi/photovault/discussions">Discussions</a>
+  </p>
 </div>
 
 ---
 
-## What it does
+## Why Smriti exists
 
-- **Indexes photos** from any folder or external drive — no upload required
-- **Recognizes faces** on-device, groups photos by person.
-  [Optional: cloud GPU acceleration](docs/face-gpu-bridge.md) for 10–70× faster embedding on free Kaggle/Colab notebooks.
-- **Suggests albums** for trips and events automatically
-- **Surfaces memories** — "N years ago today" rediscovery
-- **Visualizes geography** — interactive map of where photos were taken
-- **Shows insights** — heatmaps, top people, top locations, monthly breakdown
-- **Finds anything** — unified search across people, albums, places, photos
+Most photo apps want to be a **service**. They want a login, a sync daemon,
+a monthly fee, a server you maintain. They want your photos to be content
+they process — endlessly, in the background, on a machine that runs all
+year so you can check in twice.
 
-## Why offline?
+Smriti is none of that. Open the app, browse, close it. Your library is
+*finished work*, not a stream that needs draining. When the app is closed,
+nothing runs. When the app is open, the photos are already where they were —
+on your drive, in their folders, exactly as you left them.
 
-Your photos are personal. Smriti keeps them that way.
+## What you do with it
 
-- No cloud upload. Photos stay on your drive.
-- No account required. No telemetry. No analytics.
-- Database lives on the indexed drive — fully portable.
-- Works without internet after optional assets are installed.
+| | |
+|---|---|
+| **Bring 200,000 photos in.** Point Smriti at a folder or drive. It indexes in place — never copies, never moves your originals. | **Name a face once.** On-device face recognition groups every photo of that person across your whole library. No cloud round-trip. |
+| **See where you've actually been.** Every geotagged photo plotted on a map. Click a cluster to drill into a place. Tile cache lives on your drive. | **Find that photo of grandma in 2018.** Unified search across people, albums, places, dates. Three filters, one result. Milliseconds on 250K libraries. |
+| **Get reminded, not pestered.** "This day, N years ago" surfaces when you open the app. Never a notification. Never a curated highlight reel. | **Cull the obvious junk.** Duplicates, bursts, near-duplicates surfaced in one place. One-click cleanup. Trash, not delete — restore if you change your mind. |
+
+## See it
+
+<table>
+  <tr>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-timeline.png" alt="Smriti timeline view"></a></td>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-people.png" alt="Smriti people view"></a></td>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-map.png" alt="Smriti map view"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>Timeline</strong><br>20+ years of photos, sticky year headers, viewport-driven thumbs.</sub></td>
+    <td align="center"><sub><strong>People</strong><br>On-device face clustering. Name a face once.</sub></td>
+    <td align="center"><sub><strong>Map</strong><br>Every geotagged photo plotted. Click a cluster to drill in.</sub></td>
+  </tr>
+</table>
+
+## How it compares
+
+|  | Cloud (Google · iCloud) | Self-hosted (Immich · PhotoPrism) | **Smriti** |
+|---|---|---|---|
+| Photos live | On their servers | On your server | **On the drive they came from** |
+| Original quality preserved | Compressed by default (Google's "Storage saver" caps at 16 MP) | Preserved | **Preserved — files are never opened for write** |
+| Account required | Yes | Yes (you set one up) | **None** |
+| Server to maintain | Theirs (you pay rent) | Yours, 24 / 7 | **None — it's an app** |
+| Metadata (faces, tags, albums) | In their database | In your server's database | **On the drive with the photos** |
+| Survives provider going away | No | Only if your server keeps running | **Yes — it's files** |
+| Yearly attention you owe it | Renew subscription | Updates · certs · backups | **None** |
+| Cost over five years | $250 – $750 | NAS + power + your time | **$0** |
+| Works on a plane | Limited | Limited (no VPN) | **Everything** |
+| Memory footprint when closed | n/a | ~1 – 4 GB resident | **Zero** |
+
+> Smriti writes its database at `<drive>/.photovault/photovault.db` — on the
+> same drive as the photos. Unplug the drive, plug it into another computer,
+> open Smriti there: same library, same faces, same albums. No sync, no
+> upload, no re-indexing.
 
 ## Install
 
-### Linux
-- **Debian / Ubuntu**: [Download .deb](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-ubuntu-amd64.deb)
-- **AppImage (other distros)**: [Download AppImage](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-x86_64.AppImage) → `chmod +x` → run
-- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
-  — ML models for face recognition plus offline geocoding data.
-
-Linux release artifacts include `SHA256SUMS` for integrity
-verification. Tagged releases run smoke tests for both the `.deb`
-and the AppImage in CI before publishing.
+All builds are on the **[latest release page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)**. Pick the artifact for your OS — file names follow the standard pattern.
 
 ### Windows
-- **Recommended**: [Download MSI installer](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Setup-x64.msi)
-- **Portable fallback**: [Download ZIP](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/smriti-x86_64-pc-windows-msvc.zip)
-- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
 
-> Smriti's installer is not code-signed. Windows SmartScreen
-> may warn on first launch — click **More info** → **Run anyway**.
+- `.msi` installer for Windows 10 / 11.
+
+> Smriti's installer is not code-signed. Windows SmartScreen may warn on
+> first launch — click **More info** → **Run anyway**.
 
 ### macOS
-- Download the macOS archive from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)
-- **Optional assets pack**: [Smriti-Assets.zip](https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip)
 
-> Smriti is not notarized for macOS. Gatekeeper may warn on
-> first launch — right-click the app → **Open** → **Open anyway**.
+- `.dmg` or `.tar.gz` archives.
 
-## Automatic updates
+> Smriti is not notarized. Gatekeeper may warn on first launch — right-click
+> the app → **Open** → **Open anyway**.
 
-Smriti can check for new releases and (where possible) download
-and install them for you. The check is **opt-in**: on first run a
-prompt asks whether you want it, and you can change the answer later
-in **Settings → Advanced**. When enabled, Smriti queries
-`api.github.com` at most once every 24 hours; no photo data or
-telemetry is sent. See [PRIVACY.md](PRIVACY.md) for the full
-disclosure.
+### Linux
+
+- `.deb` for Debian / Ubuntu, `.rpm` for Fedora, `.AppImage` for any other distro (`chmod +x` then run).
+
+Linux artifacts include `SHA256SUMS` for integrity verification. Tagged
+releases run smoke tests in CI before publishing.
+
+### Optional assets pack
+
+For **face recognition + offline place names**, also grab `Smriti-Assets.zip` from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest) — ONNX runtime + face models + GeoNames database.
+
+Smriti runs without it; the asset pack just unlocks those two features.
+The app prompts you on first launch.
+
+### Automatic updates
+
+Opt-in. Off by default. If enabled, Smriti queries `api.github.com` at most
+once every 24 hours. No photo data leaves your machine. See
+[PRIVACY.md](PRIVACY.md) for the full disclosure.
 
 If you installed via a system package manager (`apt`, `brew`, `winget`,
-`flatpak`), the update banner shows the matching upgrade command
-for your platform rather than self-replacing the binary.
+`flatpak`), the update banner shows the matching upgrade command rather
+than self-replacing the binary.
 
-## Build from source
+<details>
+<summary><strong>Build from source</strong></summary>
 
 ```bash
 git clone https://github.com/ChivukulaVirinchi/photovault.git
@@ -103,7 +155,7 @@ cargo build --release
 ./target/release/smriti
 ```
 
-### HEIC support (optional)
+#### HEIC support (optional)
 
 iPhone photos are HEIC. To decode them from a source build, install
 `libheif` and rebuild with the `heic` feature:
@@ -120,24 +172,22 @@ cargo build --release --features heic
 ```
 
 Shipped binaries (.deb, AppImage, macOS .tar.gz) include HEIC support
-out of the box. The Windows MSI ships without HEIC for now —
-`libheif` Windows binaries will land in v1.1. Without HEIC enabled,
-Smriti still indexes `.heic` files but reports a clear "HEIC
-support not compiled in" error when asked to decode one.
+out of the box. The Windows MSI ships without HEIC for now — `libheif`
+Windows binaries will land in v1.1. Without HEIC enabled, Smriti still
+indexes `.heic` files but reports a clear "HEIC support not compiled in"
+error when asked to decode one.
 
-Optional — install the asset pack locally for face recognition + geocoding:
+#### Local assets
 
 ```bash
 ./scripts/setup_assets.sh      # Linux / macOS
 .\scripts\setup_assets.ps1     # Windows
 ```
 
-See [`docs/BUILD.md`](docs/BUILD.md) for full setup details including
-the WSL + Windows development workflow.
+See [`docs/BUILD.md`](docs/BUILD.md) for full setup details including the
+WSL + Windows development workflow.
 
-### Packaging helpers
-
-Local packaging smoke tests:
+#### Packaging helpers
 
 ```bash
 ./scripts/release_local.sh ubuntu
@@ -155,12 +205,25 @@ powershell -ExecutionPolicy Bypass -File scripts\release_local.ps1 -Mode full
 The official release flow is CI-driven from git tags (`v*`) via
 [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
+</details>
+
+## Privacy at a glance
+
+Smriti makes **exactly four kinds of HTTP request**. Three of them you can
+turn off. Nothing else leaves your machine — ever. No telemetry, no
+analytics, no "anonymous usage statistics."
+
+1. **Map tiles** when you open the Map view (`tile.openstreetmap.org`). Cached locally.
+2. **Asset pack download** (`github.com/.../releases`), one-time, opt-in.
+3. **Update check** (`api.github.com`), opt-in — **off by default**.
+4. **Update install** (`github.com/.../releases/download/...`), only when you click Download.
+
+Full disclosure: [PRIVACY.md](PRIVACY.md).
+
 ## Documentation
 
 Full user guide and contributor docs are published at
 **[chivukulavirinchi.github.io/photovault](https://chivukulavirinchi.github.io/photovault/)**.
-
-Headline entry points:
 
 - [Getting Started](https://chivukulavirinchi.github.io/photovault/docs/user-guide/getting-started.html)
 - [Indexing Photos](https://chivukulavirinchi.github.io/photovault/docs/user-guide/indexing.html)
@@ -175,19 +238,21 @@ Headline entry points:
 - **[Issues](https://github.com/ChivukulaVirinchi/photovault/issues)** — bug reports and feature requests, via the templates.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, commit style, CI gates, architectural rules.
 - **[Security advisories](https://github.com/ChivukulaVirinchi/photovault/security/advisories/new)** — private reporting path for vulnerabilities (see [SECURITY.md](SECURITY.md)).
-- **Sponsor** — if Smriti is useful to you, the Sponsor button at the top of this repo helps keep it maintained.
+
+## Support
+
+Smriti is free and Apache-2.0 licensed. If it's useful to you, a
+small contribution helps keep it maintained:
+
+[![Sponsor on GitHub](https://img.shields.io/badge/sponsor-on%20GitHub-466996?style=flat)](https://github.com/sponsors/ChivukulaVirinchi)
+&nbsp;
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L4L11ZM53F)
 
 > **Note on face-recognition models.** The face detection + recognition
 > models come from [InsightFace](https://github.com/deepinsight/insightface)
 > and are downloaded from the upstream project on first run, not bundled
 > in the installer. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 > for attributions.
-
-## License
-
-[Apache License 2.0](LICENSE). See
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full
-third-party attribution list.
 
 ## Built with
 
@@ -199,3 +264,9 @@ third-party attribution list.
 - [MapLibre GL](https://maplibre.org/) — interactive map view
 - [GeoNames](https://www.geonames.org/) — offline reverse geocoding
 - [OpenStreetMap](https://www.openstreetmap.org/) — map tiles
+
+## License
+
+[Apache License 2.0](LICENSE). See
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full
+third-party attribution list.

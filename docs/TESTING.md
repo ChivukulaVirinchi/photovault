@@ -1,8 +1,8 @@
 # Testing in Smriti
 
 This document explains how Smriti is tested and how *you* should test
-the code you add. It exists because the maintainer doesn't read Rust;
-tests are the contract.
+the code you add. Tests are the contract: if your PR's tests pass,
+your code lands; if they fail, the failure is the conversation.
 
 ## Pyramid
 
@@ -194,9 +194,9 @@ When you change a DTO field (rename, type change, addition,
 removal), the test for that DTO fails with a unified diff showing
 old vs new. The contributor reviews their own change, runs
 `cargo insta review` if intentional, and commits the updated
-`.snap` file alongside the source change. The reviewer sees the
-`.snap` diff in the PR and can sanity-check the wire-format
-implications without reading any Rust.
+`.snap` file alongside the source change. The reviewer reads the
+`.snap` diff in the PR to sanity-check the wire-format implications
+at a glance.
 
 If a DTO change *isn't* intentional (a typo, an accidental
 field-rename during a refactor), the failing test catches it

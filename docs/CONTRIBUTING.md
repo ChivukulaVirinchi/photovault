@@ -1,10 +1,9 @@
 # Contributing to Smriti
 
-Welcome — and thank you for considering a contribution. Smriti is
-maintained primarily by non-Rust developers, so the contribution
-flow is built around **tests as the contract**. If your PR's tests
-pass, your code lands. If they don't, the failure is the
-conversation, not a code-style debate.
+Welcome — and thank you for considering a contribution. Smriti's
+contribution flow is built around **tests as the contract**. If
+your PR's tests pass, your code lands. If they don't, the failure
+is the conversation, not a code-style debate.
 
 ## Before you open a PR
 

@@ -9,6 +9,14 @@
   import type { PersonDto } from "../lib/api/types";
 
   let clusters = $state<PersonDto[]>([]);
+  // Main grid holds clusters with 2+ photos — the people Smriti has
+  // actually grouped. Singletons (clusters with exactly one photo) are
+  // shown in a secondary section below; they're faces detected but not
+  // yet recognised across multiple photos. Without this split, small
+  // libraries where every face is unique end up with an empty People
+  // view even after detection ran successfully.
+  const mainClusters = $derived(clusters.filter((c) => c.photo_count >= 2));
+  const singletons   = $derived(clusters.filter((c) => c.photo_count === 1));
   let error = $state<string | null>(null);
   let pendingPhotos = $state(0);
   let unconfirmedTotal = $state(0);
@@ -54,7 +62,7 @@
 
   async function load() {
     try {
-      clusters = await people.list({ minPhotos: 2 });
+      clusters = await people.list({});
     } catch (e) {
       error = JSON.stringify(e);
     }
@@ -149,7 +157,7 @@
 </script>
 
 <PageHeader title="People">
-  <span class="count mono">{clusters.length}<span class="muted"> people</span></span>
+  <span class="count mono">{mainClusters.length}<span class="muted"> people</span></span>
   {#if running && facesJob}
     <span class="run-status mono">
       {facesJob.processed.toLocaleString()}{facesJob.total ? ` / ${facesJob.total.toLocaleString()}` : ""}
@@ -220,23 +228,55 @@
       <p class="working">Looking through your photos. Faces will appear here as they're found — feel free to navigate away.</p>
     </div>
   {:else}
-    <div class="grid">
-      {#each clusters as c (c.id)}
-        <a class="card" href="#/person?id={c.id}">
-          <div class="frame">
-            {#if c.representative_thumbnail_path}
-              <img src={thumbUrl(libraryStore.driveRoot, c.representative_thumbnail_path) ?? ""} alt="" />
-            {:else}
-              <span class="placeholder small">no face</span>
-            {/if}
-          </div>
-          <div class="caption">
-            <strong class="name">{c.name ?? "Unnamed"}</strong>
-            <span class="count mono">{c.photo_count} photos</span>
-          </div>
-        </a>
-      {/each}
-    </div>
+    {#if mainClusters.length > 0}
+      <div class="grid">
+        {#each mainClusters as c (c.id)}
+          <a class="card" href="#/person?id={c.id}">
+            <div class="frame">
+              {#if c.representative_thumbnail_path}
+                <img src={thumbUrl(libraryStore.driveRoot, c.representative_thumbnail_path) ?? ""} alt="" />
+              {:else}
+                <span class="placeholder small">no face</span>
+              {/if}
+            </div>
+            <div class="caption">
+              <strong class="name">{c.name ?? "Unnamed"}</strong>
+              <span class="count mono">{c.photo_count} photos</span>
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
+
+    {#if singletons.length > 0}
+      <section class="singletons">
+        <header class="singletons-head">
+          <h3 class="singletons-title">
+            Faces seen only once
+            <span class="singletons-count mono">{singletons.length}</span>
+          </h3>
+          <p class="singletons-hint">
+            Detected in a single photo each. Click any face to name them — or open one and use <em>Merge</em> to join it to a person above.
+          </p>
+        </header>
+        <div class="singletons-grid">
+          {#each singletons as c (c.id)}
+            <a class="singleton-card" href="#/person?id={c.id}">
+              <div class="singleton-frame">
+                {#if c.representative_thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, c.representative_thumbnail_path) ?? ""} alt="" />
+                {:else}
+                  <span class="placeholder small">·</span>
+                {/if}
+              </div>
+              {#if c.name}
+                <span class="singleton-name">{c.name}</span>
+              {/if}
+            </a>
+          {/each}
+        </div>
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -375,4 +415,93 @@
     color: var(--ink-muted);
   }
   .small { font-size: var(--t-xs); }
+
+  /* Singletons section — faces detected in a single photo each.
+     De-emphasized vs the main grid so a long tail of one-shot faces
+     doesn't drown the primary content. */
+  .singletons {
+    margin-top: var(--s-8);
+    padding-top: var(--s-5);
+    border-top: 1px solid var(--line-soft);
+  }
+  .singletons-head {
+    margin-bottom: var(--s-4);
+    max-width: 64ch;
+  }
+  .singletons-title {
+    font-family: var(--font-display);
+    font-size: var(--t-lg);
+    font-weight: 500;
+    font-variation-settings: "opsz" 24;
+    color: var(--ink-soft);
+    margin: 0 0 var(--s-2);
+    letter-spacing: -0.012em;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+  .singletons-count {
+    font-size: var(--t-xs);
+    color: var(--ink-faint);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+  }
+  .singletons-hint {
+    color: var(--ink-muted);
+    font-size: var(--t-sm);
+    line-height: 1.55;
+    margin: 0;
+  }
+  .singletons-hint em {
+    font-style: normal;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+  .singletons-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: var(--s-3) var(--s-2);
+  }
+  .singleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+    opacity: 0.78;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .singleton-card:hover { opacity: 1; }
+  .singleton-frame {
+    aspect-ratio: 1;
+    min-width: 0;
+    background: var(--bg-card);
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color var(--t-fast) var(--ease),
+                box-shadow var(--t-fast) var(--ease);
+  }
+  .singleton-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .singleton-card:hover .singleton-frame {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .singleton-name {
+    font-size: var(--t-2xs);
+    color: var(--ink-muted);
+    font-family: var(--font-body);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 var(--s-1);
+  }
 </style>
