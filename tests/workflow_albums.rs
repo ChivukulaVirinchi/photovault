@@ -46,7 +46,10 @@ fn add_photos_links_them_and_get_album_photo_ids_returns_them() {
 
     let album_id = repo.create("Goa 2024").unwrap();
     let added = repo.add_photos(album_id, &[1, 2, 4]).unwrap();
-    assert_eq!(added, 3, "add_photos reports the number of newly linked rows");
+    assert_eq!(
+        added, 3,
+        "add_photos reports the number of newly linked rows"
+    );
 
     let mut ids = repo.get_album_photo_ids(album_id).unwrap();
     ids.sort();
@@ -103,7 +106,10 @@ fn rename_changes_album_name_in_get_all() {
     repo.rename(id, "New name").unwrap();
 
     let all = repo.get_all().unwrap();
-    let found = all.iter().find(|a| a.id == id).expect("renamed album exists");
+    let found = all
+        .iter()
+        .find(|a| a.id == id)
+        .expect("renamed album exists");
     assert_eq!(found.name, "New name");
 }
 

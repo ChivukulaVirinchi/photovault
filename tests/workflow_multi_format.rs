@@ -85,8 +85,7 @@ fn open_image_decodes_each_raw_extension_via_the_same_path() {
     ] {
         let path = dir.path().join(format!("shot.{}", ext));
         std::fs::write(&path, &nef).unwrap();
-        let img = open_image(&path)
-            .unwrap_or_else(|e| panic!("decode failed for .{}: {}", ext, e));
+        let img = open_image(&path).unwrap_or_else(|e| panic!("decode failed for .{}: {}", ext, e));
         assert_eq!(img.width(), 48, ".{} preview width matches", ext);
         assert_eq!(img.height(), 32, ".{} preview height matches", ext);
     }

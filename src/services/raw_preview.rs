@@ -29,12 +29,12 @@
 //!    - IFD chain via the NextIFD offset (last 4 bytes of each IFD)
 //!    - SubIFD chain via tag 0x014A
 //!    - EXIF / GPS / Interop SubIFDs via tags 0x8769 / 0x8825 / 0xA005
-//!    Each visit short-circuits if we've already seen that offset,
-//!    so a malformed file with a cycle can't hang us.
+//!      Each visit short-circuits if we've already seen that offset,
+//!      so a malformed file with a cycle can't hang us.
 //! 3. For each IFD, look for two embedded-JPEG idioms:
 //!    a. `JPEGInterchangeFormat` (0x0201) + length (0x0202)
 //!    b. `StripOffsets` (0x0111) + byte counts (0x0117) where
-//!       `Compression` (0x0103) is 6 (old-style JPEG) or 7 (new).
+//!    `Compression` (0x0103) is 6 (old-style JPEG) or 7 (new).
 //! 4. Sanity-bound each candidate against the file size, then return
 //!    the bytes of the largest one (or None if no candidate found).
 //!
@@ -61,10 +61,7 @@ use std::path::Path;
 /// decode this photo" rather than a hard error.
 pub fn extract_largest_preview(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let file = File::open(path).map_err(|e| format!("open: {e}"))?;
-    let file_len = file
-        .metadata()
-        .map_err(|e| format!("stat: {e}"))?
-        .len();
+    let file_len = file.metadata().map_err(|e| format!("stat: {e}"))?.len();
     let mut reader = TiffReader::new(BufReader::new(file), file_len)?;
     let candidates = reader.find_candidates()?;
     let Some(best) = candidates.into_iter().max_by_key(|c| c.length) else {
@@ -361,8 +358,8 @@ impl TiffReader {
             return Err(format!("expected count=1, got {count}"));
         }
         match type_id {
-            3 => Ok((value & 0xFFFF) as u32), // inline SHORT
-            4 => Ok(value),                   // inline LONG
+            3 => Ok(value & 0xFFFF), // inline SHORT
+            4 => Ok(value),          // inline LONG
             _ => Err(format!("unsupported type {type_id}")),
         }
     }

@@ -61,9 +61,7 @@ pub fn make_jpeg(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
     let img = ImageBuffer::from_fn(width, height, |_x, _y| {
         // Pixel = colour ± deterministic noise. Linear-congruential RNG
         // — not cryptographic, just predictable across runs.
-        rng_state = rng_state
-            .wrapping_mul(1_103_515_245)
-            .wrapping_add(12345);
+        rng_state = rng_state.wrapping_mul(1_103_515_245).wrapping_add(12345);
         let n = ((rng_state >> 16) & 0x7F) as u8; // 0..127
         let r = colour[0].saturating_add(n / 2);
         let g = colour[1].saturating_add(n);
@@ -129,7 +127,7 @@ pub fn make_minimal_nef(preview: &[u8]) -> Vec<u8> {
 
     // IFD0
     out.extend_from_slice(&2u16.to_le_bytes()); // entry count
-    // Entry: JPEGInterchangeFormat (0x0201), type LONG, count 1, value = offset
+                                                // Entry: JPEGInterchangeFormat (0x0201), type LONG, count 1, value = offset
     out.extend_from_slice(&0x0201u16.to_le_bytes());
     out.extend_from_slice(&4u16.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes());
@@ -186,8 +184,7 @@ pub fn make_library() -> (TempDir, Database) {
         .prefix("smriti-test-")
         .tempdir()
         .expect("tempdir");
-    let database =
-        Database::open_for_drive(dir.path()).expect("open_for_drive on fresh tempdir");
+    let database = Database::open_for_drive(dir.path()).expect("open_for_drive on fresh tempdir");
     smriti::db::create_schema(&database.conn).expect("create_schema");
     smriti::db::migrations::run_migrations(&database.conn).expect("run_migrations");
     (dir, database)

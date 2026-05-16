@@ -60,14 +60,14 @@ impl GeocodingService {
     /// the user-recognisable name regardless.
     fn feature_priority(code: &str) -> u8 {
         match code {
-            "PPLC" => 0,   // country capital
-            "PPLA" => 1,   // state capital
-            "PPLA2" => 2,  // district seat
+            "PPLC" => 0,  // country capital
+            "PPLA" => 1,  // state capital
+            "PPLA2" => 2, // district seat
             "PPLA3" => 3,
             "PPLA4" => 4,
-            "PPLG" => 5,   // seat of government
-            "PPL" => 6,    // generic populated place
-            _ => 7,        // PPLX / PPLL / PPLS / etc.
+            "PPLG" => 5, // seat of government
+            "PPL" => 6,  // generic populated place
+            _ => 7,      // PPLX / PPLL / PPLS / etc.
         }
     }
 

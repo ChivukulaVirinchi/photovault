@@ -53,7 +53,17 @@ fn make_test_geonames() -> (TempDir, std::path::PathBuf) {
 
     // (name, ascii_name, lat, lng, country_code, country_name,
     //  population, feature_code)
-    let rows: &[(&str, &str, f64, f64, &str, &str, i64, &str)] = &[
+    type CityRow = (
+        &'static str,
+        &'static str,
+        f64,
+        f64,
+        &'static str,
+        &'static str,
+        i64,
+        &'static str,
+    );
+    let rows: &[CityRow] = &[
         // Vizag-area trio — the regression scenario. Rasapudipalem
         // has the highest population (bogus upstream tag) and is
         // closest to some coordinates, but Visakhapatnam is PPLA2
@@ -79,18 +89,15 @@ fn make_test_geonames() -> (TempDir, std::path::PathBuf) {
             "PPL",
         ),
         (
-            "Gajuwaka",
-            "Gajuwaka",
-            17.7000,
-            83.2166,
-            "IN",
-            "India",
-            258_944,
-            "PPL",
+            "Gajuwaka", "Gajuwaka", 17.7000, 83.2166, "IN", "India", 258_944, "PPL",
         ),
         // National capitals, comfortably above the population floor.
-        ("Paris", "Paris", 48.8566, 2.3522, "FR", "France", 2_148_271, "PPLC"),
-        ("Tokyo", "Tokyo", 35.6762, 139.6503, "JP", "Japan", 8_336_599, "PPLA"),
+        (
+            "Paris", "Paris", 48.8566, 2.3522, "FR", "France", 2_148_271, "PPLC",
+        ),
+        (
+            "Tokyo", "Tokyo", 35.6762, 139.6503, "JP", "Japan", 8_336_599, "PPLA",
+        ),
     ];
 
     let mut stmt = conn
@@ -125,7 +132,10 @@ fn vizag_coords_prefer_visakhapatnam_over_neighbourhoods() {
     let r = svc
         .reverse_geocode(17.6868, 83.2185)
         .expect("vizag should geocode");
-    assert_eq!(r.city, "Visakhapatnam", "PPLA2 beats PPL even when PPL is closer");
+    assert_eq!(
+        r.city, "Visakhapatnam",
+        "PPLA2 beats PPL even when PPL is closer"
+    );
     assert_eq!(r.country, "India");
 }
 
@@ -137,7 +147,9 @@ fn rasapudipalem_coords_still_pick_visakhapatnam_via_admin_seat() {
     // wins regardless of distance.
     let (_dir, db) = make_test_geonames();
     let svc = GeocodingService::new(&db).unwrap();
-    let r = svc.reverse_geocode(17.7330, 83.3162).expect("should geocode");
+    let r = svc
+        .reverse_geocode(17.7330, 83.3162)
+        .expect("should geocode");
     assert_eq!(
         r.city, "Visakhapatnam",
         "admin-seat priority takes precedence over distance"
@@ -148,7 +160,9 @@ fn rasapudipalem_coords_still_pick_visakhapatnam_via_admin_seat() {
 fn paris_coords_resolve_to_paris() {
     let (_dir, db) = make_test_geonames();
     let svc = GeocodingService::new(&db).unwrap();
-    let r = svc.reverse_geocode(48.8566, 2.3522).expect("paris should geocode");
+    let r = svc
+        .reverse_geocode(48.8566, 2.3522)
+        .expect("paris should geocode");
     assert_eq!(r.city, "Paris");
     assert_eq!(r.country, "France");
 }

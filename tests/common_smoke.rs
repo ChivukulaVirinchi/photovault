@@ -20,7 +20,11 @@ fn make_minimal_nef_wraps_a_decodable_preview() {
     let nef = common::make_minimal_nef(&preview);
     // The bytes between offset 38 and end should be the raw preview JPEG.
     let extracted = &nef[38..];
-    assert_eq!(extracted.len(), preview.len(), "preview survives round-trip");
+    assert_eq!(
+        extracted.len(),
+        preview.len(),
+        "preview survives round-trip"
+    );
     let img = image::load_from_memory(extracted).expect("decode extracted preview");
     assert_eq!(img.width(), 48);
     assert_eq!(img.height(), 36);

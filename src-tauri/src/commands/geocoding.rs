@@ -310,7 +310,11 @@ fn backfill_inner(
                     if samples_logged < MAX_SAMPLES {
                         tracing::info!(
                             "geocode sample: photo_id={} ({:.4}, {:.4}) -> {} / {}",
-                            id, lat, lng, r.city, r.country
+                            id,
+                            lat,
+                            lng,
+                            r.city,
+                            r.country
                         );
                         samples_logged += 1;
                     }
@@ -331,7 +335,9 @@ fn backfill_inner(
                     if samples_logged < MAX_SAMPLES {
                         tracing::info!(
                             "geocode sample: photo_id={} ({:.4}, {:.4}) -> NO MATCH",
-                            id, lat, lng
+                            id,
+                            lat,
+                            lng
                         );
                         samples_logged += 1;
                     }
