@@ -1,0 +1,44 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 152
+expression: dto
+---
+{
+  "id": 7,
+  "file_path": "subdir/IMG_0007.jpg",
+  "file_name": "IMG_0007.jpg",
+  "file_size": 1024,
+  "file_hash": "deadbeef",
+  "date_taken": "2024-01-01T12:00:00",
+  "width": 6048,
+  "height": 4024,
+  "orientation": 1,
+  "gps": {
+    "lat": 17.68,
+    "lng": 83.2,
+    "altitude": 15.0
+  },
+  "location": {
+    "city": "Visakhapatnam",
+    "country": "India"
+  },
+  "camera": {
+    "make": "NIKON CORPORATION Nikon Z 7ii",
+    "model": null,
+    "lens": "NIKKOR Z 24-70mm f/2.8 S",
+    "iso": 400,
+    "aperture": "f/2.8",
+    "shutter_speed": "1/125",
+    "focal_length": "50mm",
+    "flash": "Off"
+  },
+  "thumbnail_path": ".photovault/thumbnails/medium/v2/de/deadbeef.jpg",
+  "content_category": "photo",
+  "ocr": {
+    "text": "Hello world",
+    "confidence": 0.92
+  },
+  "faces_processed": true,
+  "is_trashed": false,
+  "indexed_at": "2024-01-01T12:00:00+00:00"
+}

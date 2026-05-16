@@ -1,0 +1,14 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 301
+expression: dto
+---
+{
+  "total_photos": 91000,
+  "missing_thumbnails": 0,
+  "inaccurate_dates": 12,
+  "missing_dates": 3,
+  "heic_count": 410,
+  "heic_decoder_available": true,
+  "face_processed_no_faces": 7400
+}

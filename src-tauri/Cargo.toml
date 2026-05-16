@@ -25,7 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 smriti = { path = ".." }
 
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 
@@ -68,6 +68,10 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# Snapshot testing for the wire-format DTOs and JSON shapes produced
+# by Tauri command handlers. See tests/dto_snapshots.rs.
+# Reviewers update snapshots with `cargo insta review`.
+insta = { version = "1", features = ["json"] }
 
 [features]
 default = ["custom-protocol", "raw"]

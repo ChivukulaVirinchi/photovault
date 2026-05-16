@@ -1,0 +1,9 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 184
+expression: dto
+---
+{
+  "city": "Visakhapatnam",
+  "country": "India"
+}

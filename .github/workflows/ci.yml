@@ -77,6 +77,8 @@ jobs:
         run: npm ci --prefix src-ui
       - name: Frontend type check
         run: npm run check --prefix src-ui
+      - name: Frontend unit tests (Vitest)
+        run: npm run test --prefix src-ui
       - name: Build frontend
         run: npm run build --prefix src-ui
 

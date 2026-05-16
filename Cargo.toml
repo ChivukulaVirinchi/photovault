@@ -180,6 +180,12 @@ panic = "abort"
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+# `insta` provides inline snapshot tests. Used by integration tests
+# under `tests/` and by `src-tauri/tests/dto_snapshots.rs` to catch
+# accidental breakage of the wire-format contract between Rust and
+# the Svelte frontend. Reviewers update snapshots with the CLI
+# `cargo insta review`.
+insta = { version = "1", features = ["json"] }
 
 [[bench]]
 name = "clustering"

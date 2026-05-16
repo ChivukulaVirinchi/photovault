@@ -1,17 +1,8 @@
-import { createThumbnailQueue } from "./thumbnailQueue.js";
+import { describe, expect, it } from "vitest";
 
-function equal<T>(actual: T, expected: T, label: string) {
-  if (actual !== expected) {
-    throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
-  }
-}
+import { createThumbnailQueue } from "./thumbnailQueue";
 
-function deepEqual<T>(actual: T, expected: T, label: string) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+/// Helper for tests that need a manually-resolvable promise.
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -20,79 +11,88 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/// Drain microtasks so queued continuations run. Used after we
+/// resolve a deferred promise — vitest doesn't auto-await microtasks
+/// between assertions.
 async function flush() {
   await Promise.resolve();
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function runsHighestPriorityNext() {
-  const first = deferred<string | null>();
-  const second = deferred<string | null>();
-  const started: number[] = [];
-  const queue = createThumbnailQueue(async (id) => {
-    started.push(id);
-    if (id === 1) return first.promise;
-    if (id === 3) return second.promise;
-    return `thumb-${id}`;
-  }, 1);
+describe("thumbnailQueue priority handling", () => {
+  it("runs the highest-priority queued item next after the in-flight one resolves", async () => {
+    const first = deferred<string | null>();
+    const second = deferred<string | null>();
+    const started: number[] = [];
 
-  const ready: string[] = [];
-  queue.enqueue(1, (path) => ready.push(path), 1);
-  queue.enqueue(2, (path) => ready.push(path), 2);
-  queue.enqueue(3, (path) => ready.push(path), 9);
-  deepEqual(started, [1], "starts first item immediately");
+    const queue = createThumbnailQueue(async (id) => {
+      started.push(id);
+      if (id === 1) return first.promise;
+      if (id === 3) return second.promise;
+      return `thumb-${id}`;
+    }, 1);
 
-  first.resolve("thumb-1");
-  await flush();
-  deepEqual(started, [1, 3], "starts highest priority queued item next");
+    const ready: string[] = [];
+    queue.enqueue(1, (path) => ready.push(path), 1);
+    queue.enqueue(2, (path) => ready.push(path), 2);
+    queue.enqueue(3, (path) => ready.push(path), 9); // highest priority
 
-  second.resolve("thumb-3");
-  await flush();
-  deepEqual(started, [1, 3, 2], "falls back to lower priority after urgent item");
-  deepEqual(ready, ["thumb-1", "thumb-3", "thumb-2"], "reports ready paths in completion order");
-}
+    expect(started).toEqual([1]);
 
-async function coalescesDuplicateRequests() {
-  const gate = deferred<string | null>();
-  let calls = 0;
-  const queue = createThumbnailQueue(async () => {
-    calls += 1;
-    return gate.promise;
-  }, 2);
+    first.resolve("thumb-1");
+    await flush();
+    expect(started).toEqual([1, 3]);
 
-  const ready: string[] = [];
-  queue.enqueue(42, (path) => ready.push(`a:${path}`), 1);
-  queue.enqueue(42, (path) => ready.push(`b:${path}`), 5);
-  gate.resolve("thumb-42");
-  await flush();
+    second.resolve("thumb-3");
+    await flush();
+    expect(started).toEqual([1, 3, 2]);
+    expect(ready).toEqual(["thumb-1", "thumb-3", "thumb-2"]);
+  });
+});
 
-  equal(calls, 1, "coalesces duplicate loader calls");
-  deepEqual(ready, ["a:thumb-42", "b:thumb-42"], "fans out coalesced result");
-}
+describe("thumbnailQueue deduplication", () => {
+  it("coalesces duplicate requests for the same photo id", async () => {
+    const gate = deferred<string | null>();
+    let calls = 0;
+    const queue = createThumbnailQueue(async () => {
+      calls += 1;
+      return gate.promise;
+    }, 2);
 
-async function cancellationDropsQueuedHandlers() {
-  const gate = deferred<string | null>();
-  const started: number[] = [];
-  const queue = createThumbnailQueue(async (id) => {
-    started.push(id);
-    if (id === 1) return gate.promise;
-    return `thumb-${id}`;
-  }, 1);
+    const ready: string[] = [];
+    queue.enqueue(42, (path) => ready.push(`a:${path}`), 1);
+    queue.enqueue(42, (path) => ready.push(`b:${path}`), 5);
 
-  const ready: string[] = [];
-  queue.enqueue(1, (path) => ready.push(path), 1);
-  const cancel = queue.enqueue(2, (path) => ready.push(path), 2);
-  cancel();
+    gate.resolve("thumb-42");
+    await flush();
 
-  gate.resolve("thumb-1");
-  await flush();
-  deepEqual(started, [1], "does not start canceled queued item");
-  deepEqual(ready, ["thumb-1"], "does not call canceled handler");
-  equal(queue.pendingCount(), 0, "clears canceled queued entry");
-}
+    expect(calls).toBe(1);
+    expect(ready).toEqual(["a:thumb-42", "b:thumb-42"]);
+  });
+});
 
-await runsHighestPriorityNext();
-await coalescesDuplicateRequests();
-await cancellationDropsQueuedHandlers();
-console.log("thumbnailQueue tests passed");
+describe("thumbnailQueue cancellation", () => {
+  it("does not start or report a canceled queued item", async () => {
+    const gate = deferred<string | null>();
+    const started: number[] = [];
+
+    const queue = createThumbnailQueue(async (id) => {
+      started.push(id);
+      if (id === 1) return gate.promise;
+      return `thumb-${id}`;
+    }, 1);
+
+    const ready: string[] = [];
+    queue.enqueue(1, (path) => ready.push(path), 1);
+    const cancel = queue.enqueue(2, (path) => ready.push(path), 2);
+    cancel();
+
+    gate.resolve("thumb-1");
+    await flush();
+
+    expect(started).toEqual([1]);
+    expect(ready).toEqual(["thumb-1"]);
+    expect(queue.pendingCount()).toBe(0);
+  });
+});

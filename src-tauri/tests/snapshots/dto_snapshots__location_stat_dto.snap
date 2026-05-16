@@ -1,0 +1,10 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 227
+expression: dto
+---
+{
+  "city": "Visakhapatnam",
+  "country": "India",
+  "photo_count": 5821
+}

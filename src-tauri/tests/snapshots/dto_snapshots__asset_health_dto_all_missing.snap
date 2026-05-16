@@ -1,0 +1,11 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 275
+expression: dto
+---
+{
+  "missing_face_models": true,
+  "missing_onnx_runtime": true,
+  "missing_geonames_db": true,
+  "summary": "Missing: face models, ONNX runtime, GeoNames database"
+}

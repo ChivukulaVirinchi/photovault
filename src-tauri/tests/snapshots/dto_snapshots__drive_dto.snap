@@ -1,0 +1,13 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 253
+expression: dto
+---
+{
+  "name": "Photos",
+  "path": "/mnt/photos",
+  "is_removable": true,
+  "has_photovault_db": true,
+  "total_size_bytes": 1000000000000,
+  "free_space_bytes": 500000000000
+}
