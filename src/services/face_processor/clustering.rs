@@ -15,7 +15,11 @@ impl FaceProcessor {
     ///    AMBIGUOUS -> queue for user review
     ///    LOW       -> leave for Stage 2
     /// 2) Complete-link agglomerative clustering on still-unresolved faces
-    pub(crate) fn run_clustering(
+    ///
+    /// Public so integration tests (and re-cluster-only flows that skip
+    /// detection) can call it without going through the full
+    /// `process_photos` pipeline.
+    pub fn run_clustering(
         face_repo: &FaceRepo,
         clustering_threshold: f32,
         resolver_weights: crate::ml::ResolverWeights,
