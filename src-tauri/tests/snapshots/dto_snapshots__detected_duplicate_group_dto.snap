@@ -1,0 +1,13 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "hash": "sha256-deadbeef",
+  "photo_ids": [
+    7,
+    8
+  ],
+  "suggested_keep_id": 7,
+  "duplicate_type": "exact"
+}

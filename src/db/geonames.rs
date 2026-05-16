@@ -151,12 +151,16 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed creating schema: {}", e))?;
 
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed starting transaction: {}", e))?;
+
     let countries = std::fs::read_to_string(&countries_path)
         .map_err(|e| format!("Failed reading {}: {}", countries_path.display(), e))?;
     for line in countries.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() >= 2 {
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO countries (code, name) VALUES (?1, ?2)",
                 [parts[0], parts[1]],
             )
@@ -167,7 +171,7 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
     let file = File::open(&cities_path)
         .map_err(|e| format!("Failed opening {}: {}", cities_path.display(), e))?;
     let reader = BufReader::new(file);
-    let mut stmt = conn
+    let mut stmt = tx
         .prepare(
             r#"
             INSERT OR IGNORE INTO cities
@@ -211,6 +215,10 @@ pub fn build_geonames_db(project_root: &Path) -> Result<(), String> {
             .map_err(|e| format!("Failed inserting city row: {}", e))?;
         }
     }
+
+    drop(stmt);
+    tx.commit()
+        .map_err(|e| format!("Failed committing GeoNames DB: {}", e))?;
 
     Ok(())
 }

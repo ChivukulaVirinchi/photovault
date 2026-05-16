@@ -1,0 +1,10 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "cluster_id": 21,
+  "name": "Asha",
+  "photo_count": 88,
+  "face_thumbnail_path": ".photovault/faces/701.jpg"
+}

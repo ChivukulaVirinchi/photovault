@@ -1,0 +1,17 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "id": "otd-2020-01-01",
+  "kind": "onthisday",
+  "title": "4 years ago today",
+  "hero_photo_id": 7,
+  "hero_thumbnail_path": ".photovault/thumbnails/memory.jpg",
+  "photo_count": 3,
+  "photo_ids": [
+    7,
+    8,
+    9
+  ]
+}

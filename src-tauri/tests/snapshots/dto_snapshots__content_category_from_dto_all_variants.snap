@@ -1,0 +1,13 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: categories
+---
+[
+  "photo",
+  "business_card",
+  "document",
+  "screenshot",
+  "presentation",
+  "whiteboard",
+  "receipt"
+]

@@ -1,0 +1,17 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "queue_id": 9,
+  "face_id": 101,
+  "candidate_cluster_id": 21,
+  "candidate_cluster_name": "Asha",
+  "candidate_cluster_size": 14,
+  "candidate_sample_face_ids": [
+    701,
+    702,
+    703
+  ],
+  "score": 0.87
+}

@@ -1,0 +1,15 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "id": 4,
+  "name": "Goa 2024",
+  "photo_count": 32,
+  "cover_photo_id": 77,
+  "cover_thumbnail_path": ".photovault/thumbnails/cover.jpg",
+  "date_range_start": "2024-01-03T10:00:00",
+  "date_range_end": "2024-01-08T18:00:00",
+  "created_at": "2024-01-10T00:00:00Z",
+  "updated_at": "2024-01-11T00:00:00Z"
+}

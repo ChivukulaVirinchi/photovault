@@ -1,0 +1,23 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "id": 41,
+  "start_time": "2024-01-01T12:00:00Z",
+  "end_time": "2024-01-01T12:00:05Z",
+  "photo_count": 3,
+  "cover_thumbnail_paths": [
+    ".photovault/thumbnails/burst-a.jpg",
+    ".photovault/thumbnails/burst-b.jpg"
+  ],
+  "cover_photo_ids": [
+    7,
+    8
+  ],
+  "member_photo_ids": [
+    7,
+    8,
+    9
+  ]
+}

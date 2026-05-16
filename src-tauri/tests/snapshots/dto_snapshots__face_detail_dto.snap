@@ -1,0 +1,13 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "face_id": 101,
+  "photo_id": 7,
+  "cluster_id": 21,
+  "cluster_name": null,
+  "confidence": 0.95,
+  "user_confirmed": 1,
+  "thumbnail_path": ".photovault/faces/101.jpg"
+}

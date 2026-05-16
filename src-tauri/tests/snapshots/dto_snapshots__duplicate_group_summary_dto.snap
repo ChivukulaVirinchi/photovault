@@ -1,0 +1,15 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "id": 31,
+  "member_count": 3,
+  "cover_thumbnail_path": ".photovault/thumbnails/dup.jpg",
+  "cover_photo_id": 7,
+  "member_photo_ids": [
+    7,
+    8,
+    9
+  ]
+}
