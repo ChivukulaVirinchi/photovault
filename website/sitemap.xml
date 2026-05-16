@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+
+  <!-- Home -->
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+
+  <!-- 404 page is intentionally excluded -->
+
+  <!-- Manual entry point and the high-value user-guide pages.
+       These are served by the docs site once GitHub Pages is
+       configured to render docs/ as HTML. -->
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/getting-started.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/indexing.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/people.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/search.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/faq.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/troubleshooting.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/settings.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+
+</urlset>

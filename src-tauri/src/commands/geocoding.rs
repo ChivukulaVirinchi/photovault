@@ -377,7 +377,7 @@ fn backfill_inner(
     // take top 3.
     let top: Vec<(String, u64)> = {
         let mut v: Vec<(String, u64)> = city_counts.into_iter().collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         v.into_iter().take(3).collect()
     };
 

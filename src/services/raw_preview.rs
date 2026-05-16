@@ -227,25 +227,21 @@ impl TiffReader {
                 TAG_COMPRESSION => {
                     compression = self.read_long_value(e.type_id, e.count, e.value).ok();
                 }
-                TAG_STRIP_OFFSETS => {
-                    // Multiple strips are normal for tiled TIFFs, but
-                    // for an embedded JPEG it's always a single strip
-                    // — count = 1. Skip multi-strip variants; they're
-                    // not JPEG bitstreams.
-                    if e.count == 1 {
-                        strip_offset = self
-                            .read_long_value(e.type_id, e.count, e.value)
-                            .ok()
-                            .map(|v| v as u64);
-                    }
+                // Multiple strips are normal for tiled TIFFs, but for
+                // an embedded JPEG it's always a single strip — count =
+                // 1. The `if e.count == 1` guard on each arm skips
+                // multi-strip variants; they're not JPEG bitstreams.
+                TAG_STRIP_OFFSETS if e.count == 1 => {
+                    strip_offset = self
+                        .read_long_value(e.type_id, e.count, e.value)
+                        .ok()
+                        .map(|v| v as u64);
                 }
-                TAG_STRIP_BYTE_COUNTS => {
-                    if e.count == 1 {
-                        strip_byte_count = self
-                            .read_long_value(e.type_id, e.count, e.value)
-                            .ok()
-                            .map(|v| v as u64);
-                    }
+                TAG_STRIP_BYTE_COUNTS if e.count == 1 => {
+                    strip_byte_count = self
+                        .read_long_value(e.type_id, e.count, e.value)
+                        .ok()
+                        .map(|v| v as u64);
                 }
                 TAG_JPEG_INTERCHANGE_FORMAT => {
                     jpeg_offset = self

@@ -32,7 +32,7 @@
   </p>
 
   <a href="https://chivukulavirinchi.github.io/photovault/">
-    <img src="website/demo-hero.webp" alt="Smriti in motion — 30 second loop showing indexing, timeline, face clustering, map, search, and slideshow" width="820">
+    <img src="website/featured.gif" alt="Smriti in motion — 30 second loop showing indexing, timeline, face clustering, map, search, and slideshow" width="820">
   </a>
 
   <p>
