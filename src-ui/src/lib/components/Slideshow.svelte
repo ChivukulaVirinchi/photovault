@@ -139,23 +139,31 @@
   }
 
   /// Decode an image off-screen so paint is instant when we mount it.
-  /// img.decode() resolves AFTER bitmap decode — load alone isn't enough
-  /// on large RAWs / HEIC files where decode can lag download by seconds.
+  /// We deliberately do NOT use `img.decode()` here — it hangs
+  /// indefinitely in some Tauri / WebView2 builds when the source
+  /// JPEG has certain ICC color profile blocks (e.g. some Unsplash
+  /// images). `onload` is reliable across every webview we support.
+  /// The visible `<img>` carries `decoding="async"` for paint-time.
   async function decodeOffscreen(url: string): Promise<void> {
-    const img = new Image();
-    img.src = url;
-    if (img.decode) {
-      try {
-        await img.decode();
-        return;
-      } catch {
-        // Fall through — some webview decoders reject .decode() even
-        // when the file paints fine. The onload below catches those.
-      }
-    }
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("decode failed"));
+    return new Promise<void>((resolve, reject) => {
+      const img = new Image();
+      const TIMEOUT_MS = 8000;
+      const timer = setTimeout(() => {
+        // If neither onload nor onerror fires within 8s, treat as
+        // success and let the visible img handle paint-time decode.
+        // We'd rather have an unflashing crossfade than a hung
+        // slideshow waiting on a webview that has gone silent.
+        resolve();
+      }, TIMEOUT_MS);
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("decode failed"));
+      };
+      img.src = url;
     });
   }
 

@@ -1,73 +1,159 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smriti — Page not found</title>
+  <title>Smriti — page not found</title>
+  <meta name="description" content="That page is forgotten." />
+  <meta name="theme-color" content="#fafaf8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0f1015" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,400;1,500&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
+    :root, :root[data-theme="light"] {
+      --bg: #fafaf8; --bg-paper: #f4f5f3;
+      --ink: #15171c; --ink-soft: #3a3d44; --ink-muted: #797d85; --ink-faint: #adb0b8;
+      --line: #d2d4d2; --line-soft: #e1e3e0; --line-hair: #ececea;
+      --accent: #466996; --accent-deep: #2f4f7a;
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1015; --bg-paper: #161821;
+      --ink: #e7eaf0; --ink-soft: #aeb3bf; --ink-muted: #80858f; --ink-faint: #4d525c;
+      --line: #2a2e38; --line-soft: #1e2129; --line-hair: #1a1d24;
+      --accent: #9eb3d4; --accent-deep: #b8c7e0;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-      background: #f6f1e8;
-      color: #2a2622;
+      min-height: 100vh;
       display: grid;
       place-items: center;
-      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 1rem;
+      line-height: 1.55;
       padding: 2rem;
-    }
-    @media (prefers-color-scheme: dark) {
-      body { background: #15110d; color: #f1ebde; }
-      .muted { color: #b3a99a !important; }
-      a { color: #d8a978 !important; }
+      -webkit-font-smoothing: antialiased;
     }
     .card {
-      max-width: 480px;
+      max-width: 540px;
       text-align: center;
     }
     .brand {
-      font-family: "Cormorant Garamond", Georgia, serif;
+      font-family: "Fraunces", Georgia, serif;
       font-style: italic;
+      font-size: 2.2rem;
       font-weight: 500;
-      font-size: 2.4rem;
-      position: relative;
+      letter-spacing: -0.005em;
       display: inline-block;
-      margin-bottom: 1.2rem;
+      margin-bottom: 1.6rem;
+      color: var(--ink);
     }
     .brand::after {
       content: "";
-      width: 7px;
-      height: 7px;
+      display: inline-block;
+      width: 7px; height: 7px;
       border-radius: 50%;
-      background: #c89968;
-      position: absolute;
-      top: 0.55rem;
-      right: -0.55rem;
+      background: var(--accent);
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent-deep);
+      font-weight: 600;
+      margin-bottom: 0.8rem;
     }
     h1 {
-      font-family: "Cormorant Garamond", Georgia, serif;
-      font-style: italic;
+      font-family: "Bricolage Grotesque", serif;
       font-weight: 400;
-      font-size: 1.6rem;
-      margin: 0 0 0.6rem;
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      line-height: 1.06;
+      letter-spacing: -0.028em;
+      margin: 0 0 1rem;
     }
-    p.muted { color: #6a635c; line-height: 1.65; margin: 0.4rem 0; }
-    a { color: #a37642; font-weight: 500; text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    h1 em {
+      font-family: "Fraunces", Georgia, serif;
+      font-style: italic;
+      color: var(--accent-deep);
+      font-weight: 400;
+    }
+    p.muted {
+      color: var(--ink-muted);
+      max-width: 42ch;
+      margin: 0 auto 2rem;
+      font-size: 1.05rem;
+      font-weight: 350;
+    }
+    .actions {
+      display: inline-flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.66rem 1.25rem;
+      border-radius: 999px;
+      font-size: 0.86rem;
+      font-weight: 500;
+      text-decoration: none;
+      border: 1px solid transparent;
+      transition: all 140ms cubic-bezier(0.32, 0.72, 0.24, 1);
+    }
+    .btn--primary {
+      background: var(--ink);
+      color: var(--bg);
+      border-color: var(--ink);
+    }
+    .btn--primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); color: #fafaf8; }
+    .btn--ghost {
+      background: transparent;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    .btn--ghost:hover { border-color: var(--ink); }
+    .fineprint {
+      margin-top: 3rem;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
   </style>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("smriti-theme");
+      var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var theme = saved === "dark" || saved === "light" ? saved : (prefersDark ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
 </head>
 <body>
   <article class="card">
     <div class="brand">smriti</div>
-    <h1>That page is forgotten.</h1>
-    <p class="muted">The link may have moved — or never existed.</p>
-    <p style="margin-top:1.4rem;">
-      <a href="./index.html">Return home</a>
-      &nbsp;·&nbsp;
-      <a href="./docs/">Read the manual</a>
+    <div class="code">404 — not found</div>
+    <h1>That page is&nbsp;<em>forgotten.</em></h1>
+    <p class="muted">
+      The link may have moved — or never existed. Try the home page, or
+      head to the manual.
     </p>
+    <div class="actions">
+      <a class="btn btn--primary" href="./index.html">Return home</a>
+      <a class="btn btn--ghost" href="https://chivukulavirinchi.github.io/photovault/docs/">Read the manual</a>
+    </div>
+    <p class="fineprint">स्मृति · remembered</p>
   </article>
 </body>
 </html>

@@ -232,17 +232,27 @@ impl FaceProcessor {
         // don't show in People, and nothing queues them for review.
         let (rescued, queued) = Self::rescue_orphan_faces(face_repo)?;
 
+        // Final fallback: any face still without a cluster becomes its own
+        // singleton cluster. Catches the "small library, every face unique"
+        // case where Stage A had no galleries to match against, Stage B's
+        // complete-link clusterer correctly produced no merges, and the
+        // rescue pass had nothing to compare to either. Without this, those
+        // faces stay cluster_id = NULL forever — invisible in the People
+        // view, even though detection successfully found them.
+        let singletons_promoted = Self::promote_orphans_to_singletons(face_repo)?;
+
         tracing::info!(
-            "Clustering: {} to-existing, {} new, merged {}, rescued {}, queued {}, from {} unresolved",
+            "Clustering: {} to-existing, {} new, merged {}, rescued {}, queued {}, singletons {}, from {} unresolved",
             assigned_to_existing,
             clusters_created,
             merged,
             rescued,
             queued,
+            singletons_promoted,
             unresolved.len()
         );
 
-        Ok(clusters_created.saturating_sub(merged))
+        Ok(clusters_created.saturating_sub(merged) + singletons_promoted)
     }
 
     /// Rescue pass for orphan faces (cluster_id IS NULL after all earlier
@@ -367,6 +377,48 @@ impl FaceProcessor {
         }
 
         Ok((rescued, queued))
+    }
+
+    /// Promote any face still lacking a cluster assignment into its own
+    /// singleton cluster. Runs after every other pass — by the time we
+    /// get here, the face has failed both stages of clustering AND the
+    /// rescue pass. Rather than leave it invisible, we give it a row in
+    /// `face_clusters` so the People view shows it. The UI's
+    /// "Faces seen only once" section is the destination.
+    ///
+    /// Honours `user_confirmed >= 0` so user-hidden faces (set to -1)
+    /// don't get resurrected as singleton clusters.
+    fn promote_orphans_to_singletons(face_repo: &FaceRepo) -> Result<usize, String> {
+        let orphan_ids: Vec<i64> = {
+            let mut stmt = face_repo
+                .conn
+                .prepare(
+                    "SELECT id FROM faces \
+                     WHERE cluster_id IS NULL AND user_confirmed >= 0",
+                )
+                .map_err(|e| format!("Failed to query orphan faces: {}", e))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, i64>(0))
+                .map_err(|e| format!("Failed to read orphan faces: {}", e))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| format!("Failed to read orphan row: {}", e))?);
+            }
+            out
+        };
+
+        let mut made = 0usize;
+        for face_id in orphan_ids {
+            match face_repo.create_cluster(&[face_id]) {
+                Ok(_) => made += 1,
+                Err(e) => tracing::warn!(
+                    "Could not promote orphan face {} to singleton cluster: {}",
+                    face_id,
+                    e
+                ),
+            }
+        }
+        Ok(made)
     }
 
     /// Unify clusters that likely represent the same person but got split by

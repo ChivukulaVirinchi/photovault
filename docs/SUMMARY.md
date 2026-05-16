@@ -22,11 +22,13 @@
 # For Contributors
 
 - [Build from Source](BUILD.md)
+- [Testing](TESTING.md)
+- [Contributing](CONTRIBUTING.md)
 - [Linux Release Guide](RELEASE_LINUX.md)
 - [Architecture Overview](architecture/overview.md)
 - [Database](architecture/database.md)
-- [State Machine](architecture/state.md)
 - [Services](architecture/services.md)
 - [ML Pipeline](architecture/ml-pipeline.md)
+- [Face GPU Bridge](face-gpu-bridge.md)
 - [Future Scope](FUTURE_SCOPE.md)
 - [Face Recognition Improvements](FACE_RECOGNITION_IMPROVEMENTS.md)
