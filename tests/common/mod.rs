@@ -40,13 +40,37 @@ use smriti::db::Database;
 
 // ---------- image generators ----------
 
-/// Produce a small JPEG (default 64×48) suitable for any test that
-/// just needs "a valid image file" — thumbnail generation, scanner
-/// recognition, EXIF orientation handling, etc. The buffer is solid
-/// `colour` so visual inspection is easy when a test fails.
+/// Produce a JPEG of approximately the given dimensions that
+/// compresses to AT LEAST 10 KB on disk — the scanner enforces a
+/// 10 KB minimum-file-size floor to avoid indexing icons / sprites
+/// / favicons. We fill the buffer with deterministic pseudo-noise
+/// (linear-congruential, seeded by `colour`) so the JPEG encoder
+/// can't crush it down to a few hundred bytes the way it does with
+/// solid colours. The visual appearance doesn't matter for any of
+/// our tests; only the bytes / file size do.
+///
+/// Default callers can use width=256, height=256 to comfortably
+/// clear the floor; on most platforms that produces a ~30-60 KB
+/// file. Wider variations exist for callers that explicitly want
+/// larger images.
 pub fn make_jpeg(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
-    let img = ImageBuffer::from_fn(width, height, |_x, _y| Rgb(colour));
-    let mut buf = Cursor::new(Vec::with_capacity((width * height) as usize));
+    let seed: u32 = u32::from(colour[0]).wrapping_mul(7919)
+        ^ u32::from(colour[1]).wrapping_mul(7901)
+        ^ u32::from(colour[2]).wrapping_mul(7883);
+    let mut rng_state: u32 = seed.wrapping_add(1);
+    let img = ImageBuffer::from_fn(width, height, |_x, _y| {
+        // Pixel = colour ± deterministic noise. Linear-congruential RNG
+        // — not cryptographic, just predictable across runs.
+        rng_state = rng_state
+            .wrapping_mul(1_103_515_245)
+            .wrapping_add(12345);
+        let n = ((rng_state >> 16) & 0x7F) as u8; // 0..127
+        let r = colour[0].saturating_add(n / 2);
+        let g = colour[1].saturating_add(n);
+        let b = colour[2].saturating_add(n / 3);
+        Rgb([r, g, b])
+    });
+    let mut buf = Cursor::new(Vec::with_capacity((width * height * 3) as usize));
     img.write_to(&mut buf, image::ImageFormat::Jpeg)
         .expect("encode jpeg");
     buf.into_inner()
@@ -54,8 +78,28 @@ pub fn make_jpeg(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
 
 /// PNG sibling of [`make_jpeg`]. Useful for testing that the scanner
 /// + thumbnail pipeline handle every supported format symmetrically.
+///
+/// PNG is lossless so we have to fill every pixel with genuinely
+/// incompressible bytes — a per-pixel-independent LCG that mutates
+/// all three channels by a wide range. With solid colour or the
+/// jpeg-style additive noise, deflate compresses a 256×256 PNG down
+/// to ~1.5 KB and the scanner's 10 KB filter discards it.
 pub fn make_png(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
-    let img = ImageBuffer::from_fn(width, height, |_x, _y| Rgb(colour));
+    let mut rng_r: u32 = u32::from(colour[0]).wrapping_add(0xDEAD_BEEF);
+    let mut rng_g: u32 = u32::from(colour[1]).wrapping_add(0xCAFE_F00D);
+    let mut rng_b: u32 = u32::from(colour[2]).wrapping_add(0xBAAD_F00D);
+    let img = ImageBuffer::from_fn(width, height, |_x, _y| {
+        // Three independent LCGs, full byte range. Looks like static —
+        // exactly what we want for incompressibility.
+        rng_r = rng_r.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        rng_g = rng_g.wrapping_mul(214_013).wrapping_add(2_531_011);
+        rng_b = rng_b.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        Rgb([
+            (rng_r >> 16) as u8,
+            (rng_g >> 16) as u8,
+            (rng_b >> 16) as u8,
+        ])
+    });
     let mut buf = Cursor::new(Vec::with_capacity((width * height * 3) as usize));
     img.write_to(&mut buf, image::ImageFormat::Png)
         .expect("encode png");
@@ -130,8 +174,18 @@ pub fn write_nef(dir: &Path, name: &str, colour: [u8; 3]) -> PathBuf {
 /// created, schema applied, migrations run. Returns the TempDir
 /// (keeps the directory alive while the test holds it) and the
 /// `Database` handle ready to use.
+///
+/// The tempdir prefix is deliberately NOT dot-prefixed: the scanner
+/// treats any directory whose name starts with `.` as hidden and
+/// refuses to descend into it (mirrors the production behaviour of
+/// "skip dotfiles unless asked"). tempfile's default `.tmpXXXX`
+/// pattern would make the entire test library invisible to a
+/// `start_scan` call.
 pub fn make_library() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = tempfile::Builder::new()
+        .prefix("smriti-test-")
+        .tempdir()
+        .expect("tempdir");
     let database =
         Database::open_for_drive(dir.path()).expect("open_for_drive on fresh tempdir");
     smriti::db::create_schema(&database.conn).expect("create_schema");
