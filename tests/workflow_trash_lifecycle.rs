@@ -58,7 +58,11 @@ fn restore_returns_photos_to_the_active_set() {
             .map(|r| r.unwrap())
             .collect()
     };
-    assert_eq!(active_ids, vec![2, 4], "only restored + never-trashed photos are active");
+    assert_eq!(
+        active_ids,
+        vec![2, 4],
+        "only restored + never-trashed photos are active"
+    );
 }
 
 #[test]
@@ -73,7 +77,10 @@ fn trashing_an_already_trashed_photo_is_idempotent() {
     let _ = TrashService::trash_photos(&db.conn, &[1]).unwrap();
 
     let stats = TrashService::get_stats(&db.conn).unwrap();
-    assert_eq!(stats.count, 1, "trash count must not double-count a re-trash");
+    assert_eq!(
+        stats.count, 1,
+        "trash count must not double-count a re-trash"
+    );
 }
 
 #[test]
@@ -92,7 +99,10 @@ fn trash_then_restore_round_trip_leaves_no_residue() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(active, 3, "round-trip restore makes the library look untouched");
+    assert_eq!(
+        active, 3,
+        "round-trip restore makes the library look untouched"
+    );
 
     let stats = TrashService::get_stats(&db.conn).unwrap();
     assert_eq!(stats.count, 0, "trash is empty after full restore");

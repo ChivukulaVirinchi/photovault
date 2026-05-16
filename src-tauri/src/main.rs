@@ -59,9 +59,7 @@ fn install_panic_log() {
             .name()
             .unwrap_or("unnamed")
             .to_string();
-        let line = format!(
-            "[{now}] panic on thread '{thread}' at {location}: {payload}\n"
-        );
+        let line = format!("[{now}] panic on thread '{thread}' at {location}: {payload}\n");
 
         // Echo to stderr in case devtools or a debugger is attached.
         let _ = std::io::stderr().write_all(line.as_bytes());

@@ -1,8 +1,13 @@
 import { defineConfig } from "vitest/config";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 // Vitest config. Kept separate from `vite.config.ts` so the dev/build
 // pipeline doesn't pull in any test-only plugins. Vitest reads this
 // automatically when run from the `src-ui` directory.
+//
+// Why the svelte plugin? Some of our stores use the Svelte 5 `$state`
+// rune; importing them in a `.test.ts` triggers the rune transform.
+// Without the svelte plugin the tests panic at import time.
 //
 // Conventions for tests under `src/`:
 //   - Plain utility tests use `node` environment (default) — fast,
@@ -11,20 +16,13 @@ import { defineConfig } from "vitest/config";
 //     the top of the file (we don't enable jsdom globally because
 //     it's slow to spin up and most of our tests don't need it).
 //   - Test files end in `.test.ts` and live next to the code they
-//     exercise. svelte-check ignores them (they're outside the
-//     production type-check path).
+//     exercise.
 export default defineConfig({
+  plugins: [svelte({ hot: false })],
   test: {
-    // Default environment for utility tests. Component tests opt in
-    // to jsdom via a file-level pragma.
     environment: "node",
-    // Test files live wherever they belong; this glob just keeps
-    // .svelte-kit / node_modules out of the picture.
     include: ["src/**/*.test.ts"],
-    // Bail after the first failure when running locally to make
-    // diagnosis easier. CI overrides via `vitest run --no-bail`.
     bail: 0,
-    // Same timeout shape as cargo test — fail fast on hung tests.
     testTimeout: 10_000,
   },
 });

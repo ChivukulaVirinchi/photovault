@@ -45,9 +45,7 @@ async fn run_scan_and_wait(
     // Drain progress messages so the bounded channel doesn't back
     // up and stall the scanner — we don't assert on individual
     // events here, just need the final report.
-    tokio::spawn(async move {
-        while rx.recv().await.is_ok() {}
-    });
+    tokio::spawn(async move { while rx.recv().await.is_ok() {} });
     handle.await.expect("scan task join")
 }
 
@@ -67,7 +65,11 @@ async fn scan_inserts_one_row_per_image() {
     let report = run_scan_and_wait(dir.path().to_path_buf(), db.clone()).await;
 
     // Assert: three rows, no errors.
-    assert_eq!(report.errors, Vec::<String>::new(), "scan should not produce errors");
+    assert_eq!(
+        report.errors,
+        Vec::<String>::new(),
+        "scan should not produce errors"
+    );
     assert_eq!(report.files_inserted, 3, "one row per JPEG");
 
     let db_guard = db.lock().await;

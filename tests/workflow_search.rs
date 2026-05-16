@@ -6,6 +6,7 @@
 //! pick queries here whose parse path is unambiguous:
 //!   - "paris" → Location filter (known-locations list)
 //!   - "2024"  → DateRange filter (year detector)
+//!
 //! For Person filters we'd need a seeded person cluster, which is
 //! out of scope at the service-layer test (the People DB is empty
 //! in a fresh test library). Person-resolved search has its own

@@ -23,9 +23,7 @@ async fn run_scan_and_wait(
 ) -> scanner::ScanReport {
     let cancel = Arc::new(AtomicBool::new(false));
     let (rx, handle) = scanner::start_scan(drive_root, db, cancel, false);
-    tokio::spawn(async move {
-        while rx.recv().await.is_ok() {}
-    });
+    tokio::spawn(async move { while rx.recv().await.is_ok() {} });
     handle.await.unwrap()
 }
 
@@ -79,10 +77,7 @@ async fn scan_skips_files_without_extension() {
     std::fs::write(dir.path().join("NOEXT"), vec![0xFF; 32 * 1024]).unwrap();
 
     let report = run_scan_and_wait(dir.path().to_path_buf(), db.clone()).await;
-    assert_eq!(
-        report.files_inserted, 1,
-        "extensionless files are skipped"
-    );
+    assert_eq!(report.files_inserted, 1, "extensionless files are skipped");
 }
 
 #[tokio::test(flavor = "multi_thread")]

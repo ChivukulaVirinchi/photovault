@@ -714,8 +714,7 @@ fn repair_thumbnail_paths(database: &Database, drive_root: &std::path::Path) -> 
         // missing file) gets cleared so the thumbnail pass regenerates.
         let expected = relative_thumbnail_path(&hash);
         let legacy = legacy_thumbnail_path(&hash);
-        let usable = (stored == expected || stored == legacy)
-            && drive_root.join(&stored).exists();
+        let usable = (stored == expected || stored == legacy) && drive_root.join(&stored).exists();
         if usable {
             continue;
         }
