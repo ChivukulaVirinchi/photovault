@@ -1,0 +1,6 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 198
+expression: dto
+---
+"screenshot"

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "tsc -p tsconfig.test.json && node .test-out/lib/slideshowQueue.test.js && node .test-out/lib/thumbnailQueue.test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "svelte": "^5",
     "svelte-check": "^4",
     "typescript": "^5",
-    "vite": "^5"
+    "vite": "^5",
+    "vitest": "^2"
   }
 }

@@ -1,0 +1,25 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 158
+expression: dto
+---
+{
+  "id": 1,
+  "file_path": "IMG.jpg",
+  "file_name": "IMG.jpg",
+  "file_size": 0,
+  "file_hash": "abc",
+  "date_taken": null,
+  "width": null,
+  "height": null,
+  "orientation": 1,
+  "gps": null,
+  "location": null,
+  "camera": null,
+  "thumbnail_path": null,
+  "content_category": "photo",
+  "ocr": null,
+  "faces_processed": false,
+  "is_trashed": false,
+  "indexed_at": "2024-01-01T12:00:00+00:00"
+}

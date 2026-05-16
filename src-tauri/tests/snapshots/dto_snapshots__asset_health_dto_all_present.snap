@@ -1,0 +1,11 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 264
+expression: dto
+---
+{
+  "missing_face_models": false,
+  "missing_onnx_runtime": false,
+  "missing_geonames_db": false,
+  "summary": "All optional assets are installed."
+}

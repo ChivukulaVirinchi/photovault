@@ -1,0 +1,14 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 164
+expression: dto
+---
+{
+  "id": 7,
+  "thumbnail_path": ".photovault/thumbnails/medium/v2/de/deadbeef.jpg",
+  "date_taken": "2024-01-01T12:00:00",
+  "width": 6048,
+  "height": 4024,
+  "orientation": 1,
+  "is_trashed": false
+}

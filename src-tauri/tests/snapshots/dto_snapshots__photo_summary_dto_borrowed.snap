@@ -1,0 +1,14 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 172
+expression: dto
+---
+{
+  "id": 1,
+  "thumbnail_path": null,
+  "date_taken": null,
+  "width": null,
+  "height": null,
+  "orientation": 1,
+  "is_trashed": false
+}

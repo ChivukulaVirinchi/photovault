@@ -1,0 +1,9 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 237
+expression: dto
+---
+{
+  "country": "India",
+  "photo_count": 9000
+}
