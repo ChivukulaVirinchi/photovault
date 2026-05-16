@@ -1,0 +1,67 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "total_photos": 120,
+  "date_range_start": "2020-01-01",
+  "date_range_end": "2024-12-31",
+  "people_count": 4,
+  "album_count": 7,
+  "country_count": 2,
+  "city_count": 5,
+  "photos_with_gps": 80,
+  "hero_photo_id": 42,
+  "hero_thumbnail_path": ".photovault/thumbnails/hero.jpg",
+  "heatmap": {
+    "2024-01-01": 3
+  },
+  "heatmap_year": 2024,
+  "monthly_counts": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "top_people": [
+    {
+      "cluster_id": 21,
+      "name": "Asha",
+      "photo_count": 88,
+      "face_id": 701,
+      "face_crop_path": ".photovault/faces/701.jpg"
+    }
+  ],
+  "top_locations": [
+    {
+      "city": "Visakhapatnam",
+      "country": "India",
+      "photo_count": 58
+    }
+  ],
+  "top_countries": [
+    {
+      "country": "India",
+      "photo_count": 90
+    }
+  ],
+  "top_cameras": [
+    {
+      "camera": "Nikon Z 7II",
+      "photo_count": 44
+    }
+  ],
+  "available_years": [
+    2024,
+    2023,
+    2022
+  ]
+}

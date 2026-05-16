@@ -1,0 +1,11 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "id": 21,
+  "name": "Asha",
+  "photo_count": 88,
+  "representative_face_id": 701,
+  "representative_thumbnail_path": ".photovault/faces/701.jpg"
+}

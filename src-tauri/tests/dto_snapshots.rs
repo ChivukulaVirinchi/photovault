@@ -42,16 +42,36 @@
 use chrono::{TimeZone, Utc};
 use insta::assert_json_snapshot;
 
+use std::collections::HashMap;
+
 use smriti::config::AppConfig;
+use smriti::db::album_repo::AlbumRecord;
+use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
+use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
+use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
+use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
+use smriti::db::recent_search_repo::RecentSearch;
+use smriti::db::trash_repo::TrashedPhotoRecord;
 use smriti::models::{ContentCategory, Photo};
+use smriti::services::album_suggestions::DetectedSuggestion;
+use smriti::services::burst_detector::BurstGroup;
 use smriti::services::drive_detector::DriveInfo;
+use smriti::services::duplicate_detector::DuplicateGroup;
 use smriti::services::geocoding::GeocodingResult;
-use smriti::services::insights::{CameraStat, CountryStat, LocationStat};
+use smriti::services::insights::{CameraStat, CountryStat, InsightsData, LocationStat, PersonStat};
 use smriti::services::library_health::LibraryHealth;
+use smriti::services::memories::{MemoryCard, MemoryKind};
+use smriti::services::search::{AlbumHit, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults};
+use smriti::services::trash::TrashStats;
 
 use smriti_tauri_lib::dto::{
-    AssetHealthDto, CameraStatDto, ContentCategoryDto, CountryStatDto, DriveDto, LibraryHealthDto,
-    LocationDto, LocationStatDto, PhotoDto, PhotoSummaryDto, SettingsDto,
+    AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetHealthDto, BurstGroupSummaryDto,
+    BurstMemberDto, CameraStatDto, ContentCategoryDto, CountryStatDto, DetectedBurstGroupDto,
+    DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto, DuplicateGroupSummaryDto,
+    DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto, LocationDto, LocationStatDto,
+    MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto, PhotoSummaryDto, PlaceHitDto,
+    RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto, SettingsDto, TrashStatsDto,
+    TrashedPhotoDto,
 };
 
 /// Fixed timestamp so date_taken / indexed_at / updated_at don't
@@ -187,24 +207,53 @@ fn location_dto_from_geocoding_result() {
 // ---------- Content category enum ----------
 
 #[test]
-fn content_category_dto_round_trip_photo() {
-    let dto: ContentCategoryDto = ContentCategory::Photo.into();
+fn content_category_dto_all_variants() {
+    let dto: Vec<ContentCategoryDto> = [
+        ContentCategory::Photo,
+        ContentCategory::BusinessCard,
+        ContentCategory::Document,
+        ContentCategory::Screenshot,
+        ContentCategory::Presentation,
+        ContentCategory::Whiteboard,
+        ContentCategory::Receipt,
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
     assert_json_snapshot!(dto);
 }
 
 #[test]
-fn content_category_dto_round_trip_screenshot() {
-    let dto: ContentCategoryDto = ContentCategory::Screenshot.into();
-    assert_json_snapshot!(dto);
-}
-
-#[test]
-fn content_category_dto_round_trip_receipt() {
-    let dto: ContentCategoryDto = ContentCategory::Receipt.into();
-    assert_json_snapshot!(dto);
+fn content_category_from_dto_all_variants() {
+    let categories: Vec<ContentCategory> = [
+        ContentCategoryDto::Photo,
+        ContentCategoryDto::BusinessCard,
+        ContentCategoryDto::Document,
+        ContentCategoryDto::Screenshot,
+        ContentCategoryDto::Presentation,
+        ContentCategoryDto::Whiteboard,
+        ContentCategoryDto::Receipt,
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    assert_json_snapshot!(categories);
 }
 
 // ---------- Insights stats ----------
+
+#[test]
+fn person_stat_dto() {
+    let stat = PersonStat {
+        cluster_id: 21,
+        name: "Asha".into(),
+        photo_count: 88,
+        face_id: Some(701),
+        face_crop_path: Some(".photovault/faces/701.jpg".into()),
+    };
+    let dto: PersonStatDto = stat.into();
+    assert_json_snapshot!(dto);
+}
 
 #[test]
 fn camera_stat_dto() {
@@ -234,6 +283,365 @@ fn country_stat_dto() {
         photo_count: 9000,
     };
     let dto: CountryStatDto = stat.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn insights_dto() {
+    let mut heatmap = HashMap::new();
+    heatmap.insert("2024-01-01".into(), 3);
+    let data = InsightsData {
+        total_photos: 120,
+        date_range_start: Some("2020-01-01".into()),
+        date_range_end: Some("2024-12-31".into()),
+        people_count: 4,
+        album_count: 7,
+        country_count: 2,
+        city_count: 5,
+        photos_with_gps: 80,
+        hero_photo_id: Some(42),
+        hero_thumbnail_path: Some(".photovault/thumbnails/hero.jpg".into()),
+        heatmap,
+        heatmap_year: 2024,
+        monthly_counts: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        top_people: vec![PersonStat {
+            cluster_id: 21,
+            name: "Asha".into(),
+            photo_count: 88,
+            face_id: Some(701),
+            face_crop_path: Some(".photovault/faces/701.jpg".into()),
+        }],
+        top_locations: vec![LocationStat {
+            city: "Visakhapatnam".into(),
+            country: "India".into(),
+            photo_count: 58,
+        }],
+        top_countries: vec![CountryStat {
+            country: "India".into(),
+            photo_count: 90,
+        }],
+        top_cameras: vec![CameraStat {
+            camera: "Nikon Z 7II".into(),
+            photo_count: 44,
+        }],
+        available_years: vec![2024, 2023, 2022],
+    };
+    let dto: InsightsDto = data.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- People ----------
+
+#[test]
+fn person_dto() {
+    let cluster = FaceClusterRecord {
+        id: 21,
+        name: Some("Asha".into()),
+        representative_face_id: Some(701),
+        photo_count: 88,
+        face_thumbnail_path: Some(".photovault/faces/701.jpg".into()),
+    };
+    let dto: PersonDto = cluster.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn review_item_dto() {
+    let item = ReviewItem {
+        queue_id: 9,
+        face_id: 101,
+        candidate_cluster_id: 21,
+        candidate_cluster_name: Some("Asha".into()),
+        candidate_cluster_size: 14,
+        candidate_sample_face_ids: vec![701, 702, 703],
+        score: 0.87,
+    };
+    let dto: ReviewItemDto = item.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn face_detail_dto() {
+    let detail = FaceDetail {
+        face_id: 101,
+        photo_id: 7,
+        cluster_id: Some(21),
+        confidence: 0.95,
+        user_confirmed: 1,
+    };
+    let dto: FaceDetailDto = detail.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Albums ----------
+
+#[test]
+fn album_dto() {
+    let album = AlbumRecord {
+        id: 4,
+        name: "Goa 2024".into(),
+        cover_photo_id: Some(77),
+        cover_auto_picked: true,
+        photo_count: 32,
+        date_range_start: Some("2024-01-03T10:00:00".into()),
+        date_range_end: Some("2024-01-08T18:00:00".into()),
+        created_at: "2024-01-10T00:00:00Z".into(),
+        updated_at: "2024-01-11T00:00:00Z".into(),
+        cover_thumbnail_path: Some(".photovault/thumbnails/cover.jpg".into()),
+    };
+    let dto: AlbumDto = album.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn album_suggestion_dto() {
+    let suggestion = AlbumSuggestionRecord {
+        id: 12,
+        kind: "trip".into(),
+        title: "Goa".into(),
+        photo_ids_json: "[7,8,9]".into(),
+        cover_photo_id: Some(7),
+        fingerprint: "trip-goa".into(),
+        status: "pending".into(),
+        seen_count: 2,
+        created_at: "2024-01-12T00:00:00Z".into(),
+        cover_thumbnail_path: Some(".photovault/thumbnails/goa.jpg".into()),
+    };
+    let dto: AlbumSuggestionDto = suggestion.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn detected_suggestion_dto() {
+    let detected = DetectedSuggestion {
+        kind: "event".into(),
+        title: "A day in Paris".into(),
+        photo_ids: vec![1, 2, 3],
+        cover_photo_id: Some(2),
+        fingerprint: "event-paris".into(),
+    };
+    let dto: DetectedSuggestionDto = detected.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Search ----------
+
+#[test]
+fn person_hit_dto() {
+    let hit = PersonHit {
+        cluster_id: 21,
+        name: "Asha".into(),
+        photo_count: 88,
+        face_thumbnail_path: Some(".photovault/faces/701.jpg".into()),
+    };
+    let dto: PersonHitDto = hit.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn album_hit_dto() {
+    let hit = AlbumHit {
+        album_id: 4,
+        name: "Goa 2024".into(),
+        photo_count: 32,
+        cover_thumbnail_path: Some(".photovault/thumbnails/cover.jpg".into()),
+    };
+    let dto: AlbumHitDto = hit.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn place_hit_dto() {
+    let hit = PlaceHit {
+        city: "Paris".into(),
+        country: Some("France".into()),
+        photo_count: 12,
+    };
+    let dto: PlaceHitDto = hit.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn search_photo_dto() {
+    let result = SearchResult {
+        photo_id: 7,
+        date_taken: Some("2024-01-01T12:00:00".into()),
+        location_city: Some("Paris".into()),
+        location_country: Some("France".into()),
+        thumbnail_path: Some(".photovault/thumbnails/search.jpg".into()),
+    };
+    let dto: SearchPhotoDto = result.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn search_results_dto() {
+    let results = UnifiedSearchResults {
+        people: vec![PersonHit {
+            cluster_id: 21,
+            name: "Asha".into(),
+            photo_count: 88,
+            face_thumbnail_path: Some(".photovault/faces/701.jpg".into()),
+        }],
+        albums: vec![AlbumHit {
+            album_id: 4,
+            name: "Goa 2024".into(),
+            photo_count: 32,
+            cover_thumbnail_path: Some(".photovault/thumbnails/cover.jpg".into()),
+        }],
+        places: vec![PlaceHit {
+            city: "Paris".into(),
+            country: Some("France".into()),
+            photo_count: 12,
+        }],
+        photos: vec![SearchResult {
+            photo_id: 7,
+            date_taken: Some("2024-01-01T12:00:00".into()),
+            location_city: Some("Paris".into()),
+            location_country: Some("France".into()),
+            thumbnail_path: Some(".photovault/thumbnails/search.jpg".into()),
+        }],
+        photo_ids: vec![7],
+        photos_grouped: Vec::new(),
+    };
+    let dto: SearchResultsDto = results.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn recent_search_dto() {
+    let recent = RecentSearch {
+        query: "paris 2024".into(),
+        last_used: "2024-01-13T00:00:00Z".into(),
+        use_count: 3,
+    };
+    let dto: RecentSearchDto = recent.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Memories ----------
+
+#[test]
+fn memory_card_dto() {
+    let card = MemoryCard {
+        id: "otd-2020-01-01".into(),
+        kind: MemoryKind::OnThisDay,
+        title: "4 years ago today".into(),
+        hero_photo_id: 7,
+        hero_thumbnail_path: Some(".photovault/thumbnails/memory.jpg".into()),
+        photo_count: 3,
+        photo_ids: vec![7, 8, 9],
+    };
+    let dto: MemoryCardDto = card.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Duplicates ----------
+
+#[test]
+fn duplicate_group_summary_dto() {
+    let group = DuplicateGroupRecord {
+        id: 31,
+        member_count: 3,
+        cover_thumbnail_path: Some(".photovault/thumbnails/dup.jpg".into()),
+        cover_photo_id: Some(7),
+        member_photo_ids: vec![7, 8, 9],
+    };
+    let dto: DuplicateGroupSummaryDto = group.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn duplicate_member_dto() {
+    let member = DuplicateGroupMemberRecord {
+        photo_id: 7,
+        is_suggested_keep: true,
+        file_path: Some("photos/a.jpg".into()),
+        thumbnail_path: Some(".photovault/thumbnails/a.jpg".into()),
+        file_size: Some(1024),
+        date_taken: Some("2024-01-01T12:00:00".into()),
+    };
+    let dto: DuplicateMemberDto = member.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn detected_duplicate_group_dto() {
+    let group = DuplicateGroup {
+        hash: "sha256-deadbeef".into(),
+        photo_ids: vec![7, 8],
+        suggested_keep_id: Some(7),
+        duplicate_type: "exact",
+    };
+    let dto: DetectedDuplicateGroupDto = group.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Bursts ----------
+
+#[test]
+fn burst_group_summary_dto() {
+    let group = BurstGroupRecord {
+        id: 41,
+        start_time: "2024-01-01T12:00:00Z".into(),
+        end_time: "2024-01-01T12:00:05Z".into(),
+        photo_count: 3,
+        cover_thumbnail_paths: vec![
+            ".photovault/thumbnails/burst-a.jpg".into(),
+            ".photovault/thumbnails/burst-b.jpg".into(),
+        ],
+        cover_photo_ids: vec![7, 8],
+        member_photo_ids: vec![7, 8, 9],
+    };
+    let dto: BurstGroupSummaryDto = group.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn burst_member_dto() {
+    let member = BurstGroupMemberRecord {
+        photo_id: 7,
+        sharpness_score: Some(0.91),
+        blur_score: Some(0.12),
+        is_suggested_best: true,
+    };
+    let dto: BurstMemberDto = member.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn detected_burst_group_dto() {
+    let group = BurstGroup {
+        photo_ids: vec![7, 8, 9],
+        start_time: fixed_ts(),
+        end_time: fixed_ts() + chrono::Duration::seconds(5),
+    };
+    let dto: DetectedBurstGroupDto = group.into();
+    assert_json_snapshot!(dto);
+}
+
+// ---------- Trash ----------
+
+#[test]
+fn trashed_photo_dto() {
+    let trashed = TrashedPhotoRecord {
+        photo_id: 7,
+        original_path: "photos/a.jpg".into(),
+        trashed_at: "2024-01-14T00:00:00Z".into(),
+        file_size: Some(1024),
+        thumbnail_path: Some(".photovault/thumbnails/a.jpg".into()),
+    };
+    let dto: TrashedPhotoDto = trashed.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn trash_stats_dto() {
+    let stats = TrashStats {
+        count: 4,
+        total_size: 8192,
+    };
+    let dto: TrashStatsDto = stats.into();
     assert_json_snapshot!(dto);
 }
 

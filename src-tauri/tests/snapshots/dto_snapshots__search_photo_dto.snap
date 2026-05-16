@@ -1,0 +1,11 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "photo_id": 7,
+  "date_taken": "2024-01-01T12:00:00",
+  "location_city": "Paris",
+  "location_country": "France",
+  "thumbnail_path": ".photovault/thumbnails/search.jpg"
+}

@@ -1,6 +1,8 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
-assertion_line: 192
 expression: dto
 ---
-"photo"
+{
+  "count": 4,
+  "total_size": 8192
+}

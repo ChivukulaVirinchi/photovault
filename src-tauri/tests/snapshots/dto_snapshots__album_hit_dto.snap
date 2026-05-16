@@ -1,0 +1,10 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "album_id": 4,
+  "name": "Goa 2024",
+  "photo_count": 32,
+  "cover_thumbnail_path": ".photovault/thumbnails/cover.jpg"
+}

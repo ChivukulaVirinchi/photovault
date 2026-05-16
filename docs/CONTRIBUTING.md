@@ -11,8 +11,9 @@ conversation, not a code-style debate.
 1. **Read [TESTING.md](./TESTING.md).** It tells you what kind of
    test to write for what kind of change. The decision tree is the
    thing you should optimise for.
-2. **Run `scripts/ci_local.sh ci` locally.** This mirrors the
-   GitHub Actions pipeline. If it passes here, it will pass on CI.
+2. **Run `scripts/ci_local.sh ci` locally.** This mirrors the core
+   build/test path from GitHub Actions. The hosted workflow also runs
+   the supply-chain audit job.
 3. **Set up the dev workflow:** see [agents.md](../agents.md) for
    one-time toolchain installation (Rust, Node, WSL on Windows).
 
@@ -37,7 +38,7 @@ benches/             # Criterion benchmarks. Not run on PRs.
 3. cargo test -p smriti -p smriti-tauri
 4. npm run check --prefix src-ui     # svelte-check + typescript
 5. npm run test  --prefix src-ui     # vitest
-6. cargo audit + cargo deny           # supply-chain
+6. cargo audit + cargo deny           # supply-chain, GitHub CI only
 ```
 
 Each is a hard gate. Total wall time on a runner: ~10-15 minutes.

@@ -1,0 +1,9 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "query": "paris 2024",
+  "last_used": "2024-01-13T00:00:00Z",
+  "use_count": 3
+}

@@ -1,0 +1,11 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "photo_id": 7,
+  "original_path": "photos/a.jpg",
+  "trashed_at": "2024-01-14T00:00:00Z",
+  "file_size": 1024,
+  "thumbnail_path": ".photovault/thumbnails/a.jpg"
+}

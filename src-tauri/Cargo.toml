@@ -25,7 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 smriti = { path = ".." }
 
-tauri = { version = "2", features = ["protocol-asset", "test"] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 

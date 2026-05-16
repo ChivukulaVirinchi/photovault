@@ -1,0 +1,10 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "photo_id": 7,
+  "sharpness_score": 0.91,
+  "blur_score": 0.12,
+  "is_suggested_best": true
+}

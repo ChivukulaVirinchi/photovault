@@ -1,0 +1,41 @@
+---
+source: src-tauri/tests/dto_snapshots.rs
+expression: dto
+---
+{
+  "people": [
+    {
+      "cluster_id": 21,
+      "name": "Asha",
+      "photo_count": 88,
+      "face_thumbnail_path": ".photovault/faces/701.jpg"
+    }
+  ],
+  "albums": [
+    {
+      "album_id": 4,
+      "name": "Goa 2024",
+      "photo_count": 32,
+      "cover_thumbnail_path": ".photovault/thumbnails/cover.jpg"
+    }
+  ],
+  "places": [
+    {
+      "city": "Paris",
+      "country": "France",
+      "photo_count": 12
+    }
+  ],
+  "photo_ids": [
+    7
+  ],
+  "photos": [
+    {
+      "photo_id": 7,
+      "date_taken": "2024-01-01T12:00:00",
+      "location_city": "Paris",
+      "location_country": "France",
+      "thumbnail_path": ".photovault/thumbnails/search.jpg"
+    }
+  ]
+}
