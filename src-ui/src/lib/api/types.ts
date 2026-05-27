@@ -36,6 +36,14 @@ export interface PhotoSummaryDto {
   height: number | null;
   orientation: number;
   is_trashed: boolean;
+  stack: PhotoStackBadgeDto | null;
+}
+
+export interface PhotoStackBadgeDto {
+  id: number;
+  kind: string;
+  member_count: number;
+  cover_photo_id: number;
 }
 
 export interface PhotoDto extends PhotoSummaryDto {

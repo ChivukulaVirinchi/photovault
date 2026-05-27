@@ -2,12 +2,12 @@
   import { onMount, onDestroy } from "svelte";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Maximize2,
-    RotateCcw, RotateCw, FolderOpen, FolderPlus, Play, Trash2, X,
+    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras } from "../lib/api/photos";
   import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
-  import { trash } from "../lib/api/all";
+  import { stacks, trash, type PhotoStack } from "../lib/api/all";
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -32,6 +32,7 @@
   let people = $state<PersonDto[]>([]);
   let albums = $state<AlbumDto[]>([]);
   let extras = $state<ExifExtras | null>(null);
+  let stack = $state<PhotoStack | null>(null);
   let error = $state<string | null>(null);
 
   // Closed by default — info button reveals.
@@ -40,6 +41,7 @@
   let manualRotate = $state(0);
   let zoomApi = $state<ZoomApi | undefined>(undefined);
   let showAddDialog = $state(false);
+  let stackTrayOpen = $state(false);
   /// Tracks the current zoom mode for the fit toggle. We can't read the
   /// internal scale of ZoomImage directly, so we mirror the "double-click
   /// toggles fit ↔ 1:1" intent here. Default is "fit" (image just loaded).
@@ -79,9 +81,15 @@
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   }
 
-  const prevId = $derived(photo ? browseContext.prev(photo.id) : null);
-  const nextId = $derived(photo ? browseContext.next(photo.id) : null);
-  const position = $derived(photo ? browseContext.position(photo.id) : null);
+  const navAnchorId = $derived.by(() => {
+    if (!photo) return null;
+    if (browseContext.ids.includes(photo.id)) return photo.id;
+    if (stack && browseContext.ids.includes(stack.cover_photo_id)) return stack.cover_photo_id;
+    return photo.id;
+  });
+  const prevId = $derived(navAnchorId != null ? browseContext.prev(navAnchorId) : null);
+  const nextId = $derived(navAnchorId != null ? browseContext.next(navAnchorId) : null);
+  const position = $derived(navAnchorId != null ? browseContext.position(navAnchorId) : null);
 
   /// EXIF orientation → degrees of CSS rotation.
   /// Mirror variants (2/4/5/7) aren't auto-flipped for v1; their rotation
@@ -177,6 +185,8 @@
     people = [];
     albums = [];
     extras = null;
+    stack = null;
+    stackTrayOpen = false;
     tint = null;
     manualRotate = 0;
     atActual = false;
@@ -201,6 +211,10 @@
       try {
         const nextAlbums = await call<AlbumDto[]>("photos_albums_for_photo", { photo_id: id });
         if (seq === loadSeq) albums = nextAlbums;
+      } catch {}
+      try {
+        const nextStack = await stacks.getForPhoto(id);
+        if (seq === loadSeq) stack = nextStack;
       } catch {}
       // Tier-2 EXIF — re-parsed off the file at request time. Non-blocking.
       photos.exifExtras(id).then((e) => { if (photo?.id === id) extras = e; }).catch(() => {});
@@ -309,6 +323,55 @@
       else back();
     } catch (e) {
       toasts.error(`Couldn't move to trash: ${e}`);
+    }
+  }
+
+  async function setStackCover(photoId: number) {
+    if (!stack) return;
+    try {
+      stack = await stacks.setCover(stack.id, photoId);
+      if (photo?.id !== photoId) gotoId(photoId);
+    } catch (e) {
+      toasts.error(`Couldn't set best photo: ${e}`);
+    }
+  }
+
+  async function removeFromStack(photoId: number) {
+    if (!stack) return;
+    try {
+      stack = await stacks.removeMember(stack.id, photoId);
+      if (photo?.id === photoId) {
+        const next = stack?.cover_photo_id ?? nextId ?? prevId;
+        if (next) gotoId(next);
+      }
+    } catch (e) {
+      toasts.error(`Couldn't remove from stack: ${e}`);
+    }
+  }
+
+  async function unstack() {
+    if (!stack) return;
+    try {
+      await stacks.unstack(stack.id);
+      stack = null;
+      toasts.success("Stack removed from timeline");
+    } catch (e) {
+      toasts.error(`Couldn't unstack: ${e}`);
+    }
+  }
+
+  async function trashStackOthers() {
+    if (!stack) return;
+    if (!confirm("Move all other photos in this stack to trash?")) return;
+    const keepId = stack.cover_photo_id;
+    const viewingKeep = photo?.id === keepId;
+    try {
+      const result = await stacks.trashOthers(stack.id);
+      toasts.success(`${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`);
+      stack = null;
+      if (!viewingKeep) gotoId(keepId);
+    } catch (e) {
+      toasts.error(`Couldn't trash stack members: ${e}`);
     }
   }
 
@@ -474,6 +537,18 @@
         <button class="tool" onclick={revealInFolder} title="Show in folder" aria-label="Show in folder">
           <FolderOpen size={16} strokeWidth={1.75} />
         </button>
+        {#if stack}
+          <button
+            class="tool stack-tool"
+            class:on={stackTrayOpen}
+            onclick={() => (stackTrayOpen = !stackTrayOpen)}
+            title={stackTrayOpen ? "Hide stack filmstrip" : `Show ${stack.member_count} stacked photos`}
+            aria-label={stackTrayOpen ? "Hide stack filmstrip" : "Show stack filmstrip"}
+          >
+            <Layers size={16} strokeWidth={1.75} />
+            <span class="tool-count mono">{stack.member_count}</span>
+          </button>
+        {/if}
         <button class="tool danger" onclick={trashAndAdvance} title="Move to trash (Del)" aria-label="Move to trash">
           <Trash2 size={16} strokeWidth={1.75} />
         </button>
@@ -499,6 +574,46 @@
       {#if position}
         <div class="position mono">
           {position.index} / {position.total}
+        </div>
+      {/if}
+
+      {#if stack && stackTrayOpen}
+        <div class="stack-tray" data-no-marquee="true">
+          <div class="stack-head">
+            <span class="stack-title mono">{stack.member_count} stacked</span>
+            <div class="stack-actions">
+              <button onclick={unstack}>Unstack</button>
+              <button class="danger-text" onclick={trashStackOthers}>Trash others</button>
+            </div>
+          </div>
+          <div class="stack-strip">
+            {#each stack.members as member (member.photo_id)}
+              <a
+                class="stack-thumb"
+                class:current={photo?.id === member.photo_id}
+                class:cover={member.is_cover}
+                href="#/photo?id={member.photo_id}"
+                title={member.score_reasons ?? "Stack member"}
+              >
+                {#if member.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, member.thumbnail_path) ?? ""} alt="" />
+                {/if}
+                {#if member.is_cover}<span class="best-label">Best</span>{/if}
+              </a>
+            {/each}
+          </div>
+          {#if photo}
+            {@const currentMember = stack.members.find((m) => m.photo_id === photo?.id)}
+            {#if currentMember}
+              <div class="stack-current">
+                <span class="stack-reason">{currentMember.score_reasons ?? "Suggested from image quality"}</span>
+                {#if !currentMember.is_cover}
+                  <button onclick={() => setStackCover(currentMember.photo_id)}>Set as best</button>
+                  <button onclick={() => removeFromStack(currentMember.photo_id)}>Remove</button>
+                {/if}
+              </div>
+            {/if}
+          {/if}
         </div>
       {/if}
 
@@ -717,6 +832,17 @@
     background: var(--accent-ghost);
     color: var(--accent);
   }
+  .stack-tool {
+    gap: 2px;
+    width: auto;
+    min-width: 34px;
+    padding: 0 7px;
+  }
+  .tool-count {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+  }
   .tool.danger:hover {
     color: var(--danger, #d96363);
     background: color-mix(in oklab, var(--bg-card) 80%, var(--danger, #d96363));
@@ -771,6 +897,96 @@
     transition: opacity 200ms var(--ease);
   }
   .viewer.active .position { opacity: 1; }
+
+  .stack-tray {
+    position: absolute;
+    left: 50%;
+    bottom: var(--s-3);
+    transform: translateX(-50%);
+    width: min(720px, calc(100% - 180px));
+    background: color-mix(in oklab, var(--bg-paper) 82%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: var(--s-2);
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 200ms var(--ease);
+  }
+  .viewer.active .stack-tray,
+  .stack-tray:hover,
+  .stack-tray:focus-within { opacity: 1; }
+  .stack-head,
+  .stack-current {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .stack-title {
+    font-size: var(--t-xs);
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .stack-actions {
+    display: flex;
+    gap: var(--s-2);
+  }
+  .stack-actions button,
+  .stack-current button {
+    font-size: var(--t-xs);
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+  }
+  .danger-text {
+    color: var(--danger, #d96363);
+  }
+  .stack-strip {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: var(--s-2) 0;
+  }
+  .stack-thumb {
+    position: relative;
+    flex: 0 0 auto;
+    width: 58px;
+    height: 58px;
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    background: var(--bg-elev);
+    border: 2px solid transparent;
+  }
+  .stack-thumb.current { border-color: var(--accent); }
+  .stack-thumb.cover { box-shadow: 0 0 0 1px var(--keep) inset; }
+  .stack-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .best-label {
+    position: absolute;
+    left: 3px;
+    bottom: 3px;
+    background: var(--keep);
+    color: #fff;
+    border-radius: 999px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .stack-current {
+    border-top: 1px solid var(--line-soft);
+    padding-top: var(--s-2);
+  }
+  .stack-reason {
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   /* ===== bottom-right filename ===== */
   .filename {

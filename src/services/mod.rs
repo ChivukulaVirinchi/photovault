@@ -19,6 +19,7 @@ pub mod memories;
 pub mod metadata_processor;
 pub mod ocr_processor;
 pub mod path_util;
+pub mod photo_stacks;
 #[cfg(feature = "raw")]
 pub mod raw_preview;
 pub mod reindexer;
@@ -42,6 +43,7 @@ pub use library_health::LibraryHealth;
 pub use memories::MemoryCard;
 pub use metadata_processor::MetadataProgress;
 pub use ocr_processor::{OcrProcessor, OcrProgress};
+pub use photo_stacks::{PhotoStackService, StackRefreshResult};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;
 pub use search::{

@@ -13,6 +13,9 @@ scroll.
   collapsed.
 - **Hover a photo** to see its filename and camera info as a quick
   tooltip.
+- **Photo stacks** collapse conservative burst and duplicate groups
+  into one timeline tile. The tile shows the suggested best photo and
+  a stacked badge with the number of photos in the group.
 
 ## Keyboard
 
@@ -54,6 +57,14 @@ Click any photo to open the viewer. Within it:
 The info panel (toggled with <kbd>I</kbd>) shows EXIF metadata,
 detected people, GPS location with a small map preview, and the file
 path on disk.
+
+If the current photo belongs to a stack, the toolbar shows a small
+stack button. Opening it reveals the other photos in that stack without
+changing normal timeline navigation: <kbd>←</kbd> and <kbd>→</kbd>
+still move to the previous or next visible timeline photo. The stack
+tray lets you browse members, mark a different best photo, remove a
+member from the stack, unstack the group, or move all non-best members
+to Trash.
 
 ## Thumbnail size
 

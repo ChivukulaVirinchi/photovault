@@ -11,6 +11,7 @@ expression: dto
   "burst_time_window_seconds": 3,
   "trash_auto_delete_days": 30,
   "scan_hidden_folders": false,
+  "show_timeline_stacks": true,
   "date_format": "locale",
   "remembered_drives": [],
   "map_cache_limit_mb": 500,

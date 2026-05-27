@@ -188,6 +188,7 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
             })
             .collect();
         let _ = repo.sync_burst_groups(&triples);
+        let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
 
         emit(
             &app_clone,

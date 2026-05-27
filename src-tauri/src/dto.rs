@@ -18,6 +18,7 @@ use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
 use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
 use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
+use smriti::db::stack_repo::{PhotoStackMemberRecord, PhotoStackRecord};
 use smriti::db::trash_repo::TrashedPhotoRecord;
 use smriti::models::{ContentCategory, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
@@ -67,6 +68,7 @@ pub struct PhotoDto {
     pub ocr: Option<OcrDto>,
     pub faces_processed: bool,
     pub is_trashed: bool,
+    pub stack: Option<PhotoStackBadgeDto>,
     pub indexed_at: String,
 }
 
@@ -79,6 +81,15 @@ pub struct PhotoSummaryDto {
     pub height: Option<i32>,
     pub orientation: i32,
     pub is_trashed: bool,
+    pub stack: Option<PhotoStackBadgeDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PhotoStackBadgeDto {
+    pub id: i64,
+    pub kind: String,
+    pub member_count: i64,
+    pub cover_photo_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -229,6 +240,7 @@ impl From<Photo> for PhotoDto {
             ocr,
             faces_processed: p.faces_processed,
             is_trashed: p.is_trashed,
+            stack: None,
             indexed_at: p.indexed_at.to_rfc3339(),
         }
     }
@@ -246,6 +258,7 @@ impl From<&Photo> for PhotoSummaryDto {
             height: p.height,
             orientation: p.orientation,
             is_trashed: p.is_trashed,
+            stack: None,
         }
     }
 }
@@ -643,6 +656,57 @@ impl From<DuplicateGroupMemberRecord> for DuplicateMemberDto {
     }
 }
 
+// ---------- photo stacks ----------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PhotoStackDto {
+    pub id: i64,
+    pub kind: String,
+    pub source_group_id: i64,
+    pub cover_photo_id: i64,
+    pub member_count: i64,
+    pub confidence: f32,
+    pub members: Vec<PhotoStackMemberDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PhotoStackMemberDto {
+    pub photo_id: i64,
+    pub thumbnail_path: Option<String>,
+    pub date_taken: Option<String>,
+    pub quality_score: f32,
+    pub score_reasons: Option<String>,
+    pub is_cover: bool,
+}
+
+impl From<PhotoStackMemberRecord> for PhotoStackMemberDto {
+    fn from(m: PhotoStackMemberRecord) -> Self {
+        Self {
+            photo_id: m.photo_id,
+            thumbnail_path: m.thumbnail_path,
+            date_taken: m.date_taken,
+            quality_score: m.quality_score,
+            score_reasons: m.score_reasons,
+            is_cover: m.is_cover,
+        }
+    }
+}
+
+pub fn stack_detail_dto(
+    stack: PhotoStackRecord,
+    members: Vec<PhotoStackMemberRecord>,
+) -> PhotoStackDto {
+    PhotoStackDto {
+        id: stack.id,
+        kind: stack.kind,
+        source_group_id: stack.source_group_id,
+        cover_photo_id: stack.cover_photo_id,
+        member_count: stack.member_count,
+        confidence: stack.confidence,
+        members: members.into_iter().map(Into::into).collect(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DetectedDuplicateGroupDto {
     pub hash: String,
@@ -1005,6 +1069,7 @@ pub struct SettingsDto {
     pub burst_time_window_seconds: i64,
     pub trash_auto_delete_days: u32,
     pub scan_hidden_folders: bool,
+    pub show_timeline_stacks: bool,
     pub date_format: String,
     pub remembered_drives: Vec<String>,
     pub map_cache_limit_mb: u32,
@@ -1041,6 +1106,7 @@ impl From<&AppConfig> for SettingsDto {
             burst_time_window_seconds: c.burst_time_window_seconds,
             trash_auto_delete_days: c.trash_auto_delete_days,
             scan_hidden_folders: c.scan_hidden_folders,
+            show_timeline_stacks: c.show_timeline_stacks,
             date_format,
             remembered_drives: c
                 .remembered_drives

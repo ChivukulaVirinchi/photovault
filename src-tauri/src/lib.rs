@@ -120,6 +120,14 @@ pub fn run() {
             commands::bursts::bursts_trash_non_best,
             commands::bursts::bursts_dismiss,
             commands::bursts::bursts_run,
+            // stacks
+            commands::stacks::stacks_get,
+            commands::stacks::stacks_get_for_photo,
+            commands::stacks::stacks_set_cover,
+            commands::stacks::stacks_remove_member,
+            commands::stacks::stacks_unstack,
+            commands::stacks::stacks_trash_others,
+            commands::stacks::stacks_refresh,
             // trash
             commands::trash::trash_list,
             commands::trash::trash_stats,
