@@ -10,6 +10,9 @@ Changes are persisted locally in user config storage.
 - **Theme** — dark, light, or follow the system theme.
 - **Thumbnail size** — grid density. Smaller thumbnails fit more
   photos per row at the cost of per-photo detail.
+- **Show photo stacks in timeline** — collapse conservative burst and
+  duplicate groups into one timeline tile. Turn this off to show every
+  photo individually.
 
 ## Indexing
 
@@ -34,6 +37,11 @@ See the [People and Faces](people.md) guide for the full pipeline.
 
 - **Burst window** — time window (in seconds) used to group burst
   shots. Default 3 seconds matches most camera apps.
+
+Photo stacks reuse burst and duplicate detection results. After either
+detector runs, Smriti refreshes stack suggestions and chooses a best
+photo using the detector's suggestion plus quality signals such as
+resolution, file size, faces, sharpness, and exposure.
 
 ## Trash
 

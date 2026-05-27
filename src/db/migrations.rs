@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 21;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 22;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -121,8 +121,54 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 21 {
         migrate_v20_to_v21(conn)?;
     }
+    if current_version < 22 {
+        migrate_v21_to_v22(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v21_to_v22(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS photo_stacks (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            source_group_id INTEGER NOT NULL,
+            source_group_hash TEXT,
+            cover_photo_id INTEGER NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            dismissed BOOLEAN DEFAULT FALSE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(kind, source_group_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS photo_stack_members (
+            id INTEGER PRIMARY KEY,
+            stack_id INTEGER NOT NULL,
+            photo_id INTEGER NOT NULL,
+            quality_score REAL NOT NULL DEFAULT 0,
+            score_reasons TEXT,
+            is_cover BOOLEAN DEFAULT FALSE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (stack_id) REFERENCES photo_stacks(id) ON DELETE CASCADE,
+            FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+            UNIQUE(stack_id, photo_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_photo_stacks_cover ON photo_stacks(cover_photo_id);
+        CREATE INDEX IF NOT EXISTS idx_photo_stacks_active ON photo_stacks(dismissed, kind);
+        CREATE INDEX IF NOT EXISTS idx_photo_stack_members_stack ON photo_stack_members(stack_id);
+        CREATE INDEX IF NOT EXISTS idx_photo_stack_members_photo ON photo_stack_members(photo_id);
+        CREATE INDEX IF NOT EXISTS idx_photo_stack_members_cover ON photo_stack_members(stack_id, is_cover);
+        "#,
+    )?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (22)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 22 (timeline photo stacks)");
     Ok(())
 }
 

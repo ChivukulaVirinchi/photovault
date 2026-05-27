@@ -318,6 +318,37 @@ export const bursts = {
   run: () => call<JobIdDto>("bursts_run"),
 };
 
+// ---------- stacks ----------
+export interface PhotoStackMember {
+  photo_id: number;
+  thumbnail_path: string | null;
+  date_taken: string | null;
+  quality_score: number;
+  score_reasons: string | null;
+  is_cover: boolean;
+}
+export interface PhotoStack {
+  id: number;
+  kind: string;
+  source_group_id: number;
+  cover_photo_id: number;
+  member_count: number;
+  confidence: number;
+  members: PhotoStackMember[];
+}
+export const stacks = {
+  get: (id: number) => call<PhotoStack>("stacks_get", { id }),
+  getForPhoto: (photoId: number) =>
+    call<PhotoStack | null>("stacks_get_for_photo", { photo_id: photoId }),
+  setCover: (stackId: number, photoId: number) =>
+    call<PhotoStack>("stacks_set_cover", { stack_id: stackId, photo_id: photoId }),
+  removeMember: (stackId: number, photoId: number) =>
+    call<PhotoStack | null>("stacks_remove_member", { stack_id: stackId, photo_id: photoId }),
+  unstack: (id: number) => call<null>("stacks_unstack", { id }),
+  trashOthers: (id: number) => call<{ count: number }>("stacks_trash_others", { id }),
+  refresh: () => call<{ stacks_found: number }>("stacks_refresh"),
+};
+
 // ---------- trash ----------
 export const trash = {
   list: (cursor: string | null = null, limit = 200) =>
@@ -415,6 +446,7 @@ export interface Settings {
   burst_time_window_seconds: number;
   trash_auto_delete_days: number;
   scan_hidden_folders: boolean;
+  show_timeline_stacks: boolean;
   date_format: string;
   remembered_drives: string[];
   map_cache_limit_mb: number;

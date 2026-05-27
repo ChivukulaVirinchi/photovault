@@ -10,5 +10,6 @@ expression: dto
   "width": 6048,
   "height": 4024,
   "orientation": 1,
-  "is_trashed": false
+  "is_trashed": false,
+  "stack": null
 }

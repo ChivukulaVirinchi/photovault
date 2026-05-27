@@ -35,6 +35,7 @@ remain idempotent across versions.
 | `face_assignments` | Which face belongs to which cluster, with confidence. |
 | `duplicates` | Exact and perceptual duplicate groups. |
 | `bursts` | Detected burst groups with timestamps. |
+| `photo_stacks` / `photo_stack_members` | Timeline stack suggestions derived from duplicate and burst groups, with cover photo and per-member quality scores. |
 | `memory_blocks` | User dismissals for surfaced memories. |
 | `trash` (via `photos.is_trashed`) | Soft-deleted photos. |
 | `search_history` | Recent search queries, capped. |

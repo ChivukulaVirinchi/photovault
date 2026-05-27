@@ -14,6 +14,8 @@ pub struct AppConfig {
     pub burst_time_window_seconds: i64,
     pub trash_auto_delete_days: u32,
     pub scan_hidden_folders: bool,
+    #[serde(default = "default_show_timeline_stacks")]
+    pub show_timeline_stacks: bool,
     pub date_format: DateFormat,
     pub remembered_drives: Vec<PathBuf>,
     pub window_width: u32,
@@ -148,6 +150,10 @@ fn default_thumbnail_cache_gb() -> f64 {
     5.0
 }
 
+fn default_show_timeline_stacks() -> bool {
+    true
+}
+
 fn default_face_embedder_model() -> String {
     "adaface_ir101_webface12m.onnx".to_string()
 }
@@ -162,6 +168,7 @@ impl Default for AppConfig {
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
+            show_timeline_stacks: true,
             date_format: DateFormat::Locale,
             remembered_drives: Vec::new(),
             window_width: 1600,

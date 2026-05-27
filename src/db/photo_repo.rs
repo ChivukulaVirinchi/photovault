@@ -173,6 +173,29 @@ impl<'a> PhotoRepo<'a> {
         )
     }
 
+    pub fn count_timeline_visible(&self, show_stacks: bool) -> SqliteResult<i64> {
+        if !show_stacks {
+            return self.count();
+        }
+        self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+              FROM photos p
+             WHERE p.is_trashed = FALSE
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM photo_stack_members m
+                     JOIN photo_stacks s ON s.id = m.stack_id
+                    WHERE m.photo_id = p.id
+                      AND s.dismissed = FALSE
+                      AND p.id != s.cover_photo_id
+               )
+            "#,
+            [],
+            |row| row.get(0),
+        )
+    }
+
     /// Photos awaiting EXIF / geocoding extraction (Phase 2 of the
     /// streaming scanner). Drives the "Resume reading metadata" banner.
     pub fn count_pending_metadata(&self) -> SqliteResult<i64> {
@@ -377,6 +400,10 @@ pub struct PhotoLite {
     pub is_trashed: bool,
     pub gps_latitude: Option<f64>,
     pub gps_longitude: Option<f64>,
+    pub stack_id: Option<i64>,
+    pub stack_kind: Option<String>,
+    pub stack_member_count: Option<i64>,
+    pub stack_cover_photo_id: Option<i64>,
 }
 
 fn row_to_photo_lite(row: &rusqlite::Row) -> SqliteResult<PhotoLite> {
@@ -393,13 +420,26 @@ fn row_to_photo_lite(row: &rusqlite::Row) -> SqliteResult<PhotoLite> {
         is_trashed: row.get(6)?,
         gps_latitude: row.get(7)?,
         gps_longitude: row.get(8)?,
+        stack_id: row.get(9)?,
+        stack_kind: row.get(10)?,
+        stack_member_count: row.get(11)?,
+        stack_cover_photo_id: row.get(12)?,
     })
 }
 
 const PHOTO_LITE_COLUMNS: &str = r#"
     id, date_taken, thumbnail_path,
     width, height, orientation, is_trashed,
-    gps_latitude, gps_longitude
+    gps_latitude, gps_longitude,
+    NULL AS stack_id, NULL AS stack_kind, NULL AS stack_member_count, NULL AS stack_cover_photo_id
+"#;
+
+const PHOTO_LITE_STACKED_COLUMNS: &str = r#"
+    p.id, p.date_taken, p.thumbnail_path,
+    p.width, p.height, p.orientation, p.is_trashed,
+    p.gps_latitude, p.gps_longitude,
+    s.id AS stack_id, s.kind AS stack_kind, COUNT(sm_all.photo_id) AS stack_member_count,
+    s.cover_photo_id AS stack_cover_photo_id
 "#;
 
 impl<'a> PhotoRepo<'a> {
@@ -411,7 +451,11 @@ impl<'a> PhotoRepo<'a> {
         cursor: Option<(Option<DateTime<Utc>>, i64)>,
         limit: i64,
         include_trashed: bool,
+        show_stacks: bool,
     ) -> SqliteResult<Vec<PhotoLite>> {
+        if show_stacks && !include_trashed {
+            return self.list_after_stacked(cursor, limit);
+        }
         let trash_clause = if include_trashed {
             "1=1"
         } else {
@@ -476,6 +520,66 @@ impl<'a> PhotoRepo<'a> {
         };
         let _ = sql; // suppress unused if logging removed
         Ok(rows)
+    }
+
+    fn list_after_stacked(
+        &self,
+        cursor: Option<(Option<DateTime<Utc>>, i64)>,
+        limit: i64,
+    ) -> SqliteResult<Vec<PhotoLite>> {
+        let base = format!(
+            r#"
+            SELECT {cols}
+              FROM photos p
+              LEFT JOIN photo_stack_members sm ON sm.photo_id = p.id
+              LEFT JOIN photo_stacks s ON s.id = sm.stack_id AND s.dismissed = FALSE
+              LEFT JOIN photo_stack_members sm_all ON sm_all.stack_id = s.id
+             WHERE p.is_trashed = 0
+               AND (s.id IS NULL OR p.id = s.cover_photo_id)
+            "#,
+            cols = PHOTO_LITE_STACKED_COLUMNS
+        );
+        let group = " GROUP BY p.id, s.id";
+
+        match cursor {
+            Some((Some(d), id)) => {
+                let sql = format!(
+                    "{base}
+                     AND ((p.date_taken IS NOT NULL AND
+                           (p.date_taken < ?1 OR (p.date_taken = ?1 AND p.id < ?2)))
+                          OR (p.date_taken IS NULL AND ?1 IS NULL AND p.id < ?2))
+                     {group}
+                     ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
+                     LIMIT ?3"
+                );
+                let date_str = d.to_rfc3339();
+                let mut stmt = self.conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![date_str, id, limit], row_to_photo_lite)?;
+                rows.collect()
+            }
+            Some((None, id)) => {
+                let sql = format!(
+                    "{base}
+                     AND p.date_taken IS NULL AND p.id < ?1
+                     {group}
+                     ORDER BY p.id DESC LIMIT ?2"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![id, limit], row_to_photo_lite)?;
+                rows.collect()
+            }
+            None => {
+                let sql = format!(
+                    "{base}
+                     {group}
+                     ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
+                     LIMIT ?1"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![limit], row_to_photo_lite)?;
+                rows.collect()
+            }
+        }
     }
 
     /// Cursor-paginated photos in a specific album, ordered by date.

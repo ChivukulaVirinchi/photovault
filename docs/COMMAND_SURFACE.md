@@ -52,6 +52,7 @@ smriti/
 │           ├── memories.rs
 │           ├── duplicates.rs
 │           ├── bursts.rs
+│           ├── stacks.rs
 │           ├── trash.rs
 │           ├── documents.rs
 │           ├── map.rs
@@ -259,6 +260,7 @@ struct PhotoDto {
     ocr: Option<OcrDto>,
     faces_processed: bool,
     is_trashed: bool,
+    stack: Option<PhotoStackBadgeDto>,
     indexed_at: String,
 }
 
@@ -282,6 +284,33 @@ struct PhotoSummaryDto {              // light variant for grids
     height: Option<u32>,
     orientation: Option<u32>,
     is_trashed: bool,
+    stack: Option<PhotoStackBadgeDto>,
+}
+
+struct PhotoStackBadgeDto {
+    id: i64,
+    kind: String,                     // burst | exact_duplicate | perceptual_duplicate
+    member_count: i64,
+    cover_photo_id: i64,
+}
+
+struct PhotoStackDto {
+    id: i64,
+    kind: String,
+    source_group_id: i64,
+    cover_photo_id: i64,
+    member_count: i64,
+    confidence: f32,
+    members: Vec<PhotoStackMemberDto>,
+}
+
+struct PhotoStackMemberDto {
+    photo_id: i64,
+    thumbnail_path: Option<String>,
+    date_taken: Option<String>,
+    quality_score: f32,
+    score_reasons: Option<String>,
+    is_cover: bool,
 }
 
 struct PersonDto {                    // a face cluster
@@ -416,7 +445,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
-| `photos.list` | `{ cursor: Option<String>, limit: Option<u32>, include_trashed: bool }` | `Page<PhotoSummaryDto>` | timeline scroll; `total` populated only on first page |
+| `photos.list` | `{ cursor: Option<String>, limit: Option<u32>, include_trashed: bool }` | `Page<PhotoSummaryDto>` | timeline scroll; `total` populated only on first page; hides non-cover stack members when timeline stacks are enabled |
 | `photos.get` | `{ id: i64 }` | `PhotoDto` | full detail (lightbox open) |
 | `photos.get_many` | `{ ids: Vec<i64> }` | `Vec<PhotoDto>` | up to 500; preserves input order; missing ids dropped silently |
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
@@ -509,7 +538,25 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `bursts.trash_non_best` | `{ group_id: i64 }` | `{ trashed: u32 }` |
 | `bursts.dismiss` | `{ group_id: i64 }` | `()` |
 
-### 9. `trash`
+### 9. `stacks`
+
+Photo stacks are a presentation layer over conservative burst and
+duplicate groups. The cover photo is the suggested best photo, but the
+user can override it. Normal viewer next/previous navigation remains
+anchored to the visible timeline photo; stack members are browsed via
+the stack tray.
+
+| Command | Args | Returns |
+|---|---|---|
+| `stacks.get` | `{ id: i64 }` | `PhotoStackDto` |
+| `stacks.get_for_photo` | `{ photo_id: i64 }` | `Option<PhotoStackDto>` |
+| `stacks.set_cover` | `{ stack_id: i64, photo_id: i64 }` | `PhotoStackDto` |
+| `stacks.remove_member` | `{ stack_id: i64, photo_id: i64 }` | `Option<PhotoStackDto>` |
+| `stacks.unstack` | `{ id: i64 }` | `()` |
+| `stacks.trash_others` | `{ id: i64 }` | `{ count: u64 }` |
+| `stacks.refresh` | `{}` | `{ stacks_found: u64 }` |
+
+### 10. `trash`
 
 | Command | Args | Returns |
 |---|---|---|
@@ -521,7 +568,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `trash.empty` | `{}` | `{ deleted: u32, freed_bytes: u64 }` |
 
 <!--
-### 10. `documents` — OCR'd text-bearing photos  [DEFERRED]
+### 11. `documents` — OCR'd text-bearing photos  [DEFERRED]
 
 The Documents tab is not exposed in the UI right now. The engine still
 classifies content categories silently for the timeline badge, and the
@@ -538,7 +585,7 @@ for the day this returns.
 -->
 
 
-### 11. `map`
+### 12. `map`
 
 | Command | Args | Returns |
 |---|---|---|
@@ -550,27 +597,27 @@ for the day this returns.
 
 > **Maps note:** MapLibre GL JS handles tile fetching directly via HTTPS to OSM — Tauri doesn't proxy tiles. The `map.tile_cache.*` commands manage *our* offline tile cache (MapLibre's IndexedDB cache or our pre-cached tiles). Pins are the only photo-side data crossing IPC.
 
-### 12. `insights`
+### 13. `insights`
 
 | Command | Args | Returns |
 |---|---|---|
 | `insights.compute` | `{ year: Option<i32> }` | `InsightsDto` | None = all-time |
 | `insights.invalidate` | `{}` | `()` | client signals stale (after big mutation); server clears its cache |
 
-### 13. `health`
+### 14. `health`
 
 | Command | Args | Returns |
 |---|---|---|
 | `health.compute` | `{}` | `LibraryHealthDto` |
 
-### 14. `geocoding`
+### 15. `geocoding`
 
 | Command | Args | Returns |
 |---|---|---|
 | `geocoding.run` | `{}` | `{ job_id: String }` | resolves all unresolved GPS-bearing photos; emits a generic `JobProgress` on `geocoding:progress` |
 | `geocoding.resolve_one` | `{ lat: f64, lng: f64 }` | `Option<LocationDto>` | sync, ~1-3ms — used by photo_detail when a specific photo opens |
 
-### 15. `settings`
+### 16. `settings`
 
 ```rust
 struct SettingsDto {
@@ -584,6 +631,7 @@ struct SettingsDto {
     date_format: DateFormat,
     home_city: Option<String>,
     memories_enabled: bool,
+    show_timeline_stacks: bool,
     auto_update_check_enabled: bool,
     map_cache_limit_mb: u32,
 }
@@ -594,7 +642,7 @@ struct SettingsDto {
 | `settings.get` | `{}` | `SettingsDto` |
 | `settings.update` | `Partial<SettingsDto>` | `SettingsDto` | partial; only fields present are written |
 
-### 16. `system` — drives, assets, updates, OS integration
+### 17. `system` — drives, assets, updates, OS integration
 
 | Command | Args | Returns |
 |---|---|---|

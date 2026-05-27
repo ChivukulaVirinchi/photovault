@@ -22,7 +22,7 @@
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { photos } from "../lib/api/photos";
-  import { memories, trash, type MemoryCard } from "../lib/api/all";
+  import { memories, stacks, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { library } from "../lib/api/library";
@@ -35,7 +35,7 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Play } from "lucide-svelte";
+  import { Check, Layers, Play } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
 
@@ -239,6 +239,17 @@
       const msg = typeof e === "string" ? e : JSON.stringify(e);
       error = msg;
       toasts.error(`Couldn't start scan: ${msg}`);
+    }
+  }
+
+  async function refreshStacks() {
+    try {
+      const result = await stacks.refresh();
+      toasts.success(`${result.stacks_found} ${result.stacks_found === 1 ? "stack" : "stacks"} ready`);
+      await refreshFirstPage();
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      toasts.error(`Couldn't refresh stacks: ${msg}`);
     }
   }
   // When a scan completes, refresh the photo list so the user sees
@@ -916,6 +927,7 @@
       {(total ?? items.length).toLocaleString()}<span class="muted"> photos</span>
     </span>
     <button class="primary" onclick={startScan}>Scan now</button>
+    <button class="ghost" onclick={refreshStacks}>Refresh stacks</button>
   {/if}
 </PageHeader>
 
@@ -1006,6 +1018,12 @@
                   {#if selection.has(photo.id)}
                     <span class="check" aria-hidden="true">
                       <Check size={14} strokeWidth={2.5} />
+                    </span>
+                  {/if}
+                  {#if photo.stack}
+                    <span class="stack-badge mono" title="{photo.stack.member_count} photos in stack">
+                      <Layers size={13} strokeWidth={2.2} />
+                      <span>{photo.stack.member_count}</span>
                     </span>
                   {/if}
                 </a>
@@ -1279,6 +1297,26 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
+  .stack-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    min-width: 30px;
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.68);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: var(--t-xs);
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 2px 7px rgba(0,0,0,0.35);
     pointer-events: none;
   }
   .cell img {

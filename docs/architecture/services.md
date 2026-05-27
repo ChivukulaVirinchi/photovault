@@ -23,6 +23,7 @@ it. Services are the unit of integration testing in `tests/`.
 | `album_suggestions` | Trip and event detection from geographic + temporal clusters. |
 | `burst_detector` | Time-window-based grouping with similarity gate. |
 | `duplicate_detector` | SHA-256 exact + DCT-pHash perceptual dedup. |
+| `photo_stacks` | Conservative timeline stack generation from duplicate/burst results, including best-photo scoring. |
 | `trash` | Soft-delete, restore, permanent-delete, auto-delete. |
 | `tile_cache` | LRU-managed cache for OpenStreetMap tiles. |
 | `update_checker` | Opt-in version check against the GitHub releases API. |

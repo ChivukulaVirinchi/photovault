@@ -7,7 +7,7 @@ use smriti::db::album_repo::AlbumRepo;
 use smriti::db::face_repo::FaceRepo;
 use smriti::db::PhotoRepo;
 
-use crate::dto::{AlbumDto, Page, PersonDto, PhotoDto, PhotoSummaryDto};
+use crate::dto::{AlbumDto, Page, PersonDto, PhotoDto, PhotoStackBadgeDto, PhotoSummaryDto};
 use crate::pagination::{self, Cursor};
 use crate::state::AppState;
 use crate::{CommandError, CommandResult};
@@ -34,16 +34,19 @@ pub async fn photos_list(
 
     let db = lib.db.lock().await;
     let repo = PhotoRepo::new(&db.conn);
+    let cfg = smriti::config::AppConfig::load();
+    let show_stacks = cfg.show_timeline_stacks && !args.include_trashed;
     let rows = repo.list_after(
         cursor_in.map(|c| (c.date_taken, c.id)),
         limit,
         args.include_trashed,
+        show_stacks,
     )?;
 
     let has_more = rows.len() as i64 == limit;
     let next_cursor = rows.last().map(|p| pagination::encode(cursor_for_lite(p)));
     let total = if cursor_in.is_none() {
-        Some(repo.count()? as u64)
+        Some(repo.count_timeline_visible(show_stacks)? as u64)
     } else {
         None
     };
@@ -59,6 +62,12 @@ pub async fn photos_list(
             height: p.height,
             orientation: p.orientation,
             is_trashed: p.is_trashed,
+            stack: p.stack_id.map(|id| PhotoStackBadgeDto {
+                id,
+                kind: p.stack_kind.unwrap_or_else(|| "unknown".into()),
+                member_count: p.stack_member_count.unwrap_or(1),
+                cover_photo_id: p.stack_cover_photo_id.unwrap_or(p.id),
+            }),
         })
         .collect();
     Ok(Page {
@@ -296,6 +305,7 @@ where
             height: p.height,
             orientation: p.orientation,
             is_trashed: p.is_trashed,
+            stack: None,
         })
         .collect();
     Ok(Page {

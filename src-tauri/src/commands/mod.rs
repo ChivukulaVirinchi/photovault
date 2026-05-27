@@ -18,6 +18,7 @@ pub mod people;
 pub mod photos;
 pub mod search;
 pub mod settings;
+pub mod stacks;
 pub mod system;
 pub mod trash;
 

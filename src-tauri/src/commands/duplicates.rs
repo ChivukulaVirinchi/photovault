@@ -239,6 +239,7 @@ pub async fn duplicates_run(
                 tracing::warn!("dup persist: {}", e);
             }
         }
+        let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
 
         emit(
             &app_clone,

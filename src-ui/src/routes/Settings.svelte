@@ -247,6 +247,11 @@
           onchange={(e) => patch({ scan_hidden_folders: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Scan hidden folders</span>
       </label>
+      <label class="checkbox">
+        <input type="checkbox" checked={s.show_timeline_stacks}
+          onchange={(e) => patch({ show_timeline_stacks: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Show stacks in timeline</span>
+      </label>
       <label>
         <span class="label-text">Auto-delete from trash after</span>
         <span class="number-with-unit">

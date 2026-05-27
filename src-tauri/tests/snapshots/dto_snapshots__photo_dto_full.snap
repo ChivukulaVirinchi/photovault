@@ -40,5 +40,6 @@ expression: dto
   },
   "faces_processed": true,
   "is_trashed": false,
+  "stack": null,
   "indexed_at": "2024-01-01T12:00:00+00:00"
 }

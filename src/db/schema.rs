@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (21);
+INSERT INTO schema_version (version) VALUES (22);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -337,6 +337,37 @@ CREATE TABLE IF NOT EXISTS burst_group_members (
 );
 
 -- ============================================================
+-- PHOTO STACKS
+-- Timeline presentation groups for high-confidence related photos
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS photo_stacks (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,                  -- 'exact_duplicate' | 'perceptual_duplicate' | 'burst'
+    source_group_id INTEGER NOT NULL,    -- duplicate_groups.id or burst_groups.id
+    source_group_hash TEXT,
+    cover_photo_id INTEGER NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    dismissed BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(kind, source_group_id)
+);
+
+CREATE TABLE IF NOT EXISTS photo_stack_members (
+    id INTEGER PRIMARY KEY,
+    stack_id INTEGER NOT NULL,
+    photo_id INTEGER NOT NULL,
+    quality_score REAL NOT NULL DEFAULT 0,
+    score_reasons TEXT,
+    is_cover BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (stack_id) REFERENCES photo_stacks(id) ON DELETE CASCADE,
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+    UNIQUE(stack_id, photo_id)
+);
+
+-- ============================================================
 -- TRASH TABLE
 -- Tracks soft-deleted photos for restore/permanent delete
 -- ============================================================
@@ -435,6 +466,11 @@ CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_group_members(grou
 CREATE INDEX IF NOT EXISTS idx_dup_members_photo ON duplicate_group_members(photo_id);
 CREATE INDEX IF NOT EXISTS idx_burst_members_group ON burst_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_burst_members_photo ON burst_group_members(photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_stacks_cover ON photo_stacks(cover_photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_stacks_active ON photo_stacks(dismissed, kind);
+CREATE INDEX IF NOT EXISTS idx_photo_stack_members_stack ON photo_stack_members(stack_id);
+CREATE INDEX IF NOT EXISTS idx_photo_stack_members_photo ON photo_stack_members(photo_id);
+CREATE INDEX IF NOT EXISTS idx_photo_stack_members_cover ON photo_stack_members(stack_id, is_cover);
 CREATE INDEX IF NOT EXISTS idx_trash_trashed_at ON trash(trashed_at);
 
 -- Albums
