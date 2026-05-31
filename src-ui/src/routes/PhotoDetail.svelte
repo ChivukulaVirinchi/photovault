@@ -14,6 +14,7 @@
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { probeVideoPoster } from "../lib/videoProbe";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
   import ZoomImage from "../lib/components/ZoomImage.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
@@ -114,6 +115,10 @@
     // files, so the viewer transform is reserved for user rotation.
     return (manualRotate + 360) % 360;
   });
+  const isVideo = $derived(photo?.media_type === "video");
+  const posterUrl = $derived(
+    photo?.thumbnail_path ? thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) : undefined
+  );
 
   function fileFormat(name: string): string {
     const m = name.toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -139,8 +144,30 @@
       rwl: "RWL (Leica RAW)",
       srw: "SRW (Samsung RAW)",
       raf: "RAF (Fujifilm RAW)",
+      // Videos
+      mp4: "MP4 video",
+      m4v: "M4V video",
+      mov: "QuickTime video",
+      webm: "WebM video",
+      mkv: "Matroska video",
+      avi: "AVI video",
+      "3gp": "3GPP video",
+      "3g2": "3GPP2 video",
+      mts: "AVCHD video",
+      m2ts: "AVCHD video",
     };
     return mapping[ext] ?? ext.toUpperCase();
+  }
+
+  function fmtDuration(ms: number | null): string {
+    if (ms == null || ms <= 0) return "—";
+    const total = Math.round(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`;
   }
 
   async function decodeImage(url: string): Promise<void> {
@@ -175,7 +202,8 @@
     if (photoId == null || resolvedImageCache.has(photoId)) return;
     try {
       const url = await imageUrlFor(photoId);
-      await decodeImage(url);
+      const p = await photos.get(photoId);
+      if (p.media_type !== "video") await decodeImage(url);
     } catch {}
   }
 
@@ -216,6 +244,14 @@
         const nextStack = await stacks.getForPhoto(id);
         if (seq === loadSeq) stack = nextStack;
       } catch {}
+      if (p.media_type === "video" && !p.thumbnail_path) {
+        probeVideoPoster(id)
+          .then(async () => {
+            const refreshed = await photos.get(id);
+            if (photo?.id === id) photo = refreshed;
+          })
+          .catch(() => {});
+      }
       // Tier-2 EXIF — re-parsed off the file at request time. Non-blocking.
       photos.exifExtras(id).then((e) => { if (photo?.id === id) extras = e; }).catch(() => {});
       if (photo?.gps && metaOpen) {
@@ -377,6 +413,7 @@
 
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.target instanceof HTMLVideoElement) return;
     switch (e.key) {
       case "Escape":     back(); break;
       case "ArrowLeft":  e.preventDefault(); gotoId(prevId); break;
@@ -385,17 +422,23 @@
         if (!e.metaKey && !e.ctrlKey) { metaOpen = !metaOpen; e.preventDefault(); }
         break;
       case "+": case "=":
-        e.preventDefault(); zoomApi?.zoomIn(); break;
+        if (!isVideo) { e.preventDefault(); zoomApi?.zoomIn(); }
+        break;
       case "-": case "_":
-        e.preventDefault(); zoomApi?.zoomOut(); break;
+        if (!isVideo) { e.preventDefault(); zoomApi?.zoomOut(); }
+        break;
       case "0":
-        e.preventDefault(); zoomApi?.fit(); atActual = false; break;
+        if (!isVideo) { e.preventDefault(); zoomApi?.fit(); atActual = false; }
+        break;
       case "1":
-        e.preventDefault(); zoomApi?.actual(); atActual = true; break;
+        if (!isVideo) { e.preventDefault(); zoomApi?.actual(); atActual = true; }
+        break;
       case "[":
-        e.preventDefault(); rotateCcw(); break;
+        if (!isVideo) { e.preventDefault(); rotateCcw(); }
+        break;
       case "]":
-        e.preventDefault(); rotateCw(); break;
+        if (!isVideo) { e.preventDefault(); rotateCw(); }
+        break;
       case "f": case "F":
         if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleFullscreen(); }
         break;
@@ -494,13 +537,25 @@
              still cover the FIRST photo load (the very first time the
              user lands here from Timeline) for the ~50 ms before the
              initial decode completes. -->
-        <ZoomImage
-          src={imageUrl}
-          alt={photo.file_name}
-          rotate={totalRotation}
-          preferredMode={atActual ? "actual" : "fit"}
-          bind:api={zoomApi}
-        />
+        {#if photo.media_type === "video"}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            class="video-player"
+            src={imageUrl}
+            poster={posterUrl}
+            controls
+            preload="metadata"
+            playsinline
+          ></video>
+        {:else}
+          <ZoomImage
+            src={imageUrl}
+            alt={photo.file_name}
+            rotate={totalRotation}
+            preferredMode={atActual ? "actual" : "fit"}
+            bind:api={zoomApi}
+          />
+        {/if}
       {:else}
         <span class="loading muted mono">loading…</span>
       {/if}
@@ -511,23 +566,25 @@
           <X size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
-        <button class="tool" onclick={() => { zoomApi?.zoomOut(); atActual = false; }} title="Zoom out (−)" aria-label="Zoom out">
-          <ZoomOut size={16} strokeWidth={1.75} />
-        </button>
-        <button class="tool" class:on={atActual} onclick={toggleFit} title={atActual ? "Fit to screen (0)" : "Actual size (1)"} aria-label="Toggle fit / actual size">
-          <Maximize2 size={16} strokeWidth={1.75} />
-        </button>
-        <button class="tool" onclick={() => { zoomApi?.zoomIn(); atActual = false; }} title="Zoom in (+)" aria-label="Zoom in">
-          <ZoomIn size={16} strokeWidth={1.75} />
-        </button>
-        <span class="sep"></span>
-        <button class="tool" onclick={rotateCcw} title="Rotate CCW ([)" aria-label="Rotate counter-clockwise">
-          <RotateCcw size={16} strokeWidth={1.75} />
-        </button>
-        <button class="tool" onclick={rotateCw} title="Rotate CW (])" aria-label="Rotate clockwise">
-          <RotateCw size={16} strokeWidth={1.75} />
-        </button>
-        <span class="sep"></span>
+        {#if !isVideo}
+          <button class="tool" onclick={() => { zoomApi?.zoomOut(); atActual = false; }} title="Zoom out (−)" aria-label="Zoom out">
+            <ZoomOut size={16} strokeWidth={1.75} />
+          </button>
+          <button class="tool" class:on={atActual} onclick={toggleFit} title={atActual ? "Fit to screen (0)" : "Actual size (1)"} aria-label="Toggle fit / actual size">
+            <Maximize2 size={16} strokeWidth={1.75} />
+          </button>
+          <button class="tool" onclick={() => { zoomApi?.zoomIn(); atActual = false; }} title="Zoom in (+)" aria-label="Zoom in">
+            <ZoomIn size={16} strokeWidth={1.75} />
+          </button>
+          <span class="sep"></span>
+          <button class="tool" onclick={rotateCcw} title="Rotate CCW ([)" aria-label="Rotate counter-clockwise">
+            <RotateCcw size={16} strokeWidth={1.75} />
+          </button>
+          <button class="tool" onclick={rotateCw} title="Rotate CW (])" aria-label="Rotate clockwise">
+            <RotateCw size={16} strokeWidth={1.75} />
+          </button>
+          <span class="sep"></span>
+        {/if}
         <button class="tool" onclick={() => (showAddDialog = true)} title="Add to album (A)" aria-label="Add to album">
           <FolderPlus size={16} strokeWidth={1.75} />
         </button>
@@ -689,6 +746,14 @@
           <dd>{fileFormat(p.file_name)}</dd>
           <dt>Dimensions</dt>
           <dd class="mono">{p.width ?? "?"} × {p.height ?? "?"}</dd>
+          {#if p.media_type === "video"}
+            <dt>Duration</dt>
+            <dd class="mono">{fmtDuration(p.duration_ms)}</dd>
+            {#if p.video?.video_codec}<dt>Video</dt><dd class="mono">{p.video.video_codec}</dd>{/if}
+            {#if p.video?.audio_codec}<dt>Audio</dt><dd class="mono">{p.video.audio_codec}</dd>{/if}
+            {#if p.video?.frame_rate}<dt>Frame rate</dt><dd class="mono">{p.video.frame_rate.toFixed(2)} fps</dd>{/if}
+            {#if p.video?.bitrate}<dt>Bitrate</dt><dd class="mono">{(p.video.bitrate / 1000000).toFixed(1)} Mbps</dd>{/if}
+          {/if}
           <dt>Size</dt>
           <dd class="mono">{fmtSize(p.file_size)}</dd>
           {#if p.orientation && p.orientation !== 1}
@@ -787,6 +852,15 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
+  }
+
+  .video-player {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
   }
 
   /* ===== floating toolbar ===== */

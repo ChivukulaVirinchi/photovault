@@ -1,8 +1,9 @@
-export type ThumbnailLoader = (id: number) => Promise<string | null>;
+export type ThumbnailLoader = (id: number, mediaType: "photo" | "video") => Promise<string | null>;
 export type ThumbnailReadyHandler = (thumbnailPath: string) => void;
 
 interface QueueEntry {
   id: number;
+  mediaType: "photo" | "video";
   priority: number;
   seq: number;
   handlers: Set<ThumbnailReadyHandler>;
@@ -35,7 +36,7 @@ export function createThumbnailQueue(load: ThumbnailLoader, maxActive = 6) {
       if (!entry) return;
       active += 1;
       activeHandlers.set(entry.id, new Set(entry.handlers));
-      void load(entry.id)
+      void load(entry.id, entry.mediaType)
         .then((thumbnailPath) => {
           const handlers = activeHandlers.get(entry.id);
           if (!thumbnailPath || !handlers) return;
@@ -52,7 +53,12 @@ export function createThumbnailQueue(load: ThumbnailLoader, maxActive = 6) {
     }
   }
 
-  function enqueue(id: number, onReady: ThumbnailReadyHandler, priority = Date.now()) {
+  function enqueue(
+    id: number,
+    onReady: ThumbnailReadyHandler,
+    priority = Date.now(),
+    mediaType: "photo" | "video" = "photo",
+  ) {
     const running = activeHandlers.get(id);
     if (running) {
       running.add(onReady);
@@ -67,6 +73,7 @@ export function createThumbnailQueue(load: ThumbnailLoader, maxActive = 6) {
     } else {
       queued.set(id, {
         id,
+        mediaType,
         priority,
         seq: ++seq,
         handlers: new Set([onReady]),

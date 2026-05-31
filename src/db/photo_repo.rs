@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 
-use crate::models::{ContentCategory, Photo};
+use crate::models::{ContentCategory, MediaType, Photo};
 
 /// A discovered file ready for database insertion
 #[derive(Debug, Clone)]
@@ -33,6 +33,13 @@ pub struct PhotoInsert {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: i32,
+    pub media_type: MediaType,
+    pub duration_ms: Option<i64>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub frame_rate: Option<f32>,
+    pub bitrate: Option<i64>,
+    pub has_audio: bool,
 }
 
 /// Photo repository for database operations
@@ -60,8 +67,8 @@ impl<'a> PhotoRepo<'a> {
                 r#"
                 INSERT INTO photos (
                     file_path, file_name, file_hash, file_size, file_mtime,
-                    orientation, metadata_extracted, thumbnailed, faces_processed
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE, FALSE, FALSE)
+                    orientation, media_type, metadata_extracted, thumbnailed, faces_processed
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, FALSE, FALSE, FALSE)
                 ON CONFLICT(file_path) DO NOTHING
                 "#,
                 params![
@@ -71,6 +78,7 @@ impl<'a> PhotoRepo<'a> {
                     photo.file_size,
                     photo.file_mtime,
                     photo.orientation,
+                    photo.media_type.as_str(),
                 ],
             )?;
             count += 1;
@@ -96,7 +104,9 @@ impl<'a> PhotoRepo<'a> {
                     camera_make, camera_model,
                     iso, aperture, shutter_speed, focal_length,
                     lens_model, flash, gps_altitude,
-                    width, height, orientation
+                    width, height, orientation,
+                    media_type, duration_ms, video_codec, audio_codec,
+                    frame_rate, bitrate, has_audio
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5,
                     ?6, ?7,
@@ -105,7 +115,9 @@ impl<'a> PhotoRepo<'a> {
                     ?12, ?13,
                     ?14, ?15, ?16, ?17,
                     ?18, ?19, ?20,
-                    ?21, ?22, ?23
+                    ?21, ?22, ?23,
+                    ?24, ?25, ?26, ?27,
+                    ?28, ?29, ?30
                 )
                 ON CONFLICT(file_path) DO UPDATE SET
                     file_hash = excluded.file_hash,
@@ -129,6 +141,13 @@ impl<'a> PhotoRepo<'a> {
                     width = excluded.width,
                     height = excluded.height,
                     orientation = excluded.orientation,
+                    media_type = excluded.media_type,
+                    duration_ms = excluded.duration_ms,
+                    video_codec = excluded.video_codec,
+                    audio_codec = excluded.audio_codec,
+                    frame_rate = excluded.frame_rate,
+                    bitrate = excluded.bitrate,
+                    has_audio = excluded.has_audio,
                     updated_at = CURRENT_TIMESTAMP
                 "#,
                 params![
@@ -155,6 +174,13 @@ impl<'a> PhotoRepo<'a> {
                     photo.width,
                     photo.height,
                     photo.orientation,
+                    photo.media_type.as_str(),
+                    photo.duration_ms,
+                    photo.video_codec,
+                    photo.audio_codec,
+                    photo.frame_rate,
+                    photo.bitrate,
+                    photo.has_audio,
                 ],
             )?;
             count += 1;
@@ -209,7 +235,7 @@ impl<'a> PhotoRepo<'a> {
     /// Photos awaiting thumbnail generation (Phase 3).
     pub fn count_pending_thumbnails(&self) -> SqliteResult<i64> {
         self.conn.query_row(
-            "SELECT COUNT(*) FROM photos WHERE thumbnailed = FALSE AND is_trashed = FALSE",
+            "SELECT COUNT(*) FROM photos WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo'",
             [],
             |row| row.get(0),
         )
@@ -228,6 +254,8 @@ impl<'a> PhotoRepo<'a> {
                 iso, aperture, shutter_speed, focal_length,
                 lens_model, flash, gps_altitude,
                 width, height, orientation,
+                media_type, duration_ms, video_codec, audio_codec,
+                frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
                 content_category, ocr_text, ocr_processed, ocr_confidence,
                 is_trashed, trashed_at,
@@ -272,6 +300,8 @@ impl<'a> PhotoRepo<'a> {
                     iso, aperture, shutter_speed, focal_length,
                     lens_model, flash, gps_altitude,
                     width, height, orientation,
+                    media_type, duration_ms, video_codec, audio_codec,
+                    frame_rate, bitrate, has_audio,
                     thumbnail_path, faces_processed,
                     content_category, ocr_text, ocr_processed, ocr_confidence,
                     is_trashed, trashed_at,
@@ -309,6 +339,8 @@ impl<'a> PhotoRepo<'a> {
                 iso, aperture, shutter_speed, focal_length,
                 lens_model, flash, gps_altitude,
                 width, height, orientation,
+                media_type, duration_ms, video_codec, audio_codec,
+                frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
                 content_category, ocr_text, ocr_processed, ocr_confidence,
                 is_trashed, trashed_at,
@@ -394,26 +426,36 @@ pub(crate) fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
         width: row.get(20)?,
         height: row.get(21)?,
         orientation: row.get::<_, Option<i32>>(22)?.unwrap_or(1),
-        thumbnail_path: row.get(23)?,
-        faces_processed: row.get(24)?,
+        media_type: row
+            .get::<_, Option<String>>(23)?
+            .map(|s| MediaType::from_db(&s))
+            .unwrap_or_default(),
+        duration_ms: row.get(24)?,
+        video_codec: row.get(25)?,
+        audio_codec: row.get(26)?,
+        frame_rate: row.get(27)?,
+        bitrate: row.get(28)?,
+        has_audio: row.get::<_, Option<bool>>(29)?.unwrap_or(false),
+        thumbnail_path: row.get(30)?,
+        faces_processed: row.get(31)?,
         content_category: row
-            .get::<_, Option<String>>(25)?
+            .get::<_, Option<String>>(32)?
             .map(|s| ContentCategory::from_db(&s))
             .unwrap_or(ContentCategory::Photo),
-        ocr_text: row.get(26)?,
-        ocr_processed: row.get::<_, Option<bool>>(27)?.unwrap_or(false),
-        ocr_confidence: row.get(28)?,
-        is_trashed: row.get(29)?,
+        ocr_text: row.get(33)?,
+        ocr_processed: row.get::<_, Option<bool>>(34)?.unwrap_or(false),
+        ocr_confidence: row.get(35)?,
+        is_trashed: row.get(36)?,
         trashed_at: row
-            .get::<_, Option<String>>(30)?
+            .get::<_, Option<String>>(37)?
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|d| d.with_timezone(&Utc)),
         indexed_at: row
-            .get::<_, String>(31)?
+            .get::<_, String>(38)?
             .parse::<DateTime<Utc>>()
             .unwrap_or_else(|_| Utc::now()),
         updated_at: row
-            .get::<_, String>(32)?
+            .get::<_, String>(39)?
             .parse::<DateTime<Utc>>()
             .unwrap_or_else(|_| Utc::now()),
     })
@@ -437,6 +479,8 @@ pub struct PhotoLite {
     pub is_trashed: bool,
     pub gps_latitude: Option<f64>,
     pub gps_longitude: Option<f64>,
+    pub media_type: MediaType,
+    pub duration_ms: Option<i64>,
     pub stack_id: Option<i64>,
     pub stack_kind: Option<String>,
     pub stack_member_count: Option<i64>,
@@ -457,10 +501,15 @@ fn row_to_photo_lite(row: &rusqlite::Row) -> SqliteResult<PhotoLite> {
         is_trashed: row.get(6)?,
         gps_latitude: row.get(7)?,
         gps_longitude: row.get(8)?,
-        stack_id: row.get(9)?,
-        stack_kind: row.get(10)?,
-        stack_member_count: row.get(11)?,
-        stack_cover_photo_id: row.get(12)?,
+        media_type: row
+            .get::<_, Option<String>>(9)?
+            .map(|s| MediaType::from_db(&s))
+            .unwrap_or_default(),
+        duration_ms: row.get(10)?,
+        stack_id: row.get(11)?,
+        stack_kind: row.get(12)?,
+        stack_member_count: row.get(13)?,
+        stack_cover_photo_id: row.get(14)?,
     })
 }
 
@@ -468,6 +517,7 @@ const PHOTO_LITE_COLUMNS: &str = r#"
     id, date_taken, thumbnail_path,
     width, height, orientation, is_trashed,
     gps_latitude, gps_longitude,
+    media_type, duration_ms,
     NULL AS stack_id, NULL AS stack_kind, NULL AS stack_member_count, NULL AS stack_cover_photo_id
 "#;
 
@@ -475,6 +525,7 @@ const PHOTO_LITE_P_COLUMNS: &str = r#"
     p.id, p.date_taken, p.thumbnail_path,
     p.width, p.height, p.orientation, p.is_trashed,
     p.gps_latitude, p.gps_longitude,
+    p.media_type, p.duration_ms,
     NULL AS stack_id, NULL AS stack_kind, NULL AS stack_member_count, NULL AS stack_cover_photo_id
 "#;
 
@@ -482,6 +533,7 @@ const PHOTO_LITE_STACKED_COLUMNS: &str = r#"
     p.id, p.date_taken, p.thumbnail_path,
     p.width, p.height, p.orientation, p.is_trashed,
     p.gps_latitude, p.gps_longitude,
+    p.media_type, p.duration_ms,
     s.id AS stack_id, s.kind AS stack_kind, COUNT(sm_all.photo_id) AS stack_member_count,
     s.cover_photo_id AS stack_cover_photo_id
 "#;

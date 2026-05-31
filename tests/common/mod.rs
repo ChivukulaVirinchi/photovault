@@ -37,6 +37,7 @@ use tempfile::TempDir;
 
 use smriti::db::photo_repo::{PhotoInsert, PhotoRepo};
 use smriti::db::Database;
+use smriti::models::MediaType;
 
 // ---------- image generators ----------
 
@@ -230,6 +231,13 @@ pub fn seed_photos(db: &Database, count: usize) -> usize {
                 width: Some(6048),
                 height: Some(4024),
                 orientation: 1,
+                media_type: MediaType::Photo,
+                duration_ms: None,
+                video_codec: None,
+                audio_codec: None,
+                frame_rate: None,
+                bitrate: None,
+                has_audio: false,
             }
         })
         .collect();

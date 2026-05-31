@@ -20,7 +20,7 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use smriti::db::photo_repo::PhotoInsert;
 use smriti::db::{create_schema, Database, PhotoRepo};
-use smriti::models::compute_groups;
+use smriti::models::{compute_groups, MediaType};
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -67,6 +67,13 @@ fn synthesize_photo(i: usize) -> PhotoInsert {
         width: Some(4032),
         height: Some(3024),
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
     }
 }
 

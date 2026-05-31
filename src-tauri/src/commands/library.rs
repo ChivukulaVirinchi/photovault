@@ -565,7 +565,7 @@ async fn run_thumbnail_pass(
             let guard = db.lock().await;
             let mut stmt = match guard.conn.prepare(
                 "SELECT id, file_path, file_hash, orientation FROM photos \
-                 WHERE thumbnailed = FALSE AND is_trashed = FALSE \
+                 WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo' \
                  LIMIT ?",
             ) {
                 Ok(s) => s,

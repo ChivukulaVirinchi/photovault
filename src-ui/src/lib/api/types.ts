@@ -35,6 +35,8 @@ export interface PhotoSummaryDto {
   width: number | null;
   height: number | null;
   orientation: number;
+  media_type: "photo" | "video";
+  duration_ms: number | null;
   is_trashed: boolean;
   stack: PhotoStackBadgeDto | null;
 }
@@ -62,6 +64,13 @@ export interface PhotoDto extends PhotoSummaryDto {
     shutter_speed: string | null;
     focal_length: string | null;
     flash: string | null;
+  } | null;
+  video: {
+    video_codec: string | null;
+    audio_codec: string | null;
+    frame_rate: number | null;
+    bitrate: number | null;
+    has_audio: boolean;
   } | null;
   content_category: string;
   ocr: { text: string; confidence: number } | null;
