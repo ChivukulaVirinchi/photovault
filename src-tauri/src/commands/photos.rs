@@ -61,6 +61,8 @@ pub async fn photos_list(
             width: p.width,
             height: p.height,
             orientation: p.orientation,
+            media_type: p.media_type.into(),
+            duration_ms: p.duration_ms,
             is_trashed: p.is_trashed,
             stack: p.stack_id.map(|id| PhotoStackBadgeDto {
                 id,
@@ -304,6 +306,8 @@ where
             width: p.width,
             height: p.height,
             orientation: p.orientation,
+            media_type: p.media_type.into(),
+            duration_ms: p.duration_ms,
             is_trashed: p.is_trashed,
             stack: None,
         })
@@ -341,19 +345,31 @@ pub async fn photos_request_thumbnail(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
 
     // Pull what we need to feed the generator without holding the DB lock.
-    let (file_path, file_hash, orientation, existing) = {
+    let (file_path, file_hash, orientation, media_type, existing) = {
         let db = lib.db.lock().await;
         let repo = PhotoRepo::new(&db.conn);
         let p = repo
             .get_by_id(args.id)?
             .ok_or_else(|| CommandError::not_found("photo", args.id))?;
-        (p.file_path, p.file_hash, p.orientation, p.thumbnail_path)
+        (
+            p.file_path,
+            p.file_hash,
+            p.orientation,
+            p.media_type,
+            p.thumbnail_path,
+        )
     };
 
     // Already generated — short-circuit.
     if let Some(rel) = existing {
         return Ok(ThumbnailResultDto {
             thumbnail_path: Some(rel),
+        });
+    }
+
+    if media_type == smriti::models::MediaType::Video {
+        return Ok(ThumbnailResultDto {
+            thumbnail_path: None,
         });
     }
 
@@ -372,6 +388,7 @@ pub async fn photos_request_thumbnail(
             orientation,
             smriti::services::thumbnail::ThumbnailSize::Medium,
         )
+        .map(|_| ())
     })
     .await
     .map_err(|e| CommandError::Internal {
@@ -393,7 +410,7 @@ pub async fn photos_request_thumbnail(
     {
         let db = lib.db.lock().await;
         if let Err(e) = db.conn.execute(
-            "UPDATE photos SET thumbnail_path = ?1 WHERE id = ?2",
+            "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2",
             rusqlite::params![&rel, args.id],
         ) {
             tracing::warn!(
@@ -419,6 +436,89 @@ fn relative_thumbnail_path(file_hash: &str) -> String {
         ".photovault/thumbnails/medium/v2/{}/{}.jpg",
         subdir, file_hash
     )
+}
+
+fn relative_video_thumbnail_path(file_hash: &str) -> String {
+    let subdir = &file_hash[..2.min(file_hash.len())];
+    format!(
+        ".photovault/thumbnails/video/v1/{}/{}.jpg",
+        subdir, file_hash
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveVideoProbeArgs {
+    pub id: i64,
+    pub duration_ms: Option<i64>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub poster_jpeg_base64: Option<String>,
+}
+
+#[tauri::command]
+pub async fn photos_save_video_probe(
+    state: State<'_, AppState>,
+    args: SaveVideoProbeArgs,
+) -> CommandResult<ThumbnailResultDto> {
+    use base64::Engine as _;
+
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let (file_hash, media_type) = {
+        let db = lib.db.lock().await;
+        let repo = PhotoRepo::new(&db.conn);
+        let p = repo
+            .get_by_id(args.id)?
+            .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+        (p.file_hash, p.media_type)
+    };
+    if media_type != smriti::models::MediaType::Video {
+        return Err(CommandError::Validation {
+            field: "media_type".into(),
+            reason: "video probe can only be saved for video items".into(),
+        });
+    }
+
+    let rel = if let Some(encoded) = args.poster_jpeg_base64.as_deref() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|e| CommandError::Validation {
+                field: "poster_jpeg_base64".into(),
+                reason: e.to_string(),
+            })?;
+        let rel = relative_video_thumbnail_path(&file_hash);
+        let abs = lib.drive_root.join(&rel);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| CommandError::Io {
+                message: e.to_string(),
+            })?;
+        }
+        std::fs::write(&abs, bytes).map_err(|e| CommandError::Io {
+            message: e.to_string(),
+        })?;
+        Some(rel)
+    } else {
+        None
+    };
+
+    {
+        let db = lib.db.lock().await;
+        db.conn.execute(
+            "UPDATE photos SET
+                duration_ms = COALESCE(?1, duration_ms),
+                width = COALESCE(?2, width),
+                height = COALESCE(?3, height),
+                thumbnail_path = COALESCE(?4, thumbnail_path),
+                thumbnailed = CASE WHEN ?4 IS NULL THEN thumbnailed ELSE TRUE END,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?5",
+            rusqlite::params![args.duration_ms, args.width, args.height, rel, args.id],
+        )?;
+    }
+
+    Ok(ThumbnailResultDto {
+        thumbnail_path: rel,
+    })
 }
 
 // ---------- EXIF extras (tier 2) ----------

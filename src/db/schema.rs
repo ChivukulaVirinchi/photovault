@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (22);
+INSERT INTO schema_version (version) VALUES (23);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS photos (
     width INTEGER,
     height INTEGER,
     orientation INTEGER DEFAULT 1,
+
+    -- Media metadata
+    media_type TEXT NOT NULL DEFAULT 'photo', -- 'photo' | 'video'
+    duration_ms INTEGER,
+    video_codec TEXT,
+    audio_codec TEXT,
+    frame_rate REAL,
+    bitrate INTEGER,
+    has_audio BOOLEAN DEFAULT FALSE,
 
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
@@ -428,6 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, locat
 CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
 CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
 CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
+CREATE INDEX IF NOT EXISTS idx_photos_media_type ON photos(media_type);
 CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
 CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
     ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;

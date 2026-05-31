@@ -1,9 +1,11 @@
 import { photos } from "./api/photos";
 import { createThumbnailQueue, type ThumbnailReadyHandler } from "./thumbnailQueue";
+import { probeVideoPoster } from "./videoProbe";
 
 export interface ThumbnailRequestOptions {
   id: number;
   thumbnailPath: string | null;
+  mediaType?: "photo" | "video";
   root?: Element | Document | null;
   rootMargin?: string;
   debounceMs?: number;
@@ -12,12 +14,20 @@ export interface ThumbnailRequestOptions {
 }
 
 const queue = createThumbnailQueue(
-  async (id) => (await photos.requestThumbnail(id)).thumbnail_path,
+  async (id, mediaType) =>
+    mediaType === "video"
+      ? probeVideoPoster(id)
+      : (await photos.requestThumbnail(id)).thumbnail_path,
   6,
 );
 
-export function enqueueThumbnail(id: number, onReady: ThumbnailReadyHandler, priority = Date.now()) {
-  return queue.enqueue(id, onReady, priority);
+export function enqueueThumbnail(
+  id: number,
+  onReady: ThumbnailReadyHandler,
+  priority = Date.now(),
+  mediaType: "photo" | "video" = "photo",
+) {
+  return queue.enqueue(id, onReady, priority, mediaType);
 }
 
 export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestOptions) {
@@ -52,7 +62,12 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
     timer = setTimeout(() => {
       timer = null;
       if (options.thumbnailPath) return;
-      unsubscribe = enqueueThumbnail(options.id, options.onReady, options.priority ?? Date.now());
+      unsubscribe = enqueueThumbnail(
+        options.id,
+        options.onReady,
+        options.priority ?? Date.now(),
+        options.mediaType ?? "photo",
+      );
     }, debounceMs);
   }
 

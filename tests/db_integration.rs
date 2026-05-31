@@ -6,6 +6,7 @@
 use smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION;
 use smriti::db::photo_repo::PhotoInsert;
 use smriti::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
+use smriti::models::MediaType;
 use smriti::services::TrashService;
 use tempfile::tempdir;
 
@@ -41,6 +42,13 @@ fn sample_photo(path: &str, hash: &str) -> PhotoInsert {
         width: Some(8192),
         height: Some(5464),
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
     }
 }
 
@@ -371,6 +379,13 @@ fn test_photo_with_no_exif() {
         width: None,
         height: None,
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
     };
 
     repo.insert_batch(&[photo]).unwrap();

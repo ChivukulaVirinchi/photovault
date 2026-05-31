@@ -17,6 +17,7 @@ mod common;
 use chrono::{TimeZone, Utc};
 
 use smriti::db::photo_repo::{PhotoInsert, PhotoRepo};
+use smriti::models::MediaType;
 use smriti::search::QueryParser;
 use smriti::services::search::SearchService;
 use smriti::services::trash::TrashService;
@@ -55,6 +56,13 @@ fn insert_photo_with(
         width: Some(1024),
         height: Some(768),
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
     };
     repo.insert_batch(&[insert]).unwrap();
     db.conn

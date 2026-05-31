@@ -152,6 +152,17 @@
     saveTimelineCache();
   }
 
+  function fmtDuration(ms: number | null): string {
+    if (ms == null || ms <= 0) return "";
+    const total = Math.round(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   // Drag-marquee state (selection by rectangle)
   let marqueeStart = $state<{ x: number; y: number } | null>(null);
   let marqueeCurrent = $state<{ x: number; y: number } | null>(null);
@@ -1002,6 +1013,7 @@
                   use:thumbnailOnVisible={{
                     id: photo.id,
                     thumbnailPath: photo.thumbnail_path,
+                    mediaType: photo.media_type,
                     root: scrollEl,
                     onReady: (path) => patchThumbnail(photo.id, path),
                   }}
@@ -1014,6 +1026,14 @@
                       loading="lazy"
                       decoding="async"
                     />
+                  {/if}
+                  {#if photo.media_type === "video"}
+                    <span class="video-badge" title="Video">
+                      <Play size={13} strokeWidth={2.4} fill="currentColor" />
+                    </span>
+                    {#if fmtDuration(photo.duration_ms)}
+                      <span class="duration mono">{fmtDuration(photo.duration_ms)}</span>
+                    {/if}
                   {/if}
                   {#if selection.has(photo.id)}
                     <span class="check" aria-hidden="true">
@@ -1318,6 +1338,33 @@
     line-height: 1;
     box-shadow: 0 2px 7px rgba(0,0,0,0.35);
     pointer-events: none;
+  }
+  .video-badge,
+  .duration {
+    position: absolute;
+    bottom: 6px;
+    background: rgba(0, 0, 0, 0.68);
+    color: #fff;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 7px rgba(0,0,0,0.35);
+    pointer-events: none;
+  }
+  .video-badge {
+    left: 6px;
+    width: 24px;
+    border-radius: 50%;
+  }
+  .duration {
+    right: 6px;
+    min-width: 38px;
+    padding: 0 7px;
+    border-radius: 999px;
+    font-size: var(--t-xs);
+    font-weight: 700;
+    line-height: 1;
   }
   .cell img {
     width: 100%;

@@ -3,5 +3,5 @@
 pub mod photo;
 pub mod timeline_group;
 
-pub use photo::{ContentCategory, Photo};
+pub use photo::{ContentCategory, MediaType, Photo};
 pub use timeline_group::{compute_groups, DateGroupRange};
