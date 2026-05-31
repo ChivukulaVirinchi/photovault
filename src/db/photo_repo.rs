@@ -326,6 +326,43 @@ impl<'a> PhotoRepo<'a> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema::create_schema;
+    use rusqlite::Connection;
+
+    #[test]
+    fn list_after_by_person_uses_valid_stack_aliases() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO face_clusters (id, face_count, photo_count) VALUES (7, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES (1, 'img.jpg', 'img.jpg', 'hash', 12, '2024-01-01T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, cluster_id, confidence)
+             VALUES (1, 0.0, 0.0, 0.1, 0.1, zeroblob(16), 7, 0.9)",
+            [],
+        )
+        .unwrap();
+
+        let rows = PhotoRepo::new(&conn)
+            .list_after_by_person(7, None, 10)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, 1);
+        assert!(rows[0].stack_id.is_none());
+    }
+}
+
 /// Convert a database row to a Photo struct.
 ///
 /// The selected columns must match the ordering used by `PhotoRepo` and document queries.
@@ -431,6 +468,13 @@ const PHOTO_LITE_COLUMNS: &str = r#"
     id, date_taken, thumbnail_path,
     width, height, orientation, is_trashed,
     gps_latitude, gps_longitude,
+    NULL AS stack_id, NULL AS stack_kind, NULL AS stack_member_count, NULL AS stack_cover_photo_id
+"#;
+
+const PHOTO_LITE_P_COLUMNS: &str = r#"
+    p.id, p.date_taken, p.thumbnail_path,
+    p.width, p.height, p.orientation, p.is_trashed,
+    p.gps_latitude, p.gps_longitude,
     NULL AS stack_id, NULL AS stack_kind, NULL AS stack_member_count, NULL AS stack_cover_photo_id
 "#;
 
@@ -593,7 +637,7 @@ impl<'a> PhotoRepo<'a> {
             "SELECT {cols} FROM photos p
              JOIN album_photos ap ON ap.photo_id = p.id
              WHERE ap.album_id = ?1 AND p.is_trashed = 0",
-            cols = PHOTO_LITE_COLUMNS.replace("id,", "p.id,")
+            cols = PHOTO_LITE_P_COLUMNS
         );
 
         match cursor {
@@ -650,7 +694,7 @@ impl<'a> PhotoRepo<'a> {
             "SELECT DISTINCT {cols} FROM photos p
              JOIN faces f ON f.photo_id = p.id
              WHERE f.cluster_id = ?1 AND p.is_trashed = 0",
-            cols = PHOTO_LITE_COLUMNS.replace("id,", "p.id,")
+            cols = PHOTO_LITE_P_COLUMNS
         );
 
         match cursor {
