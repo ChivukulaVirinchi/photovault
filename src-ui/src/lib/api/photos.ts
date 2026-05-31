@@ -12,6 +12,14 @@ export interface ThumbnailResult {
   thumbnail_path: string | null;
 }
 
+export interface SaveVideoProbeArgs {
+  id: number;
+  duration_ms: number | null;
+  width: number | null;
+  height: number | null;
+  poster_jpeg_base64: string | null;
+}
+
 export const photos = {
   list: (args: {
     cursor?: string | null;
@@ -31,6 +39,8 @@ export const photos = {
   /// missing, decode error). Concurrency is capped server-side at 8.
   requestThumbnail: (id: number) =>
     call<ThumbnailResult>("photos_request_thumbnail", { id }),
+  saveVideoProbe: (args: SaveVideoProbeArgs) =>
+    call<ThumbnailResult>("photos_save_video_probe", args),
   listByDate: (start: string, end: string, cursor: string | null = null, limit = 500) =>
     call<Page<PhotoSummaryDto>>("photos_list_by_date", {
       start,

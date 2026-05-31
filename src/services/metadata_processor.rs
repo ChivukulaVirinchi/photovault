@@ -14,7 +14,9 @@ use rayon::prelude::*;
 use rusqlite::params;
 
 use crate::db::Database;
+use crate::models::MediaType;
 use crate::services::exif_extractor::ExifExtractor;
+use crate::services::scanner::media_type_for_path;
 use crate::services::GeocodingService;
 
 const METADATA_CHUNK_SIZE: usize = 50;
@@ -92,11 +94,16 @@ async fn run_metadata_job(
         }
 
         let root = drive_root.clone();
-        let extracted: Vec<(i64, crate::services::exif_extractor::ImageMetadata)> = chunk
+        let extracted: Vec<(i64, ExtractedMetadata)> = chunk
             .par_iter()
             .map(|(id, rel_path)| {
                 let abs = root.join(rel_path);
-                let meta = ExifExtractor::extract(&abs);
+                let meta = match media_type_for_path(&abs).unwrap_or_default() {
+                    MediaType::Video => ExtractedMetadata::Video(VideoMetadata::from_path(&abs)),
+                    MediaType::Photo => {
+                        ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
+                    }
+                };
                 (*id, meta)
             })
             .collect();
@@ -113,8 +120,10 @@ async fn run_metadata_job(
             };
 
             for (id, meta) in &extracted {
+                let gps_latitude = meta.gps_latitude();
+                let gps_longitude = meta.gps_longitude();
                 let (city, country): (Option<String>, Option<String>) =
-                    match (meta.gps_latitude, meta.gps_longitude, &geocoder) {
+                    match (gps_latitude, gps_longitude, &geocoder) {
                         (Some(lat), Some(lon), Some(g)) => g
                             .reverse_geocode(lat, lon)
                             .map(|r| (Some(r.city), Some(r.country)))
@@ -142,28 +151,42 @@ async fn run_metadata_job(
                         width = ?,
                         height = ?,
                         orientation = ?,
+                        media_type = ?,
+                        duration_ms = ?,
+                        video_codec = ?,
+                        audio_codec = ?,
+                        frame_rate = ?,
+                        bitrate = ?,
+                        has_audio = ?,
                         metadata_extracted = TRUE
                      WHERE id = ?",
                     params![
-                        meta.date_taken
+                        meta.date_taken()
                             .map(|d: chrono::DateTime<chrono::Utc>| d.to_rfc3339()),
-                        meta.date_taken_source,
-                        meta.gps_latitude,
-                        meta.gps_longitude,
+                        meta.date_taken_source(),
+                        gps_latitude,
+                        gps_longitude,
                         city,
                         country,
-                        meta.camera_make,
-                        meta.camera_model,
-                        meta.iso,
-                        meta.aperture,
-                        meta.shutter_speed,
-                        meta.focal_length,
-                        meta.lens_model,
-                        meta.flash,
-                        meta.gps_altitude,
-                        meta.width.map(|v| v as i64),
-                        meta.height.map(|v| v as i64),
-                        meta.orientation.unwrap_or(1) as i64,
+                        meta.camera_make(),
+                        meta.camera_model(),
+                        meta.iso(),
+                        meta.aperture(),
+                        meta.shutter_speed(),
+                        meta.focal_length(),
+                        meta.lens_model(),
+                        meta.flash(),
+                        meta.gps_altitude(),
+                        meta.width().map(|v| v as i64),
+                        meta.height().map(|v| v as i64),
+                        meta.orientation() as i64,
+                        meta.media_type().as_str(),
+                        meta.duration_ms(),
+                        meta.video_codec(),
+                        meta.audio_codec(),
+                        meta.frame_rate(),
+                        meta.bitrate(),
+                        meta.has_audio(),
                         id,
                     ],
                 );
@@ -194,4 +217,200 @@ async fn run_metadata_job(
             elapsed_seconds: start.elapsed().as_secs_f64(),
         })
         .await;
+}
+
+enum ExtractedMetadata {
+    Photo(Box<crate::services::exif_extractor::ImageMetadata>),
+    Video(VideoMetadata),
+}
+
+#[derive(Debug, Clone, Default)]
+struct VideoMetadata {
+    date_taken: Option<chrono::DateTime<chrono::Utc>>,
+    date_taken_source: Option<String>,
+}
+
+impl VideoMetadata {
+    fn from_path(path: &std::path::Path) -> Self {
+        if let Some(date) = ExifExtractor::parse_date_from_filename(path) {
+            return Self {
+                date_taken: Some(date),
+                date_taken_source: Some("filename".into()),
+            };
+        }
+        Self {
+            date_taken: file_mtime(path),
+            date_taken_source: Some("mtime".into()),
+        }
+    }
+}
+
+fn file_mtime(path: &std::path::Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let mtime = metadata.modified().ok()?;
+    let duration = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
+    chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)
+}
+
+impl ExtractedMetadata {
+    fn media_type(&self) -> MediaType {
+        match self {
+            Self::Photo(_) => MediaType::Photo,
+            Self::Video(_) => MediaType::Video,
+        }
+    }
+
+    fn date_taken(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            Self::Photo(m) => m.date_taken,
+            Self::Video(m) => m.date_taken,
+        }
+    }
+
+    fn date_taken_source(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.date_taken_source.clone(),
+            Self::Video(m) => m.date_taken_source.clone(),
+        }
+    }
+
+    fn gps_latitude(&self) -> Option<f64> {
+        match self {
+            Self::Photo(m) => m.gps_latitude,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn gps_longitude(&self) -> Option<f64> {
+        match self {
+            Self::Photo(m) => m.gps_longitude,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn camera_make(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.camera_make.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn camera_model(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.camera_model.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn iso(&self) -> Option<i32> {
+        match self {
+            Self::Photo(m) => m.iso,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn aperture(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.aperture.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn shutter_speed(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.shutter_speed.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn focal_length(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.focal_length.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn lens_model(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.lens_model.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn flash(&self) -> Option<String> {
+        match self {
+            Self::Photo(m) => m.flash.clone(),
+            Self::Video(_) => None,
+        }
+    }
+
+    fn gps_altitude(&self) -> Option<f64> {
+        match self {
+            Self::Photo(m) => m.gps_altitude,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn width(&self) -> Option<u32> {
+        match self {
+            Self::Photo(m) => m.width,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn height(&self) -> Option<u32> {
+        match self {
+            Self::Photo(m) => m.height,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn orientation(&self) -> u16 {
+        match self {
+            Self::Photo(m) => m.orientation.unwrap_or(1),
+            Self::Video(_) => 1,
+        }
+    }
+
+    fn duration_ms(&self) -> Option<i64> {
+        match self {
+            Self::Photo(_) => None,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn video_codec(&self) -> Option<String> {
+        match self {
+            Self::Photo(_) => None,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn audio_codec(&self) -> Option<String> {
+        match self {
+            Self::Photo(_) => None,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn frame_rate(&self) -> Option<f32> {
+        match self {
+            Self::Photo(_) => None,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn bitrate(&self) -> Option<i64> {
+        match self {
+            Self::Photo(_) => None,
+            Self::Video(_) => None,
+        }
+    }
+
+    fn has_audio(&self) -> bool {
+        match self {
+            Self::Photo(_) => false,
+            Self::Video(_) => false,
+        }
+    }
 }

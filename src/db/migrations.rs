@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 22;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 23;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -124,8 +124,43 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 22 {
         migrate_v21_to_v22(conn)?;
     }
+    if current_version < 23 {
+        migrate_v22_to_v23(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v22_to_v23(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    for (col, def) in &[
+        ("media_type", "TEXT NOT NULL DEFAULT 'photo'"),
+        ("duration_ms", "INTEGER"),
+        ("video_codec", "TEXT"),
+        ("audio_codec", "TEXT"),
+        ("frame_rate", "REAL"),
+        ("bitrate", "INTEGER"),
+        ("has_audio", "BOOLEAN DEFAULT FALSE"),
+    ] {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, def);
+        match tx.execute(&sql, []) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_photos_media_type ON photos(media_type)",
+        [],
+    )?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (23)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 23 (video media metadata)");
     Ok(())
 }
 

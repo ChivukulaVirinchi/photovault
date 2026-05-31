@@ -5,6 +5,30 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum MediaType {
+    #[default]
+    Photo,
+    Video,
+}
+
+impl MediaType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Photo => "photo",
+            Self::Video => "video",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "video" => Self::Video,
+            _ => Self::Photo,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum ContentCategory {
     #[default]
     Photo,
@@ -72,6 +96,15 @@ pub struct Photo {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: i32,
+
+    // Media metadata
+    pub media_type: MediaType,
+    pub duration_ms: Option<i64>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub frame_rate: Option<f32>,
+    pub bitrate: Option<i64>,
+    pub has_audio: bool,
 
     // Processing state
     pub thumbnail_path: Option<String>,

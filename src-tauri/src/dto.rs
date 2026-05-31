@@ -20,7 +20,7 @@ use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::stack_repo::{PhotoStackMemberRecord, PhotoStackRecord};
 use smriti::db::trash_repo::TrashedPhotoRecord;
-use smriti::models::{ContentCategory, Photo};
+use smriti::models::{ContentCategory, MediaType, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
 use smriti::services::burst_detector::BurstGroup;
 use smriti::services::drive_detector::DriveInfo;
@@ -60,6 +60,9 @@ pub struct PhotoDto {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: i32,
+    pub media_type: MediaTypeDto,
+    pub duration_ms: Option<i64>,
+    pub video: Option<VideoDto>,
     pub gps: Option<GpsDto>,
     pub location: Option<LocationDto>,
     pub camera: Option<CameraDto>,
@@ -80,6 +83,8 @@ pub struct PhotoSummaryDto {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: i32,
+    pub media_type: MediaTypeDto,
+    pub duration_ms: Option<i64>,
     pub is_trashed: bool,
     pub stack: Option<PhotoStackBadgeDto>,
 }
@@ -90,6 +95,31 @@ pub struct PhotoStackBadgeDto {
     pub kind: String,
     pub member_count: i64,
     pub cover_photo_id: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaTypeDto {
+    Photo,
+    Video,
+}
+
+impl From<MediaType> for MediaTypeDto {
+    fn from(t: MediaType) -> Self {
+        match t {
+            MediaType::Photo => Self::Photo,
+            MediaType::Video => Self::Video,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VideoDto {
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub frame_rate: Option<f32>,
+    pub bitrate: Option<i64>,
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -220,6 +250,17 @@ impl From<Photo> for PhotoDto {
             text,
             confidence: p.ocr_confidence.unwrap_or(0.0),
         });
+        let video = if p.media_type == MediaType::Video {
+            Some(VideoDto {
+                video_codec: p.video_codec,
+                audio_codec: p.audio_codec,
+                frame_rate: p.frame_rate,
+                bitrate: p.bitrate,
+                has_audio: p.has_audio,
+            })
+        } else {
+            None
+        };
         Self {
             id: p.id,
             file_path: p.file_path,
@@ -232,6 +273,9 @@ impl From<Photo> for PhotoDto {
             width: p.width,
             height: p.height,
             orientation: p.orientation,
+            media_type: p.media_type.into(),
+            duration_ms: p.duration_ms,
+            video,
             gps,
             location,
             camera,
@@ -257,6 +301,8 @@ impl From<&Photo> for PhotoSummaryDto {
             width: p.width,
             height: p.height,
             orientation: p.orientation,
+            media_type: p.media_type.into(),
+            duration_ms: p.duration_ms,
             is_trashed: p.is_trashed,
             stack: None,
         }

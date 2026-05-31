@@ -52,7 +52,7 @@ use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecor
 use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::trash_repo::TrashedPhotoRecord;
-use smriti::models::{ContentCategory, Photo};
+use smriti::models::{ContentCategory, MediaType, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
 use smriti::services::burst_detector::BurstGroup;
 use smriti::services::drive_detector::DriveInfo;
@@ -110,6 +110,13 @@ fn make_photo_full() -> Photo {
         width: Some(6048),
         height: Some(4024),
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
         thumbnail_path: Some(".photovault/thumbnails/medium/v2/de/deadbeef.jpg".into()),
         faces_processed: true,
         content_category: ContentCategory::Photo,
@@ -151,6 +158,13 @@ fn make_photo_minimal() -> Photo {
         width: None,
         height: None,
         orientation: 1,
+        media_type: MediaType::Photo,
+        duration_ms: None,
+        video_codec: None,
+        audio_codec: None,
+        frame_rate: None,
+        bitrate: None,
+        has_audio: false,
         thumbnail_path: None,
         faces_processed: false,
         content_category: ContentCategory::Photo,

@@ -15,6 +15,7 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::db::photo_repo::{PhotoInsert, PhotoRepo};
 use crate::db::Database;
+use crate::models::MediaType;
 
 /// Supported image extensions.
 ///
@@ -30,6 +31,8 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
     // RAWs (TIFF-based, embedded-JPEG path)
     "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
+    // Videos
+    "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2", "mts", "m2ts",
 ];
 
 /// Directories to skip during scanning
@@ -110,6 +113,7 @@ struct FileCandidate {
     file_name: String,
     file_size: i64,
     mtime: Option<i64>,
+    media_type: MediaType,
 }
 
 /// Start a scan in a background task.
@@ -205,6 +209,7 @@ async fn run_scan_streaming(
             if !is_supported_file(&entry) {
                 continue;
             }
+            let media_type = media_type_for_path(entry.path()).unwrap_or_default();
             let Ok(metadata) = entry.metadata() else {
                 continue;
             };
@@ -232,6 +237,7 @@ async fn run_scan_streaming(
                 file_name: entry.file_name().to_string_lossy().to_string(),
                 file_size: metadata.len() as i64,
                 mtime,
+                media_type,
             };
 
             // send_blocking is OK here — this whole closure is on a blocking thread.
@@ -305,6 +311,13 @@ async fn run_scan_streaming(
                 width: None,
                 height: None,
                 orientation: 1,
+                media_type: candidate.media_type,
+                duration_ms: None,
+                video_codec: None,
+                audio_codec: None,
+                frame_rate: None,
+                bitrate: None,
+                has_audio: false,
             });
 
             if buf.len() >= DB_BATCH_SIZE {
@@ -397,15 +410,20 @@ fn should_skip(entry: &DirEntry, scan_hidden_folders: bool) -> bool {
 
 /// Check if a file has a supported extension
 fn is_supported_file(entry: &DirEntry) -> bool {
-    entry
-        .path()
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            let lower = ext.to_lowercase();
-            SUPPORTED_EXTENSIONS.contains(&lower.as_str())
-        })
-        .unwrap_or(false)
+    media_type_for_path(entry.path()).is_some()
+}
+
+pub(crate) fn media_type_for_path(path: &Path) -> Option<MediaType> {
+    let lower = path.extension()?.to_str()?.to_lowercase();
+    if !SUPPORTED_EXTENSIONS.contains(&lower.as_str()) {
+        return None;
+    }
+    match lower.as_str() {
+        "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" | "3gp" | "3g2" | "mts" | "m2ts" => {
+            Some(MediaType::Video)
+        }
+        _ => Some(MediaType::Photo),
+    }
 }
 
 /// Calculate SHA256 hash of a file (full streaming hash).
@@ -464,6 +482,9 @@ mod tests {
         let png = temp.path().join("test.PNG");
         File::create(&png).unwrap();
 
+        let mp4 = temp.path().join("clip.MP4");
+        File::create(&mp4).unwrap();
+
         let walker = WalkDir::new(temp.path()).into_iter();
         for entry in walker {
             let entry = entry.unwrap();
@@ -475,6 +496,10 @@ mod tests {
                 "test.jpg" => assert!(is_supported_file(&entry)),
                 "test.txt" => assert!(!is_supported_file(&entry)),
                 "test.PNG" => assert!(is_supported_file(&entry)),
+                "clip.MP4" => {
+                    assert!(is_supported_file(&entry));
+                    assert_eq!(media_type_for_path(entry.path()), Some(MediaType::Video));
+                }
                 _ => {}
             }
         }
