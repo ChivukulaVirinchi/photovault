@@ -99,14 +99,18 @@ fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn onnx_runtime_exists() -> bool {
+pub fn onnx_runtime_path() -> Option<PathBuf> {
     for root in candidate_asset_roots() {
         let candidate = root.join("libs").join("onnxruntime");
-        if find_runtime_in_dir(&candidate).is_some() {
-            return true;
+        if let Some(path) = find_runtime_in_dir(&candidate) {
+            return Some(path);
         }
     }
-    false
+    None
+}
+
+pub fn onnx_runtime_exists() -> bool {
+    onnx_runtime_path().is_some()
 }
 
 pub fn geonames_db_exists() -> bool {
@@ -165,6 +169,10 @@ fn candidate_asset_roots() -> Vec<PathBuf> {
     roots.push(PathBuf::from("/usr/lib/photovault")); // legacy
 
     roots
+}
+
+pub fn asset_roots() -> Vec<PathBuf> {
+    candidate_asset_roots()
 }
 
 pub fn model_dir() -> PathBuf {

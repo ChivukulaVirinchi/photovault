@@ -67,13 +67,13 @@ use smriti::services::search::{
 use smriti::services::trash::TrashStats;
 
 use smriti_tauri_lib::dto::{
-    AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetHealthDto, BurstGroupSummaryDto,
-    BurstMemberDto, CameraStatDto, ContentCategoryDto, CountryStatDto, DetectedBurstGroupDto,
-    DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto, DuplicateGroupSummaryDto,
-    DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto, LocationDto, LocationStatDto,
-    MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto, PhotoSummaryDto, PlaceHitDto,
-    RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto, SettingsDto, TrashStatsDto,
-    TrashedPhotoDto,
+    AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto,
+    BurstGroupSummaryDto, BurstMemberDto, CameraStatDto, ContentCategoryDto, CountryStatDto,
+    DetectedBurstGroupDto, DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto,
+    DuplicateGroupSummaryDto, DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto,
+    LocationDto, LocationStatDto, MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto,
+    PhotoSummaryDto, PlaceHitDto, RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto,
+    SettingsDto, TrashStatsDto, TrashedPhotoDto,
 };
 
 /// Fixed timestamp so date_taken / indexed_at / updated_at don't
@@ -702,6 +702,47 @@ fn asset_health_dto_all_missing() {
         missing_geonames_db: true,
     };
     let dto: AssetHealthDto = health.into();
+    assert_json_snapshot!(dto);
+}
+
+#[test]
+fn asset_inventory_dto() {
+    let dto = AssetInventoryDto {
+        install_root: "C:/Users/alice/AppData/Roaming/smriti/assets".into(),
+        roots: vec![
+            "C:/Users/alice/AppData/Roaming/smriti/assets".into(),
+            "C:/Program Files/Smriti".into(),
+        ],
+        total_size_bytes: 42_000,
+        assets: vec![
+            AssetItemDto {
+                id: "runtime.onnx".into(),
+                label: "ONNX Runtime".into(),
+                kind: "runtime".into(),
+                status: "active".into(),
+                required: true,
+                active: true,
+                installable: false,
+                removable: false,
+                size_bytes: Some(24_000),
+                path: Some("C:/Program Files/Smriti/libs/onnxruntime/onnxruntime.dll".into()),
+                note: Some("Required for local models.".into()),
+            },
+            AssetItemDto {
+                id: "ocr.model".into(),
+                label: "OCR model".into(),
+                kind: "model".into(),
+                status: "planned".into(),
+                required: false,
+                active: false,
+                installable: false,
+                removable: false,
+                size_bytes: None,
+                path: None,
+                note: Some("Not installed in this build.".into()),
+            },
+        ],
+    };
     assert_json_snapshot!(dto);
 }
 

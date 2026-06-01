@@ -1,11 +1,18 @@
 //! System: asset health, app version (read-only).
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::dto::{AppVersionDto, AssetHealthDto};
+use crate::dto::{AppVersionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto};
 use crate::state::AppState;
 use crate::{CommandError, CommandResult};
+
+#[cfg(target_os = "windows")]
+const ORT_LIB_NAME: &str = "onnxruntime.dll";
+#[cfg(not(target_os = "windows"))]
+const ORT_LIB_NAME: &str = "libonnxruntime.so";
 
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
@@ -18,6 +25,166 @@ pub async fn system_app_version() -> CommandResult<AppVersionDto> {
     Ok(AppVersionDto {
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn system_assets_inventory() -> CommandResult<AssetInventoryDto> {
+    Ok(build_asset_inventory())
+}
+
+fn build_asset_inventory() -> AssetInventoryDto {
+    let install_root = smriti::bootstrap::default_asset_install_dir();
+    let roots = smriti::bootstrap::asset_roots()
+        .into_iter()
+        .map(display_path)
+        .collect::<Vec<_>>();
+    let cfg = smriti::config::AppConfig::load();
+    let model_dir = smriti::bootstrap::model_dir();
+    let detector = smriti::bootstrap::detector_model_path();
+    let active_embedder = smriti::bootstrap::embedder_model_path();
+    let mut assets = Vec::new();
+
+    assets.push(asset_file(
+        "runtime.onnx",
+        "ONNX Runtime",
+        "runtime",
+        smriti::bootstrap::onnx_runtime_path().or_else(|| {
+            Some(
+                install_root
+                    .join("libs")
+                    .join("onnxruntime")
+                    .join(ORT_LIB_NAME),
+            )
+        }),
+        true,
+        true,
+        "Required for local face detection and future local models.",
+    ));
+    assets.push(asset_file(
+        "face.detector",
+        "Face detector",
+        "model",
+        Some(detector),
+        true,
+        true,
+        "Finds face boxes before recognition.",
+    ));
+    assets.push(asset_file(
+        "face.embedder.active",
+        "Face recognizer",
+        "model",
+        Some(active_embedder),
+        true,
+        true,
+        &format!("Active model: {}", cfg.face_embedder_model),
+    ));
+
+    for model in ["adaface_ir101_webface12m.onnx", "glintr100.onnx"] {
+        if model == cfg.face_embedder_model {
+            continue;
+        }
+        let path = model_dir.join(model);
+        if path.exists() {
+            assets.push(asset_file(
+                &format!("face.embedder.extra.{}", model),
+                "Extra face recognizer",
+                "model",
+                Some(path),
+                false,
+                false,
+                model,
+            ));
+        }
+    }
+
+    assets.push(asset_file(
+        "geonames.db",
+        "GeoNames database",
+        "data",
+        Some(smriti::db::geonames::geonames_db_path()),
+        true,
+        true,
+        "Offline city and country lookup for GPS photos.",
+    ));
+    assets.push(planned_asset(
+        "ocr.model",
+        "OCR model",
+        "model",
+        "Not installed in this build.",
+    ));
+    assets.push(planned_asset(
+        "vision.semantic",
+        "Semantic image search",
+        "model",
+        "Planned for a later local model pack.",
+    ));
+
+    let total_size_bytes = assets.iter().filter_map(|a| a.size_bytes).sum();
+    AssetInventoryDto {
+        install_root: display_path(install_root),
+        roots,
+        total_size_bytes,
+        assets,
+    }
+}
+
+fn asset_file(
+    id: &str,
+    label: &str,
+    kind: &str,
+    path: Option<PathBuf>,
+    required: bool,
+    active: bool,
+    note: &str,
+) -> AssetItemDto {
+    let exists = path.as_deref().is_some_and(Path::exists);
+    let status = if exists && active {
+        "active"
+    } else if exists {
+        "extra"
+    } else {
+        "missing"
+    };
+    AssetItemDto {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind: kind.to_string(),
+        status: status.to_string(),
+        required,
+        active: exists && active,
+        installable: false,
+        removable: false,
+        size_bytes: path.as_deref().and_then(file_size),
+        path: path.map(display_path),
+        note: Some(note.to_string()),
+    }
+}
+
+fn planned_asset(id: &str, label: &str, kind: &str, note: &str) -> AssetItemDto {
+    AssetItemDto {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind: kind.to_string(),
+        status: "planned".to_string(),
+        required: false,
+        active: false,
+        installable: false,
+        removable: false,
+        size_bytes: None,
+        path: None,
+        note: Some(note.to_string()),
+    }
+}
+
+fn file_size(path: &Path) -> Option<u64> {
+    path.metadata()
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+}
+
+fn display_path(path: PathBuf) -> String {
+    path.display().to_string()
 }
 
 // ---------- mutations / OS integration ----------

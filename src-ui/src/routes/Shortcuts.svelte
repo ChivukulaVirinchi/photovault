@@ -17,6 +17,7 @@
         ["1", "Actual size (1:1)"],
         ["[ / ]", "Rotate left / right"],
         ["F", "Toggle fullscreen"],
+        ["S", "Toggle favourite"],
       ],
     },
     {

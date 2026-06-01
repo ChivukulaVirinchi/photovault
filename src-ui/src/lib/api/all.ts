@@ -512,8 +512,30 @@ export const geocoding = {
 };
 
 // ---------- system ----------
+export interface AssetInventory {
+  install_root: string;
+  roots: string[];
+  total_size_bytes: number;
+  assets: AssetItem[];
+}
+
+export interface AssetItem {
+  id: string;
+  label: string;
+  kind: string;
+  status: "active" | "extra" | "missing" | "planned";
+  required: boolean;
+  active: boolean;
+  installable: boolean;
+  removable: boolean;
+  size_bytes: number | null;
+  path: string | null;
+  note: string | null;
+}
+
 export const systemEx = {
   assetHealth: () => call<AssetHealthDto>("system_asset_health"),
+  assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
   copyPathToClipboard: (photoId: number) =>

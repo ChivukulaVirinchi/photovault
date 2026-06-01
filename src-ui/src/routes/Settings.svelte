@@ -7,11 +7,13 @@
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
-  import type { LibraryHealthData, Settings } from "../lib/api/all";
+  import type { AssetInventory, AssetItem, LibraryHealthData, Settings } from "../lib/api/all";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
   let healthData = $state<LibraryHealthData | null>(null);
+  let assets = $state<AssetInventory | null>(null);
+  let assetsBusy = $state(false);
   let acting = $state(false);
   let testBusy = $state(false);
   let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
@@ -61,6 +63,7 @@
   onMount(() => {
     settingsStore.load();
     health.compute().then((d) => (healthData = d)).catch(() => {});
+    loadAssets();
   });
 
   const s = $derived(settingsStore.data);
@@ -113,6 +116,44 @@
       jobs.dismiss(placeholderId);
       toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     }
+  }
+
+  async function loadAssets() {
+    assetsBusy = true;
+    try {
+      assets = await systemEx.assetsInventory();
+    } catch (e) {
+      toasts.error(`Couldn't read assets: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      assetsBusy = false;
+    }
+  }
+
+  function formatBytes(bytes: number | null | undefined): string {
+    if (!bytes) return "-";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+  }
+
+  function installedCount(items: AssetItem[]): number {
+    return items.filter((item) => item.status === "active" || item.status === "extra").length;
+  }
+
+  function managedCount(items: AssetItem[]): number {
+    return items.filter((item) => item.status !== "planned").length;
+  }
+
+  function hasExternalAssets(inventory: AssetInventory): boolean {
+    const root = inventory.install_root.toLowerCase();
+    return inventory.assets.some((item) =>
+      item.path && item.status !== "planned" && !item.path.toLowerCase().startsWith(root),
+    );
   }
 
   async function refreshStacks() {
@@ -293,6 +334,67 @@
           <span class="unit hint mono">on next library open</span>
         </span>
       </label>
+    </section>
+
+    <section class="full-width assets-section">
+      <div class="section-heading-row">
+        <h3 class="section-title">Assets</h3>
+        <span class="hint mono">
+          {#if assets}
+            {installedCount(assets.assets)} / {managedCount(assets.assets)} ready · {formatBytes(assets.total_size_bytes)}
+          {:else}
+            Checking...
+          {/if}
+        </span>
+      </div>
+      <p class="hint blurb">
+        Local runtimes, models, and offline data live outside the app binary. Smriti uses these when available and keeps browsing usable when optional assets are missing.
+      </p>
+      <div class="asset-actions">
+        <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
+          {assetsBusy ? "Checking..." : "Recheck"}
+        </button>
+      </div>
+      {#if assets && hasExternalAssets(assets)}
+        <p class="hint blurb">
+          Some assets are being read from another search root. This is normal in development checkouts and portable installs; the table shows the exact active locations.
+        </p>
+      {/if}
+      {#if assets && devMode.enabled}
+        <details class="asset-roots">
+          <summary>Search roots</summary>
+          <ul>
+            {#each assets.roots as root}
+              <li class="mono">{root}</li>
+            {/each}
+          </ul>
+        </details>
+      {/if}
+      {#if assets}
+        <div class="asset-table" role="table" aria-label="Installed assets">
+          <div class="asset-row asset-head" role="row">
+            <span role="columnheader">Asset</span>
+            <span role="columnheader">Status</span>
+            <span role="columnheader">Size</span>
+            <span role="columnheader">Location</span>
+          </div>
+          {#each assets.assets as item}
+            <div class="asset-row" role="row">
+              <span class="asset-name" role="cell">
+                <strong>{item.label}</strong>
+                {#if item.note}<small>{item.note}</small>{/if}
+              </span>
+              <span role="cell">
+                <span class="asset-status" data-status={item.status}>{item.status}</span>
+              </span>
+              <span class="mono" role="cell">{formatBytes(item.size_bytes)}</span>
+              <span class="asset-path mono" role="cell" title={item.path ?? ""}>
+                {item.path ?? "-"}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </section>
 
     <section>
@@ -540,6 +642,12 @@
     letter-spacing: 0.1em;
     margin: 0 0 var(--s-3);
   }
+  .section-heading-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
 
   label {
     display: grid;
@@ -577,6 +685,116 @@
     margin: 0 0 var(--s-3);
   }
   .action-row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+  .assets-section { max-width: 980px; }
+  .asset-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+    flex-wrap: wrap;
+  }
+  .asset-roots {
+    margin: 0 0 var(--s-3);
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+  }
+  .asset-roots summary {
+    cursor: pointer;
+    color: var(--ink-soft);
+    margin-bottom: var(--s-2);
+  }
+  .asset-roots ul {
+    margin: 0;
+    padding-left: var(--s-4);
+  }
+  .asset-roots li {
+    margin-bottom: 4px;
+    overflow-wrap: anywhere;
+  }
+  .asset-table {
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .asset-row {
+    display: grid;
+    grid-template-columns: minmax(190px, 1.2fr) 92px 80px minmax(220px, 1fr);
+    gap: var(--s-3);
+    align-items: center;
+    padding: var(--s-2) 0;
+    border-top: 1px solid var(--line-soft);
+    min-height: 48px;
+  }
+  .asset-row:first-child { border-top: 0; }
+  .asset-head {
+    min-height: auto;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .asset-name {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .asset-name strong {
+    color: var(--ink);
+    font-size: var(--t-sm);
+    font-weight: 600;
+  }
+  .asset-name small {
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    line-height: 1.35;
+  }
+  .asset-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 70px;
+    height: 24px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    font-size: var(--t-xs);
+    text-transform: capitalize;
+  }
+  .asset-status[data-status="active"] {
+    color: var(--keep);
+    border-color: color-mix(in oklab, var(--keep) 50%, var(--line));
+    background: color-mix(in oklab, var(--keep) 8%, transparent);
+  }
+  .asset-status[data-status="extra"] {
+    color: var(--ink-soft);
+    background: var(--bg-paper);
+  }
+  .asset-status[data-status="missing"] {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
+  }
+  .asset-status[data-status="planned"] {
+    color: var(--ink-muted);
+    border-style: dashed;
+  }
+  .asset-path {
+    color: var(--ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  @media (max-width: 760px) {
+    .asset-row {
+      grid-template-columns: 1fr 82px;
+      gap: var(--s-2);
+    }
+    .asset-head { display: none; }
+    .asset-path {
+      grid-column: 1 / -1;
+      font-size: var(--t-xs);
+    }
+  }
   /* Destructive-action affordances. `.danger-soft` reads as "careful"
      but doesn't shout; `.danger` warns hot. */
   button.danger-soft {

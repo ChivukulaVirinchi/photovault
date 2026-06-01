@@ -21,6 +21,19 @@ Changes are persisted locally in user config storage.
   photos.
 - **Date format** — how dates render in day headers and insights.
 
+## Assets
+
+- **Asset inventory** — shows local runtimes, models, and offline data
+  Smriti can use, including their status, size, and on-disk location.
+- **Asset locations** — each row shows the exact file path Smriti is
+  using. In development checkouts and portable installs, assets may be
+  resolved from different search roots.
+
+Assets live outside the main app binary so the installer stays small.
+Timeline browsing still works when optional assets are missing; local
+face recognition, place lookup, and future local AI features depend on
+the matching assets being installed.
+
 ## Face Recognition
 
 - **Face confidence** — minimum detection score for a face to be
@@ -104,8 +117,8 @@ schedule.
 - **Regenerate Thumbnails** — rebuild all three thumbnail tiers.
 - **Refresh Photo Dates** — re-parse EXIF for photos with unreliable
   `date_taken`.
-- **Reinstall Assets** — re-run the optional asset installer
-  (ONNX runtime + ML models + GeoNames DB).
+- **Asset Inventory** — inspect which local model/runtime/data files
+  are present and which exact paths Smriti resolved.
 - **Fix Rotated Photos** — regenerate cached data for photos whose
   EXIF orientation wasn't previously applied.
 
