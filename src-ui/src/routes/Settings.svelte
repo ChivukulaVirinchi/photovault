@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
-  import { albums, geocoding, health, people, systemEx } from "../lib/api/all";
+  import { albums, geocoding, health, people, stacks, systemEx } from "../lib/api/all";
   import { library } from "../lib/api/library";
   import { devMode } from "../lib/stores/devMode.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -93,6 +93,7 @@
   /// size after that default changed. Long-running on big libraries
   /// — progress shows in the global JobsIndicator.
   const regeneratingThumbs = $derived(jobs.isRunning("thumbnails"));
+  let refreshingStacks = $state(false);
   async function regenerateThumbs() {
     if (regeneratingThumbs) return;
     if (
@@ -111,6 +112,20 @@
     } catch (e) {
       jobs.dismiss(placeholderId);
       toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
+  async function refreshStacks() {
+    if (refreshingStacks) return;
+    refreshingStacks = true;
+    try {
+      const result = await stacks.refresh();
+      toasts.success(`${result.stacks_found} ${result.stacks_found === 1 ? "stack" : "stacks"} ready`);
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      toasts.error(`Couldn't refresh stacks: ${msg}`);
+    } finally {
+      refreshingStacks = false;
     }
   }
 
@@ -421,6 +436,9 @@
         <div class="action-row">
           <button class="ghost" onclick={regenerateThumbs} disabled={regeneratingThumbs}>
             {regeneratingThumbs ? "Regenerating…" : "Regenerate thumbnails"}
+          </button>
+          <button class="ghost" onclick={refreshStacks} disabled={refreshingStacks}>
+            {refreshingStacks ? "Refreshing…" : "Refresh stacks"}
           </button>
         </div>
       </section>

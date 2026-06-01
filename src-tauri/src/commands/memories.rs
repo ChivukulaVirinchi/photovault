@@ -177,6 +177,13 @@ pub async fn memories_save_as_album(
 
     let album_repo = smriti::db::album_repo::AlbumRepo::new(&db.conn);
     let name = args.name.unwrap_or(card.title.clone());
+    let normalized = name.trim().to_lowercase();
+    if normalized == "favourites" || normalized == "favorites" {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "reserved for the Favourites smart album".into(),
+        });
+    }
     let album_id = album_repo.create(&name)?;
     if !card.photo_ids.is_empty() {
         album_repo.add_photos(album_id, &card.photo_ids)?;

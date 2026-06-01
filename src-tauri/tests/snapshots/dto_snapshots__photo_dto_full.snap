@@ -1,6 +1,6 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
-assertion_line: 186
+assertion_line: 188
 expression: dto
 ---
 {
@@ -42,6 +42,7 @@ expression: dto
     "confidence": 0.92
   },
   "faces_processed": true,
+  "is_favorite": true,
   "is_trashed": false,
   "stack": null,
   "indexed_at": "2024-01-01T12:00:00+00:00"

@@ -33,6 +33,8 @@ export const photos = {
     }),
   get: (id: number) => call<PhotoDto>("photos_get", { id }),
   getMany: (ids: number[]) => call<PhotoDto[]>("photos_get_many", { ids }),
+  setFavorite: (id: number, isFavorite: boolean) =>
+    call<PhotoDto>("photos_set_favorite", { id, is_favorite: isFavorite }),
   exifExtras: (id: number) => call<ExifExtras>("photos_exif_extras", { id }),
   /// Request on-demand generation for a photo whose thumbnail isn't on
   /// disk yet. Returns `{ thumbnail_path: null }` on failure (e.g. file

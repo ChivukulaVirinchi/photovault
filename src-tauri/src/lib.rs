@@ -46,6 +46,7 @@ pub fn run() {
             commands::photos::photos_list,
             commands::photos::photos_get,
             commands::photos::photos_get_many,
+            commands::photos::photos_set_favorite,
             commands::photos::photos_list_by_album,
             commands::photos::photos_list_by_person,
             commands::photos::photos_list_by_date,
