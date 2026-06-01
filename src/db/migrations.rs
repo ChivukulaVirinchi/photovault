@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 23;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 24;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -127,8 +127,35 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 23 {
         migrate_v22_to_v23(conn)?;
     }
+    if current_version < 24 {
+        migrate_v23_to_v24(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v23_to_v24(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    match tx.execute(
+        "ALTER TABLE photos ADD COLUMN is_favorite BOOLEAN DEFAULT FALSE",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_photos_favorite ON photos(is_favorite, date_taken DESC) WHERE is_favorite = TRUE",
+        [],
+    )?;
+    tx.execute("INSERT INTO schema_version (version) VALUES (24)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 24 (favorites smart album)");
     Ok(())
 }
 

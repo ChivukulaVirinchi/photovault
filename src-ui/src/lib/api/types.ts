@@ -37,6 +37,7 @@ export interface PhotoSummaryDto {
   orientation: number;
   media_type: "photo" | "video";
   duration_ms: number | null;
+  is_favorite: boolean;
   is_trashed: boolean;
   stack: PhotoStackBadgeDto | null;
 }
@@ -108,6 +109,7 @@ export interface AlbumDto {
   date_range_start: string | null;
   date_range_end: string | null;
   cover_thumbnail_path: string | null;
+  is_virtual: boolean;
 }
 
 export interface AlbumSuggestionDto {

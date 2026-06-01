@@ -25,6 +25,7 @@
   let showAddDialog = $state(false);
   let nextCursor = $state<string | null>(null);
   let hasMore = $state(false);
+  const isSmartAlbum = $derived(album?.is_virtual ?? false);
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
@@ -64,6 +65,7 @@
   /// them, doesn't touch other albums they're in. Undoable: the toast
   /// re-adds them and restores the original index ordering.
   async function removeFromAlbum() {
+    if (isSmartAlbum) return;
     const ids = selection.list();
     if (ids.length === 0) return;
     const dropSet = new Set(ids);
@@ -118,7 +120,7 @@
   }
 
   async function rename() {
-    if (!album) return;
+    if (!album || isSmartAlbum) return;
     try { album = await albums.rename(id, editName.trim()); renaming = false; }
     catch (e) { error = JSON.stringify(e); }
   }
@@ -133,6 +135,7 @@
   }
 
   async function deleteAlbum() {
+    if (isSmartAlbum) return;
     if (!confirm("Delete album? Photos will not be trashed.")) return;
     try { await albums.delete(id); window.location.hash = "/albums"; }
     catch (e) { error = JSON.stringify(e); }
@@ -183,8 +186,10 @@
         <button class="ghost icon-action" onclick={startAlbumSlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start album slideshow">
           <Play size={15} strokeWidth={2} />
         </button>
-        <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
-        <button class="danger" onclick={deleteAlbum}>Delete</button>
+        {#if !isSmartAlbum}
+          <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
+          <button class="danger" onclick={deleteAlbum}>Delete</button>
+        {/if}
       {/if}
     {/snippet}
   </DetailHeader>
@@ -202,6 +207,7 @@
         use:thumbnailOnVisible={{
           id: p.id,
           thumbnailPath: p.thumbnail_path,
+          mediaType: p.media_type,
           onReady: (path) => patchThumbnail(p.id, path),
         }}
         onclick={(e) => onCellClick(e, p.id)}
@@ -223,7 +229,7 @@
   <SelectionBar
     count={selection.size()}
     onAddToAlbum={() => (showAddDialog = true)}
-    onRemoveFromAlbum={removeFromAlbum}
+    onRemoveFromAlbum={isSmartAlbum ? undefined : removeFromAlbum}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
   />

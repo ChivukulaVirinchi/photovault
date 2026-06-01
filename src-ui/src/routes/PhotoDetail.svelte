@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Maximize2,
-    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Trash2, X,
+    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras } from "../lib/api/photos";
   import { library } from "../lib/api/library";
@@ -362,6 +362,15 @@
     }
   }
 
+  async function toggleFavorite() {
+    if (!photo) return;
+    try {
+      photo = await photos.setFavorite(photo.id, !photo.is_favorite);
+    } catch (e) {
+      toasts.error(`Couldn't update favourite: ${e}`);
+    }
+  }
+
   async function setStackCover(photoId: number) {
     if (!stack) return;
     try {
@@ -587,6 +596,15 @@
         {/if}
         <button class="tool" onclick={() => (showAddDialog = true)} title="Add to album (A)" aria-label="Add to album">
           <FolderPlus size={16} strokeWidth={1.75} />
+        </button>
+        <button
+          class="tool"
+          class:on={photo?.is_favorite ?? false}
+          onclick={toggleFavorite}
+          title={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
+          aria-label={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
+        >
+          <Star size={16} strokeWidth={1.75} fill={photo?.is_favorite ? "currentColor" : "none"} />
         </button>
         <button class="tool" onclick={startSlideshow} title="Start slideshow" aria-label="Start slideshow">
           <Play size={16} strokeWidth={1.75} />

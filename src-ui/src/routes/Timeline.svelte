@@ -22,7 +22,7 @@
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { photos } from "../lib/api/photos";
-  import { memories, stacks, trash, type MemoryCard } from "../lib/api/all";
+  import { memories, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { library } from "../lib/api/library";
@@ -253,16 +253,6 @@
     }
   }
 
-  async function refreshStacks() {
-    try {
-      const result = await stacks.refresh();
-      toasts.success(`${result.stacks_found} ${result.stacks_found === 1 ? "stack" : "stacks"} ready`);
-      await refreshFirstPage();
-    } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      toasts.error(`Couldn't refresh stacks: ${msg}`);
-    }
-  }
   // When a scan completes, refresh the photo list so the user sees
   // the new arrivals without having to reload manually.
   let lastScanCompleteId = $state<string | null>(null);
@@ -938,7 +928,6 @@
       {(total ?? items.length).toLocaleString()}<span class="muted"> photos</span>
     </span>
     <button class="primary" onclick={startScan}>Scan now</button>
-    <button class="ghost" onclick={refreshStacks}>Refresh stacks</button>
   {/if}
 </PageHeader>
 

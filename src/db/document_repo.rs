@@ -27,8 +27,11 @@ impl<'a> DocumentRepo<'a> {
                 iso, aperture, shutter_speed, focal_length,
                 lens_model, flash, gps_altitude,
                 width, height, orientation,
+                media_type, duration_ms, video_codec, audio_codec,
+                frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
                 content_category, ocr_text, ocr_processed, ocr_confidence,
+                is_favorite,
                 is_trashed, trashed_at,
                 indexed_at, updated_at
             FROM photos
@@ -63,8 +66,11 @@ impl<'a> DocumentRepo<'a> {
                 iso, aperture, shutter_speed, focal_length,
                 lens_model, flash, gps_altitude,
                 width, height, orientation,
+                media_type, duration_ms, video_codec, audio_codec,
+                frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
                 content_category, ocr_text, ocr_processed, ocr_confidence,
+                is_favorite,
                 is_trashed, trashed_at,
                 indexed_at, updated_at
             FROM photos
@@ -102,8 +108,11 @@ impl<'a> DocumentRepo<'a> {
                 p.iso, p.aperture, p.shutter_speed, p.focal_length,
                 p.lens_model, p.flash, p.gps_altitude,
                 p.width, p.height, p.orientation,
+                p.media_type, p.duration_ms, p.video_codec, p.audio_codec,
+                p.frame_rate, p.bitrate, p.has_audio,
                 p.thumbnail_path, p.faces_processed,
                 p.content_category, p.ocr_text, p.ocr_processed, p.ocr_confidence,
+                p.is_favorite,
                 p.is_trashed, p.trashed_at,
                 p.indexed_at, p.updated_at
             FROM photos p

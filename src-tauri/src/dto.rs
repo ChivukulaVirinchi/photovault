@@ -70,6 +70,7 @@ pub struct PhotoDto {
     pub content_category: ContentCategoryDto,
     pub ocr: Option<OcrDto>,
     pub faces_processed: bool,
+    pub is_favorite: bool,
     pub is_trashed: bool,
     pub stack: Option<PhotoStackBadgeDto>,
     pub indexed_at: String,
@@ -85,6 +86,7 @@ pub struct PhotoSummaryDto {
     pub orientation: i32,
     pub media_type: MediaTypeDto,
     pub duration_ms: Option<i64>,
+    pub is_favorite: bool,
     pub is_trashed: bool,
     pub stack: Option<PhotoStackBadgeDto>,
 }
@@ -283,6 +285,7 @@ impl From<Photo> for PhotoDto {
             content_category: p.content_category.into(),
             ocr,
             faces_processed: p.faces_processed,
+            is_favorite: p.is_favorite,
             is_trashed: p.is_trashed,
             stack: None,
             indexed_at: p.indexed_at.to_rfc3339(),
@@ -303,6 +306,7 @@ impl From<&Photo> for PhotoSummaryDto {
             orientation: p.orientation,
             media_type: p.media_type.into(),
             duration_ms: p.duration_ms,
+            is_favorite: p.is_favorite,
             is_trashed: p.is_trashed,
             stack: None,
         }
@@ -432,6 +436,7 @@ pub struct AlbumDto {
     pub date_range_end: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub is_virtual: bool,
 }
 
 impl From<AlbumRecord> for AlbumDto {
@@ -446,6 +451,7 @@ impl From<AlbumRecord> for AlbumDto {
             date_range_end: a.date_range_end,
             created_at: a.created_at,
             updated_at: a.updated_at,
+            is_virtual: false,
         }
     }
 }
