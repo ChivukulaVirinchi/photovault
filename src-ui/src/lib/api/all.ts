@@ -183,6 +183,10 @@ export const albums = {
 
 // ---------- search ----------
 export interface SearchResults {
+  interpreted: Array<{
+    kind: string;
+    label: string;
+  }>;
   people: Array<{
     cluster_id: number;
     name: string;

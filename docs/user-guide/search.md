@@ -1,131 +1,103 @@
 # Search
 
-Smriti's search is one box that takes natural language — names,
-places, dates, or combinations of them. There's no special syntax to
-learn, though knowing what the parser recognises helps you write
-better queries.
+Smriti's search is one box for the library metadata it already has:
+named people, dates, places, albums, favourites, media type, filenames,
+and camera names. It does not use cloud AI or guess at image contents.
 
-## How a query is parsed
+## What Search Understands
 
-Smriti parses your query into three slots:
-
-| Slot | What it matches |
+| Query | Meaning |
 |---|---|
-| **Person** | A named face cluster from the People view |
-| **Location** | A city or country from your photos' metadata |
-| **Date range** | A specific year, month, day, or relative period |
+| `Goa 2023` | Photos from Goa taken in 2023 |
+| `Dad 2024` | Photos containing Dad from 2024 |
+| `Dad and Mom` | Photos containing both Dad and Mom |
+| `only Dad` | Photos where every detected face is Dad |
+| `only Dad and Mom` | Photos where every detected face is Dad or Mom, and both are present |
+| `favourites Dad` | Favourite photos containing Dad |
+| `videos Goa 2024` | Videos from Goa taken in 2024 |
+| `album Goa Trip` | Photos in the matching album |
+| `Nikon Goa` | Filename/camera/location fallback for unmatched words |
 
-Any combination of these is valid: a query can have one filter or all
-three.
+The interpreted filters appear as chips above the results so you can see
+what Smriti understood.
 
-## Examples
+## People
 
-### Just a person
+People search uses names from the People view. Matching is
+case-insensitive and supports combinations:
 
-```
+```text
 Dad
+Dad and Mom
+Dad with Mom
 ```
 
-Returns all photos where the face cluster named "Dad" appears.
-Matching is case-insensitive.
+Multiple people are treated as an intersection: every returned photo must
+contain every requested person.
 
-### Just a place
+## Strict `only`
 
-```
-Paris
-```
+`only` is intentionally strict.
 
-Returns all photos with `Paris` as the city or with `France` as the
-country, derived from EXIF GPS at scan time.
-
-### Just a date
-
-```
-2018
-March 2019
-March 15 2019
-this week
-last month
-last year
-yesterday
-spring 2020
+```text
+only Dad
+only Dad and Mom
 ```
 
-The date parser recognises:
+A photo matches `only Dad` only when:
 
-- **ISO format**: `2024-03-15`
-- **Years**: any 4-digit year (1900–2100)
-- **Month + year**: `March 2019`, `Mar 2019`, `2019 March`
-- **Month alone**: `March` (current year)
-- **Seasons**: `spring`, `summer`, `autumn`/`fall`, `winter`
-  (current year unless qualified)
-- **Relative**: `today`, `yesterday`, `this week`, `last week`,
-  `this month`, `last month`, `this year`, `last year`
+- face processing has completed for the photo
+- Dad appears in the photo
+- no detected face is assigned to another person
+- no detected face is unassigned or unknown
 
-### Person + place
+If a photo has an unrecognised face, it is excluded. This avoids showing
+group photos when you asked for one person only.
 
-```
-Dad in Tokyo
-Sarah in France
-```
+## Dates
 
-The literal word **"in"** separates the person from the place.
-The parser treats the word before "in" as the person, and the
-word(s) after as the location.
+Search recognises:
 
-### Person + date
+- years: `2024`
+- month + year: `March 2019`, `Mar 2019`, `2019 March`
+- exact dates: `2024-03-15`
+- relative dates: `today`, `yesterday`, `this week`, `last month`
+- seasons: `spring 2020`, `fall 2021`
 
-```
-Dad 2019
-Sarah last month
-```
+Date filters combine with every other filter.
 
-Smriti tries to recognise the trailing words as a date. Anything
-that doesn't parse as a date is treated as a person name.
+## Places
 
-### Person + place + date
+Places are resolved from your library's stored city/country metadata.
+There is no hardcoded city list in smart search. If GPS reverse-geocoding
+has not been run, place search has less to work with.
 
-```
-Dad in Tokyo 2019
-Sarah in Paris March 2019
-```
+## Albums, Favourites, And Media
 
-All three filters apply.
+Use `album <name>` or `in album <name>` to filter by album.
 
-## How it handles ambiguity
+Use `favourites`, `favorites`, or `starred` to filter to favourite items.
 
-When a single word could be a place or a person, Smriti uses a small
-known-locations list (cities, countries) to decide. Words that match
-that list become location filters; everything else is treated as a
-person name. If you've named a face `Tokyo`, search for `Tokyo` will
-match the place rather than the person — name your faces so they
-don't collide with city names if you care.
+Use `videos`, `video`, `photos`, or `photo` to filter media type.
 
-## Recent searches
+## What It Does Not Do Yet
 
-Recent queries are stored locally for convenience. They appear as
-chips below the search bar when it's focused. Clear them via
-**Settings → Clear search history**.
+- No semantic image search such as `red dress`, `food`, or `sunset`.
+- No cloud lookup.
+- No OCR dependency in the main search path.
+- No regex or wildcard syntax.
+- Trashed photos are excluded.
 
-## Limitations
+## Pivots From Elsewhere
 
-- **No full-text search** of filenames, EXIF comments, or tags
-  beyond the parsed slots. Smriti optimises for the three slots
-  above because that's what most photo queries actually want.
-- **No regex or wildcards.** Names match literally.
-- **Trashed photos are excluded** from all search results. Restore
-  from the Trash view first if you need to find something there.
+Several views open Search with a pre-filled query:
 
-## Pivots from elsewhere
+- [Insights](insights.md) -> click a heatmap cell, person, or location
+- [Map](map.md) -> click a cluster or place
+- [People](people.md) -> click a person card
 
-You don't always have to type. Several views deep-link into search:
+## See Also
 
-- [Insights](insights.md) → click a heatmap cell, person, or location
-- [Map](map.md) → click a cluster
-- [People](people.md) → click a person card
-
-## See also
-
-- [Timeline](timeline.md) — full chronological view
-- [People](people.md) — naming faces makes them searchable
-- [Map](map.md) — geographic counterpart
+- [Timeline](timeline.md) - full chronological view
+- [People](people.md) - naming faces makes them searchable
+- [Map](map.md) - geographic counterpart

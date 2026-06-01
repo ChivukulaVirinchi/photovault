@@ -47,6 +47,14 @@ pub struct PhotoRepo<'a> {
     conn: &'a Connection,
 }
 
+pub type FavoriteAlbumSummary = (
+    i64,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 impl<'a> PhotoRepo<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -375,17 +383,7 @@ impl<'a> PhotoRepo<'a> {
         )
     }
 
-    pub fn favorites_album_summary(
-        &self,
-    ) -> SqliteResult<
-        Option<(
-            i64,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
+    pub fn favorites_album_summary(&self) -> SqliteResult<Option<FavoriteAlbumSummary>> {
         self.conn.query_row(
             r#"
             SELECT
