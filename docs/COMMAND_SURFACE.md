@@ -397,7 +397,9 @@ struct LibraryHealthDto { /* mirrors src/services/library_health.rs */ }
 struct TrashedPhotoDto { /* photo_id, original_path, thumbnail_path, trashed_at, file_size */ }
 struct TrashStatsDto { count: u64, total_bytes: u64, oldest_trashed_at: Option<String> }
 struct DriveDto { path: String, label: Option<String>, available_bytes: Option<u64>, is_removable: bool }
-struct AssetHealthDto { models_present: bool, geonames_present: bool, ort_present: bool, missing: Vec<String> }
+struct AssetHealthDto { missing_face_models: bool, missing_onnx_runtime: bool, missing_geonames_db: bool, summary: String }
+struct AssetInventoryDto { install_root: String, roots: Vec<String>, total_size_bytes: u64, assets: Vec<AssetItemDto> }
+struct AssetItemDto { id: String, label: String, kind: String, status: String, required: bool, active: bool, installable: bool, removable: bool, size_bytes: Option<u64>, path: Option<String>, note: Option<String> }
 struct UpdateStatusDto { current: String, latest: Option<String>, newer_available: bool, release_url: Option<String>, body: Option<String> }
 struct MapPinDto { photo_id: i64, lat: f64, lng: f64, thumbnail_path: Option<String> }
 struct SearchResultsDto {
@@ -657,7 +659,7 @@ struct SettingsDto {
 | Command | Args | Returns |
 |---|---|---|
 | `system.asset_health` | `{}` | `AssetHealthDto` |
-| `system.install_assets` | `{}` | `{ job_id: String }` | emits `JobProgress` on `assets:progress` |
+| `system.assets_inventory` | `{}` | `AssetInventoryDto` |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |
 | `system.updates.download` | `{}` | `{ job_id: String }` | emits `update:download-progress` |
 | `system.updates.install` | `{}` | `()` | applies a downloaded update; replaces binary or launches installer |

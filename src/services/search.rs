@@ -510,19 +510,39 @@ impl SearchService {
             return (None, Some(range));
         }
         let words: Vec<&str> = trimmed.split_whitespace().collect();
-        // Try last two words as a date — "Goa March 2019".
+        // Try any two-word date span first — "Goa March 2019 videos",
+        // "March 2019 Goa", "last year Paris".
         if words.len() >= 2 {
-            let last_two = format!("{} {}", words[words.len() - 2], words[words.len() - 1]);
-            if let Some(range) = DateParser::parse(&last_two) {
-                let rest = words[..words.len() - 2].join(" ");
-                let rest = rest.trim().to_string();
-                return (if rest.is_empty() { None } else { Some(rest) }, Some(range));
+            for i in 0..(words.len() - 1) {
+                let candidate = format!("{} {}", words[i], words[i + 1]);
+                if let Some(range) = DateParser::parse(&candidate) {
+                    let rest = words
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, word)| {
+                            if idx == i || idx == i + 1 {
+                                None
+                            } else {
+                                Some(*word)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let rest = rest.trim().to_string();
+                    return (if rest.is_empty() { None } else { Some(rest) }, Some(range));
+                }
             }
         }
-        // Try last word — "Goa 2023".
-        if let Some(last) = words.last() {
-            if let Some(range) = DateParser::parse(last) {
-                let rest = words[..words.len() - 1].join(" ");
+        // Try any one-word date span — "2023 Goa", "Goa 2023",
+        // "videos 2023 Goa".
+        for i in 0..words.len() {
+            if let Some(range) = DateParser::parse(words[i]) {
+                let rest = words
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, word)| if idx == i { None } else { Some(*word) })
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let rest = rest.trim().to_string();
                 return (if rest.is_empty() { None } else { Some(rest) }, Some(range));
             }
@@ -559,18 +579,24 @@ impl SearchService {
             bind.push(Value::Integer(album.id));
         }
         for place in &intent.places {
-            sql.push_str(" AND (");
-            let mut parts = Vec::new();
-            if let Some(city) = &place.city {
-                parts.push("LOWER(p.location_city) LIKE LOWER(?)");
-                bind.push(Value::Text(format!("%{}%", city)));
+            match (&place.city, &place.country) {
+                (Some(city), Some(country)) => {
+                    sql.push_str(
+                        " AND LOWER(p.location_city) LIKE LOWER(?) AND LOWER(p.location_country) LIKE LOWER(?)",
+                    );
+                    bind.push(Value::Text(format!("%{}%", city)));
+                    bind.push(Value::Text(format!("%{}%", country)));
+                }
+                (Some(city), None) => {
+                    sql.push_str(" AND LOWER(p.location_city) LIKE LOWER(?)");
+                    bind.push(Value::Text(format!("%{}%", city)));
+                }
+                (None, Some(country)) => {
+                    sql.push_str(" AND LOWER(p.location_country) LIKE LOWER(?)");
+                    bind.push(Value::Text(format!("%{}%", country)));
+                }
+                (None, None) => {}
             }
-            if let Some(country) = &place.country {
-                parts.push("LOWER(p.location_country) LIKE LOWER(?)");
-                bind.push(Value::Text(format!("%{}%", country)));
-            }
-            sql.push_str(&parts.join(" OR "));
-            sql.push(')');
         }
         for person in &intent.people_all {
             sql.push_str(

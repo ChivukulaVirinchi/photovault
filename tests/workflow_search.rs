@@ -247,6 +247,117 @@ fn smart_search_place_and_year_are_intersected() {
 }
 
 #[test]
+fn smart_search_year_then_place_are_intersected() {
+    let (_dir, db) = common::make_library();
+    let vizianagaram_2025 = insert_photo_with(
+        &db,
+        "vizianagaram-2025.jpg",
+        Some("Vizianagaram"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2025, 2, 10, 12, 0, 0).unwrap()),
+    );
+    insert_photo_with(
+        &db,
+        "vizianagaram-2024.jpg",
+        Some("Vizianagaram"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2024, 2, 10, 12, 0, 0).unwrap()),
+    );
+    insert_photo_with(
+        &db,
+        "goa-2025.jpg",
+        Some("Goa"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2025, 2, 10, 12, 0, 0).unwrap()),
+    );
+
+    let results = SearchService::search_unified(&db.conn, "2025 Vizianagaram").unwrap();
+    assert_eq!(ids(&results), vec![vizianagaram_2025]);
+    assert!(results
+        .interpreted
+        .iter()
+        .any(|f| f.kind == "place" && f.label.contains("Vizianagaram")));
+    assert!(results.interpreted.iter().any(|f| f.kind == "date"));
+}
+
+#[test]
+fn smart_search_date_place_media_favourite_order_is_flexible() {
+    let (_dir, db) = common::make_library();
+    let target = insert_photo_with(
+        &db,
+        "vizianagaram-video-2025.mp4",
+        Some("Vizianagaram"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2025, 2, 10, 12, 0, 0).unwrap()),
+    );
+    db.conn
+        .execute(
+            "UPDATE photos SET media_type = 'video', is_favorite = TRUE WHERE id = ?1",
+            rusqlite::params![target],
+        )
+        .unwrap();
+    let wrong_city = insert_photo_with(
+        &db,
+        "goa-video-2025.mp4",
+        Some("Goa"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2025, 2, 10, 12, 0, 0).unwrap()),
+    );
+    db.conn
+        .execute(
+            "UPDATE photos SET media_type = 'video', is_favorite = TRUE WHERE id = ?1",
+            rusqlite::params![wrong_city],
+        )
+        .unwrap();
+    insert_photo_with(
+        &db,
+        "vizianagaram-photo-2025.jpg",
+        Some("Vizianagaram"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2025, 2, 10, 12, 0, 0).unwrap()),
+    );
+    let wrong_year = insert_photo_with(
+        &db,
+        "vizianagaram-video-2024.mp4",
+        Some("Vizianagaram"),
+        Some("India"),
+        Some(Utc.with_ymd_and_hms(2024, 2, 10, 12, 0, 0).unwrap()),
+    );
+    db.conn
+        .execute(
+            "UPDATE photos SET media_type = 'video', is_favorite = TRUE WHERE id = ?1",
+            rusqlite::params![wrong_year],
+        )
+        .unwrap();
+
+    for query in [
+        "favourites videos 2025 Vizianagaram",
+        "2025 Vizianagaram favourite video",
+        "video 2025 Vizianagaram favourite",
+        "Vizianagaram favourite 2025 videos",
+    ] {
+        let results = SearchService::search_unified(&db.conn, query).unwrap();
+        assert_eq!(ids(&results), vec![target], "{query}");
+        assert!(
+            results.interpreted.iter().any(|f| f.kind == "date"),
+            "{query}"
+        );
+        assert!(
+            results.interpreted.iter().any(|f| f.kind == "place"),
+            "{query}"
+        );
+        assert!(
+            results.interpreted.iter().any(|f| f.kind == "media"),
+            "{query}"
+        );
+        assert!(
+            results.interpreted.iter().any(|f| f.kind == "favorite"),
+            "{query}"
+        );
+    }
+}
+
+#[test]
 fn smart_search_person_and_date_are_intersected() {
     let (_dir, db) = common::make_library();
     add_person(&db, 10, "Dad");

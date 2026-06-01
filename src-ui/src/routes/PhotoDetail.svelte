@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import {
-    ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Maximize2,
+    ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Fullscreen,
     RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras } from "../lib/api/photos";
@@ -20,7 +20,6 @@
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import type { ZoomApi } from "../lib/zoomApi";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import maplibregl, { type Map as MapInstance } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
   import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
@@ -35,6 +34,8 @@
   let extras = $state<ExifExtras | null>(null);
   let stack = $state<PhotoStack | null>(null);
   let error = $state<string | null>(null);
+  let detailEl = $state<HTMLElement | undefined>(undefined);
+  let immersive = $state(false);
 
   // Closed by default — info button reveals.
   let metaOpen = $state(false);
@@ -43,9 +44,9 @@
   let zoomApi = $state<ZoomApi | undefined>(undefined);
   let showAddDialog = $state(false);
   let stackTrayOpen = $state(false);
-  /// Tracks the current zoom mode for the fit toggle. We can't read the
-  /// internal scale of ZoomImage directly, so we mirror the "double-click
-  /// toggles fit ↔ 1:1" intent here. Default is "fit" (image just loaded).
+  /// Tracks the current zoom mode for keyboard fit/actual commands.
+  /// We can't read ZoomImage's internal scale directly, so this mirrors
+  /// the user's fit ↔ 1:1 intent across photo changes.
   let atActual = $state(false);
   let loadSeq = 0;
   const resolvedImageCache = new Map<number, string>();
@@ -311,24 +312,23 @@
   }
 
   async function toggleFullscreen() {
-    try {
-      const w = getCurrentWindow();
-      const f = await w.isFullscreen();
-      await w.setFullscreen(!f);
-    } catch {}
+    const next = !immersive;
+    immersive = next;
+    if (next) {
+      metaOpen = false;
+      stackTrayOpen = false;
+      bumpActivity();
+      try { await detailEl?.requestFullscreen?.(); } catch {}
+    } else {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+      } catch {}
+      bumpActivity();
+    }
   }
 
   function rotateCcw() { manualRotate = (manualRotate - 90 + 360) % 360; }
   function rotateCw()  { manualRotate = (manualRotate + 90) % 360; }
-
-  /// Toggle between fit-to-screen and 1:1 actual size. Double-click on
-  /// the image does the same thing under the hood; this just mirrors
-  /// it onto the toolbar so users can find the gesture without trying.
-  function toggleFit() {
-    if (!zoomApi) return;
-    if (atActual) { zoomApi.fit();    atActual = false; }
-    else          { zoomApi.actual(); atActual = true;  }
-  }
 
   function startSlideshow() {
     if (!photo) return;
@@ -424,44 +424,59 @@
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.target instanceof HTMLVideoElement) return;
     switch (e.key) {
-      case "Escape":     back(); break;
-      case "ArrowLeft":  e.preventDefault(); gotoId(prevId); break;
-      case "ArrowRight": e.preventDefault(); gotoId(nextId); break;
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        if (immersive) void toggleFullscreen();
+        else back();
+        break;
+      case "ArrowLeft":  e.preventDefault(); e.stopPropagation(); gotoId(prevId); break;
+      case "ArrowRight": e.preventDefault(); e.stopPropagation(); gotoId(nextId); break;
       case "i": case "I":
-        if (!e.metaKey && !e.ctrlKey) { metaOpen = !metaOpen; e.preventDefault(); }
+        if (!e.metaKey && !e.ctrlKey) { metaOpen = !metaOpen; e.preventDefault(); e.stopPropagation(); }
         break;
       case "+": case "=":
-        if (!isVideo) { e.preventDefault(); zoomApi?.zoomIn(); }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); zoomApi?.zoomIn(); }
         break;
       case "-": case "_":
-        if (!isVideo) { e.preventDefault(); zoomApi?.zoomOut(); }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); zoomApi?.zoomOut(); }
         break;
       case "0":
-        if (!isVideo) { e.preventDefault(); zoomApi?.fit(); atActual = false; }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); zoomApi?.fit(); atActual = false; }
         break;
       case "1":
-        if (!isVideo) { e.preventDefault(); zoomApi?.actual(); atActual = true; }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); zoomApi?.actual(); atActual = true; }
         break;
       case "[":
-        if (!isVideo) { e.preventDefault(); rotateCcw(); }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); rotateCcw(); }
         break;
       case "]":
-        if (!isVideo) { e.preventDefault(); rotateCw(); }
+        if (!isVideo) { e.preventDefault(); e.stopPropagation(); rotateCw(); }
         break;
       case "f": case "F":
-        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleFullscreen(); }
+        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); toggleFullscreen(); }
+        break;
+      case "s": case "S":
+        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); toggleFavorite(); }
         break;
       case "Delete": case "Backspace":
-        e.preventDefault(); trashAndAdvance(); break;
+        e.preventDefault(); e.stopPropagation(); trashAndAdvance(); break;
       case "a": case "A":
-        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); showAddDialog = true; }
+        if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); showAddDialog = true; }
         break;
     }
   }
 
   onMount(() => {
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement && immersive) immersive = false;
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      window.removeEventListener("keydown", onKey, { capture: true });
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
   });
 
   onDestroy(() => {
@@ -523,7 +538,7 @@
   );
 </script>
 
-<main class="detail" class:meta-open={metaOpen}>
+<main bind:this={detailEl} class="detail" class:meta-open={metaOpen && !immersive} class:immersive>
   <section class="viewer-row">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -579,11 +594,11 @@
           <button class="tool" onclick={() => { zoomApi?.zoomOut(); atActual = false; }} title="Zoom out (−)" aria-label="Zoom out">
             <ZoomOut size={16} strokeWidth={1.75} />
           </button>
-          <button class="tool" class:on={atActual} onclick={toggleFit} title={atActual ? "Fit to screen (0)" : "Actual size (1)"} aria-label="Toggle fit / actual size">
-            <Maximize2 size={16} strokeWidth={1.75} />
-          </button>
           <button class="tool" onclick={() => { zoomApi?.zoomIn(); atActual = false; }} title="Zoom in (+)" aria-label="Zoom in">
             <ZoomIn size={16} strokeWidth={1.75} />
+          </button>
+          <button class="tool" onclick={toggleFullscreen} title="Toggle fullscreen (F)" aria-label="Toggle fullscreen">
+            <Fullscreen size={16} strokeWidth={1.75} />
           </button>
           <span class="sep"></span>
           <button class="tool" onclick={rotateCcw} title="Rotate CCW ([)" aria-label="Rotate counter-clockwise">
@@ -601,7 +616,7 @@
           class="tool"
           class:on={photo?.is_favorite ?? false}
           onclick={toggleFavorite}
-          title={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
+          title={photo?.is_favorite ? "Remove from favourites (S)" : "Add to favourites (S)"}
           aria-label={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
         >
           <Star size={16} strokeWidth={1.75} fill={photo?.is_favorite ? "currentColor" : "none"} />
@@ -840,6 +855,22 @@
     display: flex;
     flex-direction: column;
     background: var(--bg);
+  }
+  .detail.immersive {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: #000;
+  }
+  .detail.immersive .viewer-row {
+    grid-template-columns: 1fr;
+  }
+  .detail.immersive .viewer {
+    background-color: #000;
+    background-image: none;
+  }
+  .detail.immersive .meta {
+    display: none;
   }
 
   .viewer-row {

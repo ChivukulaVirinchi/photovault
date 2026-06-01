@@ -1112,6 +1112,29 @@ pub struct AssetHealthDto {
     pub summary: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AssetInventoryDto {
+    pub install_root: String,
+    pub roots: Vec<String>,
+    pub total_size_bytes: u64,
+    pub assets: Vec<AssetItemDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AssetItemDto {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub status: String,
+    pub required: bool,
+    pub active: bool,
+    pub installable: bool,
+    pub removable: bool,
+    pub size_bytes: Option<u64>,
+    pub path: Option<String>,
+    pub note: Option<String>,
+}
+
 impl From<smriti::bootstrap::AssetHealth> for AssetHealthDto {
     fn from(h: smriti::bootstrap::AssetHealth) -> Self {
         let summary = h.summary();
