@@ -401,14 +401,16 @@ struct AssetHealthDto { models_present: bool, geonames_present: bool, ort_presen
 struct UpdateStatusDto { current: String, latest: Option<String>, newer_available: bool, release_url: Option<String>, body: Option<String> }
 struct MapPinDto { photo_id: i64, lat: f64, lng: f64, thumbnail_path: Option<String> }
 struct SearchResultsDto {
-    people: Vec<PersonDto>,
-    albums: Vec<AlbumDto>,
-    places: Vec<PlaceDto>,
-    photos: Page<PhotoSummaryDto>,    // paginated separately, others are small
-    parsed_query: ParsedQueryDto,     // echoes interpreted filters
+    interpreted: Vec<InterpretedFilterDto>,
+    people: Vec<PersonHitDto>,
+    albums: Vec<AlbumHitDto>,
+    places: Vec<PlaceHitDto>,
+    photo_ids: Vec<i64>,
+    photos: Vec<SearchPhotoDto>,
 }
-struct PlaceDto { city: Option<String>, country: Option<String>, photo_count: u32 }
-struct ParsedQueryDto { /* date_range, person_id, location, free_text */ }
+struct InterpretedFilterDto { kind: String, label: String }
+struct PlaceHitDto { city: String, country: Option<String>, photo_count: i64 }
+struct SearchPhotoDto { photo_id: i64, date_taken: Option<String>, location_city: Option<String>, location_country: Option<String>, thumbnail_path: Option<String> }
 struct SettingsDto { /* one field per UI-exposed setting; see settings domain below */ }
 ```
 
@@ -495,12 +497,20 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 
 | Command | Args | Returns |
 |---|---|---|
-| `search.query` | `{ q: String, photos_cursor: Option<String>, photos_limit: Option<u32> }` | `SearchResultsDto` |
+| `search.query` | `{ q: String }` | `SearchResultsDto` |
 | `search.recent.list` | `{ limit: Option<u32> }` | `Vec<RecentSearchDto>` |
 | `search.recent.remove` | `{ q: String }` | `()` |
 | `search.recent.clear` | `{}` | `()` |
 
-`search.query` is the one-shot entry point — it returns small entity lists (people/albums/places) plus the first page of photo results. Subsequent timeline-style scrolling re-invokes `search.query` with `photos_cursor`.
+`search.query` is the one-shot entry point. It returns small entity lists
+(people/albums/places), interpreted filter chips, matching photo ids for
+viewer navigation, and the first bounded photo result set.
+
+Smart search filters are deterministic: dates, people, places, albums,
+favourites, and media type are ANDed together. Multiple people mean
+"contains all". `only <people>` is strict: the photo must be face-processed,
+must contain every requested person, and must not contain another assigned
+or unassigned detected face.
 
 ### 6. `memories` — N-years-ago rediscovery
 

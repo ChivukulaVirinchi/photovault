@@ -61,7 +61,9 @@ use smriti::services::geocoding::GeocodingResult;
 use smriti::services::insights::{CameraStat, CountryStat, InsightsData, LocationStat, PersonStat};
 use smriti::services::library_health::LibraryHealth;
 use smriti::services::memories::{MemoryCard, MemoryKind};
-use smriti::services::search::{AlbumHit, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults};
+use smriti::services::search::{
+    AlbumHit, InterpretedFilter, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults,
+};
 use smriti::services::trash::TrashStats;
 
 use smriti_tauri_lib::dto::{
@@ -493,6 +495,10 @@ fn search_photo_dto() {
 #[test]
 fn search_results_dto() {
     let results = UnifiedSearchResults {
+        interpreted: vec![InterpretedFilter {
+            kind: "place".into(),
+            label: "Paris, France".into(),
+        }],
         people: vec![PersonHit {
             cluster_id: 21,
             name: "Asha".into(),

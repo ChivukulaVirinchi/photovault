@@ -29,7 +29,9 @@ use smriti::services::geocoding::GeocodingResult;
 use smriti::services::insights::{CameraStat, CountryStat, InsightsData, LocationStat, PersonStat};
 use smriti::services::library_health::LibraryHealth;
 use smriti::services::memories::MemoryCard;
-use smriti::services::search::{AlbumHit, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults};
+use smriti::services::search::{
+    AlbumHit, InterpretedFilter, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults,
+};
 use smriti::services::trash::TrashStats;
 
 /// Generic page-of-T return shape used by every paginated command.
@@ -511,11 +513,27 @@ impl From<DetectedSuggestion> for DetectedSuggestionDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResultsDto {
+    pub interpreted: Vec<InterpretedFilterDto>,
     pub people: Vec<PersonHitDto>,
     pub albums: Vec<AlbumHitDto>,
     pub places: Vec<PlaceHitDto>,
     pub photo_ids: Vec<i64>,
     pub photos: Vec<SearchPhotoDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InterpretedFilterDto {
+    pub kind: String,
+    pub label: String,
+}
+
+impl From<InterpretedFilter> for InterpretedFilterDto {
+    fn from(f: InterpretedFilter) -> Self {
+        Self {
+            kind: f.kind,
+            label: f.label,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -597,6 +615,7 @@ impl From<SearchResult> for SearchPhotoDto {
 impl From<UnifiedSearchResults> for SearchResultsDto {
     fn from(u: UnifiedSearchResults) -> Self {
         Self {
+            interpreted: u.interpreted.into_iter().map(Into::into).collect(),
             people: u.people.into_iter().map(Into::into).collect(),
             albums: u.albums.into_iter().map(Into::into).collect(),
             places: u.places.into_iter().map(Into::into).collect(),
