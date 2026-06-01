@@ -1,6 +1,6 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
-assertion_line: 192
+assertion_line: 194
 expression: dto
 ---
 {
@@ -23,6 +23,7 @@ expression: dto
   "content_category": "photo",
   "ocr": null,
   "faces_processed": false,
+  "is_favorite": false,
   "is_trashed": false,
   "stack": null,
   "indexed_at": "2024-01-01T12:00:00+00:00"

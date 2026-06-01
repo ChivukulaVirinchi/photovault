@@ -1,6 +1,6 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
-assertion_line: 206
+assertion_line: 208
 expression: dto
 ---
 {
@@ -12,6 +12,7 @@ expression: dto
   "orientation": 1,
   "media_type": "photo",
   "duration_ms": null,
+  "is_favorite": false,
   "is_trashed": false,
   "stack": null
 }

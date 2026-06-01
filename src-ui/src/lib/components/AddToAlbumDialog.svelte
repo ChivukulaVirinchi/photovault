@@ -30,7 +30,7 @@
 
   async function load() {
     try {
-      allAlbums = await albums.list();
+      allAlbums = (await albums.list()).filter((a) => !a.is_virtual);
     } catch (e) {
       error = String(e);
     }

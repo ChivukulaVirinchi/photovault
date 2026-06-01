@@ -114,6 +114,9 @@ pub struct Photo {
     pub ocr_processed: bool,
     pub ocr_confidence: Option<f32>,
 
+    // User flags
+    pub is_favorite: bool,
+
     // Soft delete
     pub is_trashed: bool,
     pub trashed_at: Option<DateTime<Utc>>,

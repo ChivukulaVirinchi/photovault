@@ -63,6 +63,7 @@ pub async fn photos_list(
             orientation: p.orientation,
             media_type: p.media_type.into(),
             duration_ms: p.duration_ms,
+            is_favorite: p.is_favorite,
             is_trashed: p.is_trashed,
             stack: p.stack_id.map(|id| PhotoStackBadgeDto {
                 id,
@@ -120,6 +121,30 @@ pub async fn photos_get_many(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PhotosSetFavoriteArgs {
+    pub id: i64,
+    pub is_favorite: bool,
+}
+
+#[tauri::command]
+pub async fn photos_set_favorite(
+    state: State<'_, AppState>,
+    args: PhotosSetFavoriteArgs,
+) -> CommandResult<PhotoDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = PhotoRepo::new(&db.conn);
+    if repo.set_favorite(args.id, args.is_favorite)? == 0 {
+        return Err(CommandError::not_found("photo", args.id));
+    }
+    let photo = repo
+        .get_by_id(args.id)?
+        .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+    Ok(photo.into())
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PhotosListByAlbumArgs {
     pub album_id: i64,
     pub cursor: Option<String>,
@@ -133,8 +158,12 @@ pub async fn photos_list_by_album(
 ) -> CommandResult<Page<PhotoSummaryDto>> {
     paged(state, args.cursor, args.limit, |db, cur, limit| {
         let repo = PhotoRepo::new(&db.conn);
-        repo.list_after_by_album(args.album_id, cur, limit)
-            .map_err(Into::into)
+        if args.album_id == super::albums::FAVORITES_ALBUM_ID {
+            repo.list_after_favorites(cur, limit).map_err(Into::into)
+        } else {
+            repo.list_after_by_album(args.album_id, cur, limit)
+                .map_err(Into::into)
+        }
     })
     .await
 }
@@ -248,7 +277,15 @@ pub async fn photos_albums_for_photo(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let album_repo = AlbumRepo::new(&db.conn);
-    let pairs = album_repo.get_albums_for_photo(args.photo_id)?;
+    let photo_repo = PhotoRepo::new(&db.conn);
+    let photo = photo_repo.get_by_id(args.photo_id)?;
+    let mut pairs = album_repo.get_albums_for_photo(args.photo_id)?;
+    if photo.as_ref().map(|p| p.is_favorite).unwrap_or(false) {
+        pairs.insert(
+            0,
+            (super::albums::FAVORITES_ALBUM_ID, "Favourites".to_string()),
+        );
+    }
     // Build minimal AlbumDtos (name + id only). For full info call `albums.get`.
     Ok(pairs
         .into_iter()
@@ -262,6 +299,7 @@ pub async fn photos_albums_for_photo(
             date_range_end: None,
             created_at: String::new(),
             updated_at: String::new(),
+            is_virtual: id == super::albums::FAVORITES_ALBUM_ID,
         })
         .collect())
 }
@@ -308,6 +346,7 @@ where
             orientation: p.orientation,
             media_type: p.media_type.into(),
             duration_ms: p.duration_ms,
+            is_favorite: p.is_favorite,
             is_trashed: p.is_trashed,
             stack: None,
         })

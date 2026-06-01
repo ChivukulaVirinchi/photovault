@@ -1,5 +1,6 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 409
 expression: dto
 ---
 {
@@ -11,5 +12,6 @@ expression: dto
   "date_range_start": "2024-01-03T10:00:00",
   "date_range_end": "2024-01-08T18:00:00",
   "created_at": "2024-01-10T00:00:00Z",
-  "updated_at": "2024-01-11T00:00:00Z"
+  "updated_at": "2024-01-11T00:00:00Z",
+  "is_virtual": false
 }

@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, State};
 
 use smriti::db::album_repo::AlbumRepo;
 use smriti::db::album_suggestion_repo::AlbumSuggestionRepo;
+use smriti::db::PhotoRepo;
 
 use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
 use crate::events::{JobProgress, EV_ALBUM_SUGGESTIONS_COMPLETE, EV_ALBUM_SUGGESTIONS_PROGRESS};
@@ -13,12 +14,49 @@ use crate::state::{AppState, JobKind};
 use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
 use crate::{CommandError, CommandResult};
 
+pub const FAVORITES_ALBUM_ID: i64 = -1;
+const FAVORITES_ALBUM_NAME: &str = "Favourites";
+
+fn is_reserved_album_name(name: &str) -> bool {
+    let normalized = name.trim().to_lowercase();
+    normalized == "favourites" || normalized == "favorites"
+}
+
+fn reject_virtual_album(field: &str) -> CommandError {
+    CommandError::Validation {
+        field: field.into(),
+        reason: "Favourites is a smart album and cannot be modified".into(),
+    }
+}
+
 fn fetch_album(repo: &AlbumRepo, id: i64) -> CommandResult<AlbumDto> {
     let all = repo.get_all()?;
     all.into_iter()
         .find(|a| a.id == id)
         .map(Into::into)
         .ok_or_else(|| CommandError::not_found("album", id))
+}
+
+fn favorites_album(conn: &rusqlite::Connection) -> CommandResult<Option<AlbumDto>> {
+    let repo = PhotoRepo::new(conn);
+    let Some((count, cover_photo_id, cover_thumbnail_path, start, end)) =
+        repo.favorites_album_summary()?
+    else {
+        return Ok(None);
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    Ok(Some(AlbumDto {
+        id: FAVORITES_ALBUM_ID,
+        name: FAVORITES_ALBUM_NAME.to_string(),
+        photo_count: count,
+        cover_photo_id,
+        cover_thumbnail_path,
+        date_range_start: start,
+        date_range_end: end,
+        created_at: now.clone(),
+        updated_at: now,
+        is_virtual: true,
+    }))
 }
 
 /// Collects (album_index, file_path, file_hash, orientation) for every
@@ -72,7 +110,10 @@ pub async fn albums_list(state: State<'_, AppState>) -> CommandResult<Vec<AlbumD
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let repo = AlbumRepo::new(&db.conn);
-        let albums: Vec<AlbumDto> = repo.get_all()?.into_iter().map(Into::into).collect();
+        let mut albums: Vec<AlbumDto> = repo.get_all()?.into_iter().map(Into::into).collect();
+        if let Some(favorites) = favorites_album(&db.conn)? {
+            albums.insert(0, favorites);
+        }
         let inputs = collect_album_cover_inputs(&db.conn, &albums)?;
         (
             albums,
@@ -105,13 +146,17 @@ pub async fn albums_get(
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
-        let repo = AlbumRepo::new(&db.conn);
-        let all = repo.get_all()?;
-        let album_model = all
-            .into_iter()
-            .find(|a| a.id == args.id)
-            .ok_or_else(|| CommandError::not_found("album", args.id))?;
-        let album: AlbumDto = album_model.into();
+        let album = if args.id == FAVORITES_ALBUM_ID {
+            favorites_album(&db.conn)?.ok_or_else(|| CommandError::not_found("album", args.id))?
+        } else {
+            let repo = AlbumRepo::new(&db.conn);
+            let all = repo.get_all()?;
+            let album_model = all
+                .into_iter()
+                .find(|a| a.id == args.id)
+                .ok_or_else(|| CommandError::not_found("album", args.id))?;
+            album_model.into()
+        };
         let inputs = collect_album_cover_inputs(&db.conn, std::slice::from_ref(&album))?;
         (
             album,
@@ -207,6 +252,12 @@ pub async fn albums_create(
             reason: "must not be empty".into(),
         });
     }
+    if is_reserved_album_name(&args.name) {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "reserved for the Favourites smart album".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -230,10 +281,19 @@ pub async fn albums_rename(
     state: State<'_, AppState>,
     args: AlbumsRenameArgs,
 ) -> CommandResult<AlbumDto> {
+    if args.id == FAVORITES_ALBUM_ID {
+        return Err(reject_virtual_album("id"));
+    }
     if args.name.trim().is_empty() {
         return Err(CommandError::Validation {
             field: "name".into(),
             reason: "must not be empty".into(),
+        });
+    }
+    if is_reserved_album_name(&args.name) {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "reserved for the Favourites smart album".into(),
         });
     }
     let lib_guard = state.library.read().await;
@@ -254,6 +314,9 @@ pub async fn albums_delete(
     state: State<'_, AppState>,
     args: AlbumsDeleteArgs,
 ) -> CommandResult<()> {
+    if args.id == FAVORITES_ALBUM_ID {
+        return Err(reject_virtual_album("id"));
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -277,6 +340,9 @@ pub async fn albums_add_photos(
     state: State<'_, AppState>,
     args: AlbumsAddPhotosArgs,
 ) -> CommandResult<AlbumsAddRemoveResult> {
+    if args.id == FAVORITES_ALBUM_ID {
+        return Err(reject_virtual_album("id"));
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -297,6 +363,9 @@ pub async fn albums_remove_photos(
     state: State<'_, AppState>,
     args: AlbumsRemovePhotosArgs,
 ) -> CommandResult<AlbumsAddRemoveResult> {
+    if args.id == FAVORITES_ALBUM_ID {
+        return Err(reject_virtual_album("id"));
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -316,6 +385,9 @@ pub async fn albums_auto_pick_cover(
     state: State<'_, AppState>,
     args: AlbumsAutoPickCoverArgs,
 ) -> CommandResult<AlbumDto> {
+    if args.id == FAVORITES_ALBUM_ID {
+        return Err(reject_virtual_album("id"));
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -543,6 +615,12 @@ pub async fn albums_suggestions_accept(
 
     let album_repo = AlbumRepo::new(&db.conn);
     let name = args.name.unwrap_or(s.title.clone());
+    if is_reserved_album_name(&name) {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "reserved for the Favourites smart album".into(),
+        });
+    }
     let album_id = album_repo.create(&name)?;
     let photo_ids = s.photo_ids();
     if !photo_ids.is_empty() {
