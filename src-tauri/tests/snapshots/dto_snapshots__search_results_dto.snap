@@ -1,8 +1,15 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 530
 expression: dto
 ---
 {
+  "interpreted": [
+    {
+      "kind": "place",
+      "label": "Paris, France"
+    }
+  ],
   "people": [
     {
       "cluster_id": 21,

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{params, params_from_iter, Connection, Result as SqliteResult};
+use rusqlite::{params, params_from_iter, types::Value, Connection, Result as SqliteResult};
 
 use crate::search::date_parser::{DateParser, DateRange};
 use crate::search::SearchQuery;
@@ -54,9 +54,16 @@ pub struct PlaceHit {
     pub photo_count: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterpretedFilter {
+    pub kind: String,
+    pub label: String,
+}
+
 /// Unified search results across all entity types.
 #[derive(Debug, Clone, Default)]
 pub struct UnifiedSearchResults {
+    pub interpreted: Vec<InterpretedFilter>,
     pub people: Vec<PersonHit>,
     pub albums: Vec<AlbumHit>,
     pub places: Vec<PlaceHit>,
@@ -68,6 +75,59 @@ pub struct UnifiedSearchResults {
 
 /// Search service.
 pub struct SearchService;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartMediaType {
+    Photo,
+    Video,
+}
+
+impl SmartMediaType {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Photo => "photo",
+            Self::Video => "video",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Photo => "Photos",
+            Self::Video => "Videos",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedPerson {
+    id: i64,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedAlbum {
+    id: i64,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedPlace {
+    city: Option<String>,
+    country: Option<String>,
+    label: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SmartIntent {
+    date_range: Option<DateRange>,
+    text: Option<String>,
+    people_all: Vec<ResolvedPerson>,
+    people_only: bool,
+    places: Vec<ResolvedPlace>,
+    albums: Vec<ResolvedAlbum>,
+    favorite: Option<bool>,
+    media_type: Option<SmartMediaType>,
+}
 
 impl SearchService {
     pub fn search(conn: &Connection, query: &SearchQuery) -> SqliteResult<Vec<SearchResult>> {
@@ -258,7 +318,9 @@ impl SearchService {
             return Ok(UnifiedSearchResults::default());
         }
 
+        let intent = Self::parse_smart_intent(conn, query)?;
         let mut results = UnifiedSearchResults {
+            interpreted: Self::interpreted_filters(&intent),
             people: Self::search_people(conn, query)?,
             albums: Self::search_albums(conn, query)?,
             places: Self::search_places(conn, query)?,
@@ -271,14 +333,169 @@ impl SearchService {
         // OCR text, and any face cluster's name. This means "Goa 2023"
         // matches photos in 2023 with location LIKE %Goa% — even though
         // "Goa" isn't in any hardcoded location list.
-        let (text_part, date_part) = Self::split_query(query);
-        let photos = Self::search_unified_photos(conn, text_part.as_deref(), date_part.as_ref())?;
+        let photos = Self::search_smart_photos(conn, &intent)?;
 
         results.photo_ids = photos.iter().map(|r| r.photo_id).collect();
         results.photos_grouped = Self::group_by_date(photos.clone());
         results.photos = photos;
 
         Ok(results)
+    }
+
+    fn parse_smart_intent(conn: &Connection, raw: &str) -> SqliteResult<SmartIntent> {
+        let (text_part, date_range) = Self::split_query(raw);
+        let mut text = text_part.unwrap_or_default();
+        let mut intent = SmartIntent {
+            date_range,
+            ..Default::default()
+        };
+        let mut lower = text.to_lowercase();
+
+        if let Some(rest) = lower
+            .strip_prefix("only ")
+            .or_else(|| lower.strip_prefix("just "))
+        {
+            intent.people_only = true;
+            text = text[text.len() - rest.len()..].trim().to_string();
+            lower = text.to_lowercase();
+        }
+
+        for (needle, media) in [
+            ("videos", SmartMediaType::Video),
+            ("video", SmartMediaType::Video),
+            ("photos", SmartMediaType::Photo),
+            ("photo", SmartMediaType::Photo),
+        ] {
+            if Self::contains_word(&lower, needle) {
+                intent.media_type = Some(media);
+                text = Self::remove_word(&text, needle);
+                lower = text.to_lowercase();
+                break;
+            }
+        }
+
+        for needle in [
+            "favourites",
+            "favorites",
+            "favourite",
+            "favorite",
+            "starred",
+        ] {
+            if Self::contains_word(&lower, needle) {
+                intent.favorite = Some(true);
+                text = Self::remove_word(&text, needle);
+                lower = text.to_lowercase();
+                break;
+            }
+        }
+
+        let album_phrase = if let Some(rest) = lower.strip_prefix("album ") {
+            Some(text[text.len() - rest.len()..].trim().to_string())
+        } else {
+            lower
+                .strip_prefix("in album ")
+                .map(|rest| text[text.len() - rest.len()..].trim().to_string())
+        };
+        if let Some(album_query) = album_phrase.as_deref() {
+            intent.albums = Self::resolve_albums(conn, album_query)?;
+            if !intent.albums.is_empty() {
+                text.clear();
+            }
+        }
+
+        let mut remaining = text.trim().to_string();
+        if !remaining.is_empty() {
+            let people = Self::resolve_people(conn, &remaining)?;
+            if !people.is_empty() {
+                remaining =
+                    Self::remove_entity_names(&remaining, people.iter().map(|p| p.name.as_str()));
+                intent.people_all = people;
+            }
+        }
+
+        if !remaining.trim().is_empty() {
+            let places = Self::resolve_places(conn, remaining.trim())?;
+            if !places.is_empty() {
+                remaining.clear();
+                intent.places = places;
+            }
+        }
+
+        let cleanup = remaining
+            .split_whitespace()
+            .filter(|w| {
+                !matches!(
+                    w.to_lowercase().as_str(),
+                    "and"
+                        | "&"
+                        | "with"
+                        | "in"
+                        | "at"
+                        | "from"
+                        | "person"
+                        | "people"
+                        | "containing"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !cleanup.trim().is_empty() {
+            intent.text = Some(cleanup.trim().to_string());
+        }
+        Ok(intent)
+    }
+
+    fn interpreted_filters(intent: &SmartIntent) -> Vec<InterpretedFilter> {
+        let mut out = Vec::new();
+        if intent.people_only {
+            out.push(InterpretedFilter {
+                kind: "only".into(),
+                label: "Only".into(),
+            });
+        }
+        for p in &intent.people_all {
+            out.push(InterpretedFilter {
+                kind: "person".into(),
+                label: p.name.clone(),
+            });
+        }
+        for p in &intent.places {
+            out.push(InterpretedFilter {
+                kind: "place".into(),
+                label: p.label.clone(),
+            });
+        }
+        for a in &intent.albums {
+            out.push(InterpretedFilter {
+                kind: "album".into(),
+                label: a.name.clone(),
+            });
+        }
+        if let Some(media) = intent.media_type {
+            out.push(InterpretedFilter {
+                kind: "media".into(),
+                label: media.label().into(),
+            });
+        }
+        if intent.favorite == Some(true) {
+            out.push(InterpretedFilter {
+                kind: "favorite".into(),
+                label: "Favourites".into(),
+            });
+        }
+        if let Some(range) = &intent.date_range {
+            out.push(InterpretedFilter {
+                kind: "date".into(),
+                label: Self::date_label(range),
+            });
+        }
+        if let Some(text) = &intent.text {
+            out.push(InterpretedFilter {
+                kind: "text".into(),
+                label: text.clone(),
+            });
+        }
+        out
     }
 
     /// Peel a date range off the end (or whole) of `q` and return
@@ -313,66 +530,231 @@ impl SearchService {
         (Some(trimmed.to_string()), None)
     }
 
-    /// Photos query that ANDs the optional date range with an OR-match
-    /// across location, filename, OCR, and face-cluster name. Either
-    /// part may be empty (in which case it's omitted from the WHERE).
-    fn search_unified_photos(
+    fn search_smart_photos(
         conn: &Connection,
-        text: Option<&str>,
-        date: Option<&DateRange>,
+        intent: &SmartIntent,
     ) -> SqliteResult<Vec<SearchResult>> {
         let mut sql = String::from(
-            "SELECT id, date_taken, location_city, location_country, thumbnail_path \
-             FROM photos p WHERE is_trashed = FALSE",
+            "SELECT p.id, p.date_taken, p.location_city, p.location_country, p.thumbnail_path \
+             FROM photos p WHERE p.is_trashed = FALSE",
         );
-        let mut bind: Vec<String> = Vec::new();
+        let mut bind: Vec<Value> = Vec::new();
 
-        if let Some(d) = date {
-            sql.push_str(" AND date_taken >= ? AND date_taken <= ?");
-            bind.push(d.start.to_rfc3339());
-            bind.push(d.end.to_rfc3339());
+        if let Some(d) = &intent.date_range {
+            sql.push_str(" AND p.date_taken >= ? AND p.date_taken <= ?");
+            bind.push(Value::Text(d.start.to_rfc3339()));
+            bind.push(Value::Text(d.end.to_rfc3339()));
         }
-
-        if let Some(t) = text {
+        if let Some(media) = intent.media_type {
+            sql.push_str(" AND p.media_type = ?");
+            bind.push(Value::Text(media.as_db().to_string()));
+        }
+        if intent.favorite == Some(true) {
+            sql.push_str(" AND p.is_favorite = TRUE");
+        }
+        for album in &intent.albums {
             sql.push_str(
-                " AND ( \
-                    LOWER(file_name)        LIKE LOWER(?) OR \
-                    LOWER(ocr_text)         LIKE LOWER(?) OR \
-                    LOWER(location_city)    LIKE LOWER(?) OR \
-                    LOWER(location_country) LIKE LOWER(?) OR \
-                    LOWER(camera_make)      LIKE LOWER(?) OR \
-                    LOWER(camera_model)     LIKE LOWER(?) OR \
-                    LOWER(COALESCE(camera_make, '') || ' ' || COALESCE(camera_model, '')) LIKE LOWER(?) OR \
-                    EXISTS ( \
-                      SELECT 1 FROM faces f \
-                      JOIN face_clusters fc ON fc.id = f.cluster_id \
-                      WHERE f.photo_id = p.id \
-                        AND fc.name IS NOT NULL \
-                        AND LOWER(fc.name) LIKE LOWER(?) \
-                    ) \
-                  )",
+                " AND EXISTS (SELECT 1 FROM album_photos ap WHERE ap.photo_id = p.id AND ap.album_id = ?)",
             );
-            let like = format!("%{}%", t);
-            for _ in 0..8 {
+            bind.push(Value::Integer(album.id));
+        }
+        for place in &intent.places {
+            sql.push_str(" AND (");
+            let mut parts = Vec::new();
+            if let Some(city) = &place.city {
+                parts.push("LOWER(p.location_city) LIKE LOWER(?)");
+                bind.push(Value::Text(format!("%{}%", city)));
+            }
+            if let Some(country) = &place.country {
+                parts.push("LOWER(p.location_country) LIKE LOWER(?)");
+                bind.push(Value::Text(format!("%{}%", country)));
+            }
+            sql.push_str(&parts.join(" OR "));
+            sql.push(')');
+        }
+        for person in &intent.people_all {
+            sql.push_str(
+                " AND (EXISTS (
+                    SELECT 1 FROM faces f
+                    WHERE f.photo_id = p.id AND f.cluster_id = ?
+                ) OR EXISTS (
+                    SELECT 1 FROM photo_inferred_identities pii
+                    WHERE pii.photo_id = p.id AND pii.cluster_id = ?
+                ))",
+            );
+            bind.push(Value::Integer(person.id));
+            bind.push(Value::Integer(person.id));
+        }
+        if intent.people_only && !intent.people_all.is_empty() {
+            sql.push_str(" AND p.faces_processed = TRUE");
+            let placeholders = std::iter::repeat_n("?", intent.people_all.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            sql.push_str(&format!(
+                " AND NOT EXISTS (
+                    SELECT 1 FROM faces f
+                    WHERE f.photo_id = p.id
+                      AND (f.cluster_id IS NULL OR f.cluster_id NOT IN ({placeholders}))
+                )"
+            ));
+            for person in &intent.people_all {
+                bind.push(Value::Integer(person.id));
+            }
+            sql.push_str(&format!(
+                " AND NOT EXISTS (
+                    SELECT 1 FROM photo_inferred_identities pii
+                    WHERE pii.photo_id = p.id AND pii.cluster_id NOT IN ({placeholders})
+                )"
+            ));
+            for person in &intent.people_all {
+                bind.push(Value::Integer(person.id));
+            }
+        }
+        if let Some(t) = &intent.text {
+            sql.push_str(
+                " AND (
+                    LOWER(p.file_name) LIKE LOWER(?) OR
+                    LOWER(p.location_city) LIKE LOWER(?) OR
+                    LOWER(p.location_country) LIKE LOWER(?) OR
+                    LOWER(p.camera_make) LIKE LOWER(?) OR
+                    LOWER(p.camera_model) LIKE LOWER(?) OR
+                    LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?)
+                )",
+            );
+            let like = Value::Text(format!("%{}%", t));
+            for _ in 0..6 {
                 bind.push(like.clone());
             }
         }
 
-        sql.push_str(" ORDER BY date_taken DESC LIMIT 1000");
-
+        sql.push_str(" ORDER BY p.date_taken DESC, p.id DESC LIMIT 1000");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params_from_iter(bind.iter()), |row| {
-                Ok(SearchResult {
-                    photo_id: row.get(0)?,
-                    date_taken: row.get(1)?,
-                    location_city: row.get(2)?,
-                    location_country: row.get(3)?,
-                    thumbnail_path: row.get(4)?,
-                })
-            })?
-            .collect::<SqliteResult<Vec<_>>>()?;
-        Ok(rows)
+        let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
+            Ok(SearchResult {
+                photo_id: row.get(0)?,
+                date_taken: row.get(1)?,
+                location_city: row.get(2)?,
+                location_country: row.get(3)?,
+                thumbnail_path: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    fn resolve_people(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPerson>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, name FROM face_clusters
+             WHERE name IS NOT NULL AND trim(name) != ''
+             ORDER BY length(name) DESC, photo_count DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ResolvedPerson {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?;
+        let lower = text.to_lowercase();
+        let mut out = Vec::new();
+        for row in rows {
+            let person = row?;
+            if Self::contains_phrase(&lower, &person.name.to_lowercase()) {
+                out.push(person);
+            }
+        }
+        Ok(out)
+    }
+
+    fn resolve_albums(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedAlbum>> {
+        let like = format!("%{}%", text.trim());
+        let mut stmt = conn.prepare(
+            "SELECT id, name FROM albums
+             WHERE LOWER(name) LIKE LOWER(?1)
+             ORDER BY updated_at DESC
+             LIMIT 5",
+        )?;
+        let rows = stmt.query_map(params![like], |row| {
+            Ok(ResolvedAlbum {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    fn resolve_places(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPlace>> {
+        let like = format!("%{}%", text.trim());
+        let mut stmt = conn.prepare(
+            "SELECT location_city, location_country, COUNT(*) AS cnt
+             FROM photos
+             WHERE is_trashed = FALSE
+               AND (LOWER(location_city) LIKE LOWER(?1)
+                    OR LOWER(location_country) LIKE LOWER(?1))
+             GROUP BY location_city, location_country
+             ORDER BY cnt DESC
+             LIMIT 3",
+        )?;
+        let rows = stmt.query_map(params![like], |row| {
+            let city: Option<String> = row.get(0)?;
+            let country: Option<String> = row.get(1)?;
+            let label = match (&city, &country) {
+                (Some(c), Some(country)) => format!("{}, {}", c, country),
+                (Some(c), None) => c.clone(),
+                (None, Some(country)) => country.clone(),
+                (None, None) => text.to_string(),
+            };
+            Ok(ResolvedPlace {
+                city,
+                country,
+                label,
+            })
+        })?;
+        rows.collect()
+    }
+
+    fn contains_word(lower: &str, needle: &str) -> bool {
+        lower
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == needle)
+    }
+
+    fn contains_phrase(lower: &str, phrase: &str) -> bool {
+        if phrase.trim().is_empty() {
+            return false;
+        }
+        lower == phrase
+            || lower.contains(&format!(" {} ", phrase))
+            || lower.starts_with(&format!("{} ", phrase))
+            || lower.ends_with(&format!(" {}", phrase))
+    }
+
+    fn remove_word(text: &str, needle: &str) -> String {
+        text.split_whitespace()
+            .filter(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+                    != needle
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn remove_entity_names<'a>(text: &str, names: impl Iterator<Item = &'a str>) -> String {
+        let mut out = text.to_string();
+        for name in names {
+            out = out.replace(name, " ");
+            out = out.replace(&name.to_lowercase(), " ");
+        }
+        out
+    }
+
+    fn date_label(range: &DateRange) -> String {
+        let start = range.start.format("%Y-%m-%d").to_string();
+        let end = range.end.format("%Y-%m-%d").to_string();
+        if start == end {
+            start
+        } else {
+            format!("{} to {}", start, end)
+        }
     }
 
     fn search_people(conn: &Connection, q: &str) -> SqliteResult<Vec<PersonHit>> {

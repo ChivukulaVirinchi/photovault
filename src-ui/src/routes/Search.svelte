@@ -76,6 +76,13 @@
 
 <div class="page">
   {#if results}
+    {#if results.interpreted.length > 0}
+      <div class="chips interpreted" aria-label="Interpreted filters">
+        {#each results.interpreted as f}
+          <span class="chip" data-kind={f.kind}>{f.label}</span>
+        {/each}
+      </div>
+    {/if}
     {#if results.people.length > 0}
       <section>
         <h3 class="section-title">People</h3>
@@ -166,7 +173,7 @@
     {/if}
   {:else if !loading}
     <div class="empty">
-      <p>Type to search across people, albums, places, and OCR text.</p>
+      <p>Type to search across people, dates, albums, places, favourites, filenames, and camera names.</p>
     </div>
   {/if}
 </div>
@@ -204,6 +211,23 @@
   .loading { color: var(--ink-muted); }
 
   .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
+  .interpreted {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    margin: 0 0 var(--s-4);
+  }
+  .interpreted .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 3px 9px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--bg-paper);
+    color: var(--ink-soft);
+    font-size: var(--t-xs);
+  }
   section { margin-bottom: var(--s-6); }
   .section-title {
     font-size: var(--t-xs);
