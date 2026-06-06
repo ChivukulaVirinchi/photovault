@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (24);
+INSERT INTO schema_version (version) VALUES (25);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -428,6 +428,16 @@ CREATE TABLE IF NOT EXISTS recent_searches (
 );
 
 -- ============================================================
+-- EXCLUDED FOLDERS
+-- Per-library folders skipped by scanner and reindexer
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS excluded_folders (
+    relative_path TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 
@@ -512,6 +522,16 @@ mod tests {
         let count: i32 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='photos'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(count, 1);
+
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='excluded_folders'",
                 [],
                 |row| row.get(0),
             )

@@ -4,7 +4,9 @@
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
+  import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
@@ -59,18 +61,22 @@
       .filter((e) => dropSet.has(e.photo.id));
     try {
       await trash.trashPhotos(ids);
+      photoVisibility.markTrashed(ids);
       photos = photos.filter((p) => !dropSet.has(p.id));
+      browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
         `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(ids);
+          photoVisibility.markRestored(ids);
           const next = photos.slice();
           for (const e of snapshot) {
             const at = Math.min(e.idx, next.length);
             next.splice(at, 0, e.photo);
           }
           photos = next;
+          browseContext.set(`person:${id}`, photos.map((p) => p.id));
         },
       );
     } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
@@ -215,12 +221,13 @@
   </div>
 {/if}
 
-<div class="page-scroll">
+<div class="page-scroll" use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
   <div class="pv-photo-grid">
     {#each photos as p (p.id)}
       <a
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
+        data-photo-id={p.id}
         href="#/photo?id={p.id}"
         use:thumbnailOnVisible={{
           id: p.id,

@@ -111,8 +111,8 @@ jobs:
             -o assets-pack/models/scrfd_10g_bnkps.onnx \
             https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx
           curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
-            -o assets-pack/models/glintr100.onnx \
-            https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx
+            -o assets-pack/models/adaface_ir101_webface12m.onnx \
+            "https://drive.usercontent.google.com/download?id=1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1&export=download&confirm=t"
 
           # GeoNames cities1000 + country codes
           curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \

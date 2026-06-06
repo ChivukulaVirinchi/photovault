@@ -11,6 +11,7 @@
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -347,10 +348,13 @@
     const advanceTo = nextId ?? prevId ?? null;
     try {
       await trash.trashPhotos([id]);
+      photoVisibility.markTrashed([id]);
+      browseContext.remove([id]);
       toasts.undoable(
         "Photo moved to trash",
         async () => {
           await trash.restore([id]);
+          photoVisibility.markRestored([id]);
           // Re-load the trashed-then-restored photo back into view.
           gotoId(id);
         },
@@ -410,8 +414,11 @@
     if (!confirm("Move all other photos in this stack to trash?")) return;
     const keepId = stack.cover_photo_id;
     const viewingKeep = photo?.id === keepId;
+    const trashedIds = stack.members.filter((member) => member.photo_id !== keepId).map((member) => member.photo_id);
     try {
       const result = await stacks.trashOthers(stack.id);
+      photoVisibility.markTrashed(trashedIds);
+      browseContext.remove(trashedIds);
       toasts.success(`${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`);
       stack = null;
       if (!viewingKeep) gotoId(keepId);

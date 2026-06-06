@@ -399,6 +399,14 @@ kbd {
   object-fit: cover;
   display: block;
 }
+.pv-marquee {
+  position: fixed;
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 60;
+}
 
 .pv-card-grid {
   display: grid;

@@ -19,11 +19,9 @@ fi
 GEONAMES_CITIES_URL="https://download.geonames.org/export/dump/cities1000.zip"
 GEONAMES_COUNTRY_URL="https://download.geonames.org/export/dump/countryInfo.txt"
 SCRFD_MODEL_URL_DEFAULT="https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx"
-GLINTR_MODEL_URL_DEFAULT="https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx"
 ADAFACE_MODEL_URL_DEFAULT="https://drive.usercontent.google.com/download?id=1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1&export=download&confirm=t"
 ORT_URL_DEFAULT="https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-linux-x64-1.23.0.tgz"
 SCRFD_MODEL_URL="${SCRFD_MODEL_URL:-$SCRFD_MODEL_URL_DEFAULT}"
-GLINTR_MODEL_URL="${GLINTR_MODEL_URL:-$GLINTR_MODEL_URL_DEFAULT}"
 ADAFACE_MODEL_URL="${ADAFACE_MODEL_URL:-$ADAFACE_MODEL_URL_DEFAULT}"
 ORT_URL="${ORT_URL:-$ORT_URL_DEFAULT}"
 
@@ -115,12 +113,10 @@ setup_models() {
   echo "\n==> Setting up face models"
 
   download "$SCRFD_MODEL_URL" "$MODELS_DIR/scrfd_10g_bnkps.onnx"
-  download "$GLINTR_MODEL_URL" "$MODELS_DIR/glintr100.onnx"
   download "$ADAFACE_MODEL_URL" "$MODELS_DIR/adaface_ir101_webface12m.onnx"
 
   echo "Installed models:"
   echo "- $MODELS_DIR/scrfd_10g_bnkps.onnx"
-  echo "- $MODELS_DIR/glintr100.onnx"
   echo "- $MODELS_DIR/adaface_ir101_webface12m.onnx"
 }
 

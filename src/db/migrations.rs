@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 24;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 25;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -130,8 +130,28 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 24 {
         migrate_v23_to_v24(conn)?;
     }
+    if current_version < 25 {
+        migrate_v24_to_v25(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v24_to_v25(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS excluded_folders (
+            relative_path TEXT PRIMARY KEY,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO schema_version (version) VALUES (25);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 25 (excluded folders)");
     Ok(())
 }
 
@@ -979,5 +999,34 @@ mod tests {
         ).unwrap();
         assert_eq!(idx_count, 2);
         Ok(())
+    }
+
+    #[test]
+    fn test_migrate_v24_to_v25() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (24);
+            "#,
+        )
+        .unwrap();
+
+        migrate_v24_to_v25(&conn).unwrap();
+
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='excluded_folders'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1);
+
+        let version = get_schema_version(&conn).unwrap();
+        assert_eq!(version, 25);
     }
 }

@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use walkdir::WalkDir;
 
+use crate::services::exclusions::ExclusionMatcher;
 use crate::services::path_util::safe_join_relative;
 use crate::services::scanner::calculate_hash;
 
@@ -64,6 +65,8 @@ impl Reindexer {
             "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
             // RAWs (TIFF-based, embedded-JPEG path)
             "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
+            // Videos
+            "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2", "mts", "m2ts",
         ] {
             supported_extensions.insert(ext.to_string());
         }
@@ -88,6 +91,7 @@ impl Reindexer {
         drive_root: &Path,
     ) -> SqliteResult<IndexChanges> {
         let mut changes = IndexChanges::default();
+        let exclusions = ExclusionMatcher::from_db(conn)?;
 
         // Use a temp table instead of loading everything into a HashMap.
         // This keeps memory usage O(1) in Rust regardless of library size.
@@ -105,7 +109,7 @@ impl Reindexer {
         for entry in WalkDir::new(drive_root)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !self.should_skip(e.path()))
+            .filter_entry(|e| !self.should_skip(drive_root, e.path(), &exclusions))
         {
             let entry = match entry {
                 Ok(e) => e,
@@ -298,12 +302,13 @@ impl Reindexer {
         Ok(result)
     }
 
-    fn should_skip(&self, path: &Path) -> bool {
+    fn should_skip(&self, drive_root: &Path, path: &Path, exclusions: &ExclusionMatcher) -> bool {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !self.scan_hidden_folders && name.starts_with('.') {
             return true;
         }
         self.skip_patterns.iter().any(|p| name.starts_with(p))
+            || exclusions.should_skip_path(drive_root, path)
     }
 
     fn system_time_to_string(time: SystemTime) -> String {
@@ -347,5 +352,20 @@ mod tests {
             hash_a, hash_b,
             "files differing past the first 64 KB must produce different hashes"
         );
+    }
+
+    #[test]
+    fn reindexer_excludes_folder_descendants() {
+        let temp = tempdir().unwrap();
+        let excluded = temp.path().join("Trips").join("Goa");
+        let similar = temp.path().join("Trips").join("Goa2");
+        fs::create_dir_all(&excluded).unwrap();
+        fs::create_dir_all(&similar).unwrap();
+
+        let matcher = ExclusionMatcher::new(vec!["Trips/Goa".into()]);
+        let reindexer = Reindexer::new();
+
+        assert!(reindexer.should_skip(temp.path(), &excluded, &matcher));
+        assert!(!reindexer.should_skip(temp.path(), &similar, &matcher));
     }
 }

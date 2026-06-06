@@ -2,6 +2,7 @@
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
@@ -35,8 +36,14 @@
   }
 
   async function trashOthers() {
+    if (!group) return;
     if (!confirm("Trash all non-keep duplicates?")) return;
+    const trashedIds = group.members
+      .filter((m) => !m.is_suggested_keep)
+      .map((m) => m.photo_id);
     await duplicates.trashOthers(id);
+    photoVisibility.markTrashed(trashedIds);
+    browseContext.remove(trashedIds);
     window.location.hash = "/duplicates";
   }
 

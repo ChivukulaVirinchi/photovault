@@ -16,6 +16,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::db::photo_repo::{PhotoInsert, PhotoRepo};
 use crate::db::Database;
 use crate::models::MediaType;
+use crate::services::exclusions::ExclusionMatcher;
 
 /// Supported image extensions.
 ///
@@ -186,6 +187,13 @@ async fn run_scan_streaming(
 ) -> Result<ScanReport, String> {
     let start = Instant::now();
     let (paths_tx, paths_rx) = bounded::<FileCandidate>(WALKER_CHANNEL_DEPTH);
+    let exclusions = {
+        let guard = db.lock().await;
+        ExclusionMatcher::from_db(&guard.conn).unwrap_or_else(|e| {
+            tracing::warn!("scan: failed to load folder exclusions: {e}");
+            ExclusionMatcher::empty()
+        })
+    };
 
     // ----- Producer: walker thread -----
     let walker_cancel = cancel.clone();
@@ -195,7 +203,7 @@ async fn run_scan_streaming(
         let walker = WalkDir::new(&walker_root)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !should_skip(e, scan_hidden_folders));
+            .filter_entry(|e| !should_skip(e, &walker_root, scan_hidden_folders, &exclusions));
 
         for entry in walker {
             if walker_cancel.load(Ordering::Relaxed) {
@@ -392,7 +400,12 @@ async fn flush_stub_batch(
 }
 
 /// Check if a directory entry should be skipped
-fn should_skip(entry: &DirEntry, scan_hidden_folders: bool) -> bool {
+fn should_skip(
+    entry: &DirEntry,
+    root: &Path,
+    scan_hidden_folders: bool,
+    exclusions: &ExclusionMatcher,
+) -> bool {
     let file_name = entry.file_name().to_string_lossy();
 
     if !scan_hidden_folders && file_name.starts_with('.') {
@@ -405,7 +418,7 @@ fn should_skip(entry: &DirEntry, scan_hidden_folders: bool) -> bool {
         }
     }
 
-    false
+    exclusions.should_skip_path(root, entry.path())
 }
 
 /// Check if a file has a supported extension
@@ -458,15 +471,42 @@ mod tests {
         let temp = tempdir().unwrap();
         let hidden = temp.path().join(".hidden");
         std::fs::create_dir(&hidden).unwrap();
+        let exclusions = ExclusionMatcher::empty();
 
         let walker = WalkDir::new(temp.path()).into_iter();
         for entry in walker {
             let entry = entry.unwrap();
             if entry.file_name().to_string_lossy() == ".hidden" {
-                assert!(should_skip(&entry, false));
-                assert!(!should_skip(&entry, true));
+                assert!(should_skip(&entry, temp.path(), false, &exclusions));
+                assert!(!should_skip(&entry, temp.path(), true, &exclusions));
             }
         }
+    }
+
+    #[test]
+    fn test_should_skip_excluded_folder_descendants() {
+        let temp = tempdir().unwrap();
+        let excluded = temp.path().join("Trips").join("Goa");
+        let similar = temp.path().join("Trips").join("Goa2");
+        std::fs::create_dir_all(&excluded).unwrap();
+        std::fs::create_dir_all(&similar).unwrap();
+        let exclusions = ExclusionMatcher::new(vec!["Trips/Goa".into()]);
+
+        let mut saw_excluded = false;
+        let mut saw_similar = false;
+        for entry in WalkDir::new(temp.path()).into_iter().filter_map(Result::ok) {
+            let name = entry.path();
+            if name == excluded {
+                saw_excluded = true;
+                assert!(should_skip(&entry, temp.path(), false, &exclusions));
+            }
+            if name == similar {
+                saw_similar = true;
+                assert!(!should_skip(&entry, temp.path(), false, &exclusions));
+            }
+        }
+        assert!(saw_excluded);
+        assert!(saw_similar);
     }
 
     #[test]

@@ -28,6 +28,12 @@ class BrowseContext {
     if (fresh.length > 0) this.ids = [...this.ids, ...fresh];
   }
 
+  remove(ids: number[]) {
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    this.ids = this.ids.filter((id) => !drop.has(id));
+  }
+
   clear() {
     this.ids = [];
     this.source = null;

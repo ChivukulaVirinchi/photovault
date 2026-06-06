@@ -12,7 +12,6 @@ $CacheDir = Join-Path $RootDir ".cache\downloads"
 $GeonamesCitiesUrl = "https://download.geonames.org/export/dump/cities1000.zip"
 $GeonamesCountryUrl = "https://download.geonames.org/export/dump/countryInfo.txt"
 $ScrfdModelUrl = if ($env:SCRFD_MODEL_URL) { $env:SCRFD_MODEL_URL } else { "https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx" }
-$GlintrModelUrl = if ($env:GLINTR_MODEL_URL) { $env:GLINTR_MODEL_URL } else { "https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx" }
 $AdafaceModelUrl = if ($env:ADAFACE_MODEL_URL) { $env:ADAFACE_MODEL_URL } else { "https://drive.usercontent.google.com/download?id=1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1&export=download&confirm=t" }
 $OrtUrl = if ($env:ORT_URL) { $env:ORT_URL } else { "https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip" }
 
@@ -115,12 +114,10 @@ if (Test-Path $OrtDll) {
 Write-Host "`n==> Setting up face models"
 
 Download-File $ScrfdModelUrl (Join-Path $ModelsDir "scrfd_10g_bnkps.onnx")
-Download-File $GlintrModelUrl (Join-Path $ModelsDir "glintr100.onnx")
 Download-File $AdafaceModelUrl (Join-Path $ModelsDir "adaface_ir101_webface12m.onnx")
 
 Write-Host "Installed models:"
 Write-Host "- $(Join-Path $ModelsDir 'scrfd_10g_bnkps.onnx')"
-Write-Host "- $(Join-Path $ModelsDir 'glintr100.onnx')"
 Write-Host "- $(Join-Path $ModelsDir 'adaface_ir101_webface12m.onnx')"
 
 Write-Host "`nDone."

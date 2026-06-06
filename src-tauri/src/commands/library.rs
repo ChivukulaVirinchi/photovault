@@ -11,7 +11,10 @@ use tauri::{AppHandle, Manager, State};
 use smriti::db::Database;
 use smriti::services::drive_detector::DriveDetector;
 
-use crate::dto::{DriveDto, IndexChangesDto, JobIdDto, LibraryHandleDto, MetadataProgressDto};
+use crate::dto::{
+    DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
+    LibraryHandleDto, MetadataProgressDto,
+};
 use crate::events::{
     EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
     EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
@@ -90,6 +93,83 @@ pub async fn library_detect_changes(state: State<'_, AppState>) -> CommandResult
         moved: changes.moved.len() as u64,
         modified: changes.modified.len() as u64,
     })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibraryExclusionPathArgs {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibraryExclusionRemoveArgs {
+    pub relative_path: String,
+}
+
+#[tauri::command]
+pub async fn library_exclusions_list(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<ExcludedFolderDto>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    Ok(smriti::db::ExcludedFolderRepo::new(&db.conn)
+        .list()?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn library_exclusions_preview(
+    state: State<'_, AppState>,
+    args: LibraryExclusionPathArgs,
+) -> CommandResult<ExcludedFolderPreviewDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let relative_path = validate_exclusion_path(&lib.drive_root, &args.path)?;
+    let db = lib.db.lock().await;
+    let indexed_count =
+        smriti::db::ExcludedFolderRepo::new(&db.conn).count_indexed_under(&relative_path)?;
+    Ok(ExcludedFolderPreviewDto {
+        relative_path,
+        indexed_count,
+    })
+}
+
+#[tauri::command]
+pub async fn library_exclusions_add(
+    state: State<'_, AppState>,
+    args: LibraryExclusionPathArgs,
+) -> CommandResult<ExcludedFolderDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let relative_path = validate_exclusion_path(&lib.drive_root, &args.path)?;
+    let db = lib.db.lock().await;
+    let record =
+        smriti::db::ExcludedFolderRepo::new(&db.conn).insert_and_remove_indexed(&relative_path)?;
+    Ok(record.into())
+}
+
+#[tauri::command]
+pub async fn library_exclusions_remove(
+    state: State<'_, AppState>,
+    args: LibraryExclusionRemoveArgs,
+) -> CommandResult<()> {
+    let relative_path = smriti::services::exclusions::normalize_stored_relative(
+        &args.relative_path,
+    )
+    .map_err(|reason| CommandError::Validation {
+        field: "relative_path".into(),
+        reason,
+    })?;
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let removed = smriti::db::ExcludedFolderRepo::new(&db.conn).remove(&relative_path)?;
+    if !removed {
+        return Err(CommandError::not_found("excluded_folder", relative_path));
+    }
+    Ok(())
 }
 
 // ---------- mutations ----------
@@ -745,6 +825,53 @@ fn estimate_eta_ms(
         return None;
     }
     Some((elapsed_ms / processed).saturating_mul(total - processed))
+}
+
+fn validate_exclusion_path(drive_root: &std::path::Path, input: &str) -> CommandResult<String> {
+    let raw = PathBuf::from(input.trim());
+    let selected = if raw.is_absolute() {
+        raw
+    } else {
+        drive_root.join(raw)
+    };
+    if !selected.exists() {
+        return Err(CommandError::Validation {
+            field: "path".into(),
+            reason: "folder does not exist".into(),
+        });
+    }
+    if !selected.is_dir() {
+        return Err(CommandError::Validation {
+            field: "path".into(),
+            reason: "path must be a folder".into(),
+        });
+    }
+
+    let root = drive_root.canonicalize()?;
+    let selected = selected.canonicalize()?;
+    let relative = selected
+        .strip_prefix(&root)
+        .map_err(|_| CommandError::Validation {
+            field: "path".into(),
+            reason: "folder must be inside the current library".into(),
+        })?;
+
+    let relative_path = smriti::services::path_util::relative_path_for_storage(relative);
+    let relative_path = smriti::services::exclusions::normalize_stored_relative(&relative_path)
+        .map_err(|reason| CommandError::Validation {
+            field: "path".into(),
+            reason,
+        })?;
+
+    let first_component = relative_path.split('/').next().unwrap_or_default();
+    if first_component.eq_ignore_ascii_case(smriti::db::LIBRARY_METADATA_DIR) {
+        return Err(CommandError::Validation {
+            field: "path".into(),
+            reason: "Smriti's library metadata folder is always managed internally".into(),
+        });
+    }
+
+    Ok(relative_path)
 }
 
 use std::sync::Arc;

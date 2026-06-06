@@ -28,6 +28,7 @@
   import { library } from "../lib/api/library";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
@@ -152,6 +153,30 @@
     saveTimelineCache();
   }
 
+  function removeFromTimeline(ids: number[]) {
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    const before = items.length;
+    items = items.filter((p) => !drop.has(p.id));
+    const removed = before - items.length;
+    browseContext.remove(ids);
+    if (total !== null && removed > 0) total = Math.max(0, total - removed);
+    saveTimelineCache();
+  }
+
+  function restoreIntoTimeline(snapshot: Array<{ idx: number; photo: PhotoSummaryDto }>) {
+    if (snapshot.length === 0) return;
+    const next = items.slice();
+    for (const e of snapshot) {
+      const at = Math.min(e.idx, next.length);
+      next.splice(at, 0, e.photo);
+    }
+    items = next;
+    browseContext.set("timeline", items.map((p) => p.id));
+    if (total !== null) total += snapshot.length;
+    saveTimelineCache();
+  }
+
   function fmtDuration(ms: number | null): string {
     if (ms == null || ms <= 0) return "";
     const total = Math.round(ms / 1000);
@@ -166,17 +191,31 @@
   // Drag-marquee state (selection by rectangle)
   let marqueeStart = $state<{ x: number; y: number } | null>(null);
   let marqueeCurrent = $state<{ x: number; y: number } | null>(null);
+  let marqueePointer = $state<{ x: number; y: number } | null>(null);
   /// Selection snapshot when the marquee started — restored as base
   /// each pointermove so cells that exit the rectangle deselect again.
   /// Held in a non-reactive ref because it doesn't need to render.
   let marqueeBase: Set<number> = new Set();
-  const marqueeRect = $derived.by(() => {
+  const marqueeContentRect = $derived.by(() => {
     if (!marqueeStart || !marqueeCurrent) return null;
     const x = Math.min(marqueeStart.x, marqueeCurrent.x);
     const y = Math.min(marqueeStart.y, marqueeCurrent.y);
     const w = Math.abs(marqueeStart.x - marqueeCurrent.x);
     const h = Math.abs(marqueeStart.y - marqueeCurrent.y);
     return { x, y, w, h };
+  });
+  const marqueeRect = $derived.by(() => {
+    if (!scrollEl || !marqueeContentRect) return null;
+    scrollTop;
+    containerW;
+    containerH;
+    const host = scrollEl.getBoundingClientRect();
+    return {
+      x: host.left + marqueeContentRect.x - scrollEl.scrollLeft,
+      y: host.top + marqueeContentRect.y - scrollTop,
+      w: marqueeContentRect.w,
+      h: marqueeContentRect.h,
+    };
   });
 
   /// Number of columns for the current zoom + container width.
@@ -371,6 +410,14 @@
   });
 
   $effect(() => {
+    photoVisibility.version;
+    const drop = photoVisibility.trashedIds;
+    if (drop.size === 0) return;
+    const stale = items.filter((p) => drop.has(p.id)).map((p) => p.id);
+    if (stale.length > 0) removeFromTimeline(stale);
+  });
+
+  $effect(() => {
     return v.attach();
   });
 
@@ -393,6 +440,10 @@
     containerH = r.height;
     const onScroll = () => {
       scrollTop = scrollEl!.scrollTop;
+      if (marqueeStart && marqueePointer) {
+        marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
+        queueMarqueeUpdate();
+      }
       saveTimelineCache();
       // Persist so that returning from PhotoDetail lands the user back
       // at the same row instead of the top of the timeline.
@@ -548,6 +599,62 @@
   // cell. At 120 Hz pointer rates with hundreds of cells visible this
   // overwhelmed the renderer and looked like a hang.
   let marqueeRaf = 0;
+  let marqueeAutoScrollRaf = 0;
+  let marqueeScrollVelocity = 0;
+
+  function marqueePointFromClient(clientX: number, clientY: number): { x: number; y: number } {
+    if (!scrollEl) return { x: clientX, y: clientY };
+    const host = scrollEl.getBoundingClientRect();
+    return {
+      x: clientX - host.left + scrollEl.scrollLeft,
+      y: clientY - host.top + scrollEl.scrollTop,
+    };
+  }
+
+  function queueMarqueeUpdate() {
+    if (marqueeRaf !== 0) return;
+    marqueeRaf = requestAnimationFrame(() => {
+      marqueeRaf = 0;
+      updateMarqueeSelection();
+    });
+  }
+
+  function updateMarqueeAutoScroll() {
+    if (!scrollEl || !marqueePointer || !marqueeStart) {
+      marqueeScrollVelocity = 0;
+      return;
+    }
+    const host = scrollEl.getBoundingClientRect();
+    const edge = 56;
+    const maxVelocity = 28;
+    const topDelta = marqueePointer.y - host.top;
+    const bottomDelta = host.bottom - marqueePointer.y;
+    if (topDelta < edge) {
+      marqueeScrollVelocity = -Math.ceil(Math.min(1, (edge - topDelta) / edge) * maxVelocity);
+    } else if (bottomDelta < edge) {
+      marqueeScrollVelocity = Math.ceil(Math.min(1, (edge - bottomDelta) / edge) * maxVelocity);
+    } else {
+      marqueeScrollVelocity = 0;
+    }
+    if (marqueeScrollVelocity !== 0 && marqueeAutoScrollRaf === 0) {
+      marqueeAutoScrollRaf = requestAnimationFrame(stepMarqueeAutoScroll);
+    }
+  }
+
+  function stepMarqueeAutoScroll() {
+    marqueeAutoScrollRaf = 0;
+    if (!scrollEl || !marqueeStart || !marqueePointer || marqueeScrollVelocity === 0) return;
+    const before = scrollEl.scrollTop;
+    scrollEl.scrollTop = Math.max(0, Math.min(scrollableMax, before + marqueeScrollVelocity));
+    if (scrollEl.scrollTop === before) {
+      marqueeScrollVelocity = 0;
+      return;
+    }
+    marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
+    queueMarqueeUpdate();
+    updateMarqueeAutoScroll();
+  }
+
   function onScrollPointerDown(e: PointerEvent) {
     // Only respond to primary-button drags that started on empty space
     // (not on a cell or any interactive child).
@@ -556,19 +663,18 @@
     if (target.closest("a.cell, .scrubber, .zoom-pill, button, input, [data-no-marquee]")) return;
     marqueeBase = e.shiftKey ? new Set(selection.ids) : new Set();
     if (!e.shiftKey) selection.clear();
-    marqueeStart = { x: e.clientX, y: e.clientY };
-    marqueeCurrent = { x: e.clientX, y: e.clientY };
+    marqueePointer = { x: e.clientX, y: e.clientY };
+    marqueeStart = marqueePointFromClient(e.clientX, e.clientY);
+    marqueeCurrent = marqueeStart;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
   function onScrollPointerMove(e: PointerEvent) {
     if (!marqueeStart) return;
-    marqueeCurrent = { x: e.clientX, y: e.clientY };
-    if (marqueeRaf !== 0) return;
-    marqueeRaf = requestAnimationFrame(() => {
-      marqueeRaf = 0;
-      updateMarqueeSelection();
-    });
+    marqueePointer = { x: e.clientX, y: e.clientY };
+    marqueeCurrent = marqueePointFromClient(e.clientX, e.clientY);
+    updateMarqueeAutoScroll();
+    queueMarqueeUpdate();
   }
   function onScrollPointerUp(e: PointerEvent) {
     if (!marqueeStart) return;
@@ -577,8 +683,14 @@
       cancelAnimationFrame(marqueeRaf);
       marqueeRaf = 0;
     }
+    if (marqueeAutoScrollRaf !== 0) {
+      cancelAnimationFrame(marqueeAutoScrollRaf);
+      marqueeAutoScrollRaf = 0;
+    }
+    marqueeScrollVelocity = 0;
     marqueeStart = null;
     marqueeCurrent = null;
+    marqueePointer = null;
   }
   function updateMarqueeSelection() {
     if (!scrollEl || !marqueeRect) return;
@@ -622,18 +734,16 @@
       .filter((e) => dropSet.has(e.photo.id));
     try {
       await trash.trashPhotos(ids);
-      items = items.filter((p) => !dropSet.has(p.id));
+      const trashedIds = ids;
+      photoVisibility.markTrashed(trashedIds);
+      removeFromTimeline(trashedIds);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${trashedIds.length} ${trashedIds.length === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
-          await trash.restore(ids);
-          const next = items.slice();
-          for (const e of snapshot) {
-            const at = Math.min(e.idx, next.length);
-            next.splice(at, 0, e.photo);
-          }
-          items = next;
+          await trash.restore(trashedIds);
+          photoVisibility.markRestored(trashedIds);
+          restoreIntoTimeline(snapshot);
         },
       );
     } catch (e) {

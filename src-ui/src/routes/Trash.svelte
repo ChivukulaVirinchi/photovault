@@ -3,13 +3,15 @@
   import { trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
+  import { selection } from "../lib/stores/selection.svelte";
+  import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let items = $state<Awaited<ReturnType<typeof trash.list>>["items"]>([]);
   let stats = $state<{ count: number; total_size: number } | null>(null);
-  let selected = $state<Set<number>>(new Set());
   let error = $state<string | null>(null);
 
   async function load() {
@@ -22,9 +24,7 @@
   }
 
   function toggle(id: number) {
-    const s = new Set(selected);
-    if (s.has(id)) s.delete(id); else s.add(id);
-    selected = s;
+    selection.toggle(id);
   }
 
   function patchThumbnail(photoId: number, thumbnailPath: string) {
@@ -34,17 +34,19 @@
   }
 
   async function restore() {
-    if (selected.size === 0) return;
-    await trash.restore([...selected]);
-    selected = new Set();
+    if (selection.size() === 0) return;
+    const ids = selection.list();
+    await trash.restore(ids);
+    photoVisibility.markRestored(ids);
+    selection.clear();
     await load();
   }
 
   async function deleteForever() {
-    if (selected.size === 0) return;
-    if (!confirm(`Permanently delete ${selected.size} photos? This cannot be undone.`)) return;
-    await trash.permanentDelete([...selected]);
-    selected = new Set();
+    if (selection.size() === 0) return;
+    if (!confirm(`Permanently delete ${selection.size()} photos? This cannot be undone.`)) return;
+    await trash.permanentDelete(selection.list());
+    selection.clear();
     await load();
   }
 
@@ -63,16 +65,16 @@
       {stats.count}<span class="muted"> · {(stats.total_size / 1024 / 1024).toFixed(0)} MB</span>
     </span>
   {/if}
-  <button onclick={restore} disabled={selected.size === 0}>
-    Restore <span class="mono">{selected.size}</span>
+  <button onclick={restore} disabled={selection.size() === 0}>
+    Restore <span class="mono">{selection.size()}</span>
   </button>
-  <button class="danger" onclick={deleteForever} disabled={selected.size === 0}>Delete forever</button>
+  <button class="danger" onclick={deleteForever} disabled={selection.size() === 0}>Delete forever</button>
   <button class="danger" onclick={emptyTrash} disabled={items.length === 0}>Empty</button>
 </PageHeader>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" use:marqueeSelect={{ getAllIds: () => items.map((t) => t.photo_id) }}>
   {#if items.length === 0}
     <div class="empty">
       <p>Nothing in trash. A clean shelf.</p>
@@ -82,7 +84,8 @@
       {#each items as t (t.photo_id)}
         <button
           class="pv-photo-cell trash-cell"
-          class:sel={selected.has(t.photo_id)}
+          class:sel={selection.has(t.photo_id)}
+          data-photo-id={t.photo_id}
           use:thumbnailOnVisible={{
             id: t.photo_id,
             thumbnailPath: t.thumbnail_path,

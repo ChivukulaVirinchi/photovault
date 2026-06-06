@@ -38,8 +38,6 @@ fn build_asset_inventory() -> AssetInventoryDto {
         .into_iter()
         .map(display_path)
         .collect::<Vec<_>>();
-    let cfg = smriti::config::AppConfig::load();
-    let model_dir = smriti::bootstrap::model_dir();
     let detector = smriti::bootstrap::detector_model_path();
     let active_embedder = smriti::bootstrap::embedder_model_path();
     let mut assets = Vec::new();
@@ -76,26 +74,8 @@ fn build_asset_inventory() -> AssetInventoryDto {
         Some(active_embedder),
         true,
         true,
-        &format!("Active model: {}", cfg.face_embedder_model),
+        "AdaFace face embedding model.",
     ));
-
-    for model in ["adaface_ir101_webface12m.onnx", "glintr100.onnx"] {
-        if model == cfg.face_embedder_model {
-            continue;
-        }
-        let path = model_dir.join(model);
-        if path.exists() {
-            assets.push(asset_file(
-                &format!("face.embedder.extra.{}", model),
-                "Extra face recognizer",
-                "model",
-                Some(path),
-                false,
-                false,
-                model,
-            ));
-        }
-    }
 
     assets.push(asset_file(
         "geonames.db",

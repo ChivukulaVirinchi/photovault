@@ -436,6 +436,10 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.cancel_scan` | `{ job_id: String }` | `()` | flips cancel flag; scan finishes mid-batch |
 | `library.detect_changes` | `{}` | `IndexChangesDto` | reindexer; preview before applying |
 | `library.apply_changes` | `{ added: bool, removed: bool, moved: bool, modified: bool }` | `ApplyResultDto` | flags choose which categories to apply |
+| `library.exclusions.list` | `{}` | `Vec<ExcludedFolderDto>` | per-library folders skipped by scan/reindex |
+| `library.exclusions.preview` | `{ path: String }` | `ExcludedFolderPreviewDto` | validates selected folder and counts indexed items under it |
+| `library.exclusions.add` | `{ path: String }` | `ExcludedFolderDto` | recursively excludes the folder and removes matching indexed rows; files stay on disk |
+| `library.exclusions.remove` | `{ relative_path: String }` | `()` | future scans can index the folder again |
 | `library.regenerate_thumbnails` | `{ photo_ids: Option<Vec<i64>> }` | `{ job_id: String }` | None = all; emits `thumbnails:progress` |
 | `library.regenerate_rotated_data` | `{}` | `{ job_id: String }` | recomputes blur/sharpness/aspect after orientation fix |
 | `library.refresh_photo_dates` | `{}` | `{ updated: u64 }` | re-reads EXIF date_taken for date-less photos |

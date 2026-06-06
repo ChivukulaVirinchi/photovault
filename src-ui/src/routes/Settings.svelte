@@ -1,18 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { albums, geocoding, health, people, stacks, systemEx } from "../lib/api/all";
   import { library } from "../lib/api/library";
+  import { libraryStore } from "../lib/stores/library.svelte";
   import { devMode } from "../lib/stores/devMode.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { AssetInventory, AssetItem, LibraryHealthData, Settings } from "../lib/api/all";
+  import type { ExcludedFolderDto } from "../lib/api/types";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
   let healthData = $state<LibraryHealthData | null>(null);
   let assets = $state<AssetInventory | null>(null);
+  let exclusions = $state<ExcludedFolderDto[] | null>(null);
+  let exclusionsBusy = $state(false);
+  let exclusionsActing = $state(false);
   let assetsBusy = $state(false);
   let acting = $state(false);
   let testBusy = $state(false);
@@ -64,6 +70,7 @@
     settingsStore.load();
     health.compute().then((d) => (healthData = d)).catch(() => {});
     loadAssets();
+    loadExclusions();
   });
 
   const s = $derived(settingsStore.data);
@@ -126,6 +133,68 @@
       toasts.error(`Couldn't read assets: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     } finally {
       assetsBusy = false;
+    }
+  }
+
+  async function loadExclusions() {
+    exclusionsBusy = true;
+    try {
+      exclusions = await library.exclusions.list();
+    } catch {
+      exclusions = null;
+    } finally {
+      exclusionsBusy = false;
+    }
+  }
+
+  async function addExclusion() {
+    if (exclusionsActing) return;
+    let selected: string | string[] | null;
+    try {
+      selected = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: libraryStore.driveRoot ?? undefined,
+      });
+    } catch {
+      toasts.error("Couldn't open the folder picker.");
+      return;
+    }
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    if (!path) return;
+
+    exclusionsActing = true;
+    try {
+      const preview = await library.exclusions.preview(path);
+      const count = preview.indexed_count;
+      const itemText = count === 1 ? "1 indexed item" : `${count.toLocaleString()} indexed items`;
+      if (
+        !confirm(
+          `Exclude ${preview.relative_path}?\n\nSmriti will skip this folder in future scans. ${itemText} inside it will be removed from Smriti. Files stay on disk.`,
+        )
+      )
+        return;
+      await library.exclusions.add(path);
+      await loadExclusions();
+      toasts.success(`Excluded ${preview.relative_path}`);
+    } catch (e) {
+      toasts.error(`Couldn't exclude folder: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      exclusionsActing = false;
+    }
+  }
+
+  async function removeExclusion(relativePath: string) {
+    if (exclusionsActing) return;
+    exclusionsActing = true;
+    try {
+      await library.exclusions.remove(relativePath);
+      await loadExclusions();
+      toasts.success("Exclusion removed. Run scan to index this folder again.");
+    } catch (e) {
+      toasts.error(`Couldn't remove exclusion: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    } finally {
+      exclusionsActing = false;
     }
   }
 
@@ -334,6 +403,44 @@
           <span class="unit hint mono">on next library open</span>
         </span>
       </label>
+      <div class="subsection">
+        <div class="section-heading-row">
+          <div>
+            <h4 class="subsection-title">Excluded folders</h4>
+            <p class="hint blurb">
+              Folders Smriti skips during scans and reindexing. Existing files are removed from Smriti only; files on disk stay untouched.
+            </p>
+          </div>
+          <button class="ghost" onclick={addExclusion} disabled={exclusionsBusy || exclusionsActing}>
+            {exclusionsActing ? "Working..." : "Exclude folder..."}
+          </button>
+        </div>
+        {#if exclusionsBusy}
+          <p class="hint blurb">Checking exclusions...</p>
+        {:else if exclusions === null}
+          <p class="hint blurb">Open a library to manage excluded folders.</p>
+        {:else if exclusions.length === 0}
+          <p class="hint blurb">No excluded folders.</p>
+        {:else}
+          <div class="exclusion-list" role="list" aria-label="Excluded folders">
+            {#each exclusions as item}
+              <div class="exclusion-row" role="listitem">
+                <div class="exclusion-main">
+                  <strong class="mono" title={item.relative_path}>{item.relative_path}</strong>
+                  <span class="hint">
+                    {item.indexed_count === 0
+                      ? "No indexed items"
+                      : `${item.indexed_count.toLocaleString()} indexed ${item.indexed_count === 1 ? "item" : "items"} remaining`}
+                  </span>
+                </div>
+                <button class="ghost danger-soft" onclick={() => removeExclusion(item.relative_path)} disabled={exclusionsActing}>
+                  Remove
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </section>
 
     <section class="full-width assets-section">
@@ -642,6 +749,15 @@
     letter-spacing: 0.1em;
     margin: 0 0 var(--s-3);
   }
+  .subsection {
+    padding-top: var(--s-4);
+  }
+  .subsection-title {
+    margin: 0 0 var(--s-1);
+    color: var(--ink);
+    font-size: var(--t-sm);
+    font-weight: 600;
+  }
   .section-heading-row {
     display: flex;
     align-items: baseline;
@@ -685,6 +801,33 @@
     margin: 0 0 var(--s-3);
   }
   .action-row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+  .exclusion-list {
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .exclusion-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-2) 0;
+    border-top: 1px solid var(--line-soft);
+  }
+  .exclusion-row:first-child { border-top: 0; }
+  .exclusion-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .exclusion-main strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink);
+    font-size: var(--t-sm);
+    font-weight: 500;
+  }
   .assets-section { max-width: 980px; }
   .asset-actions {
     display: flex;
@@ -785,6 +928,13 @@
     min-width: 0;
   }
   @media (max-width: 760px) {
+    .section-heading-row {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    .exclusion-row {
+      grid-template-columns: 1fr;
+    }
     .asset-row {
       grid-template-columns: 1fr 82px;
       gap: var(--s-2);

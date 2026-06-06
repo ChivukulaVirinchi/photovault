@@ -1,11 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { search } from "../lib/api/all";
+  import { search, trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
+  import { selection, handleCellClick } from "../lib/stores/selection.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
+  import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import SelectionBar from "../lib/components/SelectionBar.svelte";
+  import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
+  import { Check } from "lucide-svelte";
   import type { SearchResults } from "../lib/api/all";
 
   interface Props {
@@ -20,15 +27,18 @@
   let results = $state<SearchResults | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let showAddDialog = $state(false);
   let debounceId: number | undefined;
   let inputEl: HTMLInputElement | undefined;
+  const visiblePhotoIds = $derived(results?.photos.slice(0, 200).map((p) => p.photo_id) ?? []);
 
   async function run() {
-    if (!q.trim()) { results = null; return; }
+    if (!q.trim()) { results = null; selection.clear(); return; }
     loading = true;
     try {
       results = await search.query(q.trim());
       if (results) browseContext.set(`search:${q.trim()}`, results.photo_ids);
+      selection.clear();
     } catch (e) { error = JSON.stringify(e); }
     finally { loading = false; }
   }
@@ -48,9 +58,73 @@
     };
   }
 
+  function onCellClick(e: MouseEvent, photoId: number) {
+    handleCellClick(e, photoId, visiblePhotoIds);
+  }
+
+  async function bulkTrash() {
+    if (!results) return;
+    const ids = selection.list();
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    const snapshot = results.photos
+      .map((photo, idx) => ({ photo, idx }))
+      .filter((entry) => drop.has(entry.photo.photo_id));
+    const idSnapshot = results.photo_ids
+      .map((photoId, idx) => ({ photoId, idx }))
+      .filter((entry) => drop.has(entry.photoId));
+    try {
+      await trash.trashPhotos(ids);
+      photoVisibility.markTrashed(ids);
+      results = {
+        ...results,
+        photo_ids: results.photo_ids.filter((id) => !drop.has(id)),
+        photos: results.photos.filter((p) => !drop.has(p.photo_id)),
+      };
+      browseContext.remove(ids);
+      selection.clear();
+      toasts.undoable(
+        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        async () => {
+          await trash.restore(ids);
+          photoVisibility.markRestored(ids);
+          if (!results) return;
+          const nextPhotos = results.photos.slice();
+          for (const entry of snapshot) {
+            nextPhotos.splice(Math.min(entry.idx, nextPhotos.length), 0, entry.photo);
+          }
+          const nextPhotoIds = results.photo_ids.slice();
+          for (const entry of idSnapshot) {
+            nextPhotoIds.splice(Math.min(entry.idx, nextPhotoIds.length), 0, entry.photoId);
+          }
+          results = {
+            ...results,
+            photo_ids: nextPhotoIds,
+            photos: nextPhotos,
+          };
+          browseContext.set(`search:${q.trim()}`, results.photo_ids);
+        },
+      );
+    } catch (e) {
+      toasts.error(`Couldn't move to trash: ${e}`);
+    }
+  }
+
+  function onGlobalKey(e: KeyboardEvent) {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (!selection.active()) return;
+    if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
+    else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
+    else if ((e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey) {
+      showAddDialog = true; e.preventDefault();
+    }
+  }
+
   onMount(() => {
     inputEl?.focus();
     if (q.trim()) run();
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
   });
 </script>
 
@@ -74,7 +148,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" use:marqueeSelect={{ getAllIds: () => visiblePhotoIds }}>
   {#if results}
     {#if results.interpreted.length > 0}
       <div class="chips interpreted" aria-label="Interpreted filters">
@@ -146,8 +220,11 @@
           {#each results.photos.slice(0, 200) as p (p.photo_id)}
             <a
               class="pv-photo-cell"
+              class:selected={selection.has(p.photo_id)}
+              data-photo-id={p.photo_id}
               href="#/photo?id={p.photo_id}"
               title="#{p.photo_id}"
+              onclick={(e) => onCellClick(e, p.photo_id)}
               use:thumbnailOnVisible={{
                 id: p.photo_id,
                 thumbnailPath: p.thumbnail_path,
@@ -160,6 +237,11 @@
                   alt=""
                   loading="lazy"
                 />
+              {/if}
+              {#if selection.has(p.photo_id)}
+                <span class="check" aria-hidden="true">
+                  <Check size={14} strokeWidth={2.5} />
+                </span>
               {/if}
             </a>
           {/each}
@@ -177,6 +259,23 @@
     </div>
   {/if}
 </div>
+
+{#if selection.active()}
+  <SelectionBar
+    count={selection.size()}
+    onAddToAlbum={() => (showAddDialog = true)}
+    onTrash={bulkTrash}
+    onCancel={() => selection.clear()}
+  />
+{/if}
+
+{#if showAddDialog}
+  <AddToAlbumDialog
+    photoIds={selection.list()}
+    onclose={() => (showAddDialog = false)}
+    onsuccess={() => selection.clear()}
+  />
+{/if}
 
 <style>
   .search-row { padding: var(--s-4) var(--s-7) 0; }
@@ -211,6 +310,21 @@
   .loading { color: var(--ink-muted); }
 
   .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
+  .pv-photo-cell .check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
   .interpreted {
     display: flex;
     flex-wrap: wrap;

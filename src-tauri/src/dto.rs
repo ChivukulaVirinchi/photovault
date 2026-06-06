@@ -16,6 +16,7 @@ use smriti::db::album_repo::AlbumRecord;
 use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
 use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
 use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
+use smriti::db::excluded_folder_repo::ExcludedFolderRecord;
 use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::stack_repo::{PhotoStackMemberRecord, PhotoStackRecord};
@@ -1102,6 +1103,29 @@ impl From<DriveInfo> for DriveDto {
 pub struct LibraryHandleDto {
     pub drive_root: String,
     pub photo_count: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExcludedFolderDto {
+    pub relative_path: String,
+    pub indexed_count: i64,
+    pub created_at: String,
+}
+
+impl From<ExcludedFolderRecord> for ExcludedFolderDto {
+    fn from(r: ExcludedFolderRecord) -> Self {
+        Self {
+            relative_path: r.relative_path,
+            indexed_count: r.indexed_count,
+            created_at: r.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExcludedFolderPreviewDto {
+    pub relative_path: String,
+    pub indexed_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

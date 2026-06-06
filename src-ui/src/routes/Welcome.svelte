@@ -3,13 +3,10 @@
   import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { libraryStore } from "../lib/stores/library.svelte";
-  import { systemEx } from "../lib/api/all";
-  import type { AssetHealthDto } from "../lib/api/types";
 
   let dragOver = $state(false);
   let droppedPath = $state<string | null>(null);
   let pickError = $state<string | null>(null);
-  let assetHealth = $state<AssetHealthDto | null>(null);
 
   function shortRoot(p: string): string {
     const parts = p.split(/[\\/]/).filter(Boolean);
@@ -52,7 +49,6 @@
   );
 
   onMount(() => {
-    systemEx.assetHealth().then((h) => (assetHealth = h)).catch(() => {});
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     getCurrentWebview()
@@ -86,15 +82,6 @@
 
     {#if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
-
-    {#if assetHealth && (assetHealth.missing_face_models || assetHealth.missing_onnx_runtime || assetHealth.missing_geonames_db)}
-      <section class="asset-warning">
-        <h3 class="section-title">Optional setup needed</h3>
-        <p class="hint">
-          {assetHealth.summary}. Timeline browsing still works; face recognition and place names need the asset setup script.
-        </p>
-      </section>
-    {/if}
 
     {#if extraRemembered.length > 0}
       <section>
@@ -231,12 +218,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
-  }
-  .asset-warning {
-    padding: var(--s-4) var(--s-5);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: var(--bg-paper);
   }
   .section-title {
     font-size: var(--t-sm);

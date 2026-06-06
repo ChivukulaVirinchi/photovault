@@ -9,10 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] — 2026-04-21
 
-First pre-v1.0 milestone. Phases 1 and 2 of the v1.0 roadmap
-(`plan/V1_RELEASE_ROADMAP.md`) landed: release-blocker correctness
-fixes, CI hardening, scale work, and the first end-to-end Timeline
-scale-validation on 50K photos.
+First pre-v1.0 milestone. Phases 1 and 2 of the v1.0 roadmap landed:
+release-blocker correctness fixes, CI hardening, scale work, and the
+first end-to-end Timeline scale-validation on 50K photos.
 
 ### Fixed
 - **Data integrity**: reindexer move-detection was effectively broken —
@@ -94,8 +93,6 @@ scale-validation on 50K photos.
   upstream on first run, not bundled with the installer.
 
 ### Docs
-- `plan/V1_RELEASE_ROADMAP.md` captures the full v1.0 arc across
-  Phases 1, 2, 3. Phase 1 and 2 are done; Phase 3 is in progress.
 - Full `people.md` user-guide rewrite explaining the two-stage
   clustering pipeline.
 

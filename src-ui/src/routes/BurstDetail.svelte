@@ -1,6 +1,8 @@
 <script lang="ts">
   import { bursts } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { photos as photosApi } from "../lib/api/photos";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
@@ -40,8 +42,14 @@
   }
 
   async function trashRest() {
+    if (!group) return;
     if (!confirm("Trash all non-best?")) return;
+    const trashedIds = group.members
+      .filter((m) => !m.is_suggested_best)
+      .map((m) => m.photo_id);
     await bursts.trashNonBest(id);
+    photoVisibility.markTrashed(trashedIds);
+    browseContext.remove(trashedIds);
     window.location.hash = "/bursts";
   }
 

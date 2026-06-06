@@ -62,7 +62,6 @@ EOF
     mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
     cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ || true
     cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
-    cp models/glintr100.onnx assets-pack-local/models/
     cp models/adaface_ir101_webface12m.onnx assets-pack-local/models/
     cp data/geonames.db assets-pack-local/data/
     (cd assets-pack-local && zip -r ../Smriti-Assets-local.zip .)

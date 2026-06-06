@@ -21,8 +21,7 @@ const JPEG_QUALITY: u8 = 85;
 pub struct RemoteEmbedder {
     client: reqwest::blocking::Client,
     base_url: String,
-    /// Model name the desktop expects the bridge to serve (e.g.
-    /// `adaface_ir101_webface12m` or `glintr100`). Compared to the
+    /// Model name the desktop expects the bridge to serve. Compared to the
     /// notebook's `/health.model` field, normalized by stripping any
     /// trailing `.onnx`.
     expected_model: String,
@@ -233,8 +232,7 @@ impl RemoteEmbedder {
 }
 
 /// Normalize and compare model names. Both sides are case-insensitive
-/// and `.onnx` suffix is optional — so `glintr100`, `glintr100.onnx`,
-/// `GLINTR100.onnx` all match.
+/// and `.onnx` suffix is optional.
 fn models_match(a: &str, b: &str) -> bool {
     fn norm(s: &str) -> String {
         s.trim()
@@ -251,13 +249,15 @@ mod tests {
 
     #[test]
     fn model_match_handles_onnx_suffix_and_case() {
-        assert!(models_match("glintr100", "glintr100.onnx"));
-        assert!(models_match("GLINTR100.onnx", "glintr100"));
         assert!(models_match(
             "adaface_ir101_webface12m",
             "adaface_ir101_webface12m.onnx"
         ));
-        assert!(!models_match("glintr100", "adaface_ir101_webface12m"));
-        assert!(!models_match("", "glintr100"));
+        assert!(models_match(
+            "ADAFACE_IR101_WEBFACE12M.onnx",
+            "adaface_ir101_webface12m"
+        ));
+        assert!(!models_match("other", "adaface_ir101_webface12m"));
+        assert!(!models_match("", "adaface_ir101_webface12m"));
     }
 }

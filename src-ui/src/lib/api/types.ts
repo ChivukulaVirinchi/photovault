@@ -28,6 +28,17 @@ export interface LibraryOpenResult {
   first_run: boolean;
 }
 
+export interface ExcludedFolderDto {
+  relative_path: string;
+  indexed_count: number;
+  created_at: string;
+}
+
+export interface ExcludedFolderPreviewDto {
+  relative_path: string;
+  indexed_count: number;
+}
+
 export interface PhotoSummaryDto {
   id: number;
   thumbnail_path: string | null;

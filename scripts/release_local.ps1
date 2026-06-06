@@ -75,7 +75,6 @@ function Invoke-RobocopyMirror([string]$Source, [string]$Destination, [string[]]
 function Build-AssetPack([string]$OutputZip) {
     if (-not (Test-Path "libs\onnxruntime\onnxruntime.dll") -or
         -not (Test-Path "models\scrfd_10g_bnkps.onnx") -or
-        -not (Test-Path "models\glintr100.onnx") -or
         -not (Test-Path "models\adaface_ir101_webface12m.onnx") -or
         -not (Test-Path "data\geonames.db")) {
         & powershell -ExecutionPolicy Bypass -File "scripts\setup_assets.ps1" | Out-Null
@@ -89,7 +88,6 @@ function Build-AssetPack([string]$OutputZip) {
 
     Copy-Item "libs\onnxruntime\onnxruntime.dll" "$tempPack\libs\onnxruntime\onnxruntime.dll" -Force
     Copy-Item "models\scrfd_10g_bnkps.onnx" "$tempPack\models\scrfd_10g_bnkps.onnx" -Force
-    Copy-Item "models\glintr100.onnx" "$tempPack\models\glintr100.onnx" -Force
     Copy-Item "models\adaface_ir101_webface12m.onnx" "$tempPack\models\adaface_ir101_webface12m.onnx" -Force
     Copy-Item "data\geonames.db" "$tempPack\data\geonames.db" -Force
 

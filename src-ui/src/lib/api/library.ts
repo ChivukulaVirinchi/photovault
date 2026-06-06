@@ -1,6 +1,8 @@
 import { call } from "./index";
 import type {
   DriveDto,
+  ExcludedFolderDto,
+  ExcludedFolderPreviewDto,
   JobIdDto,
   LibraryHandleDto,
   LibraryOpenResult,
@@ -20,6 +22,15 @@ export const library = {
     call<{ absolute_path: string }>("library_resolve_path", {
       photo_id: photoId,
     }),
+  exclusions: {
+    list: () => call<ExcludedFolderDto[]>("library_exclusions_list"),
+    preview: (path: string) =>
+      call<ExcludedFolderPreviewDto>("library_exclusions_preview", { path }),
+    add: (path: string) =>
+      call<ExcludedFolderDto>("library_exclusions_add", { path }),
+    remove: (relativePath: string) =>
+      call<null>("library_exclusions_remove", { relative_path: relativePath }),
+  },
 
   // Streaming-scanner pipeline stages. After the initial walk inserts
   // stub rows, two background passes fill the rest in: EXIF/geocoding

@@ -105,7 +105,7 @@ pub struct AppConfig {
     pub config_version: u32,
 
     /// Face embedding model filename (relative to the models directory).
-    /// "adaface_ir101_webface12m.onnx" (default, SOTA) or "glintr100.onnx" (legacy fallback).
+    /// AdaFace is the only supported local recognizer.
     #[serde(default = "default_face_embedder_model")]
     pub face_embedder_model: String,
 }
@@ -187,7 +187,7 @@ impl Default for AppConfig {
             date_logic_version: 0,
             geonames_warning_seen: false,
             thumbnail_cache_gb: default_thumbnail_cache_gb(),
-            config_version: 2,
+            config_version: 3,
             face_embedder_model: default_face_embedder_model(),
             face_gpu_bridge_url: None,
             face_gpu_bridge_enabled: false,
@@ -249,6 +249,10 @@ impl AppConfig {
             }
             self.config_version = 2;
         }
+        if self.config_version < 3 {
+            self.face_embedder_model = default_face_embedder_model();
+            self.config_version = 3;
+        }
     }
 
     /// Clamp all values to valid ranges.
@@ -277,7 +281,7 @@ impl AppConfig {
         self.weight_temporal = self.weight_temporal.clamp(0.0, 2.0);
         self.map_cache_limit_mb = self.map_cache_limit_mb.clamp(50, 10_000);
         self.thumbnail_cache_gb = self.thumbnail_cache_gb.clamp(0.5, 100.0);
-        if self.face_embedder_model.is_empty() {
+        if self.face_embedder_model != default_face_embedder_model() {
             self.face_embedder_model = default_face_embedder_model();
         }
     }
@@ -351,4 +355,35 @@ pub enum DateFormat {
     Iso,
     Us,
     Eu,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_forces_adaface_embedder() {
+        let mut cfg = AppConfig {
+            face_embedder_model: "legacy.onnx".to_string(),
+            ..Default::default()
+        };
+
+        cfg.validate();
+
+        assert_eq!(cfg.face_embedder_model, default_face_embedder_model());
+    }
+
+    #[test]
+    fn config_migration_forces_adaface_embedder() {
+        let mut cfg = AppConfig {
+            config_version: 2,
+            face_embedder_model: "legacy.onnx".to_string(),
+            ..Default::default()
+        };
+
+        cfg.migrate_config_defaults();
+
+        assert_eq!(cfg.config_version, 3);
+        assert_eq!(cfg.face_embedder_model, default_face_embedder_model());
+    }
 }

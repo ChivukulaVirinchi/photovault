@@ -6,6 +6,7 @@ pub mod camera_names;
 pub mod document_detector;
 pub mod drive_detector;
 pub mod duplicate_detector;
+pub mod exclusions;
 pub mod exif_extractor;
 pub mod face_processor;
 pub mod geocoding;
