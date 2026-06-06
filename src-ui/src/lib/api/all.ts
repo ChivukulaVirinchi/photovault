@@ -154,6 +154,12 @@ export const albums = {
       id,
       photo_ids: photoIds,
     }),
+  export: (albumId: number, destinationDir: string | null = null, folderName: string | null = null) =>
+    call<JobIdDto>("albums_export", {
+      album_id: albumId,
+      destination_dir: destinationDir,
+      folder_name: folderName,
+    }),
   photos: (albumId: number, cursor: string | null = null, limit = 200) =>
     call<Page<PhotoSummaryDto>>("photos_list_by_album", {
       album_id: albumId,
@@ -538,6 +544,7 @@ export const systemEx = {
   assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
+  openPath: (path: string) => call<null>("system_open_path", { path }),
   copyPathToClipboard: (photoId: number) =>
     call<{ path: string }>("system_copy_path_to_clipboard", {
       photo_id: photoId,

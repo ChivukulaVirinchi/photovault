@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { albums, trash } from "../lib/api/all";
+  import { system } from "../lib/api/system";
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
+  import { jobs } from "../lib/stores/jobs.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
@@ -12,7 +15,7 @@
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Play } from "lucide-svelte";
+  import { Check, Download, FolderOpen, Play, X } from "lucide-svelte";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
 
@@ -27,7 +30,19 @@
   let showAddDialog = $state(false);
   let nextCursor = $state<string | null>(null);
   let hasMore = $state(false);
+  let exporting = $state(false);
+  let exportResult = $state<AlbumExportComplete | null>(null);
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
+
+  interface AlbumExportComplete {
+    job_id: string;
+    album_id: number;
+    folder_path: string;
+    exported: number;
+    skipped_missing: number;
+    failed: number;
+    message: string;
+  }
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
@@ -110,7 +125,16 @@
   }
   onMount(() => {
     window.addEventListener("keydown", onGlobalKey);
-    return () => window.removeEventListener("keydown", onGlobalKey);
+    let unlisten: UnlistenFn | null = null;
+    listen<AlbumExportComplete>("album_export:complete", (event) => {
+      if (event.payload.album_id !== id) return;
+      exporting = false;
+      exportResult = event.payload;
+    }).then((fn) => (unlisten = fn));
+    return () => {
+      window.removeEventListener("keydown", onGlobalKey);
+      unlisten?.();
+    };
   });
 
   async function load() {
@@ -164,6 +188,29 @@
     });
   }
 
+  async function exportAlbum() {
+    if (!album || album.photo_count === 0 || exporting) return;
+    try {
+      exporting = true;
+      exportResult = null;
+      const job = await albums.export(id);
+      jobs.register(job.job_id, "albumExport");
+      toasts.success("Album export started");
+    } catch (e) {
+      exporting = false;
+      toasts.error(`Couldn't export album: ${e}`);
+    }
+  }
+
+  async function openExportFolder() {
+    if (!exportResult) return;
+    try {
+      await system.openPath(exportResult.folder_path);
+    } catch (e) {
+      toasts.error(`Couldn't open export folder: ${e}`);
+    }
+  }
+
   $effect(() => { void id; load(); });
 </script>
 
@@ -191,6 +238,10 @@
       {:else}
         <button class="ghost icon-action" onclick={startAlbumSlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start album slideshow">
           <Play size={15} strokeWidth={2} />
+        </button>
+        <button class="ghost export-action" onclick={exportAlbum} disabled={a.photo_count === 0 || exporting} title="Export album originals">
+          <Download size={14} strokeWidth={1.9} />
+          {exporting ? "Exporting" : "Export"}
         </button>
         {#if !isSmartAlbum}
           <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
@@ -231,6 +282,35 @@
     {/each}
   </div>
 </div>
+
+{#if exportResult}
+  <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) exportResult = null; }}>
+    <div class="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <header>
+        <div>
+          <h2 id="export-title">Album exported</h2>
+          <p>{exportResult.message}</p>
+        </div>
+        <button class="icon-action ghost" onclick={() => (exportResult = null)} aria-label="Close">
+          <X size={15} strokeWidth={2} />
+        </button>
+      </header>
+      <div class="export-path mono" title={exportResult.folder_path}>{exportResult.folder_path}</div>
+      {#if exportResult.failed > 0 || exportResult.skipped_missing > 0}
+        <p class="export-note">
+          {exportResult.skipped_missing} missing, {exportResult.failed} failed.
+        </p>
+      {/if}
+      <footer>
+        <button class="primary" onclick={openExportFolder}>
+          <FolderOpen size={15} strokeWidth={2} />
+          Open folder
+        </button>
+        <button class="ghost" onclick={() => (exportResult = null)}>Done</button>
+      </footer>
+    </div>
+  </div>
+{/if}
 
 {#if selection.active()}
   <SelectionBar
@@ -279,5 +359,67 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+  .export-action,
+  .export-modal footer button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0,0,0,0.48);
+    display: grid;
+    place-items: center;
+    padding: var(--s-4);
+  }
+  .export-modal {
+    width: min(520px, 94vw);
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    box-shadow: 0 22px 60px rgba(0,0,0,0.48);
+    padding: var(--s-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+  .export-modal header,
+  .export-modal footer {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+  }
+  .export-modal header > div {
+    flex: 1;
+    min-width: 0;
+  }
+  .export-modal h2 {
+    margin: 0;
+    font-size: var(--t-lg);
+  }
+  .export-modal p {
+    margin: 4px 0 0;
+    color: var(--ink-muted);
+    font-size: var(--t-sm);
+  }
+  .export-path {
+    padding: var(--s-3);
+    background: var(--bg);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .export-note {
+    color: var(--hot, #d05a4a) !important;
+  }
+  .export-modal footer {
+    justify-content: flex-end;
   }
 </style>

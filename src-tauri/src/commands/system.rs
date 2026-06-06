@@ -390,6 +390,24 @@ pub struct CopiedPathDto {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SystemOpenPathArgs {
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn system_open_path(args: SystemOpenPathArgs) -> CommandResult<()> {
+    let path = PathBuf::from(args.path);
+    if !path.is_dir() {
+        return Err(CommandError::Validation {
+            field: "path".into(),
+            reason: "path must be an existing folder".into(),
+        });
+    }
+    open::that_detached(path)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn system_copy_path_to_clipboard(
     state: State<'_, AppState>,

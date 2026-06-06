@@ -117,4 +117,5 @@ pub enum JobKind {
     /// large libraries to deserve background-job tracking so the user
     /// can navigate freely while it runs.
     AlbumSuggestions,
+    AlbumExport,
 }

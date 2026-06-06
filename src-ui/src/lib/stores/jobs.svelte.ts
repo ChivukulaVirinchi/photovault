@@ -38,7 +38,8 @@ export type JobKind =
   | "documents"
   | "thumbnails"
   | "geocoding"
-  | "albumSuggestions";
+  | "albumSuggestions"
+  | "albumExport";
 
 const KIND_TITLE: Record<JobKind, string> = {
   scan:             "Indexing files",
@@ -50,6 +51,7 @@ const KIND_TITLE: Record<JobKind, string> = {
   thumbnails:       "Generating thumbnails",
   geocoding:        "Resolving places",
   albumSuggestions: "Looking for trips",
+  albumExport:      "Exporting album",
 };
 
 class JobsStore {
@@ -158,6 +160,8 @@ class JobsStore {
       ["geocoding:complete",  "geocoding",  true ],
       ["album_suggestions:progress", "albumSuggestions", false],
       ["album_suggestions:complete", "albumSuggestions", true ],
+      ["album_export:progress", "albumExport", false],
+      ["album_export:complete", "albumExport", true ],
     ];
     const unlistens = await Promise.all(
       subs.map(([ev, kind, done]) => listen<Wire>(ev, handle(kind, done))),

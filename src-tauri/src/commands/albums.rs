@@ -1,5 +1,9 @@
 //! Albums + AI suggestions (read-only commands for M1).
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -8,7 +12,10 @@ use smriti::db::album_suggestion_repo::AlbumSuggestionRepo;
 use smriti::db::PhotoRepo;
 
 use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
-use crate::events::{JobProgress, EV_ALBUM_SUGGESTIONS_COMPLETE, EV_ALBUM_SUGGESTIONS_PROGRESS};
+use crate::events::{
+    JobProgress, EV_ALBUM_EXPORT_COMPLETE, EV_ALBUM_EXPORT_PROGRESS, EV_ALBUM_SUGGESTIONS_COMPLETE,
+    EV_ALBUM_SUGGESTIONS_PROGRESS,
+};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
@@ -137,6 +144,191 @@ pub struct AlbumsGetArgs {
     pub id: i64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AlbumsExportArgs {
+    pub album_id: i64,
+    pub destination_dir: Option<String>,
+    pub folder_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AlbumExportItem {
+    photo_id: i64,
+    source_path: PathBuf,
+    file_name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AlbumExportCompleteDto {
+    pub job_id: String,
+    pub stage: String,
+    pub processed: u64,
+    pub total: Option<u64>,
+    pub album_id: i64,
+    pub folder_path: String,
+    pub exported: u64,
+    pub skipped_missing: u64,
+    pub failed: u64,
+    pub elapsed_ms: u64,
+    pub message: String,
+}
+
+fn default_export_root(drive_root: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(profile)
+                .join("Pictures")
+                .join("Smriti Exports");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join("Pictures").join("Smriti Exports");
+        }
+    }
+    drive_root.join("Smriti Exports")
+}
+
+fn sanitize_export_folder_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.trim().chars() {
+        let replacement =
+            matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control();
+        out.push(if replacement { '-' } else { ch });
+    }
+    let compact = out
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(['.', ' ', '-'])
+        .to_string();
+    if compact.is_empty() {
+        "Smriti Album".to_string()
+    } else {
+        compact.chars().take(120).collect()
+    }
+}
+
+fn unique_export_folder(root: &Path, preferred_name: &str) -> PathBuf {
+    let base = sanitize_export_folder_name(preferred_name);
+    let first = root.join(&base);
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..10_000 {
+        let candidate = root.join(format!("{base} {n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    root.join(format!("{base} {}", chrono::Utc::now().timestamp()))
+}
+
+fn unique_file_path(folder: &Path, file_name: &str, reserved: &mut HashSet<String>) -> PathBuf {
+    let fallback = "photo".to_string();
+    let clean_name = sanitize_export_folder_name(file_name);
+    let clean_name = if clean_name.is_empty() {
+        fallback
+    } else {
+        clean_name
+    };
+    let path = Path::new(&clean_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("photo");
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+    for n in 1..10_000 {
+        let name = if n == 1 {
+            clean_name.clone()
+        } else if ext.is_empty() {
+            format!("{stem}-{n}")
+        } else {
+            format!("{stem}-{n}.{ext}")
+        };
+        let key = name.to_lowercase();
+        let candidate = folder.join(&name);
+        if reserved.insert(key) && !candidate.exists() {
+            return candidate;
+        }
+    }
+    folder.join(format!("{stem}-{}", chrono::Utc::now().timestamp()))
+}
+
+fn export_message(exported: u64, skipped_missing: u64, failed: u64) -> String {
+    if failed == 0 && skipped_missing == 0 {
+        format!(
+            "Exported {exported} {}",
+            if exported == 1 { "item" } else { "items" }
+        )
+    } else {
+        format!("Exported {exported}, skipped {skipped_missing} missing, failed {failed}")
+    }
+}
+
+fn collect_export_items(
+    conn: &rusqlite::Connection,
+    album_id: i64,
+    drive_root: &Path,
+) -> CommandResult<Vec<AlbumExportItem>> {
+    let mut stmt = if album_id == FAVORITES_ALBUM_ID {
+        conn.prepare(
+            "SELECT id, file_path, file_name
+             FROM photos
+             WHERE is_favorite = TRUE AND is_trashed = 0
+             ORDER BY date_taken IS NULL ASC, date_taken ASC, id ASC",
+        )?
+    } else {
+        conn.prepare(
+            "SELECT p.id, p.file_path, p.file_name
+             FROM album_photos ap
+             JOIN photos p ON p.id = ap.photo_id
+             WHERE ap.album_id = ?1 AND p.is_trashed = 0
+             ORDER BY ap.added_at ASC, p.id ASC",
+        )?
+    };
+
+    let rows = if album_id == FAVORITES_ALBUM_ID {
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(rusqlite::params![album_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    rows.into_iter()
+        .map(|(photo_id, relative_path, file_name)| {
+            let source_path =
+                smriti::services::path_util::safe_join_relative(drive_root, &relative_path)
+                    .map_err(|reason| CommandError::Validation {
+                        field: "photo.file_path".into(),
+                        reason,
+                    })?;
+            Ok(AlbumExportItem {
+                photo_id,
+                source_path,
+                file_name,
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn albums_get(
     state: State<'_, AppState>,
@@ -171,6 +363,158 @@ pub async fn albums_get(
         album.cover_thumbnail_path = Some(p);
     }
     Ok(album)
+}
+
+#[tauri::command]
+pub async fn albums_export(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    args: AlbumsExportArgs,
+) -> CommandResult<JobIdDto> {
+    if state
+        .jobs
+        .lock()
+        .await
+        .has_any_of_kind(JobKind::AlbumExport)
+    {
+        return Err(CommandError::Conflict {
+            reason: "an album export is already in progress".into(),
+        });
+    }
+
+    let (album_name, items, export_root) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        let db = lib.db.lock().await;
+        let album_name = if args.album_id == FAVORITES_ALBUM_ID {
+            FAVORITES_ALBUM_NAME.to_string()
+        } else {
+            let repo = AlbumRepo::new(&db.conn);
+            let album = repo
+                .get_all()?
+                .into_iter()
+                .find(|a| a.id == args.album_id)
+                .ok_or_else(|| CommandError::not_found("album", args.album_id))?;
+            album.name
+        };
+        let items = collect_export_items(&db.conn, args.album_id, &lib.drive_root)?;
+        let export_root = args
+            .destination_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_export_root(&lib.drive_root));
+        (album_name, items, export_root)
+    };
+
+    if items.is_empty() {
+        return Err(CommandError::Validation {
+            field: "album_id".into(),
+            reason: "album has no exportable photos or videos".into(),
+        });
+    }
+
+    let folder_name = args.folder_name.as_deref().unwrap_or(&album_name);
+    std::fs::create_dir_all(&export_root)?;
+    let export_folder = unique_export_folder(&export_root, folder_name);
+    std::fs::create_dir_all(&export_folder)?;
+
+    let job = jobs::start_job(&state, JobKind::AlbumExport).await?;
+    let job_id = job.id.clone();
+    let started = job.started_at;
+    let cancel = job.cancel.clone();
+    let total = items.len() as u64;
+    let app_clone = app.clone();
+    let app_for_finish = app.clone();
+    let job_id_clone = job_id.clone();
+    let export_folder_clone = export_folder.clone();
+    let album_id = args.album_id;
+    let finish_handle = tokio::runtime::Handle::current();
+
+    emit(
+        &app,
+        EV_ALBUM_EXPORT_PROGRESS,
+        JobProgress {
+            job_id: job_id.clone(),
+            stage: "copying".into(),
+            processed: 0,
+            total: Some(total),
+            elapsed_ms: 0,
+            eta_ms: None,
+            message: Some(format!("Exporting to {}", export_folder.display())),
+        },
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let mut reserved = HashSet::new();
+        let mut exported = 0_u64;
+        let mut skipped_missing = 0_u64;
+        let mut failed = 0_u64;
+
+        for (idx, item) in items.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let processed = idx as u64;
+            emit(
+                &app_clone,
+                EV_ALBUM_EXPORT_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "copying".into(),
+                    processed,
+                    total: Some(total),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(item.file_name.clone()),
+                },
+            );
+
+            if !item.source_path.exists() {
+                skipped_missing += 1;
+                continue;
+            }
+            let dest = unique_file_path(&export_folder_clone, &item.file_name, &mut reserved);
+            match std::fs::copy(&item.source_path, &dest) {
+                Ok(_) => exported += 1,
+                Err(err) => {
+                    failed += 1;
+                    tracing::warn!(
+                        "album export: failed to copy photo {} from {}: {}",
+                        item.photo_id,
+                        item.source_path.display(),
+                        err
+                    );
+                }
+            }
+        }
+
+        let message = if cancel.load(Ordering::Relaxed) {
+            "Export cancelled".to_string()
+        } else {
+            export_message(exported, skipped_missing, failed)
+        };
+        let complete = AlbumExportCompleteDto {
+            job_id: job_id_clone.clone(),
+            stage: "complete".into(),
+            processed: exported + skipped_missing + failed,
+            total: Some(total),
+            album_id,
+            folder_path: export_folder_clone.display().to_string(),
+            exported,
+            skipped_missing,
+            failed,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            message: message.clone(),
+        };
+        emit(&app_clone, EV_ALBUM_EXPORT_COMPLETE, complete);
+
+        finish_handle.spawn(async move {
+            let st: tauri::State<AppState> = app_for_finish.state();
+            jobs::finish_job(&st, &job_id_clone).await;
+        });
+    });
+
+    Ok(JobIdDto { job_id })
 }
 
 #[tauri::command]
@@ -666,4 +1010,41 @@ pub async fn albums_suggestions_dismiss(
     let db = lib.db.lock().await;
     AlbumSuggestionRepo::new(&db.conn).dismiss(args.id)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_folder_name_is_filesystem_safe() {
+        assert_eq!(
+            sanitize_export_folder_name(r#" Goa: 2025 / Day * 1? "#),
+            "Goa- 2025 - Day - 1"
+        );
+        assert_eq!(sanitize_export_folder_name("..."), "Smriti Album");
+        assert_eq!(sanitize_export_folder_name(""), "Smriti Album");
+    }
+
+    #[test]
+    fn unique_export_folder_keeps_existing_exports() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Goa")).unwrap();
+        std::fs::create_dir(tmp.path().join("Goa 2")).unwrap();
+        assert_eq!(
+            unique_export_folder(tmp.path(), "Goa"),
+            tmp.path().join("Goa 3")
+        );
+    }
+
+    #[test]
+    fn unique_file_path_preserves_extension_and_renames_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("IMG_0001.JPG"), b"old").unwrap();
+        let mut reserved = HashSet::new();
+        let first = unique_file_path(tmp.path(), "IMG_0001.JPG", &mut reserved);
+        let second = unique_file_path(tmp.path(), "IMG_0001.JPG", &mut reserved);
+        assert_eq!(first, tmp.path().join("IMG_0001-2.JPG"));
+        assert_eq!(second, tmp.path().join("IMG_0001-3.JPG"));
+    }
 }

@@ -6,4 +6,5 @@ export const system = {
   appVersion: () => call<AppVersionDto>("system_app_version"),
   openInExplorer: (photoId: number) =>
     call<void>("system_open_in_explorer", { photo_id: photoId }),
+  openPath: (path: string) => call<void>("system_open_path", { path }),
 };

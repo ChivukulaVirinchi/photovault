@@ -203,6 +203,8 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 
 | Channel | Direction | Payload | When |
 |---|---|---|---|
+| `album_export:progress` | server → client | `JobProgress` | while copying originals to the export folder |
+| `album_export:complete` | server → client | `AlbumExportComplete` | after export finishes or is cancelled |
 | `scan:progress` | server → client | `ScanProgress` | every 200ms during active scan |
 | `scan:complete` | server → client | `ScanResult` | on scan finish (ok or error) |
 | `faces:progress` | server → client | `FacesProgress` | every chunk (25 photos) |
@@ -493,11 +495,32 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `albums.add_photos` | `{ id: i64, photo_ids: Vec<i64> }` | `{ added: u32 }` |
 | `albums.remove_photos` | `{ id: i64, photo_ids: Vec<i64> }` | `{ removed: u32 }` |
 | `albums.auto_pick_cover` | `{ id: i64 }` | `AlbumDto` |
+| `albums.export` | `{ album_id: i64, destination_dir: Option<String>, folder_name: Option<String> }` | `{ job_id: String }` |
 | `albums.suggestions.list` | `{ status: Option<SuggestionStatus> }` | `Vec<AlbumSuggestionDto>` |
 | `albums.suggestions.run_detection` | `{}` | `SuggestionDiagnosticsDto` | sync (current backend is sync; ~1-10s); if it grows, promote to job |
 | `albums.suggestions.preview` | `{ id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` |
 | `albums.suggestions.accept` | `{ id: i64, name: Option<String> }` | `AlbumDto` | creates real album; `name` overrides title |
 | `albums.suggestions.dismiss` | `{ id: i64 }` | `()` |
+
+`albums.export` copies original photo/video files into a new folder without
+modifying the library. If `destination_dir` is omitted, the backend uses the
+user-facing `Pictures/Smriti Exports` folder where available. Completion emits:
+
+```rust
+struct AlbumExportComplete {
+    job_id: String,
+    stage: String,
+    processed: u64,
+    total: Option<u64>,
+    album_id: i64,
+    folder_path: String,
+    exported: u64,
+    skipped_missing: u64,
+    failed: u64,
+    elapsed_ms: u64,
+    message: String,
+}
+```
 
 ### 5. `search` — unified query
 
@@ -668,6 +691,7 @@ struct SettingsDto {
 | `system.updates.download` | `{}` | `{ job_id: String }` | emits `update:download-progress` |
 | `system.updates.install` | `{}` | `()` | applies a downloaded update; replaces binary or launches installer |
 | `system.open_in_explorer` | `{ photo_id: i64 }` | `()` | reveals file in OS file manager |
+| `system.open_path` | `{ path: String }` | `()` | opens an existing folder in the OS file manager |
 | `system.copy_path_to_clipboard` | `{ photo_id: i64 }` | `()` |
 | `system.app_version` | `{}` | `{ version: String, build: String, channel: String }` |
 
