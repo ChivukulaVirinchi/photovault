@@ -47,9 +47,9 @@ Smriti doesn't run scans on a schedule. You re-trigger them from
   Existing rows for unchanged files are left alone.
 - **Check for Changes** — like rescan but doesn't re-process unchanged
   files. Faster when you only added or removed a few photos.
-- **Refresh Photo Dates** — re-parses EXIF for photos whose
-  `date_taken` field looks unreliable (e.g. epoch defaults from buggy
-  cameras).
+- **Refresh Capture Dates** — re-reads capture dates for photos and
+  videos. Smriti prefers embedded metadata, then strict filename dates,
+  and uses file modified time only as a marked fallback.
 - **Regenerate Thumbnails** — discards all thumbnails and lazy-rebuilds
   on next view.
 

@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use exif::{In, Reader as ExifReader, Tag, Value};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -70,8 +70,9 @@ impl ExifExtractor {
             datetime_candidate = candidate;
         }
 
-        // Filename fallback — runs unless we already have a capture-tag date.
-        if metadata.date_taken.is_none() && !metadata.had_exif_date_field {
+        // Filename fallback. A malformed capture tag should not block a strict
+        // camera/export filename; corrupted EXIF is common in copied libraries.
+        if metadata.date_taken.is_none() {
             if let Some(date) = Self::parse_date_from_filename(path) {
                 metadata.date_taken = Some(date);
                 metadata.date_taken_source = Some("filename".to_string());
@@ -88,10 +89,7 @@ impl ExifExtractor {
             if let Some(candidate) = datetime_candidate {
                 let mtime = Self::get_file_mtime(path);
                 let stale = match mtime {
-                    Some(m) => {
-                        use chrono::Datelike;
-                        (candidate.year() - m.year()).abs() >= 2
-                    }
+                    Some(m) => (candidate.year() - m.year()).abs() >= 2,
                     None => false,
                 };
                 if stale {
@@ -377,7 +375,7 @@ impl ExifExtractor {
     /// ("dinner at 10pm"), not by the UTC equivalent. The resulting
     /// `DateTime<Utc>` carries those wall-clock numbers verbatim, and the
     /// frontend treats the serialized string as local time.
-    fn parse_exif_date(date_str: &str) -> Option<DateTime<Utc>> {
+    pub(crate) fn parse_exif_date(date_str: &str) -> Option<DateTime<Utc>> {
         let mut clean = date_str
             .trim()
             .trim_matches('"')
@@ -391,10 +389,18 @@ impl ExifExtractor {
             clean = stripped;
         }
 
-        let formats = ["%Y:%m:%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%.f"];
+        let formats = [
+            "%Y:%m:%d %H:%M:%S",
+            "%Y:%m:%d %H:%M:%S%.f",
+            "%Y:%m:%d %H:%M",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S%.f",
+        ];
         for fmt in formats {
             if let Ok(parsed) = NaiveDateTime::parse_from_str(&clean, fmt) {
-                return Some(Utc.from_utc_datetime(&parsed));
+                return Self::plausible_datetime(parsed).map(|d| Utc.from_utc_datetime(&d));
             }
         }
 
@@ -407,13 +413,30 @@ impl ExifExtractor {
                 normalized.replace_range(7..8, ":");
                 for fmt in formats {
                     if let Ok(parsed) = NaiveDateTime::parse_from_str(&normalized, fmt) {
-                        return Some(Utc.from_utc_datetime(&parsed));
+                        return Self::plausible_datetime(parsed).map(|d| Utc.from_utc_datetime(&d));
                     }
                 }
             }
         }
 
+        for fmt in ["%Y:%m:%d", "%Y-%m-%d"] {
+            if let Ok(parsed) = NaiveDate::parse_from_str(&clean, fmt) {
+                let datetime = parsed.and_hms_opt(0, 0, 0)?;
+                return Self::plausible_datetime(datetime).map(|d| Utc.from_utc_datetime(&d));
+            }
+        }
+
         None
+    }
+
+    pub(crate) fn plausible_datetime(dt: NaiveDateTime) -> Option<NaiveDateTime> {
+        let year = dt.year();
+        let max_year = Utc::now().year() + 1;
+        if (1900..=max_year).contains(&year) {
+            Some(dt)
+        } else {
+            None
+        }
     }
 
     /// Parse date from filename patterns
@@ -431,10 +454,18 @@ impl ExifExtractor {
                 (Regex::new(r"Screenshot_(\d{8})[-_](\d{6})").unwrap(), "%Y%m%d%H%M%S"),
                 // VID_20190315_143022.mp4
                 (Regex::new(r"VID_(\d{8})_(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
-                // PXL_20190315_143022.jpg (Pixel phones)
-                (Regex::new(r"PXL_(\d{8})_(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
+                // PXL_20190315_143022.jpg / PXL_20190315_143022123.jpg (Pixel phones)
+                (Regex::new(r"PXL_(\d{8})_(\d{6})(?:\d{3})?").unwrap(), "%Y%m%d%H%M%S"),
+                // IMG_20190315_143022_123.jpg
+                (Regex::new(r"(?:IMG|VID|PXL)_(\d{8})_(\d{6})[_\.-]\d+").unwrap(), "%Y%m%d%H%M%S"),
                 // WhatsApp: IMG-20190315-WA0001.jpg, VID-20190315-WA0001.mp4
                 (Regex::new(r"(?:IMG|VID)-(\d{8})-WA\d+").unwrap(), "%Y%m%d"),
+                // Screenshot 2019-03-15 at 14.30.22.png
+                (Regex::new(r"Screenshot[ _](\d{4})-(\d{2})-(\d{2}) at (\d{2})\.(\d{2})\.(\d{2})").unwrap(), "%Y%m%d%H%M%S"),
+                // Signal: signal-2019-03-15-143022.jpg
+                (Regex::new(r"signal-(\d{4})-(\d{2})-(\d{2})-(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
+                // Compact ISO: 20190315-143022.jpg
+                (Regex::new(r"(\d{8})-(\d{6})").unwrap(), "%Y%m%d%H%M%S"),
                 // Snapchat / Android camera apps: 2019-03-15-14-30-22.jpg
                 (Regex::new(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})").unwrap(), "%Y%m%d%H%M%S"),
                 // Generic ISO with separators: 2019-03-15_14-30-22.jpg
@@ -458,13 +489,17 @@ impl ExifExtractor {
 
                 // Try to parse as datetime
                 if let Ok(parsed) = NaiveDateTime::parse_from_str(&date_str, format) {
-                    return Some(Utc.from_utc_datetime(&parsed));
+                    if let Some(parsed) = Self::plausible_datetime(parsed) {
+                        return Some(Utc.from_utc_datetime(&parsed));
+                    }
                 }
 
                 // Try date only format
                 if let Ok(parsed) = chrono::NaiveDate::parse_from_str(&date_str, "%Y%m%d") {
                     let datetime = parsed.and_hms_opt(0, 0, 0)?;
-                    return Some(Utc.from_utc_datetime(&datetime));
+                    if let Some(datetime) = Self::plausible_datetime(datetime) {
+                        return Some(Utc.from_utc_datetime(&datetime));
+                    }
                 }
             }
         }
@@ -580,12 +615,48 @@ mod tests {
     }
 
     #[test]
+    fn test_filename_date_parsing_pixel_with_millis() {
+        let path = std::path::Path::new("PXL_20210801_120000123.NIGHT.jpg");
+        let dt = ExifExtractor::parse_date_from_filename(path).unwrap();
+        assert_eq!(dt.year(), 2021);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_filename_date_parsing_social_exports() {
+        let signal = std::path::Path::new("signal-2024-01-15-101600.jpg");
+        let dt = ExifExtractor::parse_date_from_filename(signal).unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.hour(), 10);
+
+        let screenshot = std::path::Path::new("Screenshot 2024-01-15 at 10.16.00.png");
+        let dt = ExifExtractor::parse_date_from_filename(screenshot).unwrap();
+        assert_eq!(dt.minute(), 16);
+    }
+
+    #[test]
     fn test_exif_date_parsing() {
         let date = ExifExtractor::parse_exif_date("2019:03:15 14:30:22");
         assert!(date.is_some());
 
         let dt = date.unwrap();
         assert_eq!(dt.year(), 2019);
+    }
+
+    #[test]
+    fn test_exif_date_parsing_iso_variants() {
+        let dt = ExifExtractor::parse_exif_date("2024-01-15T10:16:00.123+05:30").unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.hour(), 10);
+
+        let date_only = ExifExtractor::parse_exif_date("2024-01-15").unwrap();
+        assert_eq!(date_only.hour(), 0);
+    }
+
+    #[test]
+    fn test_exif_date_rejects_placeholder_years() {
+        assert!(ExifExtractor::parse_exif_date("0000:00:00 00:00:00").is_none());
+        assert!(ExifExtractor::parse_exif_date("1899:12:31 23:59:59").is_none());
     }
 
     #[test]

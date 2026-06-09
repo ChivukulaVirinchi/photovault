@@ -217,20 +217,10 @@
           <strong class="title">{s.title}</strong>
           <span class="muted small">{s.photo_ids.length} photos</span>
         </header>
-        <!--
-          Album-modal preview uses the padding-top:100% aspect-ratio
-          pattern (a child span absolutely-fills the cell). This is
-          the bulletproof version — `aspect-ratio: 1` on grid items
-          inside a nested flex container kept fighting computed
-          heights and producing overlap. The hack predates aspect-
-          ratio in CSS but works reliably across every browser.
-        -->
         <div class="preview-grid">
           {#if previewLoading}
             {#each Array(12) as _}
-              <span class="m-cell loading-ph">
-                <span class="m-pad"></span>
-              </span>
+              <span class="m-cell loading-ph"></span>
             {/each}
           {:else}
             {#each previewPhotos as p (p.id)}
@@ -248,11 +238,9 @@
                     previewPhotos.map((q) => q.id),
                   )}
               >
-                <span class="m-pad">
-                  {#if p.thumbnail_path}
-                    <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
-                  {/if}
-                </span>
+                {#if p.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />
+                {/if}
               </a>
             {/each}
           {/if}
@@ -417,7 +405,7 @@
     max-height: 88vh;
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    min-height: 260px;
     overflow: hidden;
   }
   .modal header {
@@ -442,25 +430,20 @@
     color: var(--ink);
     line-height: 1.1;
   }
-  /*
-    Bulletproof grid for the suggestion preview modal. `aspect-ratio:
-    1` on grid items inside this nested flex layout kept producing
-    overlap on resize / scroll. The padding-top:100% hack guarantees
-    a 1:1 cell at any width, in any container. Don't migrate this
-    back to `.pv-photo-grid` without re-testing on small/large modals.
-  */
   .preview-grid {
     padding: var(--s-4) var(--s-6);
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
     gap: 6px;
     align-content: start;
   }
   .m-cell {
     display: block;
+    aspect-ratio: 1;
+    min-height: 132px;
     background: var(--bg-elev);
     border-radius: var(--r-sm);
     overflow: hidden;
@@ -473,14 +456,7 @@
     filter: brightness(1.06);
     box-shadow: inset 0 0 0 2px var(--accent);
   }
-  .m-pad {
-    display: block;
-    position: relative;
-    padding-top: 100%; /* the square */
-  }
   .m-cell img {
-    position: absolute;
-    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;

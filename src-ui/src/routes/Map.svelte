@@ -50,6 +50,39 @@
   let drawerPhotos = $state<PhotoSummaryDto[]>([]);
   let drawerLoading = $state(false);
   const DRAWER_LIMIT = 500;
+  type MapReturnState = {
+    center: [number, number];
+    zoom: number;
+    bearing: number;
+    pitch: number;
+  };
+
+  function readReturnState(): MapReturnState | null {
+    try {
+      const parsed = history.state?.smritiMapReturnState as MapReturnState | undefined;
+      if (!parsed) return null;
+      const rest = { ...(history.state ?? {}) };
+      delete rest.smritiMapReturnState;
+      history.replaceState(rest, "", location.href);
+      if (!Array.isArray(parsed.center) || parsed.center.length !== 2) return null;
+      if (!Number.isFinite(parsed.zoom)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function rememberReturnState() {
+    if (!map) return;
+    const center = map.getCenter();
+    const state: MapReturnState = {
+      center: [center.lng, center.lat],
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch(),
+    };
+    history.replaceState({ ...(history.state ?? {}), smritiMapReturnState: state }, "", location.href);
+  }
 
   /// Cluster appearance:
   ///   far zoom (≤6): big count-only bubble
@@ -107,6 +140,7 @@
     el.className = "pv-pin pv-pin-single";
     el.href = `#/photo?id=${photoId}`;
     el.setAttribute("aria-label", `Photo #${photoId}`);
+    el.addEventListener("click", rememberReturnState);
     if (thumb) {
       const url = thumbUrl(libraryStore.driveRoot, thumb);
       if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
@@ -251,6 +285,7 @@
 
   onMount(() => {
     if (!containerEl) return;
+    const returnState = readReturnState();
     map = new maplibregl.Map({
       container: containerEl,
       style: {
@@ -273,8 +308,10 @@
           { id: "osm", type: "raster", source: "osm" },
         ],
       },
-      center: [0, 20],
-      zoom: 2,
+      center: returnState?.center ?? [0, 20],
+      zoom: returnState?.zoom ?? 2,
+      bearing: returnState?.bearing ?? 0,
+      pitch: returnState?.pitch ?? 0,
       attributionControl: { compact: true },
     });
 
@@ -343,6 +380,7 @@
               <a
                 class="cell"
                 href="#/photo?id={p.id}"
+                onclick={rememberReturnState}
                 use:thumbnailOnVisible={{
                   id: p.id,
                   thumbnailPath: p.thumbnail_path,

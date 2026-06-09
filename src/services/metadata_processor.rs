@@ -4,13 +4,15 @@
 //! on each (header read only, ~10 KB per file), reverse-geocodes any GPS
 //! coordinates, and updates the row in place. Idempotent and resumable.
 
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use async_channel::{bounded, Receiver, Sender};
 use rayon::prelude::*;
+use regex::Regex;
 use rusqlite::params;
 
 use crate::db::Database;
@@ -231,7 +233,13 @@ struct VideoMetadata {
 }
 
 impl VideoMetadata {
-    fn from_path(path: &std::path::Path) -> Self {
+    fn from_path(path: &Path) -> Self {
+        if let Some(date) = video_capture_date(path) {
+            return Self {
+                date_taken: Some(date),
+                date_taken_source: Some("video_metadata".into()),
+            };
+        }
         if let Some(date) = ExifExtractor::parse_date_from_filename(path) {
             return Self {
                 date_taken: Some(date),
@@ -245,7 +253,85 @@ impl VideoMetadata {
     }
 }
 
-fn file_mtime(path: &std::path::Path) -> Option<chrono::DateTime<chrono::Utc>> {
+fn video_capture_date(path: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let bytes = read_video_probe_bytes(path).ok()?;
+    embedded_video_date_string(&bytes).or_else(|| quicktime_epoch_date(&bytes))
+}
+
+fn read_video_probe_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    const PROBE_CHUNK: usize = 8 * 1024 * 1024;
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len <= (PROBE_CHUNK * 2) as u64 {
+        let mut bytes = Vec::with_capacity(len as usize);
+        file.read_to_end(&mut bytes)?;
+        return Ok(bytes);
+    }
+
+    let mut bytes = vec![0u8; PROBE_CHUNK];
+    file.read_exact(&mut bytes)?;
+    file.seek(SeekFrom::End(-(PROBE_CHUNK as i64)))?;
+    let mut tail = vec![0u8; PROBE_CHUNK];
+    file.read_exact(&mut tail)?;
+    bytes.extend_from_slice(&tail);
+    Ok(bytes)
+}
+
+fn quicktime_epoch_date(bytes: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
+    find_quicktime_atom_date(bytes, b"mvhd").or_else(|| find_quicktime_atom_date(bytes, b"mdhd"))
+}
+
+fn find_quicktime_atom_date(bytes: &[u8], atom: &[u8; 4]) -> Option<chrono::DateTime<chrono::Utc>> {
+    const QT_TO_UNIX_SECONDS: i64 = 2_082_844_800;
+    for i in 0..bytes.len().saturating_sub(16) {
+        if &bytes[i..i + 4] != atom {
+            continue;
+        }
+        let version = bytes.get(i + 4).copied()?;
+        let seconds = match version {
+            0 => {
+                let raw = u32::from_be_bytes(bytes.get(i + 8..i + 12)?.try_into().ok()?);
+                i64::from(raw)
+            }
+            1 => {
+                let raw = u64::from_be_bytes(bytes.get(i + 8..i + 16)?.try_into().ok()?);
+                i64::try_from(raw).ok()?
+            }
+            _ => continue,
+        };
+        if seconds <= QT_TO_UNIX_SECONDS {
+            continue;
+        }
+        let unix = seconds - QT_TO_UNIX_SECONDS;
+        let dt = chrono::DateTime::from_timestamp(unix, 0)?;
+        ExifExtractor::plausible_datetime(dt.naive_utc())?;
+        return Some(dt);
+    }
+    None
+}
+
+fn embedded_video_date_string(bytes: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
+    lazy_static::lazy_static! {
+        static ref VIDEO_DATE: Regex = Regex::new(
+            r"(?x)
+            (\d{4}[:-]\d{2}[:-]\d{2}
+            [ T]
+            \d{2}:\d{2}(?::\d{2}(?:\.\d+)? )?
+            (?:Z|[+-]\d{2}:?\d{2})?)
+            "
+        ).unwrap();
+    }
+    let text = String::from_utf8_lossy(bytes);
+    for caps in VIDEO_DATE.captures_iter(&text) {
+        let candidate = caps.get(1)?.as_str();
+        if let Some(dt) = ExifExtractor::parse_exif_date(candidate) {
+            return Some(dt);
+        }
+    }
+    None
+}
+
+fn file_mtime(path: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
     let metadata = std::fs::metadata(path).ok()?;
     let mtime = metadata.modified().ok()?;
     let duration = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -412,5 +498,43 @@ impl ExtractedMetadata {
             Self::Photo(_) => false,
             Self::Video(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Datelike, TimeZone, Timelike, Utc};
+
+    #[test]
+    fn quicktime_epoch_date_reads_mvhd_creation_time() {
+        const QT_TO_UNIX_SECONDS: i64 = 2_082_844_800;
+        let unix = Utc
+            .with_ymd_and_hms(2024, 1, 15, 10, 16, 0)
+            .single()
+            .unwrap()
+            .timestamp();
+        let qt_seconds = (unix + QT_TO_UNIX_SECONDS) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&108u32.to_be_bytes());
+        bytes.extend_from_slice(b"mvhd");
+        bytes.push(0);
+        bytes.extend_from_slice(&[0, 0, 0]);
+        bytes.extend_from_slice(&qt_seconds.to_be_bytes());
+        bytes.resize(108, 0);
+
+        let dt = quicktime_epoch_date(&bytes).unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 16);
+    }
+
+    #[test]
+    fn embedded_video_date_string_reads_quicktime_creationdate() {
+        let bytes = b"com.apple.quicktime.creationdate\0\02024-01-15T10:16:00+05:30";
+        let dt = embedded_video_date_string(bytes).unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 16);
     }
 }

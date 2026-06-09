@@ -62,7 +62,11 @@ impl<'a> AlbumRepo<'a> {
         let mut added = 0usize;
         for pid in photo_ids {
             let result = self.conn.execute(
-                "INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO album_photos (album_id, photo_id)
+                 SELECT ?1, ?2
+                  WHERE EXISTS (
+                    SELECT 1 FROM photos WHERE id = ?2 AND is_trashed = FALSE
+                  )",
                 params![album_id, pid],
             )?;
             if result > 0 {
@@ -90,14 +94,15 @@ impl<'a> AlbumRepo<'a> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT a.id, a.name, a.cover_photo_id, a.cover_auto_picked,
-                   a.photo_count, a.created_at, a.updated_at,
+                   COUNT(p.id) AS live_photo_count, a.created_at, a.updated_at,
                    MIN(p.date_taken) AS date_range_start,
                    MAX(p.date_taken) AS date_range_end,
+                   pcov.id AS live_cover_photo_id,
                    pcov.thumbnail_path AS cover_thumbnail_path
             FROM albums a
             LEFT JOIN album_photos ap ON a.id = ap.album_id
-            LEFT JOIN photos p ON ap.photo_id = p.id
-            LEFT JOIN photos pcov ON pcov.id = a.cover_photo_id
+            LEFT JOIN photos p ON ap.photo_id = p.id AND p.is_trashed = FALSE
+            LEFT JOIN photos pcov ON pcov.id = a.cover_photo_id AND pcov.is_trashed = FALSE
             GROUP BY a.id
             ORDER BY a.updated_at DESC
             "#,
@@ -107,14 +112,14 @@ impl<'a> AlbumRepo<'a> {
             Ok(AlbumRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                cover_photo_id: row.get(2)?,
+                cover_photo_id: row.get(9)?,
                 cover_auto_picked: row.get::<_, bool>(3).unwrap_or(true),
                 photo_count: row.get(4)?,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
                 date_range_start: row.get(7)?,
                 date_range_end: row.get(8)?,
-                cover_thumbnail_path: row.get(9)?,
+                cover_thumbnail_path: row.get(10)?,
             })
         })?;
 
@@ -132,6 +137,7 @@ impl<'a> AlbumRepo<'a> {
             SELECT ap.photo_id FROM album_photos ap
             JOIN photos p ON ap.photo_id = p.id
             WHERE ap.album_id = ?1
+              AND p.is_trashed = FALSE
             ORDER BY p.date_taken ASC
             "#,
         )?;
@@ -150,7 +156,9 @@ impl<'a> AlbumRepo<'a> {
             r#"
             SELECT a.id, a.name FROM albums a
             JOIN album_photos ap ON a.id = ap.album_id
+            JOIN photos p ON p.id = ap.photo_id
             WHERE ap.photo_id = ?1
+              AND p.is_trashed = FALSE
             ORDER BY a.name ASC
             "#,
         )?;
@@ -193,12 +201,23 @@ impl<'a> AlbumRepo<'a> {
         Ok(())
     }
 
+    /// Recompute persisted album counters and refresh auto-picked cover.
+    pub fn refresh_stats(&self, album_id: i64) -> SqliteResult<()> {
+        self.update_album_stats(album_id)
+    }
+
     /// Update photo_count and optionally auto-pick cover.
     fn update_album_stats(&self, album_id: i64) -> SqliteResult<()> {
         self.conn.execute(
             r#"
             UPDATE albums SET
-              photo_count = (SELECT COUNT(*) FROM album_photos WHERE album_id = ?1),
+              photo_count = (
+                SELECT COUNT(*)
+                  FROM album_photos ap
+                  JOIN photos p ON p.id = ap.photo_id
+                 WHERE ap.album_id = ?1
+                   AND p.is_trashed = FALSE
+              ),
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1
             "#,

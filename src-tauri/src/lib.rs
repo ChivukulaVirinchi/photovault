@@ -41,6 +41,7 @@ pub fn run() {
             commands::library::library_start_scan,
             commands::library::library_cancel_scan,
             commands::library::library_start_metadata_extraction,
+            commands::library::library_refresh_photo_dates,
             commands::library::library_start_thumbnail_pass,
             commands::library::library_pending_metadata_count,
             commands::library::library_pending_thumbnail_count,

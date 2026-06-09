@@ -444,7 +444,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.exclusions.remove` | `{ relative_path: String }` | `()` | future scans can index the folder again |
 | `library.regenerate_thumbnails` | `{ photo_ids: Option<Vec<i64>> }` | `{ job_id: String }` | None = all; emits `thumbnails:progress` |
 | `library.regenerate_rotated_data` | `{}` | `{ job_id: String }` | recomputes blur/sharpness/aspect after orientation fix |
-| `library.refresh_photo_dates` | `{}` | `{ updated: u64 }` | re-reads EXIF date_taken for date-less photos |
+| `library.refresh_photo_dates` | `{}` | `{ job_id: String }` | clears stored capture dates for non-trashed photos/videos and emits metadata progress while re-reading embedded metadata, strict filename dates, and mtime fallback |
 | `library.resolve_path` | `{ photo_id: i64 }` | `{ absolute_path: String }` | resolves relative path to absolute, errors if drive not mounted |
 
 **`LibraryOpenResult`** = `{ drive_path, photo_count, first_run: bool, last_scan_at: Option<String> }`

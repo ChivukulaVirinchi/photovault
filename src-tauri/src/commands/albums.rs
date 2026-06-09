@@ -82,7 +82,7 @@ fn collect_album_cover_inputs(
         let Some(cover_id) = a.cover_photo_id else {
             continue;
         };
-        if let Some(p) = repo.get_by_id(cover_id)? {
+        if let Some(p) = repo.get_by_id(cover_id)?.filter(|p| !p.is_trashed) {
             out.push((idx, p.file_path, p.file_hash, p.orientation));
         }
     }
@@ -103,7 +103,7 @@ fn collect_suggestion_cover_inputs(
         let Some(cover_id) = s.cover_photo_id else {
             continue;
         };
-        if let Some(p) = repo.get_by_id(cover_id)? {
+        if let Some(p) = repo.get_by_id(cover_id)?.filter(|p| !p.is_trashed) {
             out.push((idx, p.file_path, p.file_hash, p.orientation));
         }
     }

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 
+use crate::db::album_repo::AlbumRepo;
 use crate::services::path_util::safe_join_relative;
 
 /// Result of a permanent delete operation.
@@ -33,7 +34,7 @@ impl TrashService {
         for photo_id in photo_ids {
             let path: Option<String> = tx
                 .query_row(
-                    "SELECT file_path FROM photos WHERE id = ?1",
+                    "SELECT file_path FROM photos WHERE id = ?1 AND is_trashed = FALSE",
                     params![photo_id],
                     |row| row.get(0),
                 )
@@ -52,6 +53,7 @@ impl TrashService {
             }
         }
 
+        refresh_album_state_for_photos(&tx, photo_ids)?;
         tx.commit()?;
         Ok(count)
     }
@@ -61,14 +63,17 @@ impl TrashService {
         let mut count = 0usize;
 
         for photo_id in photo_ids {
-            tx.execute("DELETE FROM trash WHERE photo_id = ?1", params![photo_id])?;
-            tx.execute(
-                "UPDATE photos SET is_trashed = FALSE, trashed_at = NULL WHERE id = ?1",
+            let removed = tx.execute("DELETE FROM trash WHERE photo_id = ?1", params![photo_id])?;
+            let updated = tx.execute(
+                "UPDATE photos SET is_trashed = FALSE, trashed_at = NULL WHERE id = ?1 AND is_trashed = TRUE",
                 params![photo_id],
             )?;
-            count += 1;
+            if removed > 0 || updated > 0 {
+                count += 1;
+            }
         }
 
+        refresh_album_state_for_photos(&tx, photo_ids)?;
         tx.commit()?;
         Ok(count)
     }
@@ -122,6 +127,7 @@ impl TrashService {
             result.db_records_deleted += 1;
         }
 
+        refresh_album_state_for_photos(&tx, photo_ids)?;
         tx.commit()?;
         Ok(result)
     }
@@ -153,4 +159,34 @@ impl TrashService {
             total_size: total.max(0) as u64,
         })
     }
+}
+
+fn refresh_album_state_for_photos(conn: &Connection, photo_ids: &[i64]) -> SqliteResult<()> {
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut album_ids = Vec::new();
+    for chunk in photo_ids.chunks(900) {
+        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT DISTINCT album_id FROM album_photos WHERE photo_id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+            row.get(0)
+        })?;
+        for row in rows {
+            album_ids.push(row?);
+        }
+    }
+    album_ids.sort_unstable();
+    album_ids.dedup();
+
+    let repo = AlbumRepo::new(conn);
+    for album_id in album_ids {
+        repo.refresh_stats(album_id)?;
+    }
+    Ok(())
 }

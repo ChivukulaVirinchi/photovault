@@ -115,8 +115,9 @@ schedule.
 - **Check for Changes** — scan for moves and deletions without
   re-indexing unchanged files.
 - **Regenerate Thumbnails** — rebuild all three thumbnail tiers.
-- **Refresh Photo Dates** — re-parse EXIF for photos with unreliable
-  `date_taken`.
+- **Refresh Capture Dates** — re-read capture dates for photos and
+  videos. Smriti prefers embedded metadata, then strict filename dates,
+  and uses file modified time only as a marked fallback.
 - **Asset Inventory** — inspect which local model/runtime/data files
   are present and which exact paths Smriti resolved.
 - **Fix Rotated Photos** — regenerate cached data for photos whose

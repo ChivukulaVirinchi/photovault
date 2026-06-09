@@ -512,6 +512,56 @@ pub async fn library_start_metadata_extraction(
     Ok(JobIdDto { job_id })
 }
 
+/// Re-read capture dates for every non-trashed media item. This clears
+/// stored date fields and lets the normal metadata worker repopulate
+/// them with the current parser, preserving the existing job/progress UI.
+#[tauri::command]
+pub async fn library_refresh_photo_dates(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<JobIdDto> {
+    if state
+        .jobs
+        .lock()
+        .await
+        .has_any_of_kind(JobKind::MetadataExtraction)
+    {
+        return Err(CommandError::Conflict {
+            reason: "metadata extraction is already in progress".into(),
+        });
+    }
+
+    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
+
+    let (drive_root, db) = {
+        let guard = state.library.read().await;
+        let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
+
+    {
+        let guard = db.lock().await;
+        guard.conn.execute(
+            "UPDATE photos
+             SET date_taken = NULL,
+                 date_taken_source = NULL,
+                 metadata_extracted = FALSE
+             WHERE is_trashed = FALSE",
+            [],
+        )?;
+    }
+
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    tokio::spawn(async move {
+        run_metadata_stage(app_clone, job_id_clone, drive_root, db, cancel).await;
+    });
+
+    Ok(JobIdDto { job_id })
+}
+
 /// Public IPC: start the thumbnail generation pass on demand. Refuses
 /// if one is already in flight.
 #[tauri::command]

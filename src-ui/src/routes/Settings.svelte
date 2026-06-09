@@ -103,7 +103,29 @@
   /// size after that default changed. Long-running on big libraries
   /// — progress shows in the global JobsIndicator.
   const regeneratingThumbs = $derived(jobs.isRunning("thumbnails"));
+  const refreshingDates = $derived(jobs.isRunning("metadata"));
   let refreshingStacks = $state(false);
+  async function refreshPhotoDates() {
+    if (refreshingDates) return;
+    if (
+      !confirm(
+        "Refresh capture dates for every photo and video?\n\nSmriti will re-read embedded metadata and strict filename dates, then use file modified time only as a fallback. You can keep using the app while it runs.",
+      )
+    )
+      return;
+    const placeholderId = `pending-metadata-${Date.now()}`;
+    jobs.register(placeholderId, "metadata");
+    toasts.success("Refreshing capture dates...");
+    try {
+      const r = await library.refreshPhotoDates();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "metadata");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
   async function regenerateThumbs() {
     if (regeneratingThumbs) return;
     if (
@@ -403,6 +425,19 @@
           <span class="unit hint mono">on next library open</span>
         </span>
       </label>
+      <div class="subsection">
+        <div class="section-heading-row">
+          <div>
+            <h4 class="subsection-title">Capture dates</h4>
+            <p class="hint blurb">
+              Re-read dates for every photo and video using embedded metadata first, filename dates next, and file modified time only as a fallback.
+            </p>
+          </div>
+          <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates}>
+            {refreshingDates ? "Refreshing dates..." : "Refresh dates"}
+          </button>
+        </div>
+      </div>
       <div class="subsection">
         <div class="section-heading-row">
           <div>

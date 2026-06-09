@@ -32,7 +32,9 @@
   let hasMore = $state(false);
   let exporting = $state(false);
   let exportResult = $state<AlbumExportComplete | null>(null);
+  let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
+  const scrollStorageKey = $derived(`smriti:album-scroll:${id}`);
 
   interface AlbumExportComplete {
     job_id: string;
@@ -135,6 +137,20 @@
       window.removeEventListener("keydown", onGlobalKey);
       unlisten?.();
     };
+  });
+
+  $effect(() => {
+    if (!scrollEl) return;
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    if (raw) {
+      const y = Number(raw);
+      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = y; });
+    }
+    const onScroll = () => {
+      try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
+    };
+    scrollEl.addEventListener("scroll", onScroll, { passive: true });
+    return () => scrollEl?.removeEventListener("scroll", onScroll);
   });
 
   async function load() {
@@ -254,7 +270,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page-scroll" use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
+<div class="page-scroll" bind:this={scrollEl} use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
   <div class="pv-photo-grid">
     {#each photos as p (p.id)}
       <a

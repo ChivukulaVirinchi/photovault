@@ -38,6 +38,7 @@ export const library = {
   // via DB stage flags (`metadata_extracted`, `thumbnailed`).
   startMetadataExtraction: () =>
     call<JobIdDto>("library_start_metadata_extraction"),
+  refreshPhotoDates: () => call<JobIdDto>("library_refresh_photo_dates"),
   startThumbnailPass: () => call<JobIdDto>("library_start_thumbnail_pass"),
 
   // Counts that drive the resume banners on Timeline. Each returns

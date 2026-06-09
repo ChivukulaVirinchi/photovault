@@ -10,6 +10,8 @@
 mod common;
 
 use smriti::db::album_repo::AlbumRepo;
+use smriti::db::album_suggestion_repo::AlbumSuggestionRepo;
+use smriti::services::trash::TrashService;
 
 #[test]
 fn create_album_returns_a_fresh_id() {
@@ -155,4 +157,78 @@ fn get_albums_for_photo_returns_all_albums_a_photo_belongs_to() {
     let for_two = repo.get_albums_for_photo(2).unwrap();
     assert_eq!(for_two.len(), 1);
     assert_eq!(for_two[0].0, b);
+}
+
+#[test]
+fn trashed_photos_are_hidden_from_album_membership_and_summary() {
+    let (_dir, db) = common::make_library();
+    common::seed_photos(&db, 4);
+    let repo = AlbumRepo::new(&db.conn);
+
+    let album_id = repo.create("Family").unwrap();
+    repo.add_photos(album_id, &[1, 2, 3]).unwrap();
+    TrashService::trash_photos(&db.conn, &[1]).unwrap();
+
+    let mut ids = repo.get_album_photo_ids(album_id).unwrap();
+    ids.sort();
+    assert_eq!(ids, vec![2, 3], "album members exclude trashed photos");
+
+    let album = repo
+        .get_all()
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == album_id)
+        .unwrap();
+    assert_eq!(album.photo_count, 2);
+    assert_ne!(
+        album.cover_photo_id,
+        Some(1),
+        "trashed cover is not exposed"
+    );
+
+    let added = repo.add_photos(album_id, &[1]).unwrap();
+    assert_eq!(added, 0, "adding a trashed photo is a no-op");
+}
+
+#[test]
+fn album_suggestions_are_sanitized_after_photos_are_trashed() {
+    let (_dir, db) = common::make_library();
+    common::seed_photos(&db, 3);
+    let suggestions = AlbumSuggestionRepo::new(&db.conn);
+    suggestions
+        .insert("event", "A day", &[1, 2, 3], Some(2), "event-1-2-3")
+        .unwrap();
+
+    TrashService::trash_photos(&db.conn, &[2]).unwrap();
+    let pending = suggestions.get_pending().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].photo_ids(), vec![1, 3]);
+    assert_eq!(pending[0].cover_photo_id, Some(1));
+
+    TrashService::trash_photos(&db.conn, &[1, 3]).unwrap();
+    assert!(
+        suggestions.get_pending().unwrap().is_empty(),
+        "suggestions with no active photos are hidden"
+    );
+}
+
+#[test]
+fn album_suggestions_reselect_non_renderable_video_covers() {
+    let (_dir, db) = common::make_library();
+    common::seed_photos(&db, 3);
+    db.conn
+        .execute(
+            "UPDATE photos SET media_type = 'video', thumbnail_path = NULL WHERE id = 2",
+            [],
+        )
+        .unwrap();
+
+    let suggestions = AlbumSuggestionRepo::new(&db.conn);
+    suggestions
+        .insert("event", "Mixed media", &[1, 2, 3], Some(2), "mixed-1-2-3")
+        .unwrap();
+
+    let pending = suggestions.get_pending().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].cover_photo_id, Some(1));
 }

@@ -25,6 +25,8 @@
   let savedAlbumId = $state<number | null>(null);
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
+  let scrollEl = $state<HTMLDivElement | undefined>(undefined);
+  const scrollStorageKey = $derived(`smriti:memory-scroll:${id}`);
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
@@ -76,6 +78,20 @@
   onMount(() => {
     window.addEventListener("keydown", onGlobalKey);
     return () => window.removeEventListener("keydown", onGlobalKey);
+  });
+
+  $effect(() => {
+    if (!scrollEl) return;
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    if (raw) {
+      const y = Number(raw);
+      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = y; });
+    }
+    const onScroll = () => {
+      try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
+    };
+    scrollEl.addEventListener("scroll", onScroll, { passive: true });
+    return () => scrollEl?.removeEventListener("scroll", onScroll);
   });
 
   async function load() {
@@ -130,7 +146,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page-scroll" use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
+<div class="page-scroll" bind:this={scrollEl} use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
   <div class="pv-photo-grid">
     {#each photos as p (p.id)}
       <a

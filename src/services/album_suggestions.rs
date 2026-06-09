@@ -92,6 +92,7 @@ pub fn pick_cover(conn: &Connection, photo_ids: &[i64]) -> Option<i64> {
              AND p.is_trashed = FALSE
            GROUP BY p.id
            ORDER BY
+             p.media_type = 'photo' DESC,
              COUNT(f.id) > 0 DESC,
              p.width > p.height DESC,
              p.date_taken DESC
