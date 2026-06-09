@@ -37,6 +37,7 @@ export type JobKind =
   | "bursts"
   | "documents"
   | "thumbnails"
+  | "assets"
   | "geocoding"
   | "albumSuggestions"
   | "albumExport";
@@ -49,6 +50,7 @@ const KIND_TITLE: Record<JobKind, string> = {
   bursts:           "Detecting bursts",
   documents:        "Classifying documents",
   thumbnails:       "Generating thumbnails",
+  assets:           "Installing assets",
   geocoding:        "Resolving places",
   albumSuggestions: "Looking for trips",
   albumExport:      "Exporting album",
@@ -156,6 +158,8 @@ class JobsStore {
       ["documents:complete",  "documents",  true ],
       ["thumbnails:progress", "thumbnails", false],
       ["thumbnails:complete", "thumbnails", true ],
+      ["assets:progress",     "assets",     false],
+      ["assets:complete",     "assets",     true ],
       ["geocoding:progress",  "geocoding",  false],
       ["geocoding:complete",  "geocoding",  true ],
       ["album_suggestions:progress", "albumSuggestions", false],

@@ -120,6 +120,9 @@ schedule.
   and uses file modified time only as a marked fallback.
 - **Asset Inventory** — inspect which local model/runtime/data files
   are present and which exact paths Smriti resolved.
+- **Download Assets** — downloads the optional Smriti asset pack from
+  the GitHub release and installs it into the app's managed asset
+  folder.
 - **Fix Rotated Photos** — regenerate cached data for photos whose
   EXIF orientation wasn't previously applied.
 

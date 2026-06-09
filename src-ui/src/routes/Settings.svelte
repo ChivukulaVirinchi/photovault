@@ -40,6 +40,8 @@
   // survives navigation (a 50k-photo backfill is a multi-second job).
   const backfilling = $derived(jobs.isRunning("geocoding"));
   const geocodingJob = $derived(jobs.byKind("geocoding"));
+  const installingAssets = $derived(jobs.isRunning("assets"));
+  const assetsJob = $derived(jobs.byKind("assets"));
 
   // React to backfill completion via the global store. Same reasoning
   // as Albums.svelte: a per-page Tauri `listen()` races with fast
@@ -71,6 +73,21 @@
     health.compute().then((d) => (healthData = d)).catch(() => {});
     loadAssets();
     loadExclusions();
+  });
+
+  let toastedAssetIds = new Set<string>();
+  $effect(() => {
+    if (!assetsJob) return;
+    if (assetsJob.status === "complete" && !toastedAssetIds.has(assetsJob.id)) {
+      toastedAssetIds.add(assetsJob.id);
+      const msg = assetsJob.message || "Asset setup finished.";
+      if (msg.toLowerCase().startsWith("asset install failed")) {
+        toasts.error(msg);
+      } else {
+        toasts.success("Assets ready.");
+        loadAssets();
+      }
+    }
   });
 
   const s = $derived(settingsStore.data);
@@ -155,6 +172,21 @@
       toasts.error(`Couldn't read assets: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     } finally {
       assetsBusy = false;
+    }
+  }
+
+  async function installAssets() {
+    if (installingAssets) return;
+    const placeholderId = `pending-assets-${Date.now()}`;
+    jobs.register(placeholderId, "assets");
+    toasts.success("Downloading asset pack...");
+    try {
+      const r = await systemEx.installAssets();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "assets");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start asset setup: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     }
   }
 
@@ -493,6 +525,9 @@
         Local runtimes, models, and offline data live outside the app binary. Smriti uses these when available and keeps browsing usable when optional assets are missing.
       </p>
       <div class="asset-actions">
+        <button class="primary" onclick={installAssets} disabled={installingAssets}>
+          {installingAssets ? "Installing..." : "Download assets"}
+        </button>
         <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
           {assetsBusy ? "Checking..." : "Recheck"}
         </button>

@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
-use crate::dto::{AppVersionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto};
-use crate::state::AppState;
+use crate::dto::{AppVersionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto, JobIdDto};
+use crate::events::{JobProgress, EV_ASSETS_COMPLETE, EV_ASSETS_PROGRESS};
+use crate::jobs::{self, emit};
+use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
 #[cfg(target_os = "windows")]
@@ -30,6 +32,69 @@ pub async fn system_app_version() -> CommandResult<AppVersionDto> {
 #[tauri::command]
 pub async fn system_assets_inventory() -> CommandResult<AssetInventoryDto> {
     Ok(build_asset_inventory())
+}
+
+#[tauri::command]
+pub async fn system_install_assets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<JobIdDto> {
+    if state
+        .jobs
+        .lock()
+        .await
+        .has_any_of_kind(JobKind::AssetInstall)
+    {
+        return Err(CommandError::Conflict {
+            reason: "asset installation is already in progress".into(),
+        });
+    }
+
+    let job = jobs::start_job(&state, JobKind::AssetInstall).await?;
+    let job_id = job.id.clone();
+    let started = job.started_at;
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+
+    tokio::spawn(async move {
+        emit(
+            &app_clone,
+            EV_ASSETS_PROGRESS,
+            JobProgress {
+                job_id: job_id_clone.clone(),
+                stage: "download".into(),
+                processed: 0,
+                total: None,
+                elapsed_ms: 0,
+                eta_ms: None,
+                message: Some("Downloading Smriti assets...".into()),
+            },
+        );
+
+        let message = match smriti::bootstrap::install_asset_pack().await {
+            Ok(msg) => msg,
+            Err(err) => format!("Asset install failed: {err}"),
+        };
+
+        emit(
+            &app_clone,
+            EV_ASSETS_COMPLETE,
+            JobProgress {
+                job_id: job_id_clone.clone(),
+                stage: "complete".into(),
+                processed: 1,
+                total: Some(1),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some(message),
+            },
+        );
+
+        let st: tauri::State<AppState> = app_clone.state();
+        jobs::finish_job(&st, &job_id_clone).await;
+    });
+
+    Ok(JobIdDto { job_id })
 }
 
 fn build_asset_inventory() -> AssetInventoryDto {

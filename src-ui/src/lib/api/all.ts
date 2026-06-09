@@ -542,6 +542,7 @@ export interface AssetItem {
 export const systemEx = {
   assetHealth: () => call<AssetHealthDto>("system_asset_health"),
   assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
+  installAssets: () => call<JobIdDto>("system_install_assets"),
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
   openPath: (path: string) => call<null>("system_open_path", { path }),

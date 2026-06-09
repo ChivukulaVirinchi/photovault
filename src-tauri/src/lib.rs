@@ -168,6 +168,7 @@ pub fn run() {
             // system
             commands::system::system_asset_health,
             commands::system::system_assets_inventory,
+            commands::system::system_install_assets,
             commands::system::system_app_version,
             commands::system::system_inference_provider,
             commands::system::system_open_in_explorer,
