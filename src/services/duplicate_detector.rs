@@ -2,7 +2,8 @@
 //! (perceptual DCT hash). The two passes run in sequence and emit
 //! groups with `duplicate_type = 'exact' | 'perceptual'`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use image_hasher::{HashAlg, HasherConfig};
 use rayon::prelude::*;
@@ -24,6 +25,14 @@ pub struct DuplicateGroup {
     pub duplicate_type: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct DuplicateProgress {
+    pub stage: &'static str,
+    pub processed: u64,
+    pub total: Option<u64>,
+    pub message: String,
+}
+
 /// Hamming-distance threshold (out of 64 bits) below which two photos
 /// are considered the same image. 4 bits ≈ 94% bit agreement — the
 /// floor for "really actually the same shot, different file":
@@ -38,6 +47,20 @@ const PHASH_HAMMING_THRESHOLD: u32 = 4;
 
 /// Duplicate detection service
 pub struct DuplicateDetector;
+
+struct PendingHashPhoto {
+    id: i64,
+    file_hash: String,
+    file_path: String,
+    orientation: i32,
+    thumbnail_path: Option<String>,
+}
+
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel
+        .map(|flag| flag.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
 
 impl DuplicateDetector {
     /// Find all exact duplicate groups in the database
@@ -113,10 +136,24 @@ impl DuplicateDetector {
         drive_root: &Path,
         exclude_ids: &std::collections::HashSet<i64>,
     ) -> rusqlite::Result<Vec<DuplicateGroup>> {
+        Self::find_perceptual_duplicates_with_progress(conn, drive_root, exclude_ids, None, |_| {})
+    }
+
+    pub fn find_perceptual_duplicates_with_progress(
+        conn: &Connection,
+        drive_root: &Path,
+        exclude_ids: &std::collections::HashSet<i64>,
+        cancel: Option<&AtomicBool>,
+        mut progress: impl FnMut(DuplicateProgress),
+    ) -> rusqlite::Result<Vec<DuplicateGroup>> {
         // Backfill phash for any non-trashed photo that doesn't yet
-        // have one. Cheap when the cached Small thumbnail is on disk;
-        // skips the photo silently otherwise (next prewarm warms it).
-        Self::backfill_phashes(conn, drive_root)?;
+        // have one. Prefer the DB thumbnail path, then known thumbnail
+        // tiers, then the original file so duplicate detection is not
+        // coupled to a particular cache size.
+        Self::backfill_phashes(conn, drive_root, cancel, &mut progress)?;
+        if is_cancelled(cancel) {
+            return Ok(Vec::new());
+        }
 
         // Pull (id, phash, file_path, date_taken, file_size) for
         // photos with non-null phash that aren't already in an exact
@@ -139,13 +176,19 @@ impl DuplicateDetector {
         if rows.len() < 2 {
             return Ok(Vec::new());
         }
+        progress(DuplicateProgress {
+            stage: "perceptual-index",
+            processed: 0,
+            total: Some(rows.len() as u64),
+            message: format!("indexing {} visual fingerprints", rows.len()),
+        });
 
-        // Pairwise pHash comparison parallelised with rayon. The
-        // collected pairs feed a sequential union-find — typical photo
-        // libraries have thousands of pairs, not millions, so the
-        // bottleneck is the O(n²) hamming comparison, not the merge.
-        // Union-find stays single-threaded because it's tiny by
-        // comparison and concurrent path-compression is fiddly.
+        // Candidate generation uses five disjoint pHash bands. With a
+        // threshold of four bit differences across the whole 64-bit
+        // hash, the pigeonhole principle guarantees that any valid
+        // match has at least one identical band. That avoids the old
+        // O(n^2) full comparison while preserving recall for the
+        // configured threshold.
         fn find(p: &mut [usize], mut x: usize) -> usize {
             while p[x] != x {
                 p[x] = p[p[x]];
@@ -155,22 +198,66 @@ impl DuplicateDetector {
         }
         let n = rows.len();
         let phashes: Vec<u64> = rows.iter().map(|r| r.1 as u64).collect();
-        let pairs: Vec<(usize, usize)> = (0..n)
-            .into_par_iter()
-            .flat_map(|i| {
-                let a = phashes[i];
-                ((i + 1)..n)
-                    .filter_map(|j| {
-                        let dist = (a ^ phashes[j]).count_ones();
-                        if dist <= PHASH_HAMMING_THRESHOLD {
-                            Some((i, j))
-                        } else {
-                            None
+        const BANDS: [(u32, u32); 5] = [(0, 13), (13, 13), (26, 13), (39, 13), (52, 12)];
+        let mut buckets: std::collections::HashMap<(usize, u64), Vec<usize>> =
+            std::collections::HashMap::with_capacity(n * BANDS.len());
+        for (idx, hash) in phashes.iter().copied().enumerate() {
+            if is_cancelled(cancel) {
+                return Ok(Vec::new());
+            }
+            for (band_idx, (shift, width)) in BANDS.iter().copied().enumerate() {
+                let mask = (1u64 << width) - 1;
+                buckets
+                    .entry((band_idx, (hash >> shift) & mask))
+                    .or_default()
+                    .push(idx);
+            }
+        }
+
+        progress(DuplicateProgress {
+            stage: "perceptual-compare",
+            processed: 0,
+            total: Some(buckets.len() as u64),
+            message: format!("checking {} candidate buckets", buckets.len()),
+        });
+
+        let mut seen_pairs = std::collections::HashSet::new();
+        let mut pairs = Vec::new();
+        let total_buckets = buckets.len() as u64;
+        let tick = total_buckets.div_ceil(40).max(1_000);
+        for (bucket_idx, members) in buckets.into_values().enumerate() {
+            if is_cancelled(cancel) {
+                return Ok(Vec::new());
+            }
+            if members.len() > 1 {
+                for i in 0..members.len() {
+                    for j in (i + 1)..members.len() {
+                        let a_idx = members[i].min(members[j]);
+                        let b_idx = members[i].max(members[j]);
+                        let key = ((a_idx as u64) << 32) | b_idx as u64;
+                        if !seen_pairs.insert(key) {
+                            continue;
                         }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+                        let dist = (phashes[a_idx] ^ phashes[b_idx]).count_ones();
+                        if dist <= PHASH_HAMMING_THRESHOLD {
+                            pairs.push((a_idx, b_idx));
+                        }
+                    }
+                }
+            }
+            let processed = (bucket_idx + 1) as u64;
+            if processed.is_multiple_of(tick) || processed == total_buckets {
+                progress(DuplicateProgress {
+                    stage: "perceptual-compare",
+                    processed,
+                    total: Some(total_buckets),
+                    message: format!("{} visual matches", pairs.len()),
+                });
+            }
+        }
+        if is_cancelled(cancel) {
+            return Ok(Vec::new());
+        }
         let mut parent: Vec<usize> = (0..n).collect();
         for (i, j) in pairs {
             let ra = find(&mut parent, i);
@@ -210,68 +297,73 @@ impl DuplicateDetector {
         Ok(groups)
     }
 
-    /// Compute and persist phash for any photo where it's NULL, using
-    /// the cached Small thumbnail when available. Photos whose thumb
-    /// hasn't been generated yet are skipped silently — the next
-    /// prewarm pass will populate them.
-    ///
-    /// The thumbnail layout is
-    /// `<drive>/.photovault/thumbnails/small/v2/<2hash>/<hash>.jpg`,
-    /// matching what `ThumbnailService::thumbnail_path` produces. An
-    /// earlier version of this code looked under `.photovault/thumbs/`
-    /// (the long-removed layout), which silently caused EVERY photo to
-    /// be skipped — and therefore the perceptual pass to find nothing.
-    fn backfill_phashes(conn: &Connection, drive_root: &Path) -> rusqlite::Result<()> {
+    fn backfill_phashes(
+        conn: &Connection,
+        drive_root: &Path,
+        cancel: Option<&AtomicBool>,
+        progress: &mut impl FnMut(DuplicateProgress),
+    ) -> rusqlite::Result<()> {
         let mut stmt = conn.prepare(
-            "SELECT id, file_hash FROM photos WHERE is_trashed = FALSE AND phash IS NULL",
+            "SELECT id, file_hash, file_path, orientation, thumbnail_path
+             FROM photos
+             WHERE is_trashed = FALSE AND media_type = 'photo' AND phash IS NULL",
         )?;
-        let pending: Vec<(i64, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        let pending: Vec<PendingHashPhoto> = stmt
+            .query_map([], |r| {
+                Ok(PendingHashPhoto {
+                    id: r.get(0)?,
+                    file_hash: r.get(1)?,
+                    file_path: r.get(2)?,
+                    orientation: r.get::<_, Option<i32>>(3)?.unwrap_or(1),
+                    thumbnail_path: r.get(4)?,
+                })
+            })?
             .filter_map(|r| r.ok())
             .collect();
         if pending.is_empty() {
             return Ok(());
         }
+        let total = pending.len() as u64;
+        progress(DuplicateProgress {
+            stage: "perceptual-hash",
+            processed: 0,
+            total: Some(total),
+            message: format!("building visual fingerprints for {} photos", total),
+        });
 
-        let small_root = drive_root
-            .join(".photovault")
-            .join("thumbnails")
-            .join("small")
-            .join("v2");
+        let processed = AtomicU64::new(0);
 
-        // Decode + hash in parallel. Each rayon worker builds its own
-        // hasher (Hasher<...> is not Send+Sync so we can't share one).
-        // Cost is negligible — HasherConfig::to_hasher is cheap.
         let computed: Vec<(i64, i64)> = pending
             .par_iter()
-            .filter_map(|(id, file_hash)| {
-                let subdir = &file_hash[..2.min(file_hash.len())];
-                let thumb_path = small_root.join(subdir).join(format!("{}.jpg", file_hash));
-                if !thumb_path.exists() {
+            .filter_map(|photo| {
+                if is_cancelled(cancel) {
                     return None;
                 }
-                let img = match crate::services::image_io::open_image(&thumb_path) {
-                    Ok(i) => i,
+                let (source, apply_orientation) = Self::phash_source_path(drive_root, photo)?;
+                let result = match Self::compute_phash(
+                    &source,
+                    apply_orientation.then_some(photo.orientation),
+                ) {
+                    Ok(phash) => Some((photo.id, phash)),
                     Err(e) => {
-                        tracing::trace!("phash skip {}: {}", thumb_path.display(), e);
-                        return None;
+                        tracing::trace!("phash skip {}: {}", source.display(), e);
+                        None
                     }
                 };
-                let hasher = HasherConfig::new()
-                    .hash_alg(HashAlg::DoubleGradient)
-                    .hash_size(8, 8)
-                    .to_hasher();
-                let h = hasher.hash_image(&img);
-                // image_hasher returns variable-length bytes; pad/truncate
-                // to exactly 8 bytes (= 64 bits) and reinterpret as i64.
-                let bytes = h.as_bytes();
-                let mut buf = [0u8; 8];
-                let n = bytes.len().min(8);
-                buf[..n].copy_from_slice(&bytes[..n]);
-                let phash = i64::from_le_bytes(buf);
-                Some((*id, phash))
+                processed.fetch_add(1, Ordering::Relaxed);
+                result
             })
             .collect();
+        let done = processed.load(Ordering::Relaxed);
+        progress(DuplicateProgress {
+            stage: "perceptual-hash",
+            processed: done,
+            total: Some(total),
+            message: format!("{} visual fingerprints ready", computed.len()),
+        });
+        if is_cancelled(cancel) {
+            return Ok(());
+        }
 
         let tx = conn.unchecked_transaction()?;
         {
@@ -285,6 +377,48 @@ impl DuplicateDetector {
             tracing::info!("Backfilled phash for {} photos", computed.len());
         }
         Ok(())
+    }
+
+    fn phash_source_path(drive_root: &Path, photo: &PendingHashPhoto) -> Option<(PathBuf, bool)> {
+        let mut candidates = Vec::with_capacity(5);
+        if let Some(path) = &photo.thumbnail_path {
+            candidates.push((drive_root.join(path), false));
+        }
+
+        let subdir = &photo.file_hash[..2.min(photo.file_hash.len())];
+        for size in ["small", "medium", "large"] {
+            candidates.push((
+                drive_root
+                    .join(".photovault")
+                    .join("thumbnails")
+                    .join(size)
+                    .join("v2")
+                    .join(subdir)
+                    .join(format!("{}.jpg", photo.file_hash)),
+                false,
+            ));
+        }
+
+        candidates.push((drive_root.join(&photo.file_path), true));
+        candidates.into_iter().find(|(p, _)| p.exists())
+    }
+
+    fn compute_phash(path: &Path, orientation: Option<i32>) -> Result<i64, String> {
+        let img = crate::services::image_io::open_image(path)?;
+        let img = match orientation {
+            Some(o) => crate::services::image_utils::apply_exif_orientation(img, o),
+            None => img,
+        };
+        let hasher = HasherConfig::new()
+            .hash_alg(HashAlg::DoubleGradient)
+            .hash_size(8, 8)
+            .to_hasher();
+        let h = hasher.hash_image(&img);
+        let bytes = h.as_bytes();
+        let mut buf = [0u8; 8];
+        let n = bytes.len().min(8);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        Ok(i64::from_le_bytes(buf))
     }
 
     /// Suggest which photo to keep from a duplicate group
@@ -371,6 +505,10 @@ impl DuplicateDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::schema::create_schema;
+    use image::{Rgb, RgbImage};
+    use rusqlite::Connection;
+    use tempfile::tempdir;
 
     #[test]
     fn test_suggest_keep_prefers_good_paths() {
@@ -402,5 +540,111 @@ mod tests {
 
         // Should prefer ID 2 (shorter path)
         assert_eq!(suggested, Some(2));
+    }
+
+    #[test]
+    fn perceptual_duplicates_use_medium_thumbnail_when_small_is_missing() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+
+        insert_photo_with_thumb(
+            &conn,
+            temp.path(),
+            1,
+            "photos/a.jpg",
+            "aa11111111111111111111111111111111111111111111111111111111111111",
+        );
+        insert_photo_with_thumb(
+            &conn,
+            temp.path(),
+            2,
+            "exports/a-copy.jpg",
+            "bb22222222222222222222222222222222222222222222222222222222222222",
+        );
+
+        let groups =
+            DuplicateDetector::find_perceptual_duplicates(&conn, temp.path(), &Default::default())
+                .unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].duplicate_type, "perceptual");
+        assert_eq!(groups[0].photo_ids.len(), 2);
+
+        let phash_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE phash IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(phash_count, 2);
+    }
+
+    #[test]
+    fn perceptual_duplicates_fall_back_to_original_file() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+
+        write_test_image(&temp.path().join("photos/a.jpg"));
+        write_test_image(&temp.path().join("exports/a-copy.jpg"));
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, media_type, is_trashed)
+             VALUES
+             (1, 'photos/a.jpg', 'a.jpg', 'hash-a', 100, 'photo', 0),
+             (2, 'exports/a-copy.jpg', 'a-copy.jpg', 'hash-b', 100, 'photo', 0)",
+            [],
+        )
+        .unwrap();
+
+        let groups =
+            DuplicateDetector::find_perceptual_duplicates(&conn, temp.path(), &Default::default())
+                .unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].photo_ids.len(), 2);
+    }
+
+    fn insert_photo_with_thumb(
+        conn: &Connection,
+        drive_root: &Path,
+        id: i64,
+        file_path: &str,
+        file_hash: &str,
+    ) {
+        let subdir = &file_hash[..2];
+        let rel_thumb = format!(
+            ".photovault/thumbnails/medium/v2/{}/{}.jpg",
+            subdir, file_hash
+        );
+        write_test_image(&drive_root.join(&rel_thumb));
+        conn.execute(
+            "INSERT INTO photos
+             (id, file_path, file_name, file_hash, file_size, media_type, thumbnail_path, is_trashed)
+             VALUES (?1, ?2, ?3, ?4, 100, 'photo', ?5, 0)",
+            rusqlite::params![id, file_path, file_path, file_hash, rel_thumb],
+        )
+        .unwrap();
+    }
+
+    fn write_test_image(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let mut img = RgbImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let color = if x < 32 {
+                    Rgb([220, 40, 40])
+                } else if y < 32 {
+                    Rgb([40, 180, 80])
+                } else {
+                    Rgb([40, 80, 220])
+                };
+                img.put_pixel(x, y, color);
+            }
+        }
+        img.save(path).unwrap();
     }
 }

@@ -125,6 +125,7 @@ pub struct BurstsCompleteDto {
 pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandResult<JobIdDto> {
     let job = jobs::start_job(&state, JobKind::Bursts).await?;
     let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
     let started = job.started_at;
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -164,6 +165,7 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
 
     let db_path = smriti::db::db_path_for(&drive_root);
     tokio::task::spawn_blocking(move || {
+        use std::sync::atomic::Ordering;
         let conn = match smriti::db::open_secondary(&db_path) {
             Ok(c) => c,
             Err(e) => {
@@ -172,23 +174,109 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
             }
         };
         let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
+        let mut streamed: Vec<(String, String, Vec<i64>)> = Vec::new();
+        let flush_streamed = |batch: &mut Vec<(String, String, Vec<i64>)>| {
+            if batch.is_empty() {
+                return;
+            }
+            let repo = BurstRepo::new(&conn);
+            match repo.upsert_burst_groups(batch) {
+                Ok(inserted) if inserted > 0 => emit(
+                    &app_clone,
+                    EV_BURSTS_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: "persisted".into(),
+                        processed: inserted as u64,
+                        total: None,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("{} burst groups available", inserted)),
+                    },
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("burst live persist: {}", e),
+            }
+            batch.clear();
+        };
         let groups = detector
-            .find_bursts(&conn, Some(&drive_root), Some(&thumbs_root))
+            .find_bursts_streaming(
+                &conn,
+                Some(&drive_root),
+                Some(&thumbs_root),
+                Some(cancel.as_ref()),
+                |p| {
+                    emit(
+                        &app_clone,
+                        EV_BURSTS_PROGRESS,
+                        JobProgress {
+                            job_id: job_id_clone.clone(),
+                            stage: "scan".into(),
+                            processed: p.processed,
+                            total: Some(p.total),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            eta_ms: None,
+                            message: Some(p.message),
+                        },
+                    );
+                },
+                |g| {
+                    streamed.push((
+                        g.start_time.to_rfc3339(),
+                        g.end_time.to_rfc3339(),
+                        g.photo_ids.clone(),
+                    ));
+                    if streamed.len() >= 10 {
+                        flush_streamed(&mut streamed);
+                    }
+                },
+            )
             .unwrap_or_default();
+        flush_streamed(&mut streamed);
         let count = groups.len();
-        let repo = BurstRepo::new(&conn);
-        let triples: Vec<(String, String, Vec<i64>)> = groups
-            .into_iter()
-            .map(|g| {
-                (
-                    g.start_time.to_rfc3339(),
-                    g.end_time.to_rfc3339(),
-                    g.photo_ids,
-                )
-            })
-            .collect();
-        let _ = repo.sync_burst_groups(&triples);
-        let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
+        if !cancel.load(Ordering::Relaxed) {
+            emit(
+                &app_clone,
+                EV_BURSTS_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "persist".into(),
+                    processed: 0,
+                    total: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("saving burst groups".into()),
+                },
+            );
+            let repo = BurstRepo::new(&conn);
+            let triples: Vec<(String, String, Vec<i64>)> = groups
+                .into_iter()
+                .map(|g| {
+                    (
+                        g.start_time.to_rfc3339(),
+                        g.end_time.to_rfc3339(),
+                        g.photo_ids,
+                    )
+                })
+                .collect();
+            let _ = repo.sync_burst_groups(&triples);
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            emit(
+                &app_clone,
+                EV_BURSTS_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "stacks".into(),
+                    processed: 0,
+                    total: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("refreshing stacks".into()),
+                },
+            );
+            let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
+        }
 
         emit(
             &app_clone,

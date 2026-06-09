@@ -3,7 +3,8 @@
 use chrono::{DateTime, Duration, Utc};
 use image::{imageops::FilterType, DynamicImage};
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A burst group of photos
 #[derive(Debug, Clone)]
@@ -16,6 +17,14 @@ pub struct BurstGroup {
 
     /// End timestamp
     pub end_time: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BurstProgress {
+    pub processed: u64,
+    pub total: u64,
+    pub groups_found: u64,
+    pub message: String,
 }
 
 /// Burst detection configuration
@@ -61,6 +70,8 @@ struct BurstPhotoCandidate {
     id: i64,
     date: DateTime<Utc>,
     file_path: String,
+    file_hash: String,
+    thumbnail_path: Option<String>,
     signature: Option<Vec<f32>>,
 }
 
@@ -88,81 +99,137 @@ impl BurstDetector {
         drive_root: Option<&Path>,
         thumb_root: Option<&Path>,
     ) -> rusqlite::Result<Vec<BurstGroup>> {
-        // Get all photos ordered by date_taken
+        self.find_bursts_with_progress(conn, drive_root, thumb_root, None, |_| {})
+    }
+
+    pub fn find_bursts_with_progress(
+        &self,
+        conn: &Connection,
+        drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
+        cancel: Option<&AtomicBool>,
+        mut progress: impl FnMut(BurstProgress),
+    ) -> rusqlite::Result<Vec<BurstGroup>> {
+        self.find_bursts_streaming(conn, drive_root, thumb_root, cancel, &mut progress, |_| {})
+    }
+
+    pub fn find_bursts_streaming(
+        &self,
+        conn: &Connection,
+        drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
+        cancel: Option<&AtomicBool>,
+        mut progress: impl FnMut(BurstProgress),
+        mut on_group: impl FnMut(&BurstGroup),
+    ) -> rusqlite::Result<Vec<BurstGroup>> {
+        // Get all photos ordered by date_taken. Signatures are built lazily
+        // after cheap timestamp/folder checks, so old libraries do not decode
+        // every image just to reject photos taken minutes or days apart.
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, date_taken, file_path, file_hash
+            SELECT id, date_taken, file_path, file_hash, thumbnail_path
             FROM photos
             WHERE date_taken IS NOT NULL AND is_trashed = FALSE
             ORDER BY date_taken ASC
             "#,
         )?;
 
-        let photos: Vec<(i64, String, String, String)> = stmt
+        let photos: Vec<(i64, String, String, String, Option<String>)> = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })?
             .filter_map(|r| r.ok())
             .collect();
+        drop(stmt);
 
         if photos.is_empty() {
             return Ok(Vec::new());
         }
+        let total = photos.len() as u64;
+        progress(BurstProgress {
+            processed: 0,
+            total,
+            groups_found: 0,
+            message: format!("checking {} dated photos", total),
+        });
 
         let mut groups = Vec::new();
         let mut current_group: Vec<BurstPhotoCandidate> = Vec::new();
+        let tick = total.div_ceil(40).max(250);
 
-        for (id, date_str, file_path, file_hash) in photos {
+        for (idx, (id, date_str, file_path, file_hash, thumbnail_path)) in
+            photos.into_iter().enumerate()
+        {
+            if cancel
+                .map(|flag| flag.load(Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                break;
+            }
             let date = match Self::parse_datetime(&date_str) {
                 Some(d) => d,
                 None => continue,
             };
 
-            // Prefer the cached Small thumb (260px JPEG). The v2 layout
-            // is `<thumb_root>/<2-char hash>/<full hash>.jpg`; fall back
-            // to the original full-resolution image if the thumb is
-            // not yet generated.
-            let signature = thumb_root
-                .map(|root| {
-                    let subdir = &file_hash[..2.min(file_hash.len())];
-                    root.join(subdir).join(format!("{}.jpg", file_hash))
-                })
-                .filter(|p| p.exists())
-                .and_then(|p| Self::build_signature(&p))
-                .or_else(|| {
-                    drive_root.and_then(|root| {
-                        let abs = root.join(&file_path);
-                        Self::build_signature(&abs)
-                    })
-                });
-
             let candidate = BurstPhotoCandidate {
                 id,
                 date,
                 file_path,
-                signature,
+                file_hash,
+                thumbnail_path,
+                signature: None,
             };
 
             if current_group.is_empty() {
                 current_group.push(candidate);
             } else {
-                let should_join = self.should_join_group(&current_group, &candidate);
+                let mut candidate = candidate;
+                let should_join = self.should_join_group(
+                    &mut current_group,
+                    &mut candidate,
+                    drive_root,
+                    thumb_root,
+                );
 
                 if should_join {
                     current_group.push(candidate);
                 } else {
                     // Finalize current group if candidate doesn't belong
                     if current_group.len() >= self.config.min_photos {
-                        groups.push(self.finalize_candidate_group(&current_group));
+                        let group = self.finalize_candidate_group(&current_group);
+                        on_group(&group);
+                        groups.push(group);
                     }
                     current_group = vec![candidate];
                 }
             }
+
+            let processed = (idx + 1) as u64;
+            if processed.is_multiple_of(tick) || processed == total {
+                progress(BurstProgress {
+                    processed,
+                    total,
+                    groups_found: groups.len() as u64,
+                    message: format!("{} burst groups so far", groups.len()),
+                });
+            }
         }
 
         // Don't forget the last group
-        if current_group.len() >= self.config.min_photos {
-            groups.push(self.finalize_candidate_group(&current_group));
+        if !cancel
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false)
+            && current_group.len() >= self.config.min_photos
+        {
+            let group = self.finalize_candidate_group(&current_group);
+            on_group(&group);
+            groups.push(group);
         }
 
         Ok(groups)
@@ -188,8 +255,10 @@ impl BurstDetector {
 
     fn should_join_group(
         &self,
-        group: &[BurstPhotoCandidate],
-        candidate: &BurstPhotoCandidate,
+        group: &mut [BurstPhotoCandidate],
+        candidate: &mut BurstPhotoCandidate,
+        drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
     ) -> bool {
         let last = match group.last() {
             Some(p) => p,
@@ -213,6 +282,12 @@ impl BurstDetector {
             return false;
         }
 
+        let last = group
+            .last_mut()
+            .expect("group has at least one item after early return");
+        Self::ensure_signature(last, drive_root, thumb_root);
+        Self::ensure_signature(candidate, drive_root, thumb_root);
+
         if let (Some(a), Some(b)) = (&last.signature, &candidate.signature) {
             let sim = Self::cosine_similarity(a, b);
             if sim < self.config.similarity_threshold {
@@ -221,6 +296,51 @@ impl BurstDetector {
         }
 
         true
+    }
+
+    fn ensure_signature(
+        photo: &mut BurstPhotoCandidate,
+        drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
+    ) {
+        if photo.signature.is_some() {
+            return;
+        }
+        photo.signature = Self::signature_source_path(drive_root, thumb_root, photo)
+            .and_then(|p| Self::build_signature(&p));
+    }
+
+    fn signature_source_path(
+        drive_root: Option<&Path>,
+        thumb_root: Option<&Path>,
+        photo: &BurstPhotoCandidate,
+    ) -> Option<PathBuf> {
+        let mut candidates = Vec::with_capacity(5);
+        if let (Some(root), Some(path)) = (drive_root, &photo.thumbnail_path) {
+            candidates.push(root.join(path));
+        }
+
+        if let Some(root) = thumb_root {
+            let subdir = &photo.file_hash[..2.min(photo.file_hash.len())];
+            candidates.push(root.join(subdir).join(format!("{}.jpg", photo.file_hash)));
+        }
+
+        if let Some(root) = drive_root {
+            let subdir = &photo.file_hash[..2.min(photo.file_hash.len())];
+            for size in ["medium", "small", "large"] {
+                candidates.push(
+                    root.join(".photovault")
+                        .join("thumbnails")
+                        .join(size)
+                        .join("v2")
+                        .join(subdir)
+                        .join(format!("{}.jpg", photo.file_hash)),
+                );
+            }
+            candidates.push(root.join(&photo.file_path));
+        }
+
+        candidates.into_iter().find(|p| p.exists())
     }
 
     fn folder_key(file_path: &str) -> String {
@@ -291,6 +411,7 @@ mod tests {
     use super::*;
     use chrono::Datelike;
     use image::{DynamicImage, ImageBuffer, Luma};
+    use rusqlite::params;
 
     #[test]
     fn test_parse_datetime() {
@@ -310,5 +431,57 @@ mod tests {
         let b = BurstDetector::signature_from_image(&img);
         let sim = BurstDetector::cosine_similarity(&a, &b);
         assert!(sim > 0.999);
+    }
+
+    #[test]
+    fn bursts_use_db_thumbnail_path_when_small_thumb_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                date_taken TEXT,
+                file_path TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                thumbnail_path TEXT,
+                is_trashed BOOLEAN NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .unwrap();
+
+        let thumb_dir = temp.path().join(".photovault/thumbnails/medium/v2/aa");
+        std::fs::create_dir_all(&thumb_dir).unwrap();
+        for (id, hash, value) in [(1, "aa111", 190u8), (2, "aa222", 192u8)] {
+            let thumb = thumb_dir.join(format!("{hash}.jpg"));
+            DynamicImage::ImageLuma8(ImageBuffer::from_fn(32, 32, |_x, _y| Luma([value])))
+                .save(&thumb)
+                .unwrap();
+            conn.execute(
+                "INSERT INTO photos (id, date_taken, file_path, file_hash, thumbnail_path, is_trashed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                params![
+                    id,
+                    format!("2025-01-01 10:00:0{id}"),
+                    format!("missing/original-{id}.jpg"),
+                    hash,
+                    format!(".photovault/thumbnails/medium/v2/aa/{hash}.jpg")
+                ],
+            )
+            .unwrap();
+        }
+
+        let detector = BurstDetector::new(BurstConfig::default());
+        let groups = detector
+            .find_bursts(
+                &conn,
+                Some(temp.path()),
+                Some(&temp.path().join("missing-small")),
+            )
+            .unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].photo_ids, vec![1, 2]);
     }
 }

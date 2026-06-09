@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn embedded_video_date_string_reads_quicktime_creationdate() {
-        let bytes = b"com.apple.quicktime.creationdate\0\02024-01-15T10:16:00+05:30";
+        let bytes = b"com.apple.quicktime.creationdate\0\x002024-01-15T10:16:00+05:30";
         let dt = embedded_video_date_string(bytes).unwrap();
         assert_eq!(dt.year(), 2024);
         assert_eq!(dt.hour(), 10);

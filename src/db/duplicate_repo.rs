@@ -57,8 +57,6 @@ impl<'a> DuplicateRepo<'a> {
     ) -> SqliteResult<()> {
         use std::collections::{HashMap, HashSet};
 
-        let tx = self.conn.unchecked_transaction()?;
-
         // Load existing groups by hash
         let mut existing_hashes: HashMap<String, i64> = HashMap::new();
         {
@@ -74,13 +72,36 @@ impl<'a> DuplicateRepo<'a> {
             }
         }
 
+        let tx = self.conn.unchecked_transaction()?;
         let mut seen_hashes: HashSet<String> = HashSet::new();
 
         for (hash, photo_ids, suggested_keep, dup_type) in groups {
             seen_hashes.insert(hash.clone());
 
-            if existing_hashes.contains_key(hash) {
-                continue; // Group exists — keep user's keep/dismiss choices
+            if let Some(group_id) = existing_hashes.get(hash).copied() {
+                let existing_keep: Option<i64> = tx
+                    .query_row(
+                        "SELECT photo_id FROM duplicate_group_members
+                         WHERE group_id = ?1 AND is_suggested_keep = TRUE
+                         LIMIT 1",
+                        params![group_id],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                let keep = existing_keep
+                    .filter(|id| photo_ids.contains(id))
+                    .or(*suggested_keep);
+
+                tx.execute(
+                    "DELETE FROM duplicate_group_members WHERE group_id = ?1",
+                    params![group_id],
+                )?;
+                tx.execute(
+                    "UPDATE duplicate_groups SET duplicate_type = ?2 WHERE id = ?1",
+                    params![group_id, dup_type],
+                )?;
+                insert_duplicate_members(&tx, group_id, photo_ids, keep)?;
+                continue;
             }
 
             // Create new duplicate group. Use the tx handle (already open
@@ -100,10 +121,76 @@ impl<'a> DuplicateRepo<'a> {
         // Remove groups whose hash no longer has duplicates
         for (hash, group_id) in &existing_hashes {
             if !seen_hashes.contains(hash) {
-                self.delete_group(*group_id)?;
+                tx.execute(
+                    "DELETE FROM duplicate_group_members WHERE group_id = ?1",
+                    params![group_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM duplicate_groups WHERE id = ?1",
+                    params![group_id],
+                )?;
             }
         }
 
+        tx.commit()
+    }
+
+    /// Insert or refresh the supplied groups without deleting groups
+    /// absent from this batch. Used by long-running detectors so
+    /// already-found results can stream into the UI and survive cancel.
+    pub fn upsert_duplicate_groups(
+        &self,
+        groups: &[(String, Vec<i64>, Option<i64>, &'static str)],
+    ) -> SqliteResult<()> {
+        use std::collections::HashMap;
+
+        let mut existing_hashes: HashMap<String, i64> = HashMap::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, group_hash FROM duplicate_groups")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, hash) = row?;
+                existing_hashes.insert(hash, id);
+            }
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        for (hash, photo_ids, suggested_keep, dup_type) in groups {
+            if let Some(group_id) = existing_hashes.get(hash).copied() {
+                let existing_keep: Option<i64> = tx
+                    .query_row(
+                        "SELECT photo_id FROM duplicate_group_members
+                         WHERE group_id = ?1 AND is_suggested_keep = TRUE
+                         LIMIT 1",
+                        params![group_id],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                let keep = existing_keep
+                    .filter(|id| photo_ids.contains(id))
+                    .or(*suggested_keep);
+                tx.execute(
+                    "DELETE FROM duplicate_group_members WHERE group_id = ?1",
+                    params![group_id],
+                )?;
+                tx.execute(
+                    "UPDATE duplicate_groups SET duplicate_type = ?2 WHERE id = ?1",
+                    params![group_id, dup_type],
+                )?;
+                insert_duplicate_members(&tx, group_id, photo_ids, keep)?;
+            } else {
+                tx.execute(
+                    "INSERT INTO duplicate_groups (group_hash, duplicate_type) VALUES (?1, ?2)",
+                    params![hash, dup_type],
+                )?;
+                let group_id = tx.last_insert_rowid();
+                insert_duplicate_members(&tx, group_id, photo_ids, *suggested_keep)?;
+            }
+        }
         tx.commit()
     }
 
@@ -117,25 +204,30 @@ impl<'a> DuplicateRepo<'a> {
             r#"
             SELECT
                 dg.id,
-                COUNT(dgm.id) AS member_count,
+                COUNT(p.id) AS member_count,
                 (
                     SELECT p.thumbnail_path
-                      FROM duplicate_group_members m
+                     FROM duplicate_group_members m
                       JOIN photos p ON p.id = m.photo_id
                      WHERE m.group_id = dg.id
+                       AND p.is_trashed = FALSE
                   ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
                      LIMIT 1
                 ) AS cover_thumbnail_path,
                 (
                     SELECT m.photo_id
                       FROM duplicate_group_members m
+                      JOIN photos p ON p.id = m.photo_id
                      WHERE m.group_id = dg.id
+                       AND p.is_trashed = FALSE
                   ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
                      LIMIT 1
                 ) AS cover_photo_id
             FROM duplicate_groups dg
             LEFT JOIN duplicate_group_members dgm ON dg.id = dgm.group_id
+            LEFT JOIN photos p ON p.id = dgm.photo_id AND p.is_trashed = FALSE
             GROUP BY dg.id
+            HAVING COUNT(p.id) > 1
             ORDER BY member_count DESC
             "#,
         )?;
@@ -162,7 +254,9 @@ impl<'a> DuplicateRepo<'a> {
             r#"
             SELECT m.photo_id
               FROM duplicate_group_members m
+              JOIN photos p ON p.id = m.photo_id
              WHERE m.group_id = ?1
+               AND p.is_trashed = FALSE
           ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
             "#,
         )?;
@@ -193,7 +287,7 @@ impl<'a> DuplicateRepo<'a> {
                 p.date_taken
             FROM duplicate_group_members dgm
             JOIN photos p ON dgm.photo_id = p.id
-            WHERE dgm.group_id = ?1
+            WHERE dgm.group_id = ?1 AND p.is_trashed = FALSE
             ORDER BY dgm.is_suggested_keep DESC, p.date_taken ASC
             "#,
         )?;

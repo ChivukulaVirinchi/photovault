@@ -1,5 +1,3 @@
-$ErrorActionPreference = "Stop"
-
 param(
     [ValidateSet("quick", "full")]
     [string]$Mode = "full",
@@ -10,6 +8,7 @@ param(
     [string]$WixBinPath = "C:\tools\wix311"
 )
 
+$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -20,6 +19,7 @@ $WixWorkDir = Join-Path $env:TEMP "smriti-localwix"
 $MsiPath = Join-Path $ArtifactsDir "Smriti-Setup-x64.msi"
 $ZipPath = Join-Path $ArtifactsDir "smriti-x86_64-pc-windows-msvc.zip"
 $AssetPackPath = Join-Path $ArtifactsDir "Smriti-Assets.zip"
+$BuiltExeName = "smriti-tauri.exe"
 
 $results = [System.Collections.Generic.List[object]]::new()
 $installedMsi = $false
@@ -73,11 +73,30 @@ function Invoke-RobocopyMirror([string]$Source, [string]$Destination, [string[]]
 }
 
 function Build-AssetPack([string]$OutputZip) {
+    function Resolve-GeonamesDb {
+        $repoDb = Join-Path $RepoRoot "data\geonames.db"
+        $managedDb = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "smriti\assets\data\geonames.db"
+        foreach ($candidate in @($repoDb, $managedDb)) {
+            if ((Test-Path $candidate) -and (Get-Item $candidate).Length -gt 1MB) {
+                return $candidate
+            }
+        }
+        return $null
+    }
+
     if (-not (Test-Path "libs\onnxruntime\onnxruntime.dll") -or
         -not (Test-Path "models\scrfd_10g_bnkps.onnx") -or
         -not (Test-Path "models\adaface_ir101_webface12m.onnx") -or
-        -not (Test-Path "data\geonames.db")) {
+        -not (Resolve-GeonamesDb)) {
         & powershell -ExecutionPolicy Bypass -File "scripts\setup_assets.ps1" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "setup_assets.ps1 failed with exit code $LASTEXITCODE"
+        }
+    }
+
+    $geonamesDb = Resolve-GeonamesDb
+    if (-not $geonamesDb) {
+        throw "GeoNames database missing after asset setup"
     }
 
     $tempPack = Join-Path $ArtifactsDir "assets-pack-staging"
@@ -89,7 +108,7 @@ function Build-AssetPack([string]$OutputZip) {
     Copy-Item "libs\onnxruntime\onnxruntime.dll" "$tempPack\libs\onnxruntime\onnxruntime.dll" -Force
     Copy-Item "models\scrfd_10g_bnkps.onnx" "$tempPack\models\scrfd_10g_bnkps.onnx" -Force
     Copy-Item "models\adaface_ir101_webface12m.onnx" "$tempPack\models\adaface_ir101_webface12m.onnx" -Force
-    Copy-Item "data\geonames.db" "$tempPack\data\geonames.db" -Force
+    Copy-Item $geonamesDb "$tempPack\data\geonames.db" -Force
 
     if (Test-Path $OutputZip) {
         Remove-Item $OutputZip -Force
@@ -117,8 +136,8 @@ try {
     }
 
     Invoke-Step "build-windows-release" {
-        & cargo build --release --target x86_64-pc-windows-msvc --target-dir $TargetDir | Out-Null
-        $exe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe"
+        & cargo build -p smriti-tauri --release --target x86_64-pc-windows-msvc --target-dir $TargetDir | Out-Null
+        $exe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\$BuiltExeName"
         if (-not (Test-Path $exe)) {
             throw "Expected executable missing: $exe"
         }
@@ -135,7 +154,7 @@ try {
         $stage = Join-Path $ArtifactsDir "zip-stage\smriti"
         Remove-PathSafe (Join-Path $ArtifactsDir "zip-stage")
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
-        Copy-Item "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe" "$stage\smriti.exe" -Force
+        Copy-Item "$TargetDir\x86_64-pc-windows-msvc\release\$BuiltExeName" "$stage\smriti.exe" -Force
         Copy-Item "README.md" "$stage\README.md" -Force
         Copy-Item "LICENSE" "$stage\LICENSE" -Force
         if (Test-Path $ZipPath) {
@@ -172,7 +191,7 @@ try {
 
         Invoke-RobocopyMirror $RepoRoot $WixWorkDir @('.git', 'target', 'target-win', '.github', 'website', '.cache', 'libs', 'models', 'data', 'artifacts')
 
-        $srcExe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\smriti.exe"
+        $srcExe = Join-Path $RepoRoot "$TargetDir\x86_64-pc-windows-msvc\release\$BuiltExeName"
         $dstBinDir = Join-Path $WixWorkDir "target-win\x86_64-pc-windows-msvc\release"
         New-Item -ItemType Directory -Path $dstBinDir -Force | Out-Null
         Copy-Item $srcExe (Join-Path $dstBinDir "smriti.exe") -Force

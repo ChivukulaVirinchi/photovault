@@ -103,6 +103,51 @@ impl<'a> BurstRepo<'a> {
         tx.commit()
     }
 
+    /// Insert any supplied burst groups that do not already exist by
+    /// member set. Does not delete old groups. Used for live streaming
+    /// during detection; a full completed run should still call
+    /// `sync_burst_groups` to prune stale results.
+    pub fn upsert_burst_groups(
+        &self,
+        groups: &[(String, String, Vec<i64>)],
+    ) -> SqliteResult<usize> {
+        use std::collections::{BTreeSet, HashMap};
+
+        let mut existing_sets: HashMap<BTreeSet<i64>, i64> = HashMap::new();
+        {
+            let mut grp_stmt = self.conn.prepare("SELECT id FROM burst_groups")?;
+            let group_ids: Vec<i64> = grp_stmt
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for gid in group_ids {
+                let mut mem_stmt = self
+                    .conn
+                    .prepare("SELECT photo_id FROM burst_group_members WHERE group_id = ?1")?;
+                let members: BTreeSet<i64> = mem_stmt
+                    .query_map(params![gid], |row| row.get::<_, i64>(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                existing_sets.insert(members, gid);
+            }
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut inserted = 0usize;
+        for (start_time, end_time, photo_ids) in groups {
+            let set: BTreeSet<i64> = photo_ids.iter().copied().collect();
+            if existing_sets.contains_key(&set) {
+                continue;
+            }
+            let group_id = create_group_in_conn(&tx, start_time, end_time, photo_ids)?;
+            existing_sets.insert(set, group_id);
+            inserted += 1;
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
     /// If the group has no `is_suggested_best = TRUE` member, pick one.
     /// Targets the earliest member (by photos.date_taken, falling back to
     /// `bgm.rowid`) so the choice is stable across calls. Idempotent —

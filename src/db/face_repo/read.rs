@@ -574,6 +574,53 @@ impl<'a> FaceRepo<'a> {
         Ok(faces)
     }
 
+    /// Recently detected faces that are not assigned to a person yet.
+    /// Used only as a live, in-progress surface while the face pipeline
+    /// is still clustering. The final People grid remains cluster-based.
+    pub fn get_unclustered_faces(
+        &self,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> SqliteResult<Vec<FaceDetail>> {
+        let mut sql = String::from(
+            "SELECT f.id, f.photo_id, f.cluster_id, f.confidence, f.user_confirmed
+             FROM faces f
+             JOIN photos p ON p.id = f.photo_id
+             WHERE f.cluster_id IS NULL
+               AND p.is_trashed = FALSE ",
+        );
+        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(c) = cursor {
+            sql.push_str("AND f.id > ?1 ORDER BY f.id ASC LIMIT ?2");
+            params.push(rusqlite::types::Value::from(c));
+            params.push(rusqlite::types::Value::from(limit as i64));
+        } else {
+            sql.push_str("ORDER BY f.id ASC LIMIT ?1");
+            params.push(rusqlite::types::Value::from(limit as i64));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok(FaceDetail {
+                face_id: row.get(0)?,
+                photo_id: row.get(1)?,
+                cluster_id: row.get(2)?,
+                confidence: row.get(3)?,
+                user_confirmed: row.get(4)?,
+            })
+        })?;
+
+        let mut faces = Vec::new();
+        for row in rows {
+            faces.push(row?);
+        }
+        Ok(faces)
+    }
+
     /// Count unconfirmed faces in a cluster.
     pub fn count_unconfirmed_in_cluster(&self, cluster_id: i64) -> SqliteResult<i64> {
         self.conn.query_row(

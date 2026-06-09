@@ -5,7 +5,9 @@
 
 use smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION;
 use smriti::db::photo_repo::PhotoInsert;
-use smriti::db::{create_schema, BurstRepo, Database, DuplicateRepo, PhotoRepo, TrashRepo};
+use smriti::db::{
+    create_schema, BurstRepo, Database, DuplicateRepo, FaceRepo, PhotoRepo, TrashRepo,
+};
 use smriti::models::MediaType;
 use smriti::services::TrashService;
 use tempfile::tempdir;
@@ -542,4 +544,171 @@ fn test_burst_and_duplicate_large_group_inserts() {
         dup_groups, 1,
         "resync must not duplicate the duplicate group"
     );
+}
+
+#[test]
+fn duplicate_resync_refreshes_members_and_filters_trashed_photos() {
+    let (_temp, db) = setup_db();
+    let photo_repo = PhotoRepo::new(&db.conn);
+    let photos: Vec<PhotoInsert> = (0..4)
+        .map(|i| sample_photo(&format!("photos/dup_{}.jpg", i), &format!("hash-{}", i)))
+        .collect();
+    photo_repo.insert_batch(&photos).unwrap();
+
+    let ids: Vec<i64> = db
+        .conn
+        .prepare("SELECT id FROM photos ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+
+    let repo = DuplicateRepo::new(&db.conn);
+    repo.sync_duplicate_groups(&[(
+        "visual-dup".to_string(),
+        vec![ids[0], ids[1]],
+        Some(ids[0]),
+        "perceptual",
+    )])
+    .unwrap();
+    repo.sync_duplicate_groups(&[(
+        "visual-dup".to_string(),
+        vec![ids[0], ids[1], ids[2]],
+        Some(ids[2]),
+        "perceptual",
+    )])
+    .unwrap();
+
+    let group_id: i64 = db
+        .conn
+        .query_row("SELECT id FROM duplicate_groups", [], |r| r.get(0))
+        .unwrap();
+    let members = repo.get_group_members(group_id).unwrap();
+    assert_eq!(members.len(), 3, "resync must refresh group membership");
+    assert!(
+        members
+            .iter()
+            .any(|m| m.photo_id == ids[0] && m.is_suggested_keep),
+        "existing keep choice should survive when it remains in the group"
+    );
+
+    TrashService::trash_photos(&db.conn, &[ids[1], ids[2]]).unwrap();
+    let groups = repo.get_all_groups().unwrap();
+    assert!(
+        groups.is_empty(),
+        "groups with fewer than two visible members should be hidden"
+    );
+    assert!(repo.get_group_members(group_id).unwrap().len() < 2);
+}
+
+#[test]
+fn partial_duplicate_upsert_keeps_other_groups_for_resume() {
+    let (_temp, db) = setup_db();
+    let photo_repo = PhotoRepo::new(&db.conn);
+    let photos: Vec<PhotoInsert> = (0..4)
+        .map(|i| {
+            sample_photo(
+                &format!("photos/partial_dup_{}.jpg", i),
+                &format!("pdup-{}", i),
+            )
+        })
+        .collect();
+    photo_repo.insert_batch(&photos).unwrap();
+    let ids: Vec<i64> = db
+        .conn
+        .prepare("SELECT id FROM photos ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+
+    let repo = DuplicateRepo::new(&db.conn);
+    repo.upsert_duplicate_groups(&[("exact-a".to_string(), vec![ids[0], ids[1]], None, "exact")])
+        .unwrap();
+    repo.upsert_duplicate_groups(&[(
+        "visual-b".to_string(),
+        vec![ids[2], ids[3]],
+        None,
+        "perceptual",
+    )])
+    .unwrap();
+
+    let groups = repo.get_all_groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        2,
+        "partial upserts must not prune previously streamed groups"
+    );
+}
+
+#[test]
+fn partial_burst_upsert_keeps_existing_groups_for_resume() {
+    let (_temp, db) = setup_db();
+    let photo_repo = PhotoRepo::new(&db.conn);
+    let photos: Vec<PhotoInsert> = (0..4)
+        .map(|i| {
+            sample_photo(
+                &format!("photos/partial_burst_{}.jpg", i),
+                &format!("pburst-{}", i),
+            )
+        })
+        .collect();
+    photo_repo.insert_batch(&photos).unwrap();
+    let ids: Vec<i64> = db
+        .conn
+        .prepare("SELECT id FROM photos ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+
+    let repo = BurstRepo::new(&db.conn);
+    let inserted = repo
+        .upsert_burst_groups(&[(
+            "2024-01-01T00:00:00Z".to_string(),
+            "2024-01-01T00:00:01Z".to_string(),
+            vec![ids[0], ids[1]],
+        )])
+        .unwrap();
+    assert_eq!(inserted, 1);
+    let inserted = repo
+        .upsert_burst_groups(&[(
+            "2024-01-02T00:00:00Z".to_string(),
+            "2024-01-02T00:00:01Z".to_string(),
+            vec![ids[2], ids[3]],
+        )])
+        .unwrap();
+    assert_eq!(inserted, 1);
+    assert_eq!(repo.get_all_groups().unwrap().len(), 2);
+}
+
+#[test]
+fn unclustered_faces_are_read_for_live_face_stream() {
+    let (_temp, db) = setup_db();
+    let photo_repo = PhotoRepo::new(&db.conn);
+    photo_repo
+        .insert_batch(&[sample_photo("photos/face.jpg", "face-live")])
+        .unwrap();
+    let photo_id: i64 = db
+        .conn
+        .query_row("SELECT id FROM photos LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO faces
+             (photo_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, embedding, cluster_id)
+             VALUES (?1, 0.1, 0.1, 0.2, 0.2, 0.99, zeroblob(16), NULL)",
+            rusqlite::params![photo_id],
+        )
+        .unwrap();
+
+    let faces = FaceRepo::new(&db.conn)
+        .get_unclustered_faces(None, 10)
+        .unwrap();
+    assert_eq!(faces.len(), 1);
+    assert_eq!(faces[0].photo_id, photo_id);
+    assert!(faces[0].cluster_id.is_none());
 }

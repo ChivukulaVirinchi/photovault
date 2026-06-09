@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { bursts } from "../lib/api/all";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -47,7 +48,15 @@
     if (burstsJob && burstsJob.status === "complete") load();
   });
 
-  onMount(load);
+  onMount(() => {
+    load();
+    const unlisten = listen<{ stage?: string }>("bursts:progress", (e) => {
+      if (e.payload.stage === "persisted") load();
+    });
+    return () => {
+      void unlisten.then((u) => u());
+    };
+  });
 
   function fmtTime(iso: string): string {
     const d = new Date(iso);

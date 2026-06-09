@@ -178,6 +178,36 @@ pub async fn people_face_list(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UnclusteredFaceListArgs {
+    pub cursor: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn people_unclustered_faces(
+    state: State<'_, AppState>,
+    args: UnclusteredFaceListArgs,
+) -> CommandResult<Page<FaceDetailDto>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = FaceRepo::new(&db.conn);
+    let limit = args.limit.unwrap_or(24).min(100) as usize;
+    let faces = repo.get_unclustered_faces(args.cursor, limit)?;
+    let has_more = faces.len() == limit;
+    let next_cursor = faces.last().map(|f| f.face_id);
+    let items: Vec<FaceDetailDto> = faces.into_iter().map(FaceDetailDto::from).collect();
+    let total = Some(items.len() as u64);
+
+    Ok(Page {
+        items,
+        next_cursor: next_cursor.map(|c| c.to_string()),
+        has_more,
+        total,
+    })
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FaceActionArgs {
     pub face_id: i64,
 }

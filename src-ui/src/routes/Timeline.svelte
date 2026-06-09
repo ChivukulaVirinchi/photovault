@@ -589,7 +589,9 @@
   // ----------- selection -----------
   function onCellClick(e: MouseEvent, photo: PhotoSummaryDto) {
     focusedIdx = items.findIndex((p) => p.id === photo.id);
-    handleCellClick(e, photo.id, items.map((p) => p.id));
+    const ids = items.map((p) => p.id);
+    const handled = handleCellClick(e, photo.id, ids);
+    if (!handled) browseContext.set("timeline", ids);
   }
 
   // ----------- drag-marquee selection -----------

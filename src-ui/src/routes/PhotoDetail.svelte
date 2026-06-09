@@ -1002,13 +1002,14 @@
     justify-content: center;
     cursor: pointer;
     z-index: 4;
-    opacity: 0;
+    opacity: 0.36;
     transition: opacity 200ms var(--ease),
                 background var(--t-fast) var(--ease);
   }
   .chevron.prev { left: var(--s-4); }
   .chevron.next { right: var(--s-4); }
-  .viewer.active .chevron { opacity: 1; }
+  .viewer.active .chevron,
+  .chevron:focus-visible { opacity: 0.95; }
   .chevron:hover { background: var(--bg-card); opacity: 1 !important; }
 
   /* ===== bottom-left position indicator ===== */

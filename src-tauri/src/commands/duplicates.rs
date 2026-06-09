@@ -152,6 +152,7 @@ pub async fn duplicates_run(
 ) -> CommandResult<JobIdDto> {
     let job = jobs::start_job(&state, JobKind::Duplicates).await?;
     let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
     let started = job.started_at;
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -183,6 +184,7 @@ pub async fn duplicates_run(
     );
 
     tokio::task::spawn_blocking(move || {
+        use std::sync::atomic::Ordering;
         let conn = match smriti::db::open_secondary(&db_path) {
             Ok(c) => c,
             Err(e) => {
@@ -190,25 +192,100 @@ pub async fn duplicates_run(
                 return;
             }
         };
+        if cancel.load(Ordering::Relaxed) {
+            emit(
+                &app_clone,
+                EV_DUPLICATES_COMPLETE,
+                DuplicatesCompleteDto {
+                    job_id: job_id_clone.clone(),
+                    groups_found: 0,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                },
+            );
+            let rt = tokio::runtime::Handle::current();
+            let app_for_finish = app_clone.clone();
+            let finish_job_id = job_id_clone.clone();
+            rt.spawn(async move {
+                let st: tauri::State<AppState> = app_for_finish.state();
+                jobs::finish_job(&st, &finish_job_id).await;
+            });
+            return;
+        }
         let exact = DuplicateDetector::find_duplicates(&conn).unwrap_or_default();
         let mut groups_found = exact.len();
+        let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
+            Vec::with_capacity(exact.len());
+        for g in &exact {
+            to_persist.push((
+                g.hash.clone(),
+                g.photo_ids.clone(),
+                g.suggested_keep_id,
+                g.duplicate_type,
+            ));
+        }
+        emit(
+            &app_clone,
+            EV_DUPLICATES_PROGRESS,
+            JobProgress {
+                job_id: job_id_clone.clone(),
+                stage: "exact".into(),
+                processed: exact.len() as u64,
+                total: None,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some(format!("{} exact duplicate groups", exact.len())),
+            },
+        );
+        if !to_persist.is_empty() {
+            let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
+            if let Err(e) = repo.upsert_duplicate_groups(&to_persist) {
+                tracing::warn!("dup exact live persist: {}", e);
+            } else {
+                emit(
+                    &app_clone,
+                    EV_DUPLICATES_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: "persisted".into(),
+                        processed: to_persist.len() as u64,
+                        total: None,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("{} duplicate groups available", to_persist.len())),
+                    },
+                );
+            }
+        }
 
-        if args.include_perceptual {
+        if args.include_perceptual && !cancel.load(Ordering::Relaxed) {
             let exclude_ids: std::collections::HashSet<i64> = exact
                 .iter()
                 .flat_map(|g| g.photo_ids.iter().copied())
                 .collect();
-            // Pass the drive root; `find_perceptual_duplicates` resolves
-            // each photo's small-thumbnail path itself, matching the
-            // ThumbnailService v2 layout.
-            if let Ok(perc) =
-                DuplicateDetector::find_perceptual_duplicates(&conn, &drive_root, &exclude_ids)
-            {
+            if let Ok(perc) = DuplicateDetector::find_perceptual_duplicates_with_progress(
+                &conn,
+                &drive_root,
+                &exclude_ids,
+                Some(cancel.as_ref()),
+                |p| {
+                    emit(
+                        &app_clone,
+                        EV_DUPLICATES_PROGRESS,
+                        JobProgress {
+                            job_id: job_id_clone.clone(),
+                            stage: p.stage.into(),
+                            processed: p.processed,
+                            total: p.total,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            eta_ms: None,
+                            message: Some(p.message),
+                        },
+                    );
+                },
+            ) {
                 groups_found += perc.len();
-                // Persist both passes' groups so the UI can read them.
-                let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
-                    Vec::with_capacity(exact.len() + perc.len());
-                for g in exact.iter().chain(perc.iter()) {
+                to_persist.reserve(perc.len());
+                for g in &perc {
                     to_persist.push((
                         g.hash.clone(),
                         g.photo_ids.clone(),
@@ -216,30 +293,78 @@ pub async fn duplicates_run(
                         g.duplicate_type,
                     ));
                 }
-                let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
-                if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
-                    tracing::warn!("dup persist: {}", e);
+                if !perc.is_empty() && !cancel.load(Ordering::Relaxed) {
+                    let batch: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = perc
+                        .iter()
+                        .map(|g| {
+                            (
+                                g.hash.clone(),
+                                g.photo_ids.clone(),
+                                g.suggested_keep_id,
+                                g.duplicate_type,
+                            )
+                        })
+                        .collect();
+                    let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
+                    if let Err(e) = repo.upsert_duplicate_groups(&batch) {
+                        tracing::warn!("dup perceptual live persist: {}", e);
+                    } else {
+                        emit(
+                            &app_clone,
+                            EV_DUPLICATES_PROGRESS,
+                            JobProgress {
+                                job_id: job_id_clone.clone(),
+                                stage: "persisted".into(),
+                                processed: batch.len() as u64,
+                                total: None,
+                                elapsed_ms: started.elapsed().as_millis() as u64,
+                                eta_ms: None,
+                                message: Some(format!(
+                                    "{} visual duplicate groups available",
+                                    batch.len()
+                                )),
+                            },
+                        );
+                    }
                 }
             }
-        } else {
-            // Even when perceptual is off, persist the exact pass.
-            let to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = exact
-                .iter()
-                .map(|g| {
-                    (
-                        g.hash.clone(),
-                        g.photo_ids.clone(),
-                        g.suggested_keep_id,
-                        g.duplicate_type,
-                    )
-                })
-                .collect();
+        }
+
+        if !cancel.load(Ordering::Relaxed) {
+            emit(
+                &app_clone,
+                EV_DUPLICATES_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "persist".into(),
+                    processed: 0,
+                    total: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("saving duplicate groups".into()),
+                },
+            );
             let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
             if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
                 tracing::warn!("dup persist: {}", e);
             }
         }
-        let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
+        if !cancel.load(Ordering::Relaxed) {
+            emit(
+                &app_clone,
+                EV_DUPLICATES_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "stacks".into(),
+                    processed: 0,
+                    total: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("refreshing stacks".into()),
+                },
+            );
+            let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
+        }
 
         emit(
             &app_clone,

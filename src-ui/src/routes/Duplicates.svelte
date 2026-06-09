@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -52,7 +53,15 @@
     if (dupJob && dupJob.status === "complete") load();
   });
 
-  onMount(load);
+  onMount(() => {
+    load();
+    const unlisten = listen<{ stage?: string }>("duplicates:progress", (e) => {
+      if (e.payload.stage === "persisted") load();
+    });
+    return () => {
+      void unlisten.then((u) => u());
+    };
+  });
 </script>
 
 <PageHeader title="Duplicates">

@@ -75,6 +75,11 @@ export const people = {
       cursor: cursor ?? null,
       limit: limit ?? 100,
     }),
+  unclusteredFaces: (cursor?: string | null, limit?: number) =>
+    call<Page<FaceDetailDto>>("people_unclustered_faces", {
+      cursor: cursor ?? null,
+      limit: limit ?? 24,
+    }),
   faceConfirm: (faceId: number) =>
     call<null>("people_face_confirm", { face_id: faceId }),
   faceReject: (faceId: number) =>

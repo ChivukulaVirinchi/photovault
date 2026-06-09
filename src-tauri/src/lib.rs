@@ -78,6 +78,7 @@ pub fn run() {
             commands::people::people_pending_face_count,
             commands::people::people_clustering_diagnostics,
             commands::people::people_face_list,
+            commands::people::people_unclustered_faces,
             commands::people::people_face_confirm,
             commands::people::people_face_reject,
             commands::people::people_face_hide,

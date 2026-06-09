@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { people, settings } from "../lib/api/all";
+  import { people, settings, type FaceDetailDto } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -9,6 +9,7 @@
   import type { PersonDto } from "../lib/api/types";
 
   let clusters = $state<PersonDto[]>([]);
+  let liveFaces = $state<FaceDetailDto[]>([]);
   // Main grid holds clusters with 2+ photos — the people Smriti has
   // actually grouped. Singletons (clusters with exactly one photo) are
   // shown in a secondary section below; they're faces detected but not
@@ -68,6 +69,15 @@
     }
   }
 
+  async function loadLiveFaces() {
+    try {
+      const page = await people.unclusteredFaces(null, 24);
+      liveFaces = page.items;
+    } catch {
+      // Non-critical: the canonical People grid still loads normally.
+    }
+  }
+
   async function loadPending() {
     try {
       const [r, review] = await Promise.all([
@@ -108,6 +118,7 @@
     if (c > lastSeenChunks) {
       lastSeenChunks = c;
       load();
+      loadLiveFaces();
     }
   });
 
@@ -122,6 +133,7 @@
     if (facesJob.status === "complete" && !toastedJobIds.has(facesJob.id)) {
       toastedJobIds.add(facesJob.id);
       load();
+      liveFaces = [];
       const msg = facesJob.message || "Face detection finished.";
       if (facesJob.message?.toLowerCase().startsWith("face detection failed")) {
         toasts.error(msg);
@@ -143,6 +155,7 @@
 
   onMount(() => {
     load();
+    loadLiveFaces();
     loadPending();
     checkModelUpgrade();
   });
@@ -246,6 +259,30 @@
           </a>
         {/each}
       </div>
+    {/if}
+
+    {#if running && liveFaces.length > 0}
+      <section class="live-faces">
+        <header class="live-head">
+          <h3 class="live-title">
+            Faces just detected
+            <span class="singletons-count mono">{liveFaces.length}</span>
+          </h3>
+        </header>
+        <div class="singletons-grid">
+          {#each liveFaces as f (f.face_id)}
+            <a class="singleton-card" href="#/photo?id={f.photo_id}">
+              <div class="singleton-frame">
+                {#if f.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, f.thumbnail_path) ?? ""} alt="" />
+                {:else}
+                  <span class="placeholder small">Â·</span>
+                {/if}
+              </div>
+            </a>
+          {/each}
+        </div>
+      </section>
     {/if}
 
     {#if singletons.length > 0}
@@ -415,6 +452,25 @@
     color: var(--ink-muted);
   }
   .small { font-size: var(--t-xs); }
+
+  .live-faces {
+    margin-top: var(--s-6);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--line-soft);
+  }
+  .live-head {
+    margin-bottom: var(--s-3);
+  }
+  .live-title {
+    font-family: var(--font-display);
+    font-size: var(--t-base);
+    font-weight: 500;
+    color: var(--ink-soft);
+    margin: 0;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
 
   /* Singletons section — faces detected in a single photo each.
      De-emphasized vs the main grid so a long tail of one-shot faces
