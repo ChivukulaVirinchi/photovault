@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-09
+
+Smriti 0.3.0 focuses on making larger real-world libraries feel live and
+trustworthy: videos now belong in the same library as photos, search is more
+intent-aware, cleanup jobs stream progress instead of feeling frozen, and the
+release/asset path is less brittle for installed users.
+
+### Added
+- **Video support** in the timeline and detail viewer, including playable
+  videos, posters/thumbnails, duration metadata, codec metadata, and video
+  date extraction.
+- **Photo stacks** for burst and duplicate group covers, with stack metadata
+  surfaced in timeline/detail views.
+- **Favourites smart album** that appears only when favourites exist and stays
+  non-deletable/non-duplicable.
+- **Smart search intent parsing** for date/year, place, people, media type,
+  favourites, album filters, and strict "only person X" queries. Filters are
+  order-independent and compose across supported dimensions.
+- **Asset management in Settings**, including inventory display and in-app
+  asset installation for ONNX Runtime, SCRFD, AdaFace, and GeoNames.
+- **Excluded folders** so users can keep specific child folders out of an
+  indexed library.
+- **Album export** to an accessible export folder, with conflict-safe filenames
+  and an "open folder" completion dialog.
+- **Marquee selection across photo listing views**, with bulk actions such as
+  album add and trash.
+- **Live face-detection preview strip** while the face pipeline is still
+  processing unclustered faces.
+
+### Changed
+- **Duplicate detection now streams and resumes better**: exact duplicate
+  groups are persisted as soon as they are found, perceptual groups use a
+  banded pHash candidate index instead of full pairwise comparison, and stale
+  groups are refreshed without surfacing trashed photos.
+- **Burst detection now streams and cancels better**, persists partial results
+  during long runs, prefers cached thumbnails, and builds visual signatures
+  lazily only after cheap time/folder checks pass.
+- **Cleanup jobs no longer expose fake cancel buttons** for tasks that cannot
+  honor cancellation.
+- **Timeline/detail navigation is more predictable**: timeline clicks refresh
+  browse context, and detail-view chevrons remain discoverable when previous or
+  next photos exist.
+- **Date repair pipeline is more robust** for photos and videos, with a
+  settings action to refresh dates across the library.
+- **Maps, albums, memories, suggestions, duplicates, bursts, and search now
+  consistently hide trashed photos**.
+- **Album suggestions require valid visible covers**, avoiding empty-looking
+  suggestion cards.
+- **Release-local verification script updated** for the current Tauri binary
+  name, package build target, and managed GeoNames asset location.
+
+### Fixed
+- Fixed face-cluster timeline query aliases that generated invalid SQL such as
+  `NULL AS stack.p.id`.
+- Fixed deleted photos lingering in timeline/browse context after trashing.
+- Fixed map return navigation so opening a photo from the map preserves the map
+  viewport when returning.
+- Fixed album and memory detail scroll restoration after preview navigation.
+- Fixed album preview image sizing so photos are not vertically compressed.
+- Fixed smart-search intersections such as year + city.
+- Fixed ambiguous QuickTime metadata test bytes so clippy passes with
+  `-D warnings`.
+
 ## [0.2.0] — 2026-04-21
 
 First pre-v1.0 milestone. Phases 1 and 2 of the v1.0 roadmap landed:
