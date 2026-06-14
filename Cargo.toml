@@ -151,6 +151,11 @@ self_update = { version = "0.41", default-features = false, features = ["rustls"
 futures = "0.3"
 open = "5"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Storage_FileSystem",
+] }
+
 # Optimize key deps even in debug mode — image decoding is unusable without this
 [profile.dev.package.image]
 opt-level = 3

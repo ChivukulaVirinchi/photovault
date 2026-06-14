@@ -4,7 +4,7 @@
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Fullscreen,
     RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
   } from "lucide-svelte";
-  import { photos, type ExifExtras } from "../lib/api/photos";
+  import { photos, type ExifExtras, type TimelineNeighbors } from "../lib/api/photos";
   import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
   import { stacks, trash, type PhotoStack } from "../lib/api/all";
@@ -33,6 +33,7 @@
   let people = $state<PersonDto[]>([]);
   let albums = $state<AlbumDto[]>([]);
   let extras = $state<ExifExtras | null>(null);
+  let timelineNeighbors = $state<TimelineNeighbors | null>(null);
   let stack = $state<PhotoStack | null>(null);
   let error = $state<string | null>(null);
   let detailEl = $state<HTMLElement | undefined>(undefined);
@@ -92,6 +93,8 @@
   });
   const prevId = $derived(navAnchorId != null ? browseContext.prev(navAnchorId) : null);
   const nextId = $derived(navAnchorId != null ? browseContext.next(navAnchorId) : null);
+  const effectivePrevId = $derived(prevId ?? timelineNeighbors?.prev_id ?? null);
+  const effectiveNextId = $derived(nextId ?? timelineNeighbors?.next_id ?? null);
   const position = $derived(navAnchorId != null ? browseContext.position(navAnchorId) : null);
 
   /// EXIF orientation → degrees of CSS rotation.
@@ -216,6 +219,7 @@
     albums = [];
     extras = null;
     stack = null;
+    timelineNeighbors = null;
     stackTrayOpen = false;
     tint = null;
     manualRotate = 0;
@@ -345,7 +349,7 @@
   async function trashAndAdvance() {
     if (!photo) return;
     const id = photo.id;
-    const advanceTo = nextId ?? prevId ?? null;
+    const advanceTo = effectiveNextId ?? effectivePrevId ?? null;
     try {
       await trash.trashPhotos([id]);
       photoVisibility.markTrashed([id]);
@@ -390,7 +394,7 @@
     try {
       stack = await stacks.removeMember(stack.id, photoId);
       if (photo?.id === photoId) {
-        const next = stack?.cover_photo_id ?? nextId ?? prevId;
+        const next = stack?.cover_photo_id ?? effectiveNextId ?? effectivePrevId;
         if (next) gotoId(next);
       }
     } catch (e) {
@@ -437,8 +441,8 @@
         if (immersive) void toggleFullscreen();
         else back();
         break;
-      case "ArrowLeft":  e.preventDefault(); e.stopPropagation(); gotoId(prevId); break;
-      case "ArrowRight": e.preventDefault(); e.stopPropagation(); gotoId(nextId); break;
+      case "ArrowLeft":  e.preventDefault(); e.stopPropagation(); gotoId(effectivePrevId); break;
+      case "ArrowRight": e.preventDefault(); e.stopPropagation(); gotoId(effectiveNextId); break;
       case "i": case "I":
         if (!e.metaKey && !e.ctrlKey) { metaOpen = !metaOpen; e.preventDefault(); e.stopPropagation(); }
         break;
@@ -500,12 +504,37 @@
     // gate this on each step; resolvedImageCache + the browser HTTP
     // cache dedupe duplicate requests.
     const me = photo.id;
-    void preloadPhoto(prevId);
-    void preloadPhoto(nextId);
-    const after = nextId != null ? browseContext.next(nextId) : null;
-    const before = prevId != null ? browseContext.prev(prevId) : null;
+    void preloadPhoto(effectivePrevId);
+    void preloadPhoto(effectiveNextId);
+    const after = effectiveNextId != null ? browseContext.next(effectiveNextId) : null;
+    const before = effectivePrevId != null ? browseContext.prev(effectivePrevId) : null;
     if (after != null && after !== me) void preloadPhoto(after);
     if (before != null && before !== me) void preloadPhoto(before);
+  });
+
+  $effect(() => {
+    const anchor = navAnchorId;
+    if (!photo || anchor == null || browseContext.source !== "timeline") {
+      timelineNeighbors = null;
+      return;
+    }
+    if (prevId !== null && nextId !== null) {
+      timelineNeighbors = null;
+      return;
+    }
+
+    let cancelled = false;
+    photos.timelineNeighbors(anchor)
+      .then((neighbors) => {
+        if (!cancelled && navAnchorId === anchor && browseContext.source === "timeline") {
+          timelineNeighbors = neighbors;
+        }
+      })
+      .catch((e) => console.warn("timeline neighbor lookup failed", e));
+
+    return () => {
+      cancelled = true;
+    };
   });
 
   $effect(() => {
@@ -656,13 +685,13 @@
       </div>
 
       <!-- Edge chevrons — visible on hover -->
-      {#if prevId !== null}
-        <button class="chevron prev" onclick={() => gotoId(prevId)} title="Previous (←)" aria-label="Previous">
+      {#if effectivePrevId !== null}
+        <button class="chevron prev" onclick={() => gotoId(effectivePrevId)} title="Previous (←)" aria-label="Previous">
           <ChevronLeft size={22} strokeWidth={2} />
         </button>
       {/if}
-      {#if nextId !== null}
-        <button class="chevron next" onclick={() => gotoId(nextId)} title="Next (→)" aria-label="Next">
+      {#if effectiveNextId !== null}
+        <button class="chevron next" onclick={() => gotoId(effectiveNextId)} title="Next (→)" aria-label="Next">
           <ChevronRight size={22} strokeWidth={2} />
         </button>
       {/if}

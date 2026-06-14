@@ -74,8 +74,13 @@ export function createVirtualScroll<R extends VRow>(opts: {
     const el = opts.scrollEl();
     if (!el) return () => {};
 
+    let scrollRaf = 0;
     const onScroll = () => {
-      scrollTop = el.scrollTop;
+      if (scrollRaf !== 0) return;
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0;
+        scrollTop = el.scrollTop;
+      });
     };
     const onResize = () => {
       viewportH = el.clientHeight;
@@ -88,6 +93,7 @@ export function createVirtualScroll<R extends VRow>(opts: {
     ro.observe(el);
 
     return () => {
+      if (scrollRaf !== 0) cancelAnimationFrame(scrollRaf);
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
     };

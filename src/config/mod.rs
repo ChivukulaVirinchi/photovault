@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub show_timeline_stacks: bool,
     pub date_format: DateFormat,
     pub remembered_drives: Vec<PathBuf>,
+    #[serde(default)]
+    pub remembered_libraries: Vec<RememberedLibrary>,
     pub window_width: u32,
     pub window_height: u32,
     /// Whether the user's window was maximised when they last closed
@@ -110,6 +112,13 @@ pub struct AppConfig {
     pub face_embedder_model: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RememberedLibrary {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub stable_id: Option<String>,
+}
+
 /// Bumped any time the EXIF date fallback chain changes. Stored in
 /// `AppConfig::date_logic_version`; on launch, if the saved value is
 /// less than this, the app re-extracts dates for every photo so the
@@ -171,6 +180,7 @@ impl Default for AppConfig {
             show_timeline_stacks: true,
             date_format: DateFormat::Locale,
             remembered_drives: Vec::new(),
+            remembered_libraries: Vec::new(),
             window_width: 1600,
             window_height: 1000,
             window_maximized: false,

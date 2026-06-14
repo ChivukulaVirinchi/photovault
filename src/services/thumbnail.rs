@@ -99,12 +99,15 @@ impl ConcurrencyLimiter {
     /// Block until a permit is available, then claim it. Safe to call
     /// from a `spawn_blocking` worker — Tokio has hundreds of blocking
     /// threads and parking one is fine.
-    fn acquire(&self) {
+    fn acquire(self: &Arc<Self>) -> ConcurrencyPermit {
         let mut current = self.state.lock().unwrap_or_else(|e| e.into_inner());
         while *current >= self.max {
             current = self.cv.wait(current).unwrap_or_else(|e| e.into_inner());
         }
         *current += 1;
+        ConcurrencyPermit {
+            limiter: self.clone(),
+        }
     }
 
     /// Release a permit and wake one waiter.
@@ -114,6 +117,16 @@ impl ConcurrencyLimiter {
             *current = current.saturating_sub(1);
         }
         self.cv.notify_one();
+    }
+}
+
+struct ConcurrencyPermit {
+    limiter: Arc<ConcurrencyLimiter>,
+}
+
+impl Drop for ConcurrencyPermit {
+    fn drop(&mut self) {
+        self.limiter.release();
     }
 }
 
@@ -234,13 +247,10 @@ impl ThumbnailService {
     ) -> Result<PathBuf, String> {
         // Block until a permit is free. Foreground (UI) callers wait
         // their turn rather than fail-fast.
-        self.generation_limiter.acquire();
+        let _permit = self.generation_limiter.acquire();
 
         let start = Instant::now();
         let result = self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start);
-
-        // Always release permit
-        self.generation_limiter.release();
 
         // Remove from generating set
         {
@@ -482,7 +492,7 @@ impl ThumbnailService {
             ThumbnailSize::Medium,
             ThumbnailSize::Large,
         ] {
-            let size_dir = self.cache_dir.join(size.dir_name());
+            let size_dir = self.cache_dir.join(size.dir_name()).join("v2");
 
             if !size_dir.exists() {
                 continue;
@@ -575,7 +585,7 @@ mod tests {
         use std::time::Duration;
 
         let limiter = Arc::new(ConcurrencyLimiter::new(1));
-        limiter.acquire();
+        let permit = limiter.acquire();
 
         // Second acquire should block. Spawn a thread that waits on
         // it, then release from the main thread after a short delay
@@ -591,10 +601,8 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         assert!(!started.load(std::sync::atomic::Ordering::Acquire));
 
-        limiter.release();
+        drop(permit);
         handle.join().unwrap();
         assert!(started.load(std::sync::atomic::Ordering::Acquire));
-
-        limiter.release();
     }
 }

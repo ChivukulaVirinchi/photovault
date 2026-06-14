@@ -3,7 +3,7 @@
 //! Handles all database operations for photos.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
 
 use crate::models::{ContentCategory, MediaType, Photo};
 
@@ -485,6 +485,67 @@ mod tests {
         repo.set_favorite(1, false).unwrap();
         assert!(repo.favorites_album_summary().unwrap().is_none());
     }
+
+    #[test]
+    fn timeline_neighbors_follow_timeline_order_and_skip_trash() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-02T00:00:00Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-01T00:00:00Z', 0),
+             (3, 'c.jpg', 'c.jpg', 'hash-c', 12, '2024-12-31T00:00:00Z', 1),
+             (4, 'd.jpg', 'd.jpg', 'hash-d', 12, NULL, 0)",
+            [],
+        )
+        .unwrap();
+
+        let repo = PhotoRepo::new(&conn);
+        let n = repo.timeline_neighbors(2, false).unwrap().unwrap();
+        assert_eq!(n.prev_id, Some(1));
+        assert_eq!(n.next_id, Some(4));
+
+        let null_n = repo.timeline_neighbors(4, false).unwrap().unwrap();
+        assert_eq!(null_n.prev_id, Some(2));
+        assert_eq!(null_n.next_id, None);
+    }
+
+    #[test]
+    fn timeline_neighbors_hide_non_cover_stack_members_when_enabled() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-04T00:00:00Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-03T00:00:00Z', 0),
+             (3, 'c.jpg', 'c.jpg', 'hash-c', 12, '2025-01-02T00:00:00Z', 0),
+             (4, 'd.jpg', 'd.jpg', 'hash-d', 12, '2025-01-01T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stacks (id, kind, source_group_id, cover_photo_id)
+             VALUES (10, 'burst', 99, 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stack_members (stack_id, photo_id, is_cover)
+             VALUES (10, 2, 1), (10, 3, 0)",
+            [],
+        )
+        .unwrap();
+
+        let repo = PhotoRepo::new(&conn);
+        let n = repo.timeline_neighbors(2, true).unwrap().unwrap();
+        assert_eq!(n.prev_id, Some(1));
+        assert_eq!(n.next_id, Some(4));
+
+        let unstacked = repo.timeline_neighbors(2, false).unwrap().unwrap();
+        assert_eq!(unstacked.next_id, Some(3));
+    }
 }
 
 /// Convert a database row to a Photo struct.
@@ -579,6 +640,12 @@ pub struct PhotoLite {
     pub stack_kind: Option<String>,
     pub stack_member_count: Option<i64>,
     pub stack_cover_photo_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineNeighbors {
+    pub prev_id: Option<i64>,
+    pub next_id: Option<i64>,
 }
 
 fn row_to_photo_lite(row: &rusqlite::Row) -> SqliteResult<PhotoLite> {
@@ -771,6 +838,101 @@ impl<'a> PhotoRepo<'a> {
                 rows.collect()
             }
         }
+    }
+
+    pub fn timeline_neighbors(
+        &self,
+        photo_id: i64,
+        show_stacks: bool,
+    ) -> SqliteResult<Option<TimelineNeighbors>> {
+        let Some(current) = self.get_by_id(photo_id)? else {
+            return Ok(None);
+        };
+
+        let visible = if show_stacks {
+            "p.is_trashed = 0 AND NOT EXISTS (
+                SELECT 1
+                  FROM photo_stack_members sm
+                  JOIN photo_stacks s ON s.id = sm.stack_id AND s.dismissed = FALSE
+                 WHERE sm.photo_id = p.id
+                   AND p.id <> s.cover_photo_id
+            )"
+        } else {
+            "p.is_trashed = 0"
+        };
+
+        let prev_id = if current.date_taken.is_some() {
+            let sql = format!(
+                "SELECT p.id FROM photos p
+                 JOIN photos cur ON cur.id = ?1
+                 WHERE {visible}
+                   AND p.date_taken IS NOT NULL
+                   AND p.id <> cur.id
+                   AND (p.date_taken > cur.date_taken OR (p.date_taken = cur.date_taken AND p.id > cur.id))
+                 ORDER BY p.date_taken ASC, p.id ASC
+                 LIMIT 1"
+            );
+            self.conn
+                .query_row(&sql, params![current.id], |r| r.get(0))
+                .optional()?
+        } else {
+            let sql = format!(
+                "SELECT p.id FROM photos p
+                 WHERE {visible}
+                   AND p.date_taken IS NULL
+                   AND p.id > ?1
+                 ORDER BY p.id ASC
+                 LIMIT 1"
+            );
+            let null_prev: Option<i64> = self
+                .conn
+                .query_row(&sql, params![current.id], |r| r.get(0))
+                .optional()?;
+            if null_prev.is_some() {
+                null_prev
+            } else {
+                let sql = format!(
+                    "SELECT p.id FROM photos p
+                     WHERE {visible}
+                       AND p.date_taken IS NOT NULL
+                     ORDER BY p.date_taken ASC, p.id ASC
+                     LIMIT 1"
+                );
+                self.conn.query_row(&sql, [], |r| r.get(0)).optional()?
+            }
+        };
+
+        let next_id = if current.date_taken.is_some() {
+            let sql = format!(
+                "SELECT p.id FROM photos p
+                 JOIN photos cur ON cur.id = ?1
+                 WHERE {visible}
+                   AND (
+                        (p.date_taken IS NOT NULL
+                         AND (p.date_taken < cur.date_taken OR (p.date_taken = cur.date_taken AND p.id < cur.id)))
+                        OR p.date_taken IS NULL
+                   )
+                 ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
+                 LIMIT 1"
+            );
+            self.conn
+                .query_row(&sql, params![current.id], |r| r.get(0))
+                .optional()?
+        } else {
+            let sql = format!(
+                "SELECT p.id FROM photos p
+                 WHERE {visible}
+                   AND p.date_taken IS NULL
+                   AND p.id < ?1
+                 ORDER BY p.id DESC
+                 LIMIT 1"
+            );
+            self.conn
+                .query_row(&sql, params![current.id], |r| r.get(0))
+                .optional()?
+        };
+
+        Ok(Some(TimelineNeighbors { prev_id, next_id }))
     }
 
     /// Cursor-paginated photos in a specific album, ordered by date.

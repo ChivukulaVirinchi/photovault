@@ -4,6 +4,7 @@
 //! `library.start_scan`, `library.apply_changes` etc. land in M2.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
@@ -191,7 +192,17 @@ pub async fn library_open(
     state: State<'_, AppState>,
     args: LibraryOpenArgs,
 ) -> CommandResult<LibraryOpenResult> {
-    let drive_root = PathBuf::from(&args.drive_path);
+    let requested_root = PathBuf::from(&args.drive_path);
+    let remembered_stable_id = smriti::config::AppConfig::load()
+        .remembered_libraries
+        .into_iter()
+        .find(|entry| entry.path == requested_root)
+        .and_then(|entry| entry.stable_id);
+    let drive_root = DriveDetector::resolve_remembered_library_path(
+        &requested_root,
+        remembered_stable_id.as_deref(),
+    )
+    .unwrap_or_else(|| requested_root.clone());
     if !drive_root.exists() {
         return Err(CommandError::DriveNotMounted {
             path: args.drive_path,
@@ -443,10 +454,14 @@ pub async fn library_regenerate_thumbnails(
     let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
-    let (drive_root, db) = {
+    let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
+        (
+            lib.drive_root.clone(),
+            lib.db.clone(),
+            lib.thumbnails.clone(),
+        )
     };
 
     // Full regenerate semantics: wipe every photo's thumbnail_path +
@@ -470,7 +485,7 @@ pub async fn library_regenerate_thumbnails(
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        run_thumbnail_pass(drive_root, db, cancel, app_clone, job_id_clone).await;
+        run_thumbnail_pass(drive_root, db, thumbnails, cancel, app_clone, job_id_clone).await;
     });
 
     Ok(JobIdDto { job_id })
@@ -578,16 +593,20 @@ pub async fn library_start_thumbnail_pass(
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
 
-    let (drive_root, db) = {
+    let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
+        (
+            lib.drive_root.clone(),
+            lib.db.clone(),
+            lib.thumbnails.clone(),
+        )
     };
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        run_thumbnail_pass(drive_root, db, cancel, app_clone, job_id_clone).await;
+        run_thumbnail_pass(drive_root, db, thumbnails, cancel, app_clone, job_id_clone).await;
     });
 
     Ok(JobIdDto { job_id })
@@ -656,26 +675,14 @@ async fn run_metadata_stage(
 async fn run_thumbnail_pass(
     drive_root: PathBuf,
     db: Arc<tokio::sync::Mutex<smriti::db::Database>>,
+    svc: Arc<smriti::services::thumbnail::ThumbnailService>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     app: AppHandle,
     job_id: String,
 ) {
-    use smriti::services::thumbnail::{ThumbnailService, ThumbnailSize};
+    use smriti::services::thumbnail::ThumbnailSize;
 
     let chunk_size: usize = 20;
-    let svc = match ThumbnailService::new(
-        &drive_root,
-        smriti::config::AppConfig::load().thumbnail_cache_gb,
-    ) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            tracing::error!("thumbnail pass: failed to create service: {e}");
-            let st: tauri::State<AppState> = app.state();
-            jobs::finish_job(&st, &job_id).await;
-            return;
-        }
-    };
-
     let total_pending: Option<u64> = {
         let guard = db.lock().await;
         smriti::db::photo_repo::PhotoRepo::new(&guard.conn)
@@ -716,18 +723,41 @@ async fn run_thumbnail_pass(
             break;
         }
 
-        let svc = svc.clone();
+        let svc_for_chunk = svc.clone();
         let drive = drive_root.clone();
-        let updates: Vec<(i64, Option<String>)> = chunk
-            .iter()
-            .map(|(id, path, hash, orient)| {
-                let abs = drive.join(path);
-                match svc.generate_thumbnail(&abs, hash, *orient, ThumbnailSize::Medium) {
-                    Ok(_) => (*id, Some(relative_thumbnail_path(hash))),
-                    Err(_) => (*id, None),
+        let cancel_for_chunk = cancel.clone();
+        let updates: Vec<(i64, Option<String>)> =
+            match tauri::async_runtime::spawn_blocking(move || {
+                let mut updates = Vec::with_capacity(chunk.len());
+                for (id, path, hash, orient) in chunk {
+                    if cancel_for_chunk.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let abs = drive.join(path);
+                    let rel = match svc_for_chunk.generate_thumbnail(
+                        &abs,
+                        &hash,
+                        orient,
+                        ThumbnailSize::Medium,
+                    ) {
+                        Ok(_) => Some(relative_thumbnail_path(&hash)),
+                        Err(e) => {
+                            tracing::debug!("thumbnail pass failed for photo_id={id}: {e}");
+                            None
+                        }
+                    };
+                    updates.push((id, rel));
                 }
+                updates
             })
-            .collect();
+            .await
+            {
+                Ok(updates) => updates,
+                Err(e) => {
+                    tracing::error!("thumbnail worker panicked: {e}");
+                    break;
+                }
+            };
 
         let photo_ids: Vec<i64> = updates
             .iter()
@@ -751,6 +781,10 @@ async fn run_thumbnail_pass(
                     );
                 } else {
                     failed_ids.insert(*id);
+                    let _ = tx.execute(
+                        "UPDATE photos SET thumbnailed = TRUE WHERE id = ?1",
+                        rusqlite::params![id],
+                    );
                 }
             }
             if let Err(e) = tx.commit() {
@@ -923,8 +957,6 @@ fn validate_exclusion_path(drive_root: &std::path::Path, input: &str) -> Command
 
     Ok(relative_path)
 }
-
-use std::sync::Arc;
 
 /// Auto-chain after a Scan completes: metadata → existing
 /// duplicates/bursts detection. Face detection is deliberately NOT

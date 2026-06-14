@@ -458,6 +458,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `photos.list` | `{ cursor: Option<String>, limit: Option<u32>, include_trashed: bool }` | `Page<PhotoSummaryDto>` | timeline scroll; `total` populated only on first page; hides non-cover stack members when timeline stacks are enabled |
 | `photos.get` | `{ id: i64 }` | `PhotoDto` | full detail (lightbox open) |
 | `photos.get_many` | `{ ids: Vec<i64> }` | `Vec<PhotoDto>` | up to 500; preserves input order; missing ids dropped silently |
+| `photos.timeline_neighbors` | `{ id: i64 }` | `{ prev_id: Option<i64>, next_id: Option<i64> }` | authoritative timeline prev/next for detail navigation at paged-list edges |
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_person` | `{ person_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_date` | `{ start: String, end: String, cursor, limit }` | `Page<PhotoSummaryDto>` | inclusive range |

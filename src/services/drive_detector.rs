@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub struct DriveInfo {
     pub name: String,
     pub path: PathBuf,
+    pub stable_id: Option<String>,
     pub is_removable: bool,
     pub has_photovault_db: bool,
     pub total_size_bytes: Option<u64>,
@@ -87,6 +88,46 @@ impl DriveDetector {
         Self::check_path(path)
     }
 
+    /// Return a stable volume identity when the platform exposes one.
+    /// On Windows this is the volume GUID path, which survives drive-letter
+    /// changes such as the same disk moving from F:\ to D:\.
+    pub fn stable_id_for_path(path: &std::path::Path) -> Option<String> {
+        platform_stable_id(path)
+    }
+
+    /// Resolve a remembered library path that may have been remounted at a
+    /// different location. If a stable id is known, prefer an exact mounted
+    /// volume match. For legacy configs without stable ids, use the only
+    /// currently-mounted indexed Smriti library if there is exactly one.
+    pub fn resolve_remembered_library_path(
+        remembered_path: &std::path::Path,
+        stable_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        if remembered_path.exists() {
+            return Some(remembered_path.to_path_buf());
+        }
+
+        let indexed: Vec<DriveInfo> = Self::detect()
+            .into_iter()
+            .filter(|d| d.has_photovault_db)
+            .collect();
+
+        if let Some(stable_id) = stable_id {
+            if let Some(drive) = indexed
+                .iter()
+                .find(|d| d.stable_id.as_deref() == Some(stable_id))
+            {
+                return Some(drive.path.clone());
+            }
+        }
+
+        if indexed.len() == 1 {
+            return Some(indexed[0].path.clone());
+        }
+
+        None
+    }
+
     /// Check if a path is a valid drive/folder for indexing
     fn check_path(path: PathBuf) -> Option<DriveInfo> {
         if !path.exists() || !path.is_dir() {
@@ -107,6 +148,7 @@ impl DriveDetector {
 
         Some(DriveInfo {
             name,
+            stable_id: Self::stable_id_for_path(&path),
             path,
             is_removable: true, // Simplified - could detect properly
             has_photovault_db,
@@ -114,4 +156,37 @@ impl DriveDetector {
             free_space_bytes: None,
         })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_stable_id(path: &std::path::Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeNameForVolumeMountPointW;
+
+    let mut mount = path.as_os_str().encode_wide().collect::<Vec<u16>>();
+    if !mount.ends_with(&[b'\\' as u16]) && !mount.ends_with(&[b'/' as u16]) {
+        mount.push(b'\\' as u16);
+    }
+    mount.push(0);
+
+    let mut buf = vec![0u16; 512];
+    let ok = unsafe {
+        GetVolumeNameForVolumeMountPointW(mount.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
+    };
+    if ok == 0 {
+        return None;
+    }
+
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let value = String::from_utf16_lossy(&buf[..len]);
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn platform_stable_id(_path: &std::path::Path) -> Option<String> {
+    None
 }

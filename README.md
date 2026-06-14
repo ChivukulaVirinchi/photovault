@@ -29,6 +29,9 @@
     <a href="https://github.com/ChivukulaVirinchi/photovault/stargazers">
       <img src="https://img.shields.io/github/stars/ChivukulaVirinchi/photovault?style=flat&color=466996" alt="Stars">
     </a>
+    <a href="https://ko-fi.com/L4L11ZM53F">
+      <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support Smriti on Ko-fi">
+    </a>
   </p>
 
   <a href="https://chivukulavirinchi.github.io/photovault/">
@@ -43,6 +46,8 @@
     <a href="https://chivukulavirinchi.github.io/photovault/docs/">Manual</a>
     &nbsp;·&nbsp;
     <a href="https://github.com/ChivukulaVirinchi/photovault/discussions">Discussions</a>
+    &nbsp;·&nbsp;
+    <a href="https://ko-fi.com/L4L11ZM53F">Support</a>
   </p>
 </div>
 

@@ -375,6 +375,32 @@ pub struct ThumbnailResultDto {
     pub thumbnail_path: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TimelineNeighborsDto {
+    pub prev_id: Option<i64>,
+    pub next_id: Option<i64>,
+}
+
+#[tauri::command]
+pub async fn photos_timeline_neighbors(
+    state: State<'_, AppState>,
+    args: PhotosGetArgs,
+) -> CommandResult<TimelineNeighborsDto> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = PhotoRepo::new(&db.conn);
+    let show_stacks = smriti::config::AppConfig::load().show_timeline_stacks;
+    let neighbors = repo
+        .timeline_neighbors(args.id, show_stacks)?
+        .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+
+    Ok(TimelineNeighborsDto {
+        prev_id: neighbors.prev_id,
+        next_id: neighbors.next_id,
+    })
+}
+
 #[tauri::command]
 pub async fn photos_request_thumbnail(
     state: State<'_, AppState>,

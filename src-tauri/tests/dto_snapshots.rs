@@ -674,6 +674,7 @@ fn drive_dto() {
     let drive = DriveInfo {
         name: "Photos".into(),
         path: std::path::PathBuf::from("/mnt/photos"),
+        stable_id: Some("volume-guid".into()),
         is_removable: true,
         has_photovault_db: true,
         total_size_bytes: Some(1_000_000_000_000),

@@ -12,6 +12,11 @@ export interface ThumbnailResult {
   thumbnail_path: string | null;
 }
 
+export interface TimelineNeighbors {
+  prev_id: number | null;
+  next_id: number | null;
+}
+
 export interface SaveVideoProbeArgs {
   id: number;
   duration_ms: number | null;
@@ -36,6 +41,8 @@ export const photos = {
   setFavorite: (id: number, isFavorite: boolean) =>
     call<PhotoDto>("photos_set_favorite", { id, is_favorite: isFavorite }),
   exifExtras: (id: number) => call<ExifExtras>("photos_exif_extras", { id }),
+  timelineNeighbors: (id: number) =>
+    call<TimelineNeighbors>("photos_timeline_neighbors", { id }),
   /// Request on-demand generation for a photo whose thumbnail isn't on
   /// disk yet. Returns `{ thumbnail_path: null }` on failure (e.g. file
   /// missing, decode error). Concurrency is capped server-side at 8.

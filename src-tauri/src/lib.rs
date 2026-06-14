@@ -59,6 +59,7 @@ pub fn run() {
             commands::photos::photos_people_in_photo,
             commands::photos::photos_albums_for_photo,
             commands::photos::photos_exif_extras,
+            commands::photos::photos_timeline_neighbors,
             commands::photos::photos_request_thumbnail,
             commands::photos::photos_save_video_probe,
             // people

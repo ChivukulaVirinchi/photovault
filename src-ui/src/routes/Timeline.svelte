@@ -146,11 +146,29 @@
     };
   }
 
+  const pendingThumbnailPatches = new Map<number, string>();
+  let thumbnailPatchRaf = 0;
+
+  function flushThumbnailPatches() {
+    thumbnailPatchRaf = 0;
+    if (pendingThumbnailPatches.size === 0) return;
+    const patches = new Map(pendingThumbnailPatches);
+    pendingThumbnailPatches.clear();
+    let changed = false;
+    items = items.map((p) => {
+      const thumbnailPath = patches.get(p.id);
+      if (!thumbnailPath || p.thumbnail_path === thumbnailPath) return p;
+      changed = true;
+      return { ...p, thumbnail_path: thumbnailPath };
+    });
+    if (changed) saveTimelineCache();
+  }
+
   function patchThumbnail(photoId: number, thumbnailPath: string) {
-    items = items.map((p) => (
-      p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
-    ));
-    saveTimelineCache();
+    pendingThumbnailPatches.set(photoId, thumbnailPath);
+    if (thumbnailPatchRaf === 0) {
+      thumbnailPatchRaf = requestAnimationFrame(flushThumbnailPatches);
+    }
   }
 
   function removeFromTimeline(ids: number[]) {
@@ -438,19 +456,25 @@
     const r = scrollEl.getBoundingClientRect();
     containerW = r.width - 14;
     containerH = r.height;
+    let scrollRaf = 0;
     const onScroll = () => {
-      scrollTop = scrollEl!.scrollTop;
-      if (marqueeStart && marqueePointer) {
-        marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
-        queueMarqueeUpdate();
-      }
-      saveTimelineCache();
-      // Persist so that returning from PhotoDetail lands the user back
-      // at the same row instead of the top of the timeline.
-      try { sessionStorage.setItem(scrollStorageKey, String(scrollTop)); } catch {}
+      if (scrollRaf !== 0) return;
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0;
+        scrollTop = scrollEl!.scrollTop;
+        if (marqueeStart && marqueePointer) {
+          marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
+          queueMarqueeUpdate();
+        }
+        saveTimelineCache();
+        // Persist so that returning from PhotoDetail lands the user back
+        // at the same row instead of the top of the timeline.
+        try { sessionStorage.setItem(scrollStorageKey, String(scrollTop)); } catch {}
+      });
     };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      if (scrollRaf !== 0) cancelAnimationFrame(scrollRaf);
       ro.disconnect();
       scrollEl?.removeEventListener("scroll", onScroll);
     };
@@ -520,13 +544,9 @@
         if (wanted.length === 0) return;
         try {
           const fresh = await photos.getMany(wanted);
-          const byId = new Map(fresh.map((p) => [p.id, p]));
-          items = items.map((p) => {
-            const u = byId.get(p.id);
-            if (!u) return p;
-            return { ...p, thumbnail_path: u.thumbnail_path ?? p.thumbnail_path };
-          });
-          saveTimelineCache();
+          for (const p of fresh) {
+            if (p.thumbnail_path) patchThumbnail(p.id, p.thumbnail_path);
+          }
         } catch {
           // best-effort — the on-demand thumbnail path covers misses
         }
@@ -562,6 +582,7 @@
 
     return () => {
       window.removeEventListener("keydown", onGlobalKey);
+      if (thumbnailPatchRaf !== 0) cancelAnimationFrame(thumbnailPatchRaf);
       if (throttle != null) clearTimeout(throttle);
       if (scanRefresh != null) clearTimeout(scanRefresh);
       Promise.all(unlistens).then((fns) => fns.forEach((f) => f()));
