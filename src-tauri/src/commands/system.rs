@@ -11,11 +11,6 @@ use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
-#[cfg(target_os = "windows")]
-const ORT_LIB_NAME: &str = "onnxruntime.dll";
-#[cfg(not(target_os = "windows"))]
-const ORT_LIB_NAME: &str = "libonnxruntime.so";
-
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
     let h = smriti::bootstrap::asset_health();
@@ -111,14 +106,8 @@ fn build_asset_inventory() -> AssetInventoryDto {
         "runtime.onnx",
         "ONNX Runtime",
         "runtime",
-        smriti::bootstrap::onnx_runtime_path().or_else(|| {
-            Some(
-                install_root
-                    .join("libs")
-                    .join("onnxruntime")
-                    .join(ORT_LIB_NAME),
-            )
-        }),
+        smriti::bootstrap::onnx_runtime_path()
+            .or_else(|| Some(smriti::bootstrap::onnx_runtime_install_path())),
         true,
         true,
         "Required for local face detection and future local models.",

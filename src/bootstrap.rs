@@ -50,6 +50,14 @@ impl AssetHealth {
 const ORT_LIB_NAME: &str = "onnxruntime.dll";
 #[cfg(not(target_os = "windows"))]
 const ORT_LIB_NAME: &str = "libonnxruntime.so";
+#[cfg(target_os = "windows")]
+const ORT_PLATFORM_DIR: &str = "windows";
+#[cfg(target_os = "linux")]
+const ORT_PLATFORM_DIR: &str = "linux";
+#[cfg(target_os = "macos")]
+const ORT_PLATFORM_DIR: &str = "macos";
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+const ORT_PLATFORM_DIR: &str = "";
 
 pub fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -101,12 +109,31 @@ fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
 
 pub fn onnx_runtime_path() -> Option<PathBuf> {
     for root in candidate_asset_roots() {
-        let candidate = root.join("libs").join("onnxruntime");
-        if let Some(path) = find_runtime_in_dir(&candidate) {
+        if let Some(path) = onnx_runtime_path_in_root(&root) {
             return Some(path);
         }
     }
     None
+}
+
+fn onnx_runtime_path_in_root(root: &Path) -> Option<PathBuf> {
+    let candidate = root.join("libs").join("onnxruntime");
+    if let Some(path) = find_runtime_in_dir(&candidate) {
+        return Some(path);
+    }
+    if !ORT_PLATFORM_DIR.is_empty() {
+        return find_runtime_in_dir(&candidate.join(ORT_PLATFORM_DIR));
+    }
+    None
+}
+
+pub fn onnx_runtime_install_path() -> PathBuf {
+    let base = default_asset_install_dir().join("libs").join("onnxruntime");
+    if ORT_PLATFORM_DIR.is_empty() {
+        base.join(ORT_LIB_NAME)
+    } else {
+        base.join(ORT_PLATFORM_DIR).join(ORT_LIB_NAME)
+    }
 }
 
 pub fn onnx_runtime_exists() -> bool {
@@ -340,4 +367,42 @@ pub async fn install_asset_pack() -> Result<String, String> {
     }
 
     Ok(format!("Assets installed to {}", install_root.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_runtime_from_asset_pack_platform_subdir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = if ORT_PLATFORM_DIR.is_empty() {
+            temp.path().join("libs").join("onnxruntime")
+        } else {
+            temp.path()
+                .join("libs")
+                .join("onnxruntime")
+                .join(ORT_PLATFORM_DIR)
+        };
+        std::fs::create_dir_all(&runtime_dir).expect("runtime dir");
+        let runtime = runtime_dir.join(ORT_LIB_NAME);
+        std::fs::write(&runtime, b"not a real runtime").expect("runtime marker");
+
+        assert_eq!(onnx_runtime_path_in_root(temp.path()), Some(runtime));
+    }
+
+    #[test]
+    fn runtime_install_path_matches_asset_pack_layout() {
+        let path = onnx_runtime_install_path();
+        let suffix = if ORT_PLATFORM_DIR.is_empty() {
+            PathBuf::from("libs").join("onnxruntime").join(ORT_LIB_NAME)
+        } else {
+            PathBuf::from("libs")
+                .join("onnxruntime")
+                .join(ORT_PLATFORM_DIR)
+                .join(ORT_LIB_NAME)
+        };
+
+        assert!(path.ends_with(suffix));
+    }
 }
