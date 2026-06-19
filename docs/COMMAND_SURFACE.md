@@ -205,6 +205,8 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 |---|---|---|---|
 | `album_export:progress` | server → client | `JobProgress` | while copying originals to the export folder |
 | `album_export:complete` | server → client | `AlbumExportComplete` | after export finishes or is cancelled |
+| `semantic:progress` | server → client | `JobProgress` | while downloading semantic model assets or indexing vectors |
+| `semantic:complete` | server → client | `JobProgress` | after semantic model install/index finishes or is cancelled |
 | `scan:progress` | server → client | `ScanProgress` | every 200ms during active scan |
 | `scan:complete` | server → client | `ScanResult` | on scan finish (ok or error) |
 | `faces:progress` | server → client | `FacesProgress` | every chunk (25 photos) |
@@ -402,6 +404,7 @@ struct DriveDto { path: String, label: Option<String>, available_bytes: Option<u
 struct AssetHealthDto { missing_face_models: bool, missing_onnx_runtime: bool, missing_geonames_db: bool, summary: String }
 struct AssetInventoryDto { install_root: String, roots: Vec<String>, total_size_bytes: u64, assets: Vec<AssetItemDto> }
 struct AssetItemDto { id: String, label: String, kind: String, status: String, required: bool, active: bool, installable: bool, removable: bool, size_bytes: Option<u64>, path: Option<String>, note: Option<String> }
+struct SemanticStatusDto { model_key: String, display_name: String, model_dir: String, assets_installed: bool, indexed_photos: u64, pending_photos: u64, failed_photos: u64, vector_bytes: u64 }
 struct UpdateStatusDto { current: String, latest: Option<String>, newer_available: bool, release_url: Option<String>, body: Option<String> }
 struct MapPinDto { photo_id: i64, lat: f64, lng: f64, thumbnail_path: Option<String> }
 struct SearchResultsDto {
@@ -541,6 +544,28 @@ favourites, and media type are ANDed together. Multiple people mean
 "contains all". `only <people>` is strict: the photo must be face-processed,
 must contain every requested person, and must not contain another assigned
 or unassigned detected face.
+
+If the optional semantic model is installed and the library has indexed
+vectors, `search.query` also asks the local text encoder for semantic
+photo candidates. Those candidates are not a separate shortcut: they are
+fed into the same smart-search filter path, so date/person/place/media
+constraints still apply.
+
+### 5a. `semantic` — optional visual search
+
+Semantic search uses the local `immich-app/ViT-B-32-SigLIP2-256__webli`
+ONNX model. The model files live outside the app binary under the asset
+root; per-library vectors live under `.photovault/semantic/...`.
+
+| Command | Args | Returns |
+|---|---|---|
+| `semantic.status` | `{}` | `SemanticStatusDto` |
+| `semantic.install_model` | `{}` | `{ job_id: String }` | emits `semantic:progress`, `semantic:complete` while downloading the visual/text encoders and tokenizer |
+| `semantic.start_indexing` | `{}` | `{ job_id: String }` | resumable; emits `semantic:progress`, `semantic:complete` |
+| `semantic.similar_photos` | `{ photo_id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` | HNSW nearest-neighbour lookup over indexed visual vectors |
+
+`semantic.start_indexing` indexes non-trashed photos and videos. Videos
+use their poster thumbnail, so thumbnail generation must have run first.
 
 ### 6. `memories` — N-years-ago rediscovery
 
