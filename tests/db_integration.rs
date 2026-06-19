@@ -66,6 +66,7 @@ fn test_schema_creation() {
         "duplicate_groups",
         "burst_groups",
         "trash",
+        "semantic_index_state",
     ] {
         let count: i32 = db
             .conn
