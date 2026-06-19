@@ -236,6 +236,29 @@ export const search = {
   recentClear: () => call<null>("search_recent_clear"),
 };
 
+// ---------- semantic search ----------
+export interface SemanticStatus {
+  model_key: string;
+  display_name: string;
+  model_dir: string;
+  assets_installed: boolean;
+  indexed_photos: number;
+  pending_photos: number;
+  failed_photos: number;
+  vector_bytes: number;
+}
+
+export const semantic = {
+  status: () => call<SemanticStatus>("semantic_status"),
+  installModel: () => call<JobIdDto>("semantic_install_model"),
+  startIndexing: () => call<JobIdDto>("semantic_start_indexing"),
+  similarPhotos: (photoId: number, limit = 24) =>
+    call<PhotoSummaryDto[]>("semantic_similar_photos", {
+      photo_id: photoId,
+      limit,
+    }),
+};
+
 // ---------- memories ----------
 export interface MemoryCard {
   id: string;

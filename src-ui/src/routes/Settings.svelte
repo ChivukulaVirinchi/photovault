@@ -2,20 +2,21 @@
   import { onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { settingsStore } from "../lib/stores/settings.svelte";
-  import { albums, geocoding, health, people, stacks, systemEx } from "../lib/api/all";
+  import { albums, geocoding, health, people, semantic, stacks, systemEx } from "../lib/api/all";
   import { library } from "../lib/api/library";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { devMode } from "../lib/stores/devMode.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
-  import type { AssetInventory, AssetItem, LibraryHealthData, Settings } from "../lib/api/all";
+  import type { AssetInventory, AssetItem, LibraryHealthData, SemanticStatus, Settings } from "../lib/api/all";
   import type { ExcludedFolderDto } from "../lib/api/types";
 
   let saving = $state(false);
   let error = $state<string | null>(null);
   let healthData = $state<LibraryHealthData | null>(null);
   let assets = $state<AssetInventory | null>(null);
+  let semanticStatus = $state<SemanticStatus | null>(null);
   let exclusions = $state<ExcludedFolderDto[] | null>(null);
   let exclusionsBusy = $state(false);
   let exclusionsActing = $state(false);
@@ -42,6 +43,8 @@
   const geocodingJob = $derived(jobs.byKind("geocoding"));
   const installingAssets = $derived(jobs.isRunning("assets"));
   const assetsJob = $derived(jobs.byKind("assets"));
+  const semanticRunning = $derived(jobs.isRunning("semantic"));
+  const semanticJob = $derived(jobs.byKind("semantic"));
 
   // React to backfill completion via the global store. Same reasoning
   // as Albums.svelte: a per-page Tauri `listen()` races with fast
@@ -72,6 +75,7 @@
     settingsStore.load();
     health.compute().then((d) => (healthData = d)).catch(() => {});
     loadAssets();
+    loadSemanticStatus();
     loadExclusions();
   });
 
@@ -87,6 +91,19 @@
         toasts.success("Assets ready.");
         loadAssets();
       }
+    }
+  });
+
+  let toastedSemanticIds = new Set<string>();
+  $effect(() => {
+    if (!semanticJob) return;
+    if (semanticJob.status === "complete" && !toastedSemanticIds.has(semanticJob.id)) {
+      toastedSemanticIds.add(semanticJob.id);
+      const msg = semanticJob.message || "Visual search updated.";
+      if (msg.toLowerCase().includes("failed")) toasts.error(msg);
+      else toasts.success(msg);
+      loadAssets();
+      loadSemanticStatus();
     }
   });
 
@@ -175,6 +192,14 @@
     }
   }
 
+  async function loadSemanticStatus() {
+    try {
+      semanticStatus = await semantic.status();
+    } catch {
+      semanticStatus = null;
+    }
+  }
+
   async function installAssets() {
     if (installingAssets) return;
     const placeholderId = `pending-assets-${Date.now()}`;
@@ -187,6 +212,36 @@
     } catch (e) {
       jobs.dismiss(placeholderId);
       toasts.error(`Couldn't start asset setup: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
+  async function installSemanticModel() {
+    if (semanticRunning) return;
+    const placeholderId = `pending-semantic-assets-${Date.now()}`;
+    jobs.register(placeholderId, "semantic");
+    toasts.success("Downloading visual search model...");
+    try {
+      const r = await semantic.installModel();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "semantic");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start visual search model install: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+    }
+  }
+
+  async function startSemanticIndexing() {
+    if (semanticRunning) return;
+    const placeholderId = `pending-semantic-index-${Date.now()}`;
+    jobs.register(placeholderId, "semantic");
+    toasts.success("Indexing visual search...");
+    try {
+      const r = await semantic.startIndexing();
+      jobs.dismiss(placeholderId);
+      jobs.register(r.job_id, "semantic");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start visual search indexing: ${typeof e === "string" ? e : JSON.stringify(e)}`);
     }
   }
 
@@ -531,6 +586,44 @@
         <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
           {assetsBusy ? "Checking..." : "Recheck"}
         </button>
+      </div>
+      <div class="semantic-panel">
+        <div class="section-heading-row">
+          <div>
+            <h4 class="subsection-title">Visual search</h4>
+            <p class="hint blurb">
+              Search by image meaning and find visually similar photos. The model is optional and stored outside the app binary.
+            </p>
+          </div>
+          <span class="asset-status" data-status={semanticStatus?.assets_installed ? "active" : "missing"}>
+            {semanticStatus?.assets_installed ? "ready" : "missing"}
+          </span>
+        </div>
+        {#if semanticStatus}
+          <div class="semantic-stats" aria-label="Visual search status">
+            <span><strong>{semanticStatus.display_name}</strong></span>
+            <span class="mono">{semanticStatus.indexed_photos.toLocaleString()} indexed</span>
+            <span class="mono">{semanticStatus.pending_photos.toLocaleString()} pending</span>
+            <span class="mono">{semanticStatus.failed_photos.toLocaleString()} failed</span>
+            <span class="mono">{formatBytes(semanticStatus.vector_bytes)} vectors</span>
+          </div>
+          {#if devMode.enabled}
+            <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
+          {/if}
+        {:else}
+          <p class="hint blurb">Open a library to see visual search status.</p>
+        {/if}
+        <div class="asset-actions">
+          <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticStatus?.assets_installed}>
+            {semanticRunning ? "Working..." : "Download visual model"}
+          </button>
+          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !semanticStatus?.assets_installed}>
+            {semanticRunning ? "Indexing..." : "Index visual search"}
+          </button>
+          <button class="ghost" onclick={loadSemanticStatus} disabled={semanticRunning}>
+            Recheck visual search
+          </button>
+        </div>
       </div>
       {#if assets && hasExternalAssets(assets)}
         <p class="hint blurb">
@@ -923,6 +1016,25 @@
   .asset-roots li {
     margin-bottom: 4px;
     overflow-wrap: anywhere;
+  }
+  .semantic-panel {
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+    padding: var(--s-3) 0;
+    margin: var(--s-3) 0;
+  }
+  .semantic-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2) var(--s-4);
+    align-items: center;
+    color: var(--ink-soft);
+    font-size: var(--t-sm);
+    margin-bottom: var(--s-2);
+  }
+  .semantic-stats strong {
+    color: var(--ink);
+    font-weight: 600;
   }
   .asset-table {
     border-top: 1px solid var(--line);
