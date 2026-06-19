@@ -242,6 +242,7 @@ export interface SemanticStatus {
   display_name: string;
   model_dir: string;
   assets_installed: boolean;
+  onnx_runtime_installed: boolean;
   indexed_photos: number;
   pending_photos: number;
   failed_photos: number;

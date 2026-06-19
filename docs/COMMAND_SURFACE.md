@@ -404,7 +404,7 @@ struct DriveDto { path: String, label: Option<String>, available_bytes: Option<u
 struct AssetHealthDto { missing_face_models: bool, missing_onnx_runtime: bool, missing_geonames_db: bool, summary: String }
 struct AssetInventoryDto { install_root: String, roots: Vec<String>, total_size_bytes: u64, assets: Vec<AssetItemDto> }
 struct AssetItemDto { id: String, label: String, kind: String, status: String, required: bool, active: bool, installable: bool, removable: bool, size_bytes: Option<u64>, path: Option<String>, note: Option<String> }
-struct SemanticStatusDto { model_key: String, display_name: String, model_dir: String, assets_installed: bool, indexed_photos: u64, pending_photos: u64, failed_photos: u64, vector_bytes: u64 }
+struct SemanticStatusDto { model_key: String, display_name: String, model_dir: String, assets_installed: bool, onnx_runtime_installed: bool, indexed_photos: u64, pending_photos: u64, failed_photos: u64, vector_bytes: u64 }
 struct UpdateStatusDto { current: String, latest: Option<String>, newer_available: bool, release_url: Option<String>, body: Option<String> }
 struct MapPinDto { photo_id: i64, lat: f64, lng: f64, thumbnail_path: Option<String> }
 struct SearchResultsDto {
@@ -564,7 +564,8 @@ root; per-library vectors live under `.photovault/semantic/...`.
 | `semantic.start_indexing` | `{}` | `{ job_id: String }` | resumable; emits `semantic:progress`, `semantic:complete` |
 | `semantic.similar_photos` | `{ photo_id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` | HNSW nearest-neighbour lookup over indexed visual vectors |
 
-`semantic.start_indexing` indexes non-trashed photos and videos. Videos
+`semantic.start_indexing` requires both the visual search model and ONNX
+Runtime asset pack. It indexes non-trashed photos and videos. Videos
 use their poster thumbnail, so thumbnail generation must have run first.
 
 ### 6. `memories` — N-years-ago rediscovery

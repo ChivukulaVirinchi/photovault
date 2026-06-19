@@ -52,6 +52,7 @@ pub struct SemanticStatus {
     pub display_name: String,
     pub model_dir: String,
     pub assets_installed: bool,
+    pub onnx_runtime_installed: bool,
     pub indexed_photos: u64,
     pub pending_photos: u64,
     pub failed_photos: u64,
@@ -168,6 +169,7 @@ impl SemanticSearchService {
                 .map(|a| a.root.display().to_string())
                 .unwrap_or_else(|| Self::default_asset_paths().root.display().to_string()),
             assets_installed: assets.as_ref().is_some_and(SemanticAssetPaths::installed),
+            onnx_runtime_installed: crate::bootstrap::onnx_runtime_exists(),
             indexed_photos: stats.indexed,
             pending_photos: stats.pending,
             failed_photos: stats.failed,
@@ -510,6 +512,12 @@ impl SemanticSearchService {
                 SEMANTIC_MODEL_DISPLAY
             )
         })?;
+        if !crate::bootstrap::onnx_runtime_exists() {
+            return Err(
+                "ONNX Runtime is missing. Use Settings -> Assets -> Download assets before indexing visual search."
+                    .into(),
+            );
+        }
         let rt = OnnxRuntime::init().map_err(|e| e.to_string())?;
         SemanticModelRunner::new(&rt, paths)
     }

@@ -40,8 +40,9 @@ matching assets being installed.
   `ViT-B-32 SigLIP2 256` semantic search model. The download is large
   and is stored in the user asset directory, not bundled into Smriti.
 - **Index visual search** — creates per-library image vectors under
-  `<library>/.photovault/semantic`. It is resumable; rerun it after
-  adding new files.
+  `<library>/.photovault/semantic`. It also requires the ONNX Runtime
+  installed by **Download assets**. It is resumable; rerun it after adding
+  new files.
 - **Recheck visual search** — refreshes the status counts shown in
   Settings.
 

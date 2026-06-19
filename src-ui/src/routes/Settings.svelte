@@ -45,6 +45,11 @@
   const assetsJob = $derived(jobs.byKind("assets"));
   const semanticRunning = $derived(jobs.isRunning("semantic"));
   const semanticJob = $derived(jobs.byKind("semantic"));
+  const visualSearchReady = $derived(Boolean(semanticStatus?.assets_installed && semanticStatus?.onnx_runtime_installed));
+  const visualSearchMissingRuntime = $derived(Boolean(semanticStatus?.assets_installed && !semanticStatus?.onnx_runtime_installed));
+  const visualSearchStatus = $derived(
+    visualSearchReady ? "ready" : visualSearchMissingRuntime ? "runtime missing" : "missing",
+  );
 
   // React to backfill completion via the global store. Same reasoning
   // as Albums.svelte: a per-page Tauri `listen()` races with fast
@@ -595,8 +600,8 @@
               Search by image meaning and find visually similar photos. The model is optional and stored outside the app binary.
             </p>
           </div>
-          <span class="asset-status" data-status={semanticStatus?.assets_installed ? "active" : "missing"}>
-            {semanticStatus?.assets_installed ? "ready" : "missing"}
+          <span class="asset-status" data-status={visualSearchReady ? "active" : "missing"}>
+            {visualSearchStatus}
           </span>
         </div>
         {#if semanticStatus}
@@ -610,6 +615,9 @@
           {#if devMode.enabled}
             <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
           {/if}
+          {#if visualSearchMissingRuntime}
+            <p class="hint blurb">ONNX Runtime is missing. Click Download assets, then recheck visual search before indexing.</p>
+          {/if}
         {:else}
           <p class="hint blurb">Open a library to see visual search status.</p>
         {/if}
@@ -617,7 +625,7 @@
           <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticStatus?.assets_installed}>
             {semanticRunning ? "Working..." : "Download visual model"}
           </button>
-          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !semanticStatus?.assets_installed}>
+          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady}>
             {semanticRunning ? "Indexing..." : "Index visual search"}
           </button>
           <button class="ghost" onclick={loadSemanticStatus} disabled={semanticRunning}>

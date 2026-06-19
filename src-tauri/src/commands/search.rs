@@ -27,7 +27,11 @@ pub async fn search_query(
     let semantic_ids = if should_try_semantic(&args.q) {
         let svc = SemanticSearchService::new(&lib.drive_root);
         match svc.status(&db.conn) {
-            Ok(status) if status.assets_installed && status.indexed_photos > 0 => {
+            Ok(status)
+                if status.assets_installed
+                    && status.onnx_runtime_installed
+                    && status.indexed_photos > 0 =>
+            {
                 let mut cache = match lib.semantic_index.lock() {
                     Ok(cache) => cache,
                     Err(_) => return Err(CommandError::internal("semantic index cache poisoned")),

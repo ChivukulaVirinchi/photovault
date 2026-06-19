@@ -117,6 +117,19 @@ pub async fn semantic_start_indexing(
     let (drive_root, db_path) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        let db = lib.db.lock().await;
+        let status = SemanticSearchService::new(&lib.drive_root).status(&db.conn)?;
+        if !status.assets_installed {
+            return Err(CommandError::MlUnavailable {
+                reason: "Install the visual search model from Settings -> Assets first.".into(),
+            });
+        }
+        if !status.onnx_runtime_installed {
+            return Err(CommandError::MlUnavailable {
+                reason: "Install ONNX Runtime from Settings -> Assets -> Download assets first."
+                    .into(),
+            });
+        }
         (lib.drive_root.clone(), db_path_for(&lib.drive_root))
     };
     let job = jobs::start_job(&state, JobKind::SemanticIndex).await?;
