@@ -45,26 +45,30 @@ pub async fn semantic_install_model(
 
     let job = jobs::start_job(&state, JobKind::SemanticAssets).await?;
     let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
     let started = job.started_at;
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
 
     tokio::spawn(async move {
-        let result = SemanticSearchService::install_model_assets(|stage, processed, total| {
-            emit(
-                &app_clone,
-                EV_SEMANTIC_PROGRESS,
-                JobProgress {
-                    job_id: job_id_clone.clone(),
-                    stage: stage.into(),
-                    processed,
-                    total,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    eta_ms: None,
-                    message: Some("Downloading semantic search model".into()),
-                },
-            );
-        })
+        let result = SemanticSearchService::install_model_assets(
+            Some(cancel.as_ref()),
+            |stage, processed, total| {
+                emit(
+                    &app_clone,
+                    EV_SEMANTIC_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: stage.into(),
+                        processed,
+                        total,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("Downloading semantic search model ({stage})")),
+                    },
+                );
+            },
+        )
         .await;
 
         emit(
@@ -79,6 +83,9 @@ pub async fn semantic_install_model(
                 eta_ms: None,
                 message: Some(match result {
                     Ok(()) => "Semantic search model installed".into(),
+                    Err(err) if err.to_lowercase().contains("cancelled") => {
+                        "Semantic model install cancelled".into()
+                    }
                     Err(err) => format!("Semantic model install failed: {err}"),
                 }),
             },

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::{DynamicImage, ImageBuffer, Rgb};
 use ndarray::Array1;
@@ -38,6 +39,12 @@ const TOKENIZER_URL: &str = "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-
 const PREPROCESS_URL: &str = "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/visual/preprocess_cfg.json";
 const CONFIG_URL: &str =
     "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/config.json";
+
+const VISUAL_MODEL_BYTES: u64 = 378_359_772;
+const TEXTUAL_MODEL_BYTES: u64 = 1_129_435_819;
+const TOKENIZER_BYTES: u64 = 34_362_885;
+const PREPROCESS_BYTES: u64 = 154;
+const CONFIG_BYTES: u64 = 551;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticStatus {
@@ -170,34 +177,51 @@ impl SemanticSearchService {
         })
     }
 
-    pub async fn install_model_assets<F>(mut progress: F) -> Result<(), String>
+    pub async fn install_model_assets<F>(
+        cancel: Option<&AtomicBool>,
+        mut progress: F,
+    ) -> Result<(), String>
     where
         F: FnMut(&str, u64, Option<u64>) + Send,
     {
         let paths = Self::default_asset_paths();
-        download_asset(
-            VISUAL_MODEL_URL,
-            &paths.visual_model,
-            "visual-model",
-            &mut progress,
-        )
-        .await?;
-        download_asset(
-            TEXTUAL_MODEL_URL,
-            &paths.textual_model,
-            "text-model",
-            &mut progress,
-        )
-        .await?;
-        download_asset(TOKENIZER_URL, &paths.tokenizer, "tokenizer", &mut progress).await?;
-        download_asset(
-            PREPROCESS_URL,
-            &paths.preprocess,
-            "preprocess",
-            &mut progress,
-        )
-        .await?;
-        download_asset(CONFIG_URL, &paths.config, "config", &mut progress).await?;
+        let assets = [
+            SemanticDownload {
+                url: VISUAL_MODEL_URL,
+                destination: paths.visual_model,
+                stage: "visual-model",
+                expected_size: VISUAL_MODEL_BYTES,
+            },
+            SemanticDownload {
+                url: TEXTUAL_MODEL_URL,
+                destination: paths.textual_model,
+                stage: "text-model",
+                expected_size: TEXTUAL_MODEL_BYTES,
+            },
+            SemanticDownload {
+                url: TOKENIZER_URL,
+                destination: paths.tokenizer,
+                stage: "tokenizer",
+                expected_size: TOKENIZER_BYTES,
+            },
+            SemanticDownload {
+                url: PREPROCESS_URL,
+                destination: paths.preprocess,
+                stage: "preprocess",
+                expected_size: PREPROCESS_BYTES,
+            },
+            SemanticDownload {
+                url: CONFIG_URL,
+                destination: paths.config,
+                stage: "config",
+                expected_size: CONFIG_BYTES,
+            },
+        ];
+        let total = assets.iter().map(|a| a.expected_size).sum::<u64>();
+        let mut completed = 0;
+        for asset in assets {
+            completed = download_asset(asset, completed, total, cancel, &mut progress).await?;
+        }
         Ok(())
     }
 
@@ -745,46 +769,86 @@ fn truncate_error(error: &str) -> String {
     error.chars().take(500).collect()
 }
 
+struct SemanticDownload {
+    url: &'static str,
+    stage: &'static str,
+    destination: PathBuf,
+    expected_size: u64,
+}
+
 async fn download_asset<F>(
-    url: &str,
-    destination: &Path,
-    stage: &str,
+    asset: SemanticDownload,
+    completed_before: u64,
+    total_bytes: u64,
+    cancel: Option<&AtomicBool>,
     progress: &mut F,
-) -> Result<(), String>
+) -> Result<u64, String>
 where
     F: FnMut(&str, u64, Option<u64>) + Send,
 {
-    if destination.exists() {
-        return Ok(());
+    if asset.destination.exists() {
+        let completed = completed_before + asset.expected_size;
+        progress(asset.stage, completed, Some(total_bytes));
+        return Ok(completed);
     }
-    if let Some(parent) = destination.parent() {
+    if let Some(parent) = asset.destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|e| format!("failed creating {}: {e}", parent.display()))?;
     }
-    let response = reqwest::get(url)
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("Semantic model install cancelled".into());
+    }
+
+    let response = reqwest::get(asset.url)
         .await
-        .map_err(|e| format!("download request failed for {url}: {e}"))?;
+        .map_err(|e| format!("download request failed for {}: {e}", asset.url))?;
     if !response.status().is_success() {
         return Err(format!(
-            "download failed for {url}: HTTP {}",
+            "download failed for {}: HTTP {}",
+            asset.url,
             response.status()
         ));
     }
-    let total = response.content_length();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("download body failed for {url}: {e}"))?;
-    progress(stage, bytes.len() as u64, total);
-    let tmp = destination.with_extension("tmp");
-    tokio::fs::write(&tmp, &bytes)
+    let expected = response.content_length().unwrap_or(asset.expected_size);
+    let tmp = asset.destination.with_extension("tmp");
+    let mut file = tokio::fs::File::create(&tmp)
         .await
         .map_err(|e| format!("failed writing {}: {e}", tmp.display()))?;
-    tokio::fs::rename(&tmp, destination)
+    let mut downloaded = 0u64;
+    let mut last_emit = 0u64;
+    let mut stream = response.bytes_stream();
+
+    use futures::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err("Semantic model install cancelled".into());
+        }
+        let chunk = chunk.map_err(|e| format!("download body failed for {}: {e}", asset.url))?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
+            .map_err(|e| format!("failed writing {}: {e}", tmp.display()))?;
+        downloaded += chunk.len() as u64;
+        if downloaded.saturating_sub(last_emit) >= 1_048_576 || downloaded >= expected {
+            last_emit = downloaded;
+            progress(
+                asset.stage,
+                completed_before + downloaded.min(asset.expected_size),
+                Some(total_bytes),
+            );
+        }
+    }
+    tokio::io::AsyncWriteExt::flush(&mut file)
         .await
-        .map_err(|e| format!("failed moving {}: {e}", destination.display()))?;
-    Ok(())
+        .map_err(|e| format!("failed flushing {}: {e}", tmp.display()))?;
+    drop(file);
+    tokio::fs::rename(&tmp, &asset.destination)
+        .await
+        .map_err(|e| format!("failed moving {}: {e}", asset.destination.display()))?;
+    let completed = completed_before + asset.expected_size;
+    progress(asset.stage, completed, Some(total_bytes));
+    Ok(completed)
 }
 
 pub fn semantic_ids_by_score(candidates: &[SemanticCandidate]) -> HashMap<i64, usize> {

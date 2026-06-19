@@ -225,6 +225,14 @@ class JobsStore {
     this.jobs = next;
   }
 
+  markCancelling(id: string) {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const next = new Map(this.jobs);
+    next.set(id, { ...job, message: "Cancelling..." });
+    this.jobs = next;
+  }
+
 }
 
 /// Compute a rough ETA in ms based on processed/total + elapsed_ms.
