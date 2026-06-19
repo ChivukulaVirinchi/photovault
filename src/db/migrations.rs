@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 25;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 26;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -133,8 +133,43 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 25 {
         migrate_v24_to_v25(conn)?;
     }
+    if current_version < 26 {
+        migrate_v25_to_v26(conn)?;
+    }
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v25_to_v26(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS semantic_index_state (
+            photo_id INTEGER NOT NULL,
+            model_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'indexed', 'failed', 'unsupported')),
+            vector_offset INTEGER,
+            vector_dim INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            indexed_at DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (photo_id, model_key),
+            FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_semantic_state_status
+            ON semantic_index_state(model_key, status);
+        CREATE INDEX IF NOT EXISTS idx_semantic_state_photo
+            ON semantic_index_state(photo_id);
+
+        INSERT INTO schema_version (version) VALUES (26);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 26 (semantic search)");
     Ok(())
 }
 

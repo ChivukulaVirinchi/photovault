@@ -1,6 +1,6 @@
 //! Search service - executes parsed queries against the database.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::{params, params_from_iter, types::Value, Connection, Result as SqliteResult};
 
@@ -127,6 +127,7 @@ struct SmartIntent {
     albums: Vec<ResolvedAlbum>,
     favorite: Option<bool>,
     media_type: Option<SmartMediaType>,
+    semantic_photo_ids: Vec<i64>,
 }
 
 impl SearchService {
@@ -313,12 +314,21 @@ impl SearchService {
         conn: &Connection,
         raw_query: &str,
     ) -> SqliteResult<UnifiedSearchResults> {
+        Self::search_unified_with_semantic(conn, raw_query, Vec::new())
+    }
+
+    pub fn search_unified_with_semantic(
+        conn: &Connection,
+        raw_query: &str,
+        semantic_photo_ids: Vec<i64>,
+    ) -> SqliteResult<UnifiedSearchResults> {
         let query = raw_query.trim();
         if query.is_empty() {
             return Ok(UnifiedSearchResults::default());
         }
 
-        let intent = Self::parse_smart_intent(conn, query)?;
+        let mut intent = Self::parse_smart_intent(conn, query)?;
+        intent.semantic_photo_ids = semantic_photo_ids;
         let mut results = UnifiedSearchResults {
             interpreted: Self::interpreted_filters(&intent),
             people: Self::search_people(conn, query)?,
@@ -490,9 +500,21 @@ impl SearchService {
             });
         }
         if let Some(text) = &intent.text {
+            if intent.semantic_photo_ids.is_empty() {
+                out.push(InterpretedFilter {
+                    kind: "text".into(),
+                    label: text.clone(),
+                });
+            } else {
+                out.push(InterpretedFilter {
+                    kind: "semantic".into(),
+                    label: text.clone(),
+                });
+            }
+        } else if !intent.semantic_photo_ids.is_empty() {
             out.push(InterpretedFilter {
-                kind: "text".into(),
-                label: text.clone(),
+                kind: "semantic".into(),
+                label: "Visual meaning".into(),
             });
         }
         out
@@ -637,7 +659,17 @@ impl SearchService {
             }
         }
         if let Some(t) = &intent.text {
-            sql.push_str(
+            let semantic_clause = if intent.semantic_photo_ids.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " OR p.id IN ({})",
+                    std::iter::repeat_n("?", intent.semantic_photo_ids.len())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            sql.push_str(&format!(
                 " AND (
                     LOWER(p.file_name) LIKE LOWER(?) OR
                     LOWER(p.location_city) LIKE LOWER(?) OR
@@ -645,15 +677,36 @@ impl SearchService {
                     LOWER(p.camera_make) LIKE LOWER(?) OR
                     LOWER(p.camera_model) LIKE LOWER(?) OR
                     LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?)
+                    {semantic_clause}
                 )",
-            );
+            ));
             let like = Value::Text(format!("%{}%", t));
             for _ in 0..6 {
                 bind.push(like.clone());
             }
+            for id in &intent.semantic_photo_ids {
+                bind.push(Value::Integer(*id));
+            }
+        } else if !intent.semantic_photo_ids.is_empty() {
+            sql.push_str(&format!(
+                " AND p.id IN ({})",
+                std::iter::repeat_n("?", intent.semantic_photo_ids.len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            for id in &intent.semantic_photo_ids {
+                bind.push(Value::Integer(*id));
+            }
         }
 
-        sql.push_str(" ORDER BY p.date_taken DESC, p.id DESC LIMIT 1000");
+        let limit = if intent.semantic_photo_ids.is_empty() {
+            1000
+        } else {
+            5000
+        };
+        sql.push_str(&format!(
+            " ORDER BY p.date_taken DESC, p.id DESC LIMIT {limit}"
+        ));
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
             Ok(SearchResult {
@@ -664,7 +717,28 @@ impl SearchService {
                 thumbnail_path: row.get(4)?,
             })
         })?;
-        rows.collect()
+        let mut results = rows.collect::<SqliteResult<Vec<_>>>()?;
+        if !intent.semantic_photo_ids.is_empty() {
+            let rank: HashMap<i64, usize> = intent
+                .semantic_photo_ids
+                .iter()
+                .enumerate()
+                .map(|(idx, id)| (*id, idx))
+                .collect();
+            results.sort_by(
+                |a, b| match (rank.get(&a.photo_id), rank.get(&b.photo_id)) {
+                    (Some(ra), Some(rb)) => ra.cmp(rb),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => b
+                        .date_taken
+                        .cmp(&a.date_taken)
+                        .then(b.photo_id.cmp(&a.photo_id)),
+                },
+            );
+            results.truncate(1000);
+        }
+        Ok(results)
     }
 
     fn resolve_people(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPerson>> {
