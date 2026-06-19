@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use smriti::db::Database;
+use smriti::services::semantic::{SemanticIndexCache, SemanticModelRunner};
 use smriti::services::thumbnail::ThumbnailService;
 use tokio::sync::{Mutex, RwLock};
 
@@ -39,6 +40,8 @@ pub struct OpenLibrary {
     /// On-demand thumbnail generator. Shared across handlers so the
     /// 8-permit concurrency limiter applies globally, not per-request.
     pub thumbnails: Arc<ThumbnailService>,
+    pub semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
+    pub semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
 }
 
 impl OpenLibrary {
@@ -51,6 +54,8 @@ impl OpenLibrary {
             drive_root,
             db: Arc::new(Mutex::new(database)),
             thumbnails,
+            semantic_index: Arc::new(std::sync::Mutex::new(SemanticIndexCache::default())),
+            semantic_runner: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -112,6 +117,8 @@ pub enum JobKind {
     Geocoding,
     Thumbnails,
     AssetInstall,
+    SemanticAssets,
+    SemanticIndex,
     UpdateDownload,
     /// Trip / event detection over photo metadata. Long enough on
     /// large libraries to deserve background-job tracking so the user

@@ -33,6 +33,7 @@ use smriti::services::memories::MemoryCard;
 use smriti::services::search::{
     AlbumHit, InterpretedFilter, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults,
 };
+use smriti::services::semantic::SemanticStatus;
 use smriti::services::trash::TrashStats;
 
 /// Generic page-of-T return shape used by every paginated command.
@@ -1174,6 +1175,33 @@ impl From<smriti::bootstrap::AssetHealth> for AssetHealthDto {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppVersionDto {
     pub version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SemanticStatusDto {
+    pub model_key: String,
+    pub display_name: String,
+    pub model_dir: String,
+    pub assets_installed: bool,
+    pub indexed_photos: u64,
+    pub pending_photos: u64,
+    pub failed_photos: u64,
+    pub vector_bytes: u64,
+}
+
+impl From<SemanticStatus> for SemanticStatusDto {
+    fn from(s: SemanticStatus) -> Self {
+        Self {
+            model_key: s.model_key,
+            display_name: s.display_name,
+            model_dir: s.model_dir,
+            assets_installed: s.assets_installed,
+            indexed_photos: s.indexed_photos,
+            pending_photos: s.pending_photos,
+            failed_photos: s.failed_photos,
+            vector_bytes: s.vector_bytes,
+        }
+    }
 }
 
 // ---------- settings ----------

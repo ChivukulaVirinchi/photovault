@@ -17,6 +17,7 @@ pub mod memories;
 pub mod people;
 pub mod photos;
 pub mod search;
+pub mod semantic;
 pub mod settings;
 pub mod stacks;
 pub mod system;

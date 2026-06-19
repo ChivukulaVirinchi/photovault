@@ -157,11 +157,61 @@ fn build_asset_inventory() -> AssetInventoryDto {
         "model",
         "Not installed in this build.",
     ));
-    assets.push(planned_asset(
-        "vision.semantic",
-        "Semantic image search",
+    assets.push(asset_file(
+        "vision.semantic.visual",
+        "Semantic visual encoder",
         "model",
-        "Planned for a later local model pack.",
+        smriti::bootstrap::asset_roots()
+            .into_iter()
+            .map(|root| {
+                root.join("models")
+                    .join("semantic")
+                    .join("vit-b-32-siglip2-256-webli")
+                    .join("visual")
+                    .join("model.onnx")
+            })
+            .find(|p| p.exists())
+            .or_else(|| {
+                Some(
+                    install_root
+                        .join("models")
+                        .join("semantic")
+                        .join("vit-b-32-siglip2-256-webli")
+                        .join("visual")
+                        .join("model.onnx"),
+                )
+            }),
+        false,
+        true,
+        "Optional local visual search model.",
+    ));
+    assets.push(asset_file(
+        "vision.semantic.text",
+        "Semantic text encoder",
+        "model",
+        smriti::bootstrap::asset_roots()
+            .into_iter()
+            .map(|root| {
+                root.join("models")
+                    .join("semantic")
+                    .join("vit-b-32-siglip2-256-webli")
+                    .join("textual")
+                    .join("model.onnx")
+            })
+            .find(|p| p.exists())
+            .or_else(|| {
+                Some(
+                    install_root
+                        .join("models")
+                        .join("semantic")
+                        .join("vit-b-32-siglip2-256-webli")
+                        .join("textual")
+                        .join("model.onnx"),
+                )
+            }),
+        false,
+        true,
+        "Optional local text-to-image search model.",
     ));
 
     let total_size_bytes = assets.iter().filter_map(|a| a.size_bytes).sum();

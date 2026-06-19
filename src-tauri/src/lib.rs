@@ -108,6 +108,11 @@ pub fn run() {
             commands::search::search_recent_list,
             commands::search::search_recent_remove,
             commands::search::search_recent_clear,
+            // semantic search
+            commands::semantic::semantic_status,
+            commands::semantic::semantic_install_model,
+            commands::semantic::semantic_start_indexing,
+            commands::semantic::semantic_similar_photos,
             // memories
             commands::memories::memories_today,
             commands::memories::memories_detail,
