@@ -5,7 +5,9 @@ use tauri::State;
 
 use smriti::db::recent_search_repo::RecentSearchRepo;
 use smriti::services::search::SearchService;
-use smriti::services::semantic::SemanticSearchService;
+use smriti::services::semantic::{
+    relevant_text_search_candidates, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
+};
 
 use crate::dto::{RecentSearchDto, SearchResultsDto};
 use crate::state::AppState;
@@ -52,8 +54,17 @@ pub async fn search_query(
                 let runner = runner_guard
                     .as_mut()
                     .expect("semantic runner initialized above");
-                match svc.search_text_cached(&db.conn, &mut cache, runner, &args.q, 250) {
-                    Ok(candidates) => candidates.into_iter().map(|c| c.photo_id).collect(),
+                match svc.search_text_cached(
+                    &db.conn,
+                    &mut cache,
+                    runner,
+                    &args.q,
+                    SEMANTIC_TEXT_SEARCH_LIMIT,
+                ) {
+                    Ok(candidates) => relevant_text_search_candidates(candidates)
+                        .into_iter()
+                        .map(|c| c.photo_id)
+                        .collect(),
                     Err(err) => {
                         tracing::debug!("semantic search skipped: {}", err);
                         Vec::new()

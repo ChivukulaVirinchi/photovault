@@ -26,6 +26,12 @@ pub const SEMANTIC_MODEL_DISPLAY: &str = "ViT-B-32 SigLIP2 256";
 pub const SEMANTIC_MODEL_REVISION: &str = "762c736d366fc253e9453021144f9fe71789b075";
 pub const SEMANTIC_DIM: usize = 768;
 pub const SEMANTIC_CONTEXT_LEN: usize = 64;
+pub const SEMANTIC_TEXT_SEARCH_LIMIT: usize = 250;
+pub const SEMANTIC_TEXT_RESULT_CAP: usize = 80;
+
+const SEMANTIC_TEXT_MIN_SCORE: f32 = 0.06;
+const SEMANTIC_TEXT_MAX_SCORE_DROP: f32 = 0.02;
+const SEMANTIC_TEXT_MIN_SCORE_RATIO: f32 = 0.75;
 
 const MODEL_DIR_NAME: &str = "vit-b-32-siglip2-256-webli";
 const VECTOR_FILE: &str = "vectors.f32";
@@ -64,6 +70,14 @@ pub struct SemanticIndexStats {
     pub indexed: u64,
     pub pending: u64,
     pub failed: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SemanticIndexBatchOutcome {
+    pub processed: u64,
+    pub indexed: u64,
+    pub failed: u64,
+    pub done: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -254,8 +268,7 @@ impl SemanticSearchService {
              LEFT JOIN semantic_index_state s
                ON s.photo_id = p.id AND s.model_key = ?1
              WHERE p.is_trashed = FALSE
-               AND COALESCE(s.status, 'pending') != 'indexed'
-               AND COALESCE(s.status, 'pending') != 'unsupported'
+               AND COALESCE(s.status, 'pending') = 'pending'
              ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
              LIMIT ?2",
         )?;
@@ -287,26 +300,105 @@ impl SemanticSearchService {
 
     pub fn mark_indexed(
         &self,
-        conn: &Connection,
+        conn: &mut Connection,
         photo_id: i64,
         vector: &[f32],
     ) -> rusqlite::Result<()> {
-        let mut store = VectorStore::new(&self.drive_root)?;
-        let offset = store.append(vector)?;
-        conn.execute(
-            "INSERT INTO semantic_index_state
-                (photo_id, model_key, status, vector_offset, vector_dim, attempts, last_error, indexed_at)
-             VALUES (?1, ?2, 'indexed', ?3, ?4, 0, NULL, CURRENT_TIMESTAMP)
-             ON CONFLICT(photo_id, model_key) DO UPDATE SET
-                status = 'indexed',
-                vector_offset = excluded.vector_offset,
-                vector_dim = excluded.vector_dim,
-                last_error = NULL,
-                indexed_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP",
-            params![photo_id, SEMANTIC_MODEL_KEY, offset as i64, vector.len() as i64],
-        )?;
-        Ok(())
+        self.record_index_batch(conn, &[(photo_id, vector.to_vec())], &[])
+    }
+
+    pub fn index_next_batch(
+        &self,
+        conn: &mut Connection,
+        runner: &mut SemanticImageRunner,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<SemanticIndexBatchOutcome, String> {
+        let batch = self
+            .next_pending_batch(conn, limit)
+            .map_err(|e| e.to_string())?;
+        if batch.is_empty() {
+            return Ok(SemanticIndexBatchOutcome {
+                done: true,
+                ..Default::default()
+            });
+        }
+
+        let mut indexed = Vec::new();
+        let mut failed = Vec::new();
+        for photo in &batch {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Semantic indexing cancelled".into());
+            }
+            match photo
+                .source_path(&self.drive_root)
+                .and_then(|path| runner.embed_image_path(&path))
+            {
+                Ok(vector) => indexed.push((photo.photo_id, vector)),
+                Err(err) => failed.push((photo.photo_id, err)),
+            }
+        }
+
+        self.record_index_batch(conn, &indexed, &failed)
+            .map_err(|e| e.to_string())?;
+
+        Ok(SemanticIndexBatchOutcome {
+            processed: batch.len() as u64,
+            indexed: indexed.len() as u64,
+            failed: failed.len() as u64,
+            done: false,
+        })
+    }
+
+    fn record_index_batch(
+        &self,
+        conn: &mut Connection,
+        indexed: &[(i64, Vec<f32>)],
+        failed: &[(i64, String)],
+    ) -> rusqlite::Result<()> {
+        let offsets = if indexed.is_empty() {
+            Vec::new()
+        } else {
+            let mut store = VectorStore::new(&self.drive_root)?;
+            store.append_many(indexed.iter().map(|(_, vector)| vector.as_slice()))?
+        };
+
+        let tx = conn.transaction()?;
+        for ((photo_id, vector), offset) in indexed.iter().zip(offsets.iter()) {
+            tx.execute(
+                "INSERT INTO semantic_index_state
+                    (photo_id, model_key, status, vector_offset, vector_dim, attempts, last_error, indexed_at)
+                 VALUES (?1, ?2, 'indexed', ?3, ?4, 0, NULL, CURRENT_TIMESTAMP)
+                 ON CONFLICT(photo_id, model_key) DO UPDATE SET
+                    status = 'indexed',
+                    vector_offset = excluded.vector_offset,
+                    vector_dim = excluded.vector_dim,
+                    attempts = 0,
+                    last_error = NULL,
+                    indexed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP",
+                params![
+                    photo_id,
+                    SEMANTIC_MODEL_KEY,
+                    *offset as i64,
+                    vector.len() as i64
+                ],
+            )?;
+        }
+        for (photo_id, err) in failed {
+            tx.execute(
+                "INSERT INTO semantic_index_state
+                    (photo_id, model_key, status, attempts, last_error)
+                 VALUES (?1, ?2, 'failed', 1, ?3)
+                 ON CONFLICT(photo_id, model_key) DO UPDATE SET
+                    status = 'failed',
+                    attempts = attempts + 1,
+                    last_error = excluded.last_error,
+                    updated_at = CURRENT_TIMESTAMP",
+                params![photo_id, SEMANTIC_MODEL_KEY, truncate_error(err)],
+            )?;
+        }
+        tx.commit()
     }
 
     pub fn search_text(
@@ -505,6 +597,23 @@ impl SemanticSearchService {
             .find(SemanticAssetPaths::installed)
     }
 
+    pub fn image_runner() -> Result<SemanticImageRunner, String> {
+        let paths = Self::find_assets().ok_or_else(|| {
+            format!(
+                "Semantic search model is not installed. Install {} from Settings.",
+                SEMANTIC_MODEL_DISPLAY
+            )
+        })?;
+        if !crate::bootstrap::onnx_runtime_exists() {
+            return Err(
+                "ONNX Runtime is missing. Use Settings -> Assets -> Download assets before indexing visual search."
+                    .into(),
+            );
+        }
+        let rt = OnnxRuntime::init().map_err(|e| e.to_string())?;
+        SemanticImageRunner::new(&rt, paths)
+    }
+
     pub fn model_runner() -> Result<SemanticModelRunner, String> {
         let paths = Self::find_assets().ok_or_else(|| {
             format!(
@@ -537,11 +646,19 @@ pub struct SemanticPhotoInput {
 
 impl SemanticPhotoInput {
     pub fn source_path(&self, drive_root: &Path) -> Result<PathBuf, String> {
-        if self.media_type == "video" {
-            if let Some(thumbnail) = &self.thumbnail_path {
-                return safe_join_relative(drive_root, thumbnail)
-                    .map_err(|e| format!("invalid video thumbnail path: {e}"));
+        if let Some(thumbnail) = &self.thumbnail_path {
+            match safe_join_relative(drive_root, thumbnail) {
+                Ok(path) if path.exists() => return Ok(path),
+                Ok(_) if self.media_type == "video" => {
+                    return Err("video poster thumbnail is not ready".into());
+                }
+                Err(e) if self.media_type == "video" => {
+                    return Err(format!("invalid video thumbnail path: {e}"));
+                }
+                _ => {}
             }
+        }
+        if self.media_type == "video" {
             return Err("video poster thumbnail is not ready".into());
         }
         safe_join_relative(drive_root, &self.file_path)
@@ -554,27 +671,16 @@ struct IndexRow {
     vector: Vec<f32>,
 }
 
-pub struct SemanticModelRunner {
+pub struct SemanticImageRunner {
     visual: ort::session::Session,
-    textual: ort::session::Session,
-    tokenizer: Tokenizer,
 }
 
-impl SemanticModelRunner {
+impl SemanticImageRunner {
     fn new(rt: &OnnxRuntime, paths: SemanticAssetPaths) -> Result<Self, String> {
         let visual = rt
             .load_model_with_threads(&paths.visual_model, 1)
             .map_err(|e| format!("visual model load failed: {e}"))?;
-        let textual = rt
-            .load_model_with_threads(&paths.textual_model, 1)
-            .map_err(|e| format!("text model load failed: {e}"))?;
-        let tokenizer = Tokenizer::from_file(&paths.tokenizer)
-            .map_err(|e| format!("tokenizer load failed: {e}"))?;
-        Ok(Self {
-            visual,
-            textual,
-            tokenizer,
-        })
+        Ok(Self { visual })
     }
 
     pub fn embed_image_path(&mut self, path: &Path) -> Result<Vec<f32>, String> {
@@ -595,39 +701,48 @@ impl SemanticModelRunner {
             .map_err(|e| format!("visual inference failed: {e}"))?;
         extract_normalized_output(outputs)
     }
+}
+
+pub struct SemanticModelRunner {
+    textual: ort::session::Session,
+    tokenizer: Tokenizer,
+}
+
+impl SemanticModelRunner {
+    fn new(rt: &OnnxRuntime, paths: SemanticAssetPaths) -> Result<Self, String> {
+        let textual = rt
+            .load_model_with_threads(&paths.textual_model, 1)
+            .map_err(|e| format!("text model load failed: {e}"))?;
+        let tokenizer = Tokenizer::from_file(&paths.tokenizer)
+            .map_err(|e| format!("tokenizer load failed: {e}"))?;
+        Ok(Self { textual, tokenizer })
+    }
 
     pub fn embed_text(&mut self, text: &str) -> Result<Vec<f32>, String> {
         let encoding = self
             .tokenizer
             .encode(text, true)
             .map_err(|e| format!("tokenization failed: {e}"))?;
-        let mut ids = vec![0i64; SEMANTIC_CONTEXT_LEN];
-        let mut mask = vec![0i64; SEMANTIC_CONTEXT_LEN];
-        for (idx, id) in encoding
-            .get_ids()
-            .iter()
-            .take(SEMANTIC_CONTEXT_LEN)
-            .enumerate()
-        {
-            ids[idx] = *id as i64;
-            mask[idx] = 1;
-        }
-        let input_ids = ort::value::TensorRef::<i64>::from_array_view((
+        let ids = padded_text_context(encoding.get_ids());
+        let input_ids = ort::value::TensorRef::<i32>::from_array_view((
             vec![1, SEMANTIC_CONTEXT_LEN as i64],
             ids.as_slice(),
         ))
         .map_err(|e| e.to_string())?;
-        let attention = ort::value::TensorRef::<i64>::from_array_view((
-            vec![1, SEMANTIC_CONTEXT_LEN as i64],
-            mask.as_slice(),
-        ))
-        .map_err(|e| e.to_string())?;
         let outputs = self
             .textual
-            .run(ort::inputs![input_ids, attention])
+            .run(ort::inputs![input_ids])
             .map_err(|e| format!("text inference failed: {e}"))?;
         extract_normalized_output(outputs)
     }
+}
+
+fn padded_text_context(token_ids: &[u32]) -> Vec<i32> {
+    let mut ids = vec![0i32; SEMANTIC_CONTEXT_LEN];
+    for (idx, id) in token_ids.iter().take(SEMANTIC_CONTEXT_LEN).enumerate() {
+        ids[idx] = *id as i32;
+    }
+    ids
 }
 
 fn preprocess_image(img: &DynamicImage) -> Vec<f32> {
@@ -706,13 +821,22 @@ impl VectorStore {
         self.root.join(VECTOR_FILE)
     }
 
-    fn append(&mut self, vector: &[f32]) -> rusqlite::Result<u64> {
-        if vector.len() != SEMANTIC_DIM {
-            return Err(rusqlite::Error::InvalidParameterName(format!(
-                "semantic vector dimension {} != {}",
-                vector.len(),
-                SEMANTIC_DIM
-            )));
+    fn append_many<'a, I>(&mut self, vectors: I) -> rusqlite::Result<Vec<u64>>
+    where
+        I: IntoIterator<Item = &'a [f32]>,
+    {
+        let vectors = vectors.into_iter().collect::<Vec<_>>();
+        if vectors.is_empty() {
+            return Ok(Vec::new());
+        }
+        for vector in &vectors {
+            if vector.len() != SEMANTIC_DIM {
+                return Err(rusqlite::Error::InvalidParameterName(format!(
+                    "semantic vector dimension {} != {}",
+                    vector.len(),
+                    SEMANTIC_DIM
+                )));
+            }
         }
         let path = self.vector_path();
         let mut file = OpenOptions::new()
@@ -721,15 +845,20 @@ impl VectorStore {
             .read(true)
             .open(&path)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let offset = file
+        let mut offset = file
             .seek(SeekFrom::End(0))
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        for value in vector {
-            file.write_all(&value.to_le_bytes())
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut offsets = Vec::with_capacity(vectors.len());
+        for vector in vectors {
+            offsets.push(offset);
+            for value in vector {
+                file.write_all(&value.to_le_bytes())
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            }
+            offset += (SEMANTIC_DIM * 4) as u64;
         }
-        self.bump_manifest()?;
-        Ok(offset)
+        self.bump_manifest_by(offsets.len() as u64)?;
+        Ok(offsets)
     }
 
     fn read(&self, offset: u64, dim: usize) -> std::io::Result<Vec<f32>> {
@@ -743,7 +872,7 @@ impl VectorStore {
             .collect())
     }
 
-    fn bump_manifest(&self) -> rusqlite::Result<()> {
+    fn bump_manifest_by(&self, count: u64) -> rusqlite::Result<()> {
         let path = self.root.join(MANIFEST_FILE);
         let mut manifest: VectorManifest = std::fs::read(&path)
             .ok()
@@ -754,7 +883,7 @@ impl VectorStore {
                 dim: SEMANTIC_DIM,
                 vector_count: 0,
             });
-        manifest.vector_count += 1;
+        manifest.vector_count += count;
         let data = serde_json::to_vec_pretty(&manifest)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         std::fs::write(path, data)
@@ -858,12 +987,36 @@ where
     progress(asset.stage, completed, Some(total_bytes));
     Ok(completed)
 }
-
 pub fn semantic_ids_by_score(candidates: &[SemanticCandidate]) -> HashMap<i64, usize> {
     candidates
         .iter()
         .enumerate()
         .map(|(idx, c)| (c.photo_id, idx))
+        .collect()
+}
+
+pub fn relevant_text_search_candidates(
+    mut candidates: Vec<SemanticCandidate>,
+) -> Vec<SemanticCandidate> {
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let Some(top) = candidates.first().map(|c| c.score) else {
+        return Vec::new();
+    };
+    if top < SEMANTIC_TEXT_MIN_SCORE {
+        return Vec::new();
+    }
+
+    let threshold = SEMANTIC_TEXT_MIN_SCORE
+        .max(top - SEMANTIC_TEXT_MAX_SCORE_DROP)
+        .max(top * SEMANTIC_TEXT_MIN_SCORE_RATIO);
+    candidates
+        .into_iter()
+        .filter(|c| c.score >= threshold)
+        .take(SEMANTIC_TEXT_RESULT_CAP)
         .collect()
 }
 
@@ -885,6 +1038,34 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn setup_semantic_test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                thumbnail_path TEXT,
+                media_type TEXT NOT NULL DEFAULT 'photo',
+                date_taken TEXT,
+                is_trashed BOOLEAN NOT NULL DEFAULT FALSE
+            );
+            CREATE TABLE semantic_index_state (
+                photo_id INTEGER NOT NULL,
+                model_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                vector_offset INTEGER,
+                vector_dim INTEGER,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                indexed_at TEXT,
+                updated_at TEXT,
+                PRIMARY KEY(photo_id, model_key)
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
     #[test]
     fn vector_store_round_trips_fixed_width_vectors() {
         let dir = tempdir().unwrap();
@@ -894,8 +1075,11 @@ mod tests {
         let mut second = vec![0.0f32; SEMANTIC_DIM];
         second[9] = 1.0;
 
-        let off_a = store.append(&first).unwrap();
-        let off_b = store.append(&second).unwrap();
+        let offsets = store
+            .append_many([first.as_slice(), second.as_slice()])
+            .unwrap();
+        let off_a = offsets[0];
+        let off_b = offsets[1];
 
         assert_eq!(off_a, 0);
         assert_eq!(off_b, (SEMANTIC_DIM * 4) as u64);
@@ -904,8 +1088,228 @@ mod tests {
     }
 
     #[test]
+    fn pending_batch_does_not_retry_failed_rows() {
+        let conn = setup_semantic_test_conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, media_type, is_trashed) VALUES
+                (1, 'a.jpg', 'photo', FALSE),
+                (2, 'b.jpg', 'photo', FALSE)",
+            [],
+        )
+        .unwrap();
+        SemanticSearchService::mark_failed(&conn, 1, "bad image").unwrap();
+
+        let svc = SemanticSearchService::new(tempdir().unwrap().path());
+        let batch = svc.next_pending_batch(&conn, 10).unwrap();
+
+        assert_eq!(
+            batch.iter().map(|p| p.photo_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn record_index_batch_persists_vectors_and_failures_once() {
+        let mut conn = setup_semantic_test_conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, media_type, is_trashed) VALUES
+                (1, 'a.jpg', 'photo', FALSE),
+                (2, 'b.jpg', 'photo', FALSE),
+                (3, 'c.jpg', 'photo', FALSE)",
+            [],
+        )
+        .unwrap();
+        let dir = tempdir().unwrap();
+        let svc = SemanticSearchService::new(dir.path());
+        let mut first = vec![0.0f32; SEMANTIC_DIM];
+        first[0] = 1.0;
+        let mut second = vec![0.0f32; SEMANTIC_DIM];
+        second[1] = 1.0;
+
+        svc.record_index_batch(
+            &mut conn,
+            &[(1, first.clone()), (2, second.clone())],
+            &[(3, "decode failed".into())],
+        )
+        .unwrap();
+
+        let rows = conn
+            .prepare(
+                "SELECT photo_id, status, vector_offset, vector_dim, attempts, COALESCE(last_error, '')
+                 FROM semantic_index_state
+                 ORDER BY photo_id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1, "indexed");
+        assert_eq!(rows[0].2, Some(0));
+        assert_eq!(rows[0].3, Some(SEMANTIC_DIM as i64));
+        assert_eq!(rows[1].0, 2);
+        assert_eq!(rows[1].1, "indexed");
+        assert_eq!(rows[1].2, Some((SEMANTIC_DIM * 4) as i64));
+        assert_eq!(rows[2].0, 3);
+        assert_eq!(rows[2].1, "failed");
+        assert_eq!(rows[2].4, 1);
+        assert_eq!(rows[2].5, "decode failed");
+
+        let store = VectorStore::new(dir.path()).unwrap();
+        assert_eq!(store.read(0, SEMANTIC_DIM).unwrap(), first);
+        assert_eq!(
+            store.read((SEMANTIC_DIM * 4) as u64, SEMANTIC_DIM).unwrap(),
+            second
+        );
+        assert_eq!(
+            std::fs::metadata(store.vector_path()).unwrap().len(),
+            (2 * SEMANTIC_DIM * 4) as u64
+        );
+    }
+
+    #[test]
+    fn photo_source_prefers_existing_thumbnail() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".photovault/thumbs")).unwrap();
+        std::fs::write(dir.path().join("photo.jpg"), b"original").unwrap();
+        std::fs::write(dir.path().join(".photovault/thumbs/photo.jpg"), b"thumb").unwrap();
+        let input = SemanticPhotoInput {
+            photo_id: 1,
+            file_path: "photo.jpg".into(),
+            thumbnail_path: Some(".photovault/thumbs/photo.jpg".into()),
+            media_type: "photo".into(),
+        };
+
+        assert_eq!(
+            input.source_path(dir.path()).unwrap(),
+            dir.path().join(".photovault/thumbs/photo.jpg")
+        );
+    }
+
+    #[test]
+    fn search_vector_returns_indexed_candidates() {
+        let mut conn = setup_semantic_test_conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, media_type, is_trashed) VALUES
+                (1, 'a.jpg', 'photo', FALSE),
+                (2, 'b.jpg', 'photo', FALSE),
+                (3, 'c.jpg', 'photo', TRUE)",
+            [],
+        )
+        .unwrap();
+        let dir = tempdir().unwrap();
+        let svc = SemanticSearchService::new(dir.path());
+        let mut first = vec![0.0f32; SEMANTIC_DIM];
+        first[0] = 1.0;
+        let mut second = vec![0.0f32; SEMANTIC_DIM];
+        second[1] = 1.0;
+        let mut trashed = vec![0.0f32; SEMANTIC_DIM];
+        trashed[0] = 1.0;
+
+        svc.record_index_batch(
+            &mut conn,
+            &[(1, first.clone()), (2, second), (3, trashed)],
+            &[],
+        )
+        .unwrap();
+
+        let matches = svc.search_vector(&conn, &first, 5).unwrap();
+
+        assert_eq!(matches.first().map(|c| c.photo_id), Some(1));
+        assert!(!matches.iter().any(|c| c.photo_id == 3));
+    }
+
+    #[test]
     fn cosine_handles_normal_vectors() {
         assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 0.001);
         assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 0.001);
+    }
+
+    #[test]
+    fn text_context_is_fixed_width_int32_and_padded() {
+        let ids = padded_text_context(&[2, 101, 102, 1]);
+
+        assert_eq!(ids.len(), SEMANTIC_CONTEXT_LEN);
+        assert_eq!(&ids[..5], &[2, 101, 102, 1, 0]);
+
+        let long = (0..(SEMANTIC_CONTEXT_LEN as u32 + 10)).collect::<Vec<_>>();
+        let truncated = padded_text_context(&long);
+        assert_eq!(truncated.len(), SEMANTIC_CONTEXT_LEN);
+        assert_eq!(truncated[0], 0);
+        assert_eq!(
+            truncated[SEMANTIC_CONTEXT_LEN - 1],
+            (SEMANTIC_CONTEXT_LEN - 1) as i32
+        );
+    }
+
+    #[test]
+    fn text_search_gate_rejects_weak_absent_queries() {
+        let kept = relevant_text_search_candidates(vec![
+            SemanticCandidate {
+                photo_id: 1,
+                score: 0.035,
+            },
+            SemanticCandidate {
+                photo_id: 2,
+                score: 0.030,
+            },
+        ]);
+
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn text_search_gate_keeps_only_standout_matches() {
+        let kept = relevant_text_search_candidates(vec![
+            SemanticCandidate {
+                photo_id: 1,
+                score: 0.095,
+            },
+            SemanticCandidate {
+                photo_id: 2,
+                score: 0.070,
+            },
+            SemanticCandidate {
+                photo_id: 3,
+                score: 0.040,
+            },
+        ]);
+
+        assert_eq!(kept.iter().map(|c| c.photo_id).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn text_search_gate_keeps_dense_relevant_clusters() {
+        let kept = relevant_text_search_candidates(vec![
+            SemanticCandidate {
+                photo_id: 1,
+                score: 0.078,
+            },
+            SemanticCandidate {
+                photo_id: 2,
+                score: 0.074,
+            },
+            SemanticCandidate {
+                photo_id: 3,
+                score: 0.048,
+            },
+        ]);
+
+        assert_eq!(
+            kept.iter().map(|c| c.photo_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 }

@@ -934,3 +934,132 @@ impl SearchService {
         rows.collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                date_taken TEXT,
+                location_city TEXT,
+                location_country TEXT,
+                camera_make TEXT,
+                camera_model TEXT,
+                thumbnail_path TEXT,
+                faces_processed BOOLEAN DEFAULT FALSE,
+                media_type TEXT NOT NULL DEFAULT 'photo',
+                is_favorite BOOLEAN DEFAULT FALSE,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            CREATE TABLE face_clusters (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                photo_count INTEGER NOT NULL DEFAULT 0,
+                representative_face_id INTEGER
+            );
+            CREATE TABLE faces (
+                id INTEGER PRIMARY KEY,
+                photo_id INTEGER NOT NULL,
+                cluster_id INTEGER
+            );
+            CREATE TABLE photo_inferred_identities (
+                photo_id INTEGER NOT NULL,
+                cluster_id INTEGER NOT NULL
+            );
+            CREATE TABLE albums (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                photo_count INTEGER NOT NULL DEFAULT 0,
+                cover_photo_id INTEGER,
+                updated_at TEXT
+            );
+            CREATE TABLE album_photos (
+                album_id INTEGER NOT NULL,
+                photo_id INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_photo(conn: &Connection, id: i64, file_name: &str, date_taken: &str) {
+        conn.execute(
+            "INSERT INTO photos
+                (id, file_path, file_name, file_hash, file_size, date_taken, media_type, thumbnail_path)
+             VALUES (?1, ?2, ?3, ?4, 100, ?5, 'photo', ?6)",
+            params![
+                id,
+                format!("{file_name}.jpg"),
+                file_name,
+                format!("hash-{id}"),
+                date_taken,
+                format!(".photovault/thumbs/{file_name}.jpg")
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unified_search_returns_semantic_matches_when_text_does_not_match_metadata() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-01-02T10:00:00Z");
+        insert_photo(&conn, 3, "img003", "2024-01-03T10:00:00Z");
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "group photo", vec![3, 1]).unwrap();
+
+        assert_eq!(results.photo_ids, vec![3, 1]);
+        assert_eq!(
+            results
+                .interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("media", "Photos"), ("semantic", "group")]
+        );
+    }
+
+    #[test]
+    fn unified_search_ands_date_filter_with_semantic_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2023-06-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-06-01T10:00:00Z");
+        insert_photo(&conn, 3, "img003", "2024-07-01T10:00:00Z");
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "family 2024", vec![1, 3, 2])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![3, 2]);
+        assert!(results
+            .interpreted
+            .iter()
+            .any(|f| f.kind == "semantic" && f.label == "family"));
+        assert!(results.interpreted.iter().any(|f| f.kind == "date"));
+    }
+
+    #[test]
+    fn unified_search_excludes_trashed_semantic_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-01-02T10:00:00Z");
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 1", [])
+            .unwrap();
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "beach", vec![1, 2]).unwrap();
+
+        assert_eq!(results.photo_ids, vec![2]);
+    }
+}

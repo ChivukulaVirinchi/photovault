@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
@@ -20,6 +20,8 @@ static EP_LOGGED: AtomicBool = AtomicBool::new(false);
 /// this reflects the *best* provider that probed available, not a
 /// proof that every op runs on it.
 static ACTIVE_PROVIDER: OnceLock<&'static str> = OnceLock::new();
+static ORT_INITIALIZED: OnceLock<()> = OnceLock::new();
+static ORT_INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// User-facing label for the active execution provider, e.g. "DirectML",
 /// "CUDA", "CoreML", "CPU". Returns "CPU" before any session is built.
@@ -143,8 +145,20 @@ impl OnnxRuntime {
     ///
     /// This should be called once at application startup, before creating any sessions.
     pub fn init() -> ort::Result<Self> {
+        if ORT_INITIALIZED.get().is_some() {
+            return Ok(Self);
+        }
+
+        let _guard = ORT_INIT_LOCK.lock().map_err(|_| {
+            ort::Error::new("ONNX Runtime initialization lock is poisoned".to_string())
+        })?;
+        if ORT_INITIALIZED.get().is_some() {
+            return Ok(Self);
+        }
+
         if let Some(dylib_path) = Self::resolve_dylib_path() {
             ort::init_from(&dylib_path)?.commit();
+            let _ = ORT_INITIALIZED.set(());
             tracing::info!(
                 "ONNX Runtime initialized (dynamic) from: {}",
                 dylib_path.display()

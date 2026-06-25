@@ -143,55 +143,39 @@ pub async fn semantic_start_indexing(
         let worker_app = app_clone.clone();
         let worker_job_id = job_id_clone.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let conn = open_secondary(&db_path).map_err(|e| e.to_string())?;
+            let mut conn = open_secondary(&db_path).map_err(|e| e.to_string())?;
             let svc = SemanticSearchService::new(&drive_root);
-            let mut runner = SemanticSearchService::model_runner()?;
+            let mut runner = SemanticSearchService::image_runner()?;
             let mut processed = 0u64;
-            let mut total = svc.index_stats(&conn).map_err(|e| e.to_string())?.pending;
-            if total == 0 {
-                total = 0;
-            }
+            let total = svc.index_stats(&conn).map_err(|e| e.to_string())?.pending;
             let started_inner = Instant::now();
 
             loop {
                 if cancel.load(Ordering::Relaxed) {
                     return Ok::<String, String>("Semantic indexing cancelled".into());
                 }
-                let batch = svc
-                    .next_pending_batch(&conn, 16)
-                    .map_err(|e| e.to_string())?;
-                if batch.is_empty() {
+                let outcome = svc.index_next_batch(&mut conn, &mut runner, 16, &cancel)?;
+                if outcome.done {
                     return Ok("Semantic indexing complete".into());
                 }
-                for photo in batch {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Ok("Semantic indexing cancelled".into());
-                    }
-                    let outcome = photo
-                        .source_path(&drive_root)
-                        .and_then(|path| runner.embed_image_path(&path))
-                        .and_then(|vector| {
-                            svc.mark_indexed(&conn, photo.photo_id, &vector)
-                                .map_err(|e| e.to_string())
-                        });
-                    if let Err(err) = outcome {
-                        let _ = SemanticSearchService::mark_failed(&conn, photo.photo_id, &err);
-                    }
-                    processed += 1;
-                    emit(
-                        &worker_app,
-                        EV_SEMANTIC_PROGRESS,
-                        JobProgress {
-                            job_id: worker_job_id.clone(),
-                            stage: "index".into(),
-                            processed,
-                            total: Some(total),
-                            elapsed_ms: started_inner.elapsed().as_millis() as u64,
-                            eta_ms: None,
-                            message: Some("Indexing visual meaning".into()),
-                        },
-                    );
-                }
+                processed += outcome.processed;
+                emit(
+                    &worker_app,
+                    EV_SEMANTIC_PROGRESS,
+                    JobProgress {
+                        job_id: worker_job_id.clone(),
+                        stage: "index".into(),
+                        processed,
+                        total: Some(total),
+                        elapsed_ms: started_inner.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(if outcome.failed == 0 {
+                            "Indexing visual meaning".into()
+                        } else {
+                            format!("Indexing visual meaning ({} failed)", outcome.failed)
+                        }),
+                    },
+                );
             }
         })
         .await
