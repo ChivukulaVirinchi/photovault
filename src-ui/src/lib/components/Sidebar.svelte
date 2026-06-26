@@ -1,11 +1,12 @@
 <script lang="ts">
   import {
-    Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon,
+    Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon, Bot,
     Copy, Layers, /* FileText (Documents deferred) */ BarChart2, Trash2, Settings,
     ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
+  import { assistantStore } from "../stores/assistant.svelte";
 
   interface Props { current: string }
   let { current }: Props = $props();
@@ -17,6 +18,7 @@
     { path: "/albums",     label: "Albums",     icon: FolderOpen },
     { path: "/memories",   label: "Memories",   icon: Sparkles   },
     { path: "/search",     label: "Search",     icon: Search     },
+    { path: "/assistant",  label: "Assistant",  icon: Bot        },
     { path: "/map",        label: "Map",        icon: MapIcon    },
     { path: "/duplicates", label: "Duplicates", icon: Copy       },
     { path: "/bursts",     label: "Bursts",     icon: Layers     },
@@ -31,6 +33,7 @@
   ];
 
   function isActive(path: string) {
+    if (path === "/assistant") return assistantStore.open;
     if (current === path) return true;
     if (path === "/people"     && current === "/person")    return true;
     if (path === "/albums"     && current === "/album")     return true;
@@ -49,6 +52,14 @@
 
   const collapsed = $derived(settingsStore.sidebarCollapsed);
   const theme     = $derived(settingsStore.theme);
+  const visibleItems = $derived(
+    items.filter(
+      (item) =>
+        item.path !== "/assistant" ||
+        (settingsStore.data?.ai_features_enabled === true &&
+          settingsStore.data?.assistant_enabled !== false),
+    ),
+  );
 
   function cycleTheme() {
     const order: Array<"dark" | "light" | "system"> = ["dark", "light", "system"];
@@ -63,7 +74,7 @@
   /// Enter on a focused link is handled by the browser (anchor activation).
   function onNavKey(e: KeyboardEvent) {
     const nav = e.currentTarget as HTMLElement;
-    const links = Array.from(nav.querySelectorAll<HTMLAnchorElement>("a"));
+    const links = Array.from(nav.querySelectorAll<HTMLElement>("a, button.nav-action"));
     if (links.length === 0) return;
     const here = links.findIndex((a) => a === document.activeElement);
     let next = -1;
@@ -139,16 +150,28 @@
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <nav onkeydown={onNavKey}>
-    {#each items as item (item.path)}
+    {#each visibleItems as item (item.path)}
       {@const Icon = item.icon}
-      <a
-        href="#{item.path}"
-        class:active={isActive(item.path)}
-        title={collapsed ? item.label : ""}
-      >
-        <Icon class="nav-icon" size={16} strokeWidth={1.75} />
-        <span class="label">{item.label}</span>
-      </a>
+      {#if item.path === "/assistant"}
+        <button
+          class="nav-action"
+          class:active={isActive(item.path)}
+          title={collapsed ? item.label : "Assistant (Ctrl+Shift+A)"}
+          onclick={() => assistantStore.show()}
+        >
+          <Icon class="nav-icon" size={16} strokeWidth={1.75} />
+          <span class="label">{item.label}</span>
+        </button>
+      {:else}
+        <a
+          href="#{item.path}"
+          class:active={isActive(item.path)}
+          title={collapsed ? item.label : ""}
+        >
+          <Icon class="nav-icon" size={16} strokeWidth={1.75} />
+          <span class="label">{item.label}</span>
+        </a>
+      {/if}
     {/each}
   </nav>
 
@@ -274,39 +297,50 @@
     overflow-y: auto;
     padding: var(--s-2) 0;
   }
-  nav a {
+  nav a,
+  nav .nav-action {
     display: flex;
     align-items: center;
     gap: var(--s-3);
     padding: 8px var(--s-3);
     margin-left: 2px;
+    width: calc(100% - 2px);
     border-radius: var(--r-sm);
+    border: 0;
+    background: transparent;
     color: var(--ink-muted);
     font-size: var(--t-sm);
     font-weight: 500;
     position: relative;
     text-decoration: none;
+    cursor: pointer;
     transition: background var(--t-fast) var(--ease),
                 color      var(--t-fast) var(--ease);
   }
-  .sidebar.collapsed nav a {
+  .sidebar.collapsed nav a,
+  .sidebar.collapsed nav .nav-action {
     justify-content: center;
     padding: 9px 0;
     margin-left: 0;
+    width: 100%;
   }
-  nav a :global(.nav-icon) {
+  nav a :global(.nav-icon),
+  nav .nav-action :global(.nav-icon) {
     flex-shrink: 0;
     color: currentColor;
   }
-  nav a:hover {
+  nav a:hover,
+  nav .nav-action:hover {
     background: var(--bg-card);
     color: var(--ink);
   }
-  nav a.active {
+  nav a.active,
+  nav .nav-action.active {
     color: var(--ink);
     font-weight: 600;
   }
-  nav a.active::before {
+  nav a.active::before,
+  nav .nav-action.active::before {
     content: "";
     position: absolute;
     left: -2px;
@@ -316,10 +350,12 @@
     background: var(--accent);
     border-radius: 1px;
   }
-  .sidebar.collapsed nav a.active::before {
+  .sidebar.collapsed nav a.active::before,
+  .sidebar.collapsed nav .nav-action.active::before {
     left: -6px;
   }
-  .sidebar.collapsed nav a .label {
+  .sidebar.collapsed nav a .label,
+  .sidebar.collapsed nav .nav-action .label {
     display: none;
   }
 

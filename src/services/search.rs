@@ -130,6 +130,17 @@ struct SmartIntent {
     semantic_photo_ids: Vec<i64>,
 }
 
+impl SmartIntent {
+    fn has_structured_filters(&self) -> bool {
+        self.date_range.is_some()
+            || !self.people_all.is_empty()
+            || !self.places.is_empty()
+            || !self.albums.is_empty()
+            || self.favorite.is_some()
+            || self.media_type.is_some()
+    }
+}
+
 impl SearchService {
     pub fn search(conn: &Connection, query: &SearchQuery) -> SqliteResult<Vec<SearchResult>> {
         if query.is_empty() {
@@ -426,7 +437,16 @@ impl SearchService {
         if !remaining.trim().is_empty() {
             let places = Self::resolve_places(conn, remaining.trim())?;
             if !places.is_empty() {
-                remaining.clear();
+                remaining =
+                    Self::remove_entity_names(&remaining, places.iter().map(|p| p.label.as_str()));
+                remaining = Self::remove_entity_names(
+                    &remaining,
+                    places.iter().filter_map(|p| p.city.as_deref()),
+                );
+                remaining = Self::remove_entity_names(
+                    &remaining,
+                    places.iter().filter_map(|p| p.country.as_deref()),
+                );
                 intent.places = places;
             }
         }
@@ -687,7 +707,7 @@ impl SearchService {
             for id in &intent.semantic_photo_ids {
                 bind.push(Value::Integer(*id));
             }
-        } else if !intent.semantic_photo_ids.is_empty() {
+        } else if !intent.semantic_photo_ids.is_empty() && !intent.has_structured_filters() {
             sql.push_str(&format!(
                 " AND p.id IN ({})",
                 std::iter::repeat_n("?", intent.semantic_photo_ids.len())
@@ -782,25 +802,23 @@ impl SearchService {
     }
 
     fn resolve_places(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPlace>> {
-        let like = format!("%{}%", text.trim());
         let mut stmt = conn.prepare(
             "SELECT location_city, location_country, COUNT(*) AS cnt
              FROM photos
              WHERE is_trashed = FALSE
-               AND (LOWER(location_city) LIKE LOWER(?1)
-                    OR LOWER(location_country) LIKE LOWER(?1))
+               AND (location_city IS NOT NULL OR location_country IS NOT NULL)
              GROUP BY location_city, location_country
              ORDER BY cnt DESC
-             LIMIT 3",
+             LIMIT 100",
         )?;
-        let rows = stmt.query_map(params![like], |row| {
+        let rows = stmt.query_map([], |row| {
             let city: Option<String> = row.get(0)?;
             let country: Option<String> = row.get(1)?;
             let label = match (&city, &country) {
                 (Some(c), Some(country)) => format!("{}, {}", c, country),
                 (Some(c), None) => c.clone(),
                 (None, Some(country)) => country.clone(),
-                (None, None) => text.to_string(),
+                (None, None) => String::new(),
             };
             Ok(ResolvedPlace {
                 city,
@@ -808,7 +826,28 @@ impl SearchService {
                 label,
             })
         })?;
-        rows.collect()
+        let lower = text.to_lowercase();
+        let mut out = Vec::new();
+        for row in rows {
+            let place = row?;
+            let city_match = place
+                .city
+                .as_deref()
+                .is_some_and(|city| Self::contains_phrase(&lower, &city.to_lowercase()));
+            let country_match = place
+                .country
+                .as_deref()
+                .is_some_and(|country| Self::contains_phrase(&lower, &country.to_lowercase()));
+            let label_match = !place.label.is_empty()
+                && Self::contains_phrase(&lower, &place.label.to_lowercase());
+            if city_match || country_match || label_match {
+                out.push(place);
+                if out.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn contains_word(lower: &str, needle: &str) -> bool {
@@ -1009,6 +1048,29 @@ mod tests {
         .unwrap();
     }
 
+    fn set_location(conn: &Connection, id: i64, city: &str, country: &str) {
+        conn.execute(
+            "UPDATE photos SET location_city = ?2, location_country = ?3 WHERE id = ?1",
+            params![id, city, country],
+        )
+        .unwrap();
+    }
+
+    fn insert_person(conn: &Connection, id: i64, name: &str, photo_ids: &[i64]) {
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, photo_count) VALUES (?1, ?2, ?3)",
+            params![id, name, photo_ids.len() as i64],
+        )
+        .unwrap();
+        for (idx, photo_id) in photo_ids.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO faces (id, photo_id, cluster_id) VALUES (?1, ?2, ?3)",
+                params![10_000 + idx as i64 + id * 100, photo_id, id],
+            )
+            .unwrap();
+        }
+    }
+
     #[test]
     fn unified_search_returns_semantic_matches_when_text_does_not_match_metadata() {
         let conn = search_test_conn();
@@ -1061,5 +1123,75 @@ mod tests {
             SearchService::search_unified_with_semantic(&conn, "beach", vec![1, 2]).unwrap();
 
         assert_eq!(results.photo_ids, vec![2]);
+    }
+
+    #[test]
+    fn unified_search_resolves_person_and_place_independent_of_order() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-other", "2024-01-02T10:00:00Z");
+        insert_photo(&conn, 3, "goa-tata", "2024-01-03T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        set_location(&conn, 3, "Goa", "India");
+        insert_person(&conn, 7, "Tata", &[1, 3]);
+
+        let a = SearchService::search_unified_with_semantic(&conn, "tata vizianagaram", vec![])
+            .unwrap();
+        let b = SearchService::search_unified_with_semantic(&conn, "vizianagaram tata", vec![])
+            .unwrap();
+
+        assert_eq!(a.photo_ids, vec![1]);
+        assert_eq!(b.photo_ids, vec![1]);
+        assert_eq!(
+            a.interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("person", "Tata"), ("place", "Vizianagaram, India")]
+        );
+        assert_eq!(
+            b.interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("person", "Tata"), ("place", "Vizianagaram, India")]
+        );
+    }
+
+    #[test]
+    fn semantic_does_not_delete_fully_structured_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-tata-older", "2023-01-01T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        insert_person(&conn, 7, "Tata", &[1, 2]);
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "tata vizianagaram", vec![1])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn semantic_visual_text_still_filters_inside_structured_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata-car", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-tata-home", "2024-01-02T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        insert_person(&conn, 7, "Tata", &[1, 2]);
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "car tata vizianagaram", vec![1])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![1]);
+        assert!(results
+            .interpreted
+            .iter()
+            .any(|f| f.kind == "semantic" && f.label == "car"));
     }
 }

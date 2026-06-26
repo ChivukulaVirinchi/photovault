@@ -14,9 +14,12 @@ use smriti::services::semantic::{SemanticIndexCache, SemanticModelRunner};
 use smriti::services::thumbnail::ThumbnailService;
 use tokio::sync::{Mutex, RwLock};
 
+use smriti::services::assistant::{AssistantDraft, AssistantRun};
+
 pub struct AppState {
     pub library: RwLock<Option<OpenLibrary>>,
     pub jobs: Mutex<JobRegistry>,
+    pub assistant: Mutex<AssistantRuntime>,
 }
 
 impl AppState {
@@ -24,6 +27,7 @@ impl AppState {
         Self {
             library: RwLock::new(None),
             jobs: Mutex::new(JobRegistry::default()),
+            assistant: Mutex::new(AssistantRuntime::default()),
         }
     }
 }
@@ -74,6 +78,25 @@ impl OpenLibrary {
 #[derive(Default)]
 pub struct JobRegistry {
     inner: HashMap<String, JobHandle>,
+}
+
+#[derive(Default)]
+pub struct AssistantRuntime {
+    pub sessions: HashMap<String, AssistantSession>,
+}
+
+pub struct AssistantSession {
+    pub run: AssistantRun,
+    pub draft: Option<AssistantDraft>,
+    pub library_root: String,
+    pub messages: Vec<AssistantMessage>,
+    pub current_result_ids: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssistantMessage {
+    pub role: String,
+    pub content: String,
 }
 
 impl JobRegistry {

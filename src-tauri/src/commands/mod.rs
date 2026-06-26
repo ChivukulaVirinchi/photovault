@@ -5,6 +5,7 @@
 //! than ~15 lines is a service-layer change, not a handler change.
 
 pub mod albums;
+pub mod assistant;
 pub mod bursts;
 pub mod documents;
 pub mod duplicates;

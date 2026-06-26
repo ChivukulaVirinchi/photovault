@@ -7,7 +7,7 @@
   import { photos, type ExifExtras, type TimelineNeighbors } from "../lib/api/photos";
   import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
-  import { semantic, stacks, trash, type PhotoStack } from "../lib/api/all";
+  import { stacks, trash, type PhotoStack } from "../lib/api/all";
   import { call } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -23,7 +23,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import maplibregl, { type Map as MapInstance } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
-  import type { PhotoDto, PersonDto, AlbumDto, PhotoSummaryDto } from "../lib/api/types";
+  import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
 
   interface Props { id: number }
   let { id }: Props = $props();
@@ -35,7 +35,6 @@
   let extras = $state<ExifExtras | null>(null);
   let timelineNeighbors = $state<TimelineNeighbors | null>(null);
   let stack = $state<PhotoStack | null>(null);
-  let similar = $state<PhotoSummaryDto[]>([]);
   let error = $state<string | null>(null);
   let detailEl = $state<HTMLElement | undefined>(undefined);
   let immersive = $state(false);
@@ -220,7 +219,6 @@
     albums = [];
     extras = null;
     stack = null;
-    similar = [];
     timelineNeighbors = null;
     stackTrayOpen = false;
     tint = null;
@@ -252,9 +250,6 @@
         const nextStack = await stacks.getForPhoto(id);
         if (seq === loadSeq) stack = nextStack;
       } catch {}
-      semantic.similarPhotos(id, 18)
-        .then((items) => { if (seq === loadSeq) similar = items; })
-        .catch(() => {});
       if (p.media_type === "video" && !p.thumbnail_path) {
         probeVideoPoster(id)
           .then(async () => {
@@ -792,20 +787,6 @@
           </ul>
         {/if}
 
-        {#if similar.length > 0}
-          <hr class="hairline" />
-          <h3 class="section">Similar</h3>
-          <div class="similar-strip">
-            {#each similar as item (item.id)}
-              <a class="similar-thumb" href="#/photo?id={item.id}" title={`Photo #${item.id}`}>
-                {#if item.thumbnail_path}
-                  <img src={thumbUrl(libraryStore.driveRoot, item.thumbnail_path) ?? ""} alt="" loading="lazy" />
-                {/if}
-              </a>
-            {/each}
-          </div>
-        {/if}
-
         <!-- Camera section -->
         {#if p.camera || extras?.software || extras?.exposure_bias}
           <hr class="hairline" />
@@ -1254,28 +1235,6 @@
     border-radius: 50%;
     background: var(--accent);
   }
-  .similar-strip {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-  }
-  .similar-thumb {
-    aspect-ratio: 1;
-    border-radius: var(--r-sm);
-    overflow: hidden;
-    background: var(--bg-card);
-    border: 1px solid var(--line-soft);
-  }
-  .similar-thumb img {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: cover;
-  }
-  .similar-thumb:hover {
-    border-color: var(--accent);
-  }
-
   .specs {
     display: grid;
     grid-template-columns: 90px 1fr;

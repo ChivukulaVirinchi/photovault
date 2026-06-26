@@ -239,6 +239,7 @@ pub async fn library_open(
 
     let mut guard = state.library.write().await;
     *guard = Some(open_library);
+    state.assistant.lock().await.sessions.clear();
 
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
@@ -320,6 +321,7 @@ pub async fn library_close(state: State<'_, AppState>) -> CommandResult<()> {
         // away the Database's Drop impl triggers a passive WAL checkpoint.
         drop(lib);
     }
+    state.assistant.lock().await.sessions.clear();
     Ok(())
 }
 

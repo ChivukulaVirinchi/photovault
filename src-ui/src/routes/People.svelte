@@ -16,8 +16,12 @@
   // yet recognised across multiple photos. Without this split, small
   // libraries where every face is unique end up with an empty People
   // view even after detection ran successfully.
-  const mainClusters = $derived(clusters.filter((c) => c.photo_count >= 2));
-  const singletons   = $derived(clusters.filter((c) => c.photo_count === 1));
+  function isNamed(c: PersonDto): boolean {
+    return !!c.name?.trim();
+  }
+
+  const mainClusters = $derived(clusters.filter((c) => c.photo_count >= 2 || isNamed(c)));
+  const singletons   = $derived(clusters.filter((c) => c.photo_count === 1 && !isNamed(c)));
   let error = $state<string | null>(null);
   let pendingPhotos = $state(0);
   let unconfirmedTotal = $state(0);

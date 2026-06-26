@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (26);
+INSERT INTO schema_version (version) VALUES (27);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -261,6 +261,7 @@ CREATE TABLE IF NOT EXISTS albums (
     cover_photo_id INTEGER,
     cover_auto_picked BOOLEAN DEFAULT TRUE,
     photo_count INTEGER DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT 'user' CHECK(created_by IN ('user', 'agent')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL

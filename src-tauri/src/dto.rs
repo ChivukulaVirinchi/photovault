@@ -441,6 +441,7 @@ pub struct AlbumDto {
     pub created_at: String,
     pub updated_at: String,
     pub is_virtual: bool,
+    pub created_by: String,
 }
 
 impl From<AlbumRecord> for AlbumDto {
@@ -456,6 +457,7 @@ impl From<AlbumRecord> for AlbumDto {
             created_at: a.created_at,
             updated_at: a.updated_at,
             is_virtual: false,
+            created_by: a.created_by,
         }
     }
 }
@@ -1229,6 +1231,12 @@ pub struct SettingsDto {
     pub face_gpu_bridge_url: Option<String>,
     pub face_gpu_bridge_enabled: bool,
     pub face_embedder_model: String,
+    pub assistant_enabled: bool,
+    pub ai_features_enabled: bool,
+    pub assistant_provider: String,
+    pub assistant_base_url: String,
+    pub assistant_model: String,
+    pub assistant_api_key_set: bool,
 }
 
 impl From<&AppConfig> for SettingsDto {
@@ -1270,6 +1278,12 @@ impl From<&AppConfig> for SettingsDto {
             face_gpu_bridge_url: c.face_gpu_bridge_url.clone(),
             face_gpu_bridge_enabled: c.face_gpu_bridge_enabled,
             face_embedder_model: c.face_embedder_model.clone(),
+            assistant_enabled: c.assistant_enabled,
+            ai_features_enabled: c.ai_features_enabled,
+            assistant_provider: c.assistant_provider.clone(),
+            assistant_base_url: c.assistant_base_url.clone(),
+            assistant_model: c.assistant_model.clone(),
+            assistant_api_key_set: c.assistant_api_key.is_some(),
         }
     }
 }

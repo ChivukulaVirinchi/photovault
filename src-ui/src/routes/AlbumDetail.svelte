@@ -32,6 +32,7 @@
   let hasMore = $state(false);
   let exporting = $state(false);
   let exportResult = $state<AlbumExportComplete | null>(null);
+  let confirmingDelete = $state(false);
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
   const scrollStorageKey = $derived(`smriti:album-scroll:${id}`);
@@ -182,9 +183,11 @@
 
   async function deleteAlbum() {
     if (isSmartAlbum) return;
-    if (!confirm("Delete album? Photos will not be trashed.")) return;
-    try { await albums.delete(id); window.location.hash = "/albums"; }
-    catch (e) { error = JSON.stringify(e); }
+    try {
+      await albums.delete(id);
+      confirmingDelete = false;
+      window.location.hash = "/albums";
+    } catch (e) { error = JSON.stringify(e); }
   }
 
   function fmtRange(s: string | null, e: string | null): string {
@@ -261,7 +264,7 @@
         </button>
         {#if !isSmartAlbum}
           <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
-          <button class="danger" onclick={deleteAlbum}>Delete</button>
+          <button class="danger" onclick={() => (confirmingDelete = true)}>Delete</button>
         {/if}
       {/if}
     {/snippet}
@@ -323,6 +326,27 @@
           Open folder
         </button>
         <button class="ghost" onclick={() => (exportResult = null)}>Done</button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
+{#if confirmingDelete && album}
+  <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) confirmingDelete = false; }}>
+    <div class="export-modal" role="dialog" aria-modal="true" aria-labelledby="delete-album-title">
+      <header>
+        <div>
+          <h2 id="delete-album-title">Delete album?</h2>
+          <p>{album.name}</p>
+        </div>
+        <button class="icon-action ghost" onclick={() => (confirmingDelete = false)} aria-label="Close">
+          <X size={15} strokeWidth={2} />
+        </button>
+      </header>
+      <p class="export-note">Photos and videos stay in the library. Only this album is removed.</p>
+      <footer>
+        <button class="danger" onclick={deleteAlbum}>Delete album</button>
+        <button class="ghost" onclick={() => (confirmingDelete = false)}>Cancel</button>
       </footer>
     </div>
   </div>

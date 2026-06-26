@@ -24,6 +24,7 @@
   let acting = $state(false);
   let testBusy = $state(false);
   let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
+  let assistantApiKey = $state("");
   async function testBridge() {
     if (!s?.face_gpu_bridge_url) return;
     testBusy = true;
@@ -473,6 +474,87 @@
         </select>
       </label>
     </section>
+
+    <section>
+      <h3 class="section-title">AI features</h3>
+      <label class="checkbox">
+        <input type="checkbox" checked={s.ai_features_enabled}
+          onchange={(e) => patch({ ai_features_enabled: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Enable AI features</span>
+      </label>
+      <p class="hint blurb">
+        Enables provider-backed Assistant features. Local visual search remains available when this is off.
+      </p>
+    </section>
+
+    {#if s.ai_features_enabled}
+      <section>
+        <h3 class="section-title">Assistant</h3>
+        <label class="checkbox">
+          <input type="checkbox" checked={s.assistant_enabled}
+            onchange={(e) => patch({ assistant_enabled: (e.target as HTMLInputElement).checked })} />
+          <span class="label-text">Enable Assistant</span>
+        </label>
+        <label>
+          <span class="label-text">Provider</span>
+          <select value={s.assistant_provider} onchange={(e) => patch({ assistant_provider: (e.target as HTMLSelectElement).value as Settings["assistant_provider"] })}>
+            <option value="local">Local album tools</option>
+            <option value="openai_compatible">OpenAI-compatible</option>
+          </select>
+        </label>
+        {#if s.assistant_provider === "openai_compatible"}
+          <label>
+            <span class="label-text">Base URL</span>
+            <input
+              value={s.assistant_base_url}
+              spellcheck="false"
+              onchange={(e) => patch({ assistant_base_url: (e.target as HTMLInputElement).value.trim() })}
+            />
+          </label>
+          <label>
+            <span class="label-text">Model</span>
+            <input
+              value={s.assistant_model}
+              spellcheck="false"
+              onchange={(e) => patch({ assistant_model: (e.target as HTMLInputElement).value.trim() })}
+            />
+          </label>
+          <label>
+            <span class="label-text">
+              API key
+              {#if s.assistant_api_key_set}<span class="hint">(configured)</span>{/if}
+            </span>
+            <span class="inline-field">
+              <input
+                type="password"
+                bind:value={assistantApiKey}
+                autocomplete="off"
+                spellcheck="false"
+                placeholder={s.assistant_api_key_set ? "Stored key unchanged" : "Paste API key"}
+              />
+              <button
+                class="ghost"
+                onclick={async () => {
+                  await patch({ assistant_api_key: assistantApiKey || null });
+                  assistantApiKey = "";
+                }}
+                disabled={!assistantApiKey.trim()}
+              >
+                Save key
+              </button>
+              {#if s.assistant_api_key_set}
+                <button class="ghost danger-soft" onclick={() => patch({ assistant_api_key: null })}>
+                  Clear
+                </button>
+              {/if}
+            </span>
+          </label>
+          <p class="hint blurb">
+            The key is saved locally and is never sent back to the UI after saving.
+          </p>
+        {/if}
+      </section>
+    {/if}
 
     <section>
       <h3 class="section-title">Library</h3>
@@ -961,6 +1043,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+  .inline-field {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .unit { color: var(--ink-muted); font-size: var(--t-xs); }
   input, select { max-width: 200px; }

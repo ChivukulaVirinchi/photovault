@@ -192,6 +192,65 @@ export const albums = {
   },
 };
 
+// ---------- assistant ----------
+export type AssistantRunStatus =
+  | "running"
+  | "waiting_for_approval"
+  | "waiting_for_clarification"
+  | "results_ready"
+  | "completed"
+  | "stopped"
+  | "failed";
+
+export interface AssistantActivity {
+  label: string;
+}
+
+export interface AssistantPhotoSample {
+  id: number;
+  thumbnail_path: string | null;
+  date_taken: string | null;
+}
+
+export interface AssistantAlbumPreview {
+  approval_id: string;
+  album_name: string;
+  photo_count: number;
+  sample: AssistantPhotoSample[];
+  people: Array<{ id: number; name: string }>;
+  places: Array<{ city: string | null; country: string | null; label: string }>;
+  date: { start: string; end: string; label: string } | null;
+  media_type: string | null;
+  people_only: boolean;
+  semantic_text: string | null;
+  intent: "create_album" | "search";
+}
+
+export interface AssistantRun {
+  run_id: string;
+  library_root: string;
+  status: AssistantRunStatus;
+  message: string;
+  response: string | null;
+  clarification_options: string[];
+  activity: AssistantActivity[];
+  preview: AssistantAlbumPreview | null;
+  album_id: number | null;
+}
+
+export const assistant = {
+  start: (message: string, runId?: string) => call<AssistantRun>("assistant_start", { message, run_id: runId ?? null }),
+  continueRun: (runId: string, message: string) =>
+    call<AssistantRun>("assistant_continue", { run_id: runId, message }),
+  state: (runId: string) => call<AssistantRun>("assistant_state", { run_id: runId }),
+  stop: (runId: string) => call<AssistantRun>("assistant_stop", { run_id: runId }),
+  approve: (runId: string, approvalId: string) =>
+    call<AssistantRun>("assistant_approve", { run_id: runId, approval_id: approvalId }),
+  reject: (runId: string, approvalId: string) =>
+    call<AssistantRun>("assistant_reject", { run_id: runId, approval_id: approvalId }),
+  clear: () => call<null>("assistant_clear"),
+};
+
 // ---------- search ----------
 export interface SearchResults {
   interpreted: Array<{
@@ -497,6 +556,13 @@ export interface Settings {
   face_gpu_bridge_url: string | null;
   face_gpu_bridge_enabled: boolean;
   face_embedder_model: string;
+  assistant_enabled: boolean;
+  ai_features_enabled: boolean;
+  assistant_provider: "local" | "openai_compatible";
+  assistant_base_url: string;
+  assistant_model: string;
+  assistant_api_key_set: boolean;
+  assistant_api_key?: string | null;
 }
 export const settings = {
   get: () => call<Settings>("settings_get"),

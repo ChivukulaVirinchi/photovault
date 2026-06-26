@@ -29,6 +29,7 @@
   import Cull from "./routes/Cull.svelte";
   import Shortcuts from "./routes/Shortcuts.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
+  import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
   import ToastHost from "./lib/components/ToastHost.svelte";
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
   import Slideshow from "./lib/components/Slideshow.svelte";
@@ -36,6 +37,7 @@
   import { browseContext } from "./lib/stores/browseContext.svelte";
   import { selection } from "./lib/stores/selection.svelte";
   import { slideshow } from "./lib/stores/slideshow.svelte";
+  import { assistantStore } from "./lib/stores/assistant.svelte";
 
   let route = $state<{ path: string; params: Record<string, string> }>({
     path: "/timeline",
@@ -57,6 +59,17 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.shiftKey &&
+      e.key.toLowerCase() === "a" &&
+      settingsStore.data?.ai_features_enabled === true &&
+      settingsStore.data?.assistant_enabled !== false
+    ) {
+      assistantStore.show();
+      e.preventDefault();
+      return;
+    }
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.key === "?") { showShortcuts = !showShortcuts; e.preventDefault(); }
     else if (e.key === "/") { window.location.hash = "/search"; e.preventDefault(); }
@@ -89,6 +102,7 @@
       browseContext.clear();
       selection.clear();
       slideshow.close();
+      assistantStore.resetForLibrary();
       if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
         window.location.hash = "/timeline";
       }
@@ -161,6 +175,7 @@
 <ToastHost />
 <JobsIndicator />
 <Slideshow />
+<AssistantDrawer />
 
 <style>
   .shell {

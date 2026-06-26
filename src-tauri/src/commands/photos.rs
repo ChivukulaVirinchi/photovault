@@ -300,6 +300,7 @@ pub async fn photos_albums_for_photo(
             created_at: String::new(),
             updated_at: String::new(),
             is_virtual: id == super::albums::FAVORITES_ALBUM_ID,
+            created_by: "user".into(),
         })
         .collect())
 }

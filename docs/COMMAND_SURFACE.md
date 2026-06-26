@@ -343,6 +343,7 @@ struct AlbumDto {
     date_range: Option<(String, String)>,  // earliest, latest
     created_at: String,
     updated_at: String,
+    created_by: String,                    // "user" | "agent"
 }
 
 struct AlbumSuggestionDto {
@@ -526,6 +527,97 @@ struct AlbumExportComplete {
 }
 ```
 
+### 4a. `assistant` — photo Assistant
+
+The Assistant is a first-class app surface for finding photos from natural
+language and, when explicitly requested, creating albums from the result set.
+Showing matching photos is the default behavior. Album creation requires an
+explicit album intent, a candidate preview, and user approval.
+
+It cannot access original photo bytes, raw thumbnails, filesystem paths,
+embeddings, or raw SQL handles. Agent-created albums are normal albums with
+`created_by = "agent"`.
+
+| Command | Args | Returns |
+|---|---|---|
+| `assistant.start` | `{ message: String }` | `AssistantRunDto` |
+| `assistant.continue` | `{ run_id: String, message: String }` | `AssistantRunDto` |
+| `assistant.state` | `{ run_id: String }` | `AssistantRunDto` |
+| `assistant.stop` | `{ run_id: String }` | `AssistantRunDto` |
+| `assistant.approve` | `{ run_id: String, approval_id: String }` | `AssistantRunDto` |
+| `assistant.reject` | `{ run_id: String, approval_id: String }` | `AssistantRunDto` |
+| `assistant.clear` | `{}` | `()` |
+
+```rust
+struct AssistantRunDto {
+    run_id: String,
+    library_root: String,
+    status: AssistantRunStatus,
+    message: String,
+    response: Option<String>,
+    clarification_options: Vec<String>,
+    activity: Vec<AssistantActivityDto>,
+    preview: Option<AssistantAlbumPreviewDto>,
+    album_id: Option<i64>,
+}
+
+#[serde(rename_all = "snake_case")]
+enum AssistantRunStatus {
+    Running,
+    WaitingForApproval,
+    WaitingForClarification,
+    ResultsReady,
+    Completed,
+    Stopped,
+    Failed,
+}
+
+struct AssistantAlbumPreviewDto {
+    approval_id: String,
+    album_name: String,
+    photo_count: usize,
+    sample: Vec<AssistantPhotoSampleDto>,
+    people: Vec<AssistantPersonRefDto>,
+    places: Vec<AssistantPlaceRefDto>,
+    date: Option<AssistantDateRefDto>,
+    media_type: Option<String>,
+    people_only: bool,
+    semantic_text: Option<String>,
+    intent: AssistantIntent,           // "create_album" | "search"
+}
+```
+
+Assistant runs are scoped to the open library. Opening or closing a library
+clears in-memory Assistant sessions.
+
+The provider-backed Assistant is a bounded tool loop. Each turn includes only a
+minimal state summary: active photo count, current result-set count, pending
+album-preview summary, current album summary, and semantic-search availability.
+Recent conversation messages are capped; older chat text is not summarized or
+persisted. The model can call `resolve_people`, `resolve_places`,
+`resolve_date_range`, `search_photos`, `search_albums`,
+`add_photos_to_album`, `preview_album`, and `ask_user` when it
+needs facts or follow-up state. `ask_user` may return `clarification_options`
+for option-button UI. The app validates and executes those tools. Continuations
+are sent with recent session context; the backend does not concatenate turns or
+derive album names from leftover prompt text.
+Current result ids and the current album id are recorded into recent Assistant
+conversation history after result-producing steps; follow-up references use
+that history rather than a separate lookup tool.
+`search_photos.semantic_text` is rejected when it contains command/reference
+language or short unresolved aliases, so unknown place/person shorthand must be
+resolved or clarified. `preview_album` can only prepare an approval draft; album
+creation still happens only through `assistant.approve`. Adding photos to an
+existing album is a separate explicit tool action and requires an existing
+album id plus explicit photo ids or the current result set.
+
+Provider-backed Assistant requires an OpenAI-compatible provider and stored API
+key. The old local parser fallback is disabled for Assistant execution.
+
+| Event | Direction | Payload | Notes |
+|---|---|---|---|
+| `assistant:activity` | server -> client | `{ run_id, library_root, label }` | operational activity only; no chain-of-thought |
+
 ### 5. `search` — unified query
 
 | Command | Args | Returns |
@@ -700,6 +792,12 @@ struct SettingsDto {
     show_timeline_stacks: bool,
     auto_update_check_enabled: bool,
     map_cache_limit_mb: u32,
+    assistant_enabled: bool,
+    ai_features_enabled: bool,
+    assistant_provider: String,        // default "openai_compatible"
+    assistant_base_url: String,        // default "https://openrouter.ai/api/v1"
+    assistant_model: String,           // default "deepseek/deepseek-v4-flash"
+    assistant_api_key_set: bool,       // key is write-only through settings.update
 }
 ```
 

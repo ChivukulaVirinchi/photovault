@@ -36,6 +36,7 @@ pub const EV_UPDATE_DOWNLOAD_PROGRESS: &str = "update:download-progress";
 pub const EV_UPDATE_INSTALLED: &str = "update:installed";
 pub const EV_DRIVES_CHANGED: &str = "drives:changed";
 pub const EV_LIBRARY_SCAN_RECOMMENDED: &str = "library:scan-recommended";
+pub const EV_ASSISTANT_ACTIVITY: &str = "assistant:activity";
 
 /// Generic progress payload used by most jobs that don't need
 /// stage-specific fields.
@@ -48,4 +49,11 @@ pub struct JobProgress {
     pub elapsed_ms: u64,
     pub eta_ms: Option<u64>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AssistantActivityEvent {
+    pub run_id: String,
+    pub library_root: String,
+    pub label: String,
 }

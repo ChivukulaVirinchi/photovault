@@ -103,6 +103,14 @@ pub fn run() {
             commands::albums::albums_suggestions_accept,
             commands::albums::albums_suggestions_dismiss,
             commands::albums::albums_suggestions_reset_all,
+            // assistant
+            commands::assistant::assistant_start,
+            commands::assistant::assistant_continue,
+            commands::assistant::assistant_state,
+            commands::assistant::assistant_stop,
+            commands::assistant::assistant_approve,
+            commands::assistant::assistant_reject,
+            commands::assistant::assistant_clear,
             // search
             commands::search::search_query,
             commands::search::search_recent_list,
