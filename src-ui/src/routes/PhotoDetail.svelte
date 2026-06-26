@@ -1235,7 +1235,6 @@
     border-radius: 50%;
     background: var(--accent);
   }
-
   .specs {
     display: grid;
     grid-template-columns: 90px 1fr;

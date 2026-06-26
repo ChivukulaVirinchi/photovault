@@ -1,4 +1,4 @@
-<div align="center">
+    <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/smriti-logo-dark.svg">
     <img src="docs/smriti-logo.svg" alt="Smriti" width="240">
@@ -139,6 +139,10 @@ For **face recognition + offline place names**, also grab `Smriti-Assets.zip` fr
 
 Smriti runs without it; the asset pack just unlocks those two features.
 The app prompts you on first launch.
+
+Visual search is a separate optional model install from **Settings ->
+Assets**. It is intentionally not bundled into the app or the standard
+asset pack because the local text/image encoders are large.
 
 ### Automatic updates
 

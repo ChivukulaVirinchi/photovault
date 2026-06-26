@@ -33,6 +33,7 @@ use smriti::services::memories::MemoryCard;
 use smriti::services::search::{
     AlbumHit, InterpretedFilter, PersonHit, PlaceHit, SearchResult, UnifiedSearchResults,
 };
+use smriti::services::semantic::SemanticStatus;
 use smriti::services::trash::TrashStats;
 
 /// Generic page-of-T return shape used by every paginated command.
@@ -440,6 +441,7 @@ pub struct AlbumDto {
     pub created_at: String,
     pub updated_at: String,
     pub is_virtual: bool,
+    pub created_by: String,
 }
 
 impl From<AlbumRecord> for AlbumDto {
@@ -455,6 +457,7 @@ impl From<AlbumRecord> for AlbumDto {
             created_at: a.created_at,
             updated_at: a.updated_at,
             is_virtual: false,
+            created_by: a.created_by,
         }
     }
 }
@@ -1176,6 +1179,35 @@ pub struct AppVersionDto {
     pub version: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SemanticStatusDto {
+    pub model_key: String,
+    pub display_name: String,
+    pub model_dir: String,
+    pub assets_installed: bool,
+    pub onnx_runtime_installed: bool,
+    pub indexed_photos: u64,
+    pub pending_photos: u64,
+    pub failed_photos: u64,
+    pub vector_bytes: u64,
+}
+
+impl From<SemanticStatus> for SemanticStatusDto {
+    fn from(s: SemanticStatus) -> Self {
+        Self {
+            model_key: s.model_key,
+            display_name: s.display_name,
+            model_dir: s.model_dir,
+            assets_installed: s.assets_installed,
+            onnx_runtime_installed: s.onnx_runtime_installed,
+            indexed_photos: s.indexed_photos,
+            pending_photos: s.pending_photos,
+            failed_photos: s.failed_photos,
+            vector_bytes: s.vector_bytes,
+        }
+    }
+}
+
 // ---------- settings ----------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1199,6 +1231,12 @@ pub struct SettingsDto {
     pub face_gpu_bridge_url: Option<String>,
     pub face_gpu_bridge_enabled: bool,
     pub face_embedder_model: String,
+    pub assistant_enabled: bool,
+    pub ai_features_enabled: bool,
+    pub assistant_provider: String,
+    pub assistant_base_url: String,
+    pub assistant_model: String,
+    pub assistant_api_key_set: bool,
 }
 
 impl From<&AppConfig> for SettingsDto {
@@ -1240,6 +1278,12 @@ impl From<&AppConfig> for SettingsDto {
             face_gpu_bridge_url: c.face_gpu_bridge_url.clone(),
             face_gpu_bridge_enabled: c.face_gpu_bridge_enabled,
             face_embedder_model: c.face_embedder_model.clone(),
+            assistant_enabled: c.assistant_enabled,
+            ai_features_enabled: c.ai_features_enabled,
+            assistant_provider: c.assistant_provider.clone(),
+            assistant_base_url: c.assistant_base_url.clone(),
+            assistant_model: c.assistant_model.clone(),
+            assistant_api_key_set: c.assistant_api_key.is_some(),
         }
     }
 }

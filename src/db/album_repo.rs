@@ -17,6 +17,7 @@ pub struct AlbumRecord {
     pub date_range_end: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub created_by: String,
     /// Resolved absolute thumbnail path for the cover photo (set during loading, not from DB)
     pub cover_thumbnail_path: Option<String>,
 }
@@ -32,8 +33,15 @@ impl<'a> AlbumRepo<'a> {
 
     /// Create a new album with the given name. Returns the new album ID.
     pub fn create(&self, name: &str) -> SqliteResult<i64> {
-        self.conn
-            .execute("INSERT INTO albums (name) VALUES (?1)", params![name])?;
+        self.create_with_source(name, "user")
+    }
+
+    /// Create a new album and mark who created it.
+    pub fn create_with_source(&self, name: &str, created_by: &str) -> SqliteResult<i64> {
+        self.conn.execute(
+            "INSERT INTO albums (name, created_by) VALUES (?1, ?2)",
+            params![name, created_by],
+        )?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -98,6 +106,7 @@ impl<'a> AlbumRepo<'a> {
                    MIN(p.date_taken) AS date_range_start,
                    MAX(p.date_taken) AS date_range_end,
                    pcov.id AS live_cover_photo_id,
+                   COALESCE(a.created_by, 'user') AS created_by,
                    pcov.thumbnail_path AS cover_thumbnail_path
             FROM albums a
             LEFT JOIN album_photos ap ON a.id = ap.album_id
@@ -119,7 +128,8 @@ impl<'a> AlbumRepo<'a> {
                 updated_at: row.get(6)?,
                 date_range_start: row.get(7)?,
                 date_range_end: row.get(8)?,
-                cover_thumbnail_path: row.get(10)?,
+                cover_thumbnail_path: row.get(11)?,
+                created_by: row.get(10)?,
             })
         })?;
 

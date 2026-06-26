@@ -358,6 +358,50 @@ fn smart_search_date_place_media_favourite_order_is_flexible() {
 }
 
 #[test]
+fn smart_search_semantic_candidates_still_respect_structured_filters() {
+    let (_dir, db) = common::make_library();
+    let target = insert_photo_with(
+        &db,
+        "semantic-beach-2025.jpg",
+        None,
+        None,
+        Some(Utc.with_ymd_and_hms(2025, 4, 10, 12, 0, 0).unwrap()),
+    );
+    let wrong_year = insert_photo_with(
+        &db,
+        "semantic-beach-2024.jpg",
+        None,
+        None,
+        Some(Utc.with_ymd_and_hms(2024, 4, 10, 12, 0, 0).unwrap()),
+    );
+    let wrong_media = insert_photo_with(
+        &db,
+        "semantic-beach-video-2025.mp4",
+        None,
+        None,
+        Some(Utc.with_ymd_and_hms(2025, 4, 10, 12, 0, 0).unwrap()),
+    );
+    db.conn
+        .execute(
+            "UPDATE photos SET media_type = 'video' WHERE id = ?1",
+            rusqlite::params![wrong_media],
+        )
+        .unwrap();
+
+    let results = SearchService::search_unified_with_semantic(
+        &db.conn,
+        "beach photos 2025",
+        vec![wrong_media, wrong_year, target],
+    )
+    .unwrap();
+
+    assert_eq!(ids(&results), vec![target]);
+    assert!(results.interpreted.iter().any(|f| f.kind == "semantic"));
+    assert!(results.interpreted.iter().any(|f| f.kind == "date"));
+    assert!(results.interpreted.iter().any(|f| f.kind == "media"));
+}
+
+#[test]
 fn smart_search_person_and_date_are_intersected() {
     let (_dir, db) = common::make_library();
     add_person(&db, 10, "Dad");

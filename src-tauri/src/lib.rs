@@ -103,11 +103,24 @@ pub fn run() {
             commands::albums::albums_suggestions_accept,
             commands::albums::albums_suggestions_dismiss,
             commands::albums::albums_suggestions_reset_all,
+            // assistant
+            commands::assistant::assistant_start,
+            commands::assistant::assistant_continue,
+            commands::assistant::assistant_state,
+            commands::assistant::assistant_stop,
+            commands::assistant::assistant_approve,
+            commands::assistant::assistant_reject,
+            commands::assistant::assistant_clear,
             // search
             commands::search::search_query,
             commands::search::search_recent_list,
             commands::search::search_recent_remove,
             commands::search::search_recent_clear,
+            // semantic search
+            commands::semantic::semantic_status,
+            commands::semantic::semantic_install_model,
+            commands::semantic::semantic_start_indexing,
+            commands::semantic::semantic_similar_photos,
             // memories
             commands::memories::memories_today,
             commands::memories::memories_detail,

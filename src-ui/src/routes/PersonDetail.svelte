@@ -271,7 +271,8 @@
     source={person}
     onclose={() => (showMergeDialog = false)}
     onsuccess={(merged) => {
-      window.location.hash = `/person?id=${merged.id}`;
+      history.replaceState(null, "", `#/person?id=${merged.id}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
     }}
   />
 {/if}

@@ -22,5 +22,11 @@ expression: dto
   "thumbnail_cache_gb": 5.0,
   "face_gpu_bridge_url": null,
   "face_gpu_bridge_enabled": false,
-  "face_embedder_model": "adaface_ir101_webface12m.onnx"
+  "face_embedder_model": "adaface_ir101_webface12m.onnx",
+  "assistant_enabled": false,
+  "ai_features_enabled": false,
+  "assistant_provider": "openai_compatible",
+  "assistant_base_url": "https://openrouter.ai/api/v1",
+  "assistant_model": "deepseek/deepseek-v4-flash",
+  "assistant_api_key_set": false
 }

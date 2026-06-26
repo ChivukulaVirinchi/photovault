@@ -1,7 +1,7 @@
 <script lang="ts">
   import { jobs, etaMs, type Job } from "../stores/jobs.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { Loader2, X } from "lucide-svelte";
+  import { CircleX, Loader2, Minus } from "lucide-svelte";
 
   let expanded = $state(false);
   // Auto-collapse when no jobs are running.
@@ -36,6 +36,7 @@
       jobs.dismiss(j.id);
       return;
     }
+    jobs.markCancelling(j.id);
     try {
       await invoke("jobs_cancel", { args: { job_id: j.id } });
     } catch (e) {
@@ -55,7 +56,8 @@
           {jobs.count} {jobs.count === 1 ? "task" : "tasks"} running
         </span>
         <button class="icon-btn" onclick={() => (expanded = false)} aria-label="Collapse">
-          <X size={13} strokeWidth={1.75} />
+          <Minus size={14} strokeWidth={2} />
+          <span class="sr-only">Collapse</span>
         </button>
       </header>
       <ul class="list">
@@ -76,7 +78,8 @@
                     ? "Pause ? resume later, even after moving the drive to another machine"
                     : "Cancel"}
                 >
-                  <X size={12} strokeWidth={2} />
+                  <CircleX size={13} strokeWidth={2} />
+                  <span class="sr-only">Cancel</span>
                 </button>
               {/if}
             </div>
@@ -165,6 +168,17 @@
     border-radius: var(--r-sm);
     display: inline-flex; align-items: center; justify-content: center;
     cursor: pointer;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
   .icon-btn:hover { background: var(--bg-card); color: var(--ink); }
   .icon-btn.cancel {

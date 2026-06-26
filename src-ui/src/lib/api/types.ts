@@ -121,6 +121,7 @@ export interface AlbumDto {
   date_range_end: string | null;
   cover_thumbnail_path: string | null;
   is_virtual: boolean;
+  created_by: "user" | "agent";
 }
 
 export interface AlbumSuggestionDto {

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (25);
+INSERT INTO schema_version (version) VALUES (27);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -261,6 +261,7 @@ CREATE TABLE IF NOT EXISTS albums (
     cover_photo_id INTEGER,
     cover_auto_picked BOOLEAN DEFAULT TRUE,
     photo_count INTEGER DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT 'user' CHECK(created_by IN ('user', 'agent')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cover_photo_id) REFERENCES photos(id) ON DELETE SET NULL
@@ -438,6 +439,25 @@ CREATE TABLE IF NOT EXISTS excluded_folders (
 );
 
 -- ============================================================
+-- SEMANTIC SEARCH
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS semantic_index_state (
+    photo_id INTEGER NOT NULL,
+    model_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'indexed', 'failed', 'unsupported')),
+    vector_offset INTEGER,
+    vector_dim INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    indexed_at DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (photo_id, model_key),
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+);
+
+-- ============================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 
@@ -506,6 +526,12 @@ CREATE INDEX IF NOT EXISTS idx_album_suggestions_fingerprint ON album_suggestion
 
 -- Recent searches
 CREATE INDEX IF NOT EXISTS idx_recent_searches_used ON recent_searches(last_used DESC);
+
+-- Semantic search
+CREATE INDEX IF NOT EXISTS idx_semantic_state_status
+    ON semantic_index_state(model_key, status);
+CREATE INDEX IF NOT EXISTS idx_semantic_state_photo
+    ON semantic_index_state(photo_id);
 "#;
 
 #[cfg(test)]

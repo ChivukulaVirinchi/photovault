@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
@@ -20,6 +20,8 @@ static EP_LOGGED: AtomicBool = AtomicBool::new(false);
 /// this reflects the *best* provider that probed available, not a
 /// proof that every op runs on it.
 static ACTIVE_PROVIDER: OnceLock<&'static str> = OnceLock::new();
+static ORT_INITIALIZED: OnceLock<()> = OnceLock::new();
+static ORT_INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// User-facing label for the active execution provider, e.g. "DirectML",
 /// "CUDA", "CoreML", "CPU". Returns "CPU" before any session is built.
@@ -81,25 +83,15 @@ impl OnnxRuntime {
             tracing::warn!("ORT_DYLIB_PATH set but file not found: {}", path);
         }
 
-        // 1b. Check installed optional asset-pack roots
-        let roots = [
-            crate::bootstrap::default_asset_install_dir(),
-            std::env::var("PHOTOVAULT_ASSET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("")),
-        ];
-        for root in roots {
-            if root.as_os_str().is_empty() {
-                continue;
-            }
-            let candidate_dir = root.join("libs").join("onnxruntime");
-            if let Some(candidate) = Self::find_runtime_in_dir(&candidate_dir) {
-                tracing::info!(
-                    "Using ONNX Runtime from optional asset-pack path: {}",
-                    candidate.display()
-                );
-                return Some(candidate);
-            }
+        // 1b. Check installed optional asset-pack roots. The asset pack
+        // stores runtimes under platform subdirectories; bootstrap owns
+        // that layout so health checks and dynamic loading agree.
+        if let Some(candidate) = crate::bootstrap::onnx_runtime_path() {
+            tracing::info!(
+                "Using ONNX Runtime from optional asset-pack path: {}",
+                candidate.display()
+            );
+            return Some(candidate);
         }
 
         let rel_dir = Path::new("libs").join("onnxruntime");
@@ -153,8 +145,20 @@ impl OnnxRuntime {
     ///
     /// This should be called once at application startup, before creating any sessions.
     pub fn init() -> ort::Result<Self> {
+        if ORT_INITIALIZED.get().is_some() {
+            return Ok(Self);
+        }
+
+        let _guard = ORT_INIT_LOCK.lock().map_err(|_| {
+            ort::Error::new("ONNX Runtime initialization lock is poisoned".to_string())
+        })?;
+        if ORT_INITIALIZED.get().is_some() {
+            return Ok(Self);
+        }
+
         if let Some(dylib_path) = Self::resolve_dylib_path() {
             ort::init_from(&dylib_path)?.commit();
+            let _ = ORT_INITIALIZED.set(());
             tracing::info!(
                 "ONNX Runtime initialized (dynamic) from: {}",
                 dylib_path.display()

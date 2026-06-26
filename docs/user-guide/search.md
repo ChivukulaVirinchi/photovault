@@ -2,7 +2,7 @@
 
 Smriti's search is one box for the library metadata it already has:
 named people, dates, places, albums, favourites, media type, filenames,
-and camera names. It does not use cloud AI or guess at image contents.
+camera names, and optional local visual meaning. It does not use cloud AI.
 
 ## What Search Understands
 
@@ -17,6 +17,7 @@ and camera names. It does not use cloud AI or guess at image contents.
 | `videos Goa 2024` | Videos from Goa taken in 2024 |
 | `album Goa Trip` | Photos in the matching album |
 | `Nikon Goa` | Filename/camera/location fallback for unmatched words |
+| `beach sunset` | Visually similar photos, when visual search is installed and indexed |
 
 The interpreted filters appear as chips above the results so you can see
 what Smriti understood.
@@ -80,9 +81,28 @@ Use `favourites`, `favorites`, or `starred` to filter to favourite items.
 
 Use `videos`, `video`, `photos`, or `photo` to filter media type.
 
+## Visual Meaning
+
+Visual search is optional. Install the visual model from
+**Settings -> Assets -> Visual search** and install the runtime pack with
+**Download assets**, then run **Index visual search**. Smriti stores the
+model outside the app binary and stores per-library vectors under
+`.photovault/semantic`.
+
+When visual search is ready, natural queries such as:
+
+```text
+beach sunset
+food photos 2024
+videos mountains
+```
+
+are matched against local image/video-poster embeddings. Structured
+filters still apply: `food photos 2024` is semantic `food` plus photo
+media type plus the 2024 date range, not a separate loose search path.
+
 ## What It Does Not Do Yet
 
-- No semantic image search such as `red dress`, `food`, or `sunset`.
 - No cloud lookup.
 - No OCR dependency in the main search path.
 - No regex or wildcard syntax.

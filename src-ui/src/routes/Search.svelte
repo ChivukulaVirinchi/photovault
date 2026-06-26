@@ -140,7 +140,7 @@
       bind:this={inputEl}
       bind:value={q}
       oninput={onInput}
-      placeholder='Try a name, place, or "Goa 2023"…'
+      placeholder='Try a name, place, "Goa 2023", or "beach sunset"'
     />
     {#if loading}<span class="loading mono">…</span>{/if}
   </div>
@@ -255,7 +255,7 @@
     {/if}
   {:else if !loading}
     <div class="empty">
-      <p>Type to search across people, dates, albums, places, favourites, filenames, and camera names.</p>
+      <p>Type to search across people, dates, albums, places, favourites, filenames, camera names, and visual meaning.</p>
     </div>
   {/if}
 </div>

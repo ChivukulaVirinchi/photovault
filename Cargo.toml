@@ -133,6 +133,7 @@ rayon = "1.10"
 # Additional async utilities
 async-channel = "2.0"
 lru = "0.16"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 # Regex for filename parsing
 regex = "1"

@@ -110,6 +110,34 @@ pub struct AppConfig {
     /// AdaFace is the only supported local recognizer.
     #[serde(default = "default_face_embedder_model")]
     pub face_embedder_model: String,
+
+    /// Enables the album-only in-app Assistant. Semantic search remains
+    /// available when this is off.
+    #[serde(default = "default_assistant_enabled")]
+    pub assistant_enabled: bool,
+
+    /// Top-level opt-in for provider-backed AI features. Local semantic
+    /// search is not gated by this.
+    #[serde(default)]
+    pub ai_features_enabled: bool,
+
+    /// Assistant provider identifier. `local` keeps the deterministic
+    /// album-only harness; `openai_compatible` enables the saved endpoint
+    /// configuration for a provider-backed assistant turn.
+    #[serde(default = "default_assistant_provider")]
+    pub assistant_provider: String,
+
+    /// OpenAI-compatible chat completions base URL.
+    #[serde(default = "default_assistant_base_url")]
+    pub assistant_base_url: String,
+
+    /// Provider model name.
+    #[serde(default = "default_assistant_model")]
+    pub assistant_model: String,
+
+    /// Provider API key. DTOs only expose whether this is set.
+    #[serde(default)]
+    pub assistant_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,6 +195,22 @@ fn default_face_embedder_model() -> String {
     "adaface_ir101_webface12m.onnx".to_string()
 }
 
+fn default_assistant_enabled() -> bool {
+    false
+}
+
+fn default_assistant_provider() -> String {
+    "openai_compatible".to_string()
+}
+
+fn default_assistant_base_url() -> String {
+    "https://openrouter.ai/api/v1".to_string()
+}
+
+fn default_assistant_model() -> String {
+    "deepseek/deepseek-v4-flash".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -197,8 +241,14 @@ impl Default for AppConfig {
             date_logic_version: 0,
             geonames_warning_seen: false,
             thumbnail_cache_gb: default_thumbnail_cache_gb(),
-            config_version: 3,
+            config_version: 4,
             face_embedder_model: default_face_embedder_model(),
+            assistant_enabled: false,
+            ai_features_enabled: false,
+            assistant_provider: default_assistant_provider(),
+            assistant_base_url: default_assistant_base_url(),
+            assistant_model: default_assistant_model(),
+            assistant_api_key: None,
             face_gpu_bridge_url: None,
             face_gpu_bridge_enabled: false,
         }
@@ -263,6 +313,18 @@ impl AppConfig {
             self.face_embedder_model = default_face_embedder_model();
             self.config_version = 3;
         }
+        if self.config_version < 4 {
+            if self.assistant_provider == "local" {
+                self.assistant_provider = default_assistant_provider();
+            }
+            if self.assistant_base_url == "https://api.openai.com/v1" {
+                self.assistant_base_url = default_assistant_base_url();
+            }
+            if self.assistant_model == "gpt-4.1-mini" {
+                self.assistant_model = default_assistant_model();
+            }
+            self.config_version = 4;
+        }
     }
 
     /// Clamp all values to valid ranges.
@@ -293,6 +355,28 @@ impl AppConfig {
         self.thumbnail_cache_gb = self.thumbnail_cache_gb.clamp(0.5, 100.0);
         if self.face_embedder_model != default_face_embedder_model() {
             self.face_embedder_model = default_face_embedder_model();
+        }
+        if !matches!(
+            self.assistant_provider.as_str(),
+            "local" | "openai_compatible"
+        ) {
+            self.assistant_provider = default_assistant_provider();
+        }
+        if !self.assistant_base_url.starts_with("https://")
+            && !self.assistant_base_url.starts_with("http://localhost")
+            && !self.assistant_base_url.starts_with("http://127.0.0.1")
+        {
+            self.assistant_base_url = default_assistant_base_url();
+        }
+        if self.assistant_model.trim().is_empty() {
+            self.assistant_model = default_assistant_model();
+        }
+        if self
+            .assistant_api_key
+            .as_deref()
+            .is_some_and(|s| s.trim().is_empty())
+        {
+            self.assistant_api_key = None;
         }
     }
 
@@ -393,7 +477,7 @@ mod tests {
 
         cfg.migrate_config_defaults();
 
-        assert_eq!(cfg.config_version, 3);
+        assert_eq!(cfg.config_version, 4);
         assert_eq!(cfg.face_embedder_model, default_face_embedder_model());
     }
 }

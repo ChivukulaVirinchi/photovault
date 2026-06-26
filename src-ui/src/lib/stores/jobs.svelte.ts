@@ -38,6 +38,7 @@ export type JobKind =
   | "documents"
   | "thumbnails"
   | "assets"
+  | "semantic"
   | "geocoding"
   | "albumSuggestions"
   | "albumExport";
@@ -51,6 +52,7 @@ const KIND_TITLE: Record<JobKind, string> = {
   documents:        "Classifying documents",
   thumbnails:       "Generating thumbnails",
   assets:           "Installing assets",
+  semantic:         "Indexing visual search",
   geocoding:        "Resolving places",
   albumSuggestions: "Looking for trips",
   albumExport:      "Exporting album",
@@ -160,6 +162,8 @@ class JobsStore {
       ["thumbnails:complete", "thumbnails", true ],
       ["assets:progress",     "assets",     false],
       ["assets:complete",     "assets",     true ],
+      ["semantic:progress",   "semantic",   false],
+      ["semantic:complete",   "semantic",   true ],
       ["geocoding:progress",  "geocoding",  false],
       ["geocoding:complete",  "geocoding",  true ],
       ["album_suggestions:progress", "albumSuggestions", false],
@@ -218,6 +222,14 @@ class JobsStore {
     if (!this.jobs.has(id)) return;
     const next = new Map(this.jobs);
     next.delete(id);
+    this.jobs = next;
+  }
+
+  markCancelling(id: string) {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const next = new Map(this.jobs);
+    next.set(id, { ...job, message: "Cancelling..." });
     this.jobs = next;
   }
 

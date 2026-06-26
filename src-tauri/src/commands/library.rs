@@ -11,6 +11,9 @@ use tauri::{AppHandle, Manager, State};
 
 use smriti::db::Database;
 use smriti::services::drive_detector::DriveDetector;
+use smriti::services::semantic::{
+    SemanticIndexCache, SemanticModelRunner, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
+};
 
 use crate::dto::{
     DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
@@ -224,19 +227,90 @@ pub async fn library_open(
         repo.count()?
     };
 
+    let open_library =
+        OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
+            message: e.to_string(),
+        })?;
+    spawn_semantic_warmup(
+        drive_root.clone(),
+        open_library.semantic_index.clone(),
+        open_library.semantic_runner.clone(),
+    );
+
     let mut guard = state.library.write().await;
-    *guard =
-        Some(
-            OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
-                message: e.to_string(),
-            })?,
-        );
+    *guard = Some(open_library);
+    state.assistant.lock().await.sessions.clear();
 
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
         photo_count,
         first_run: needs_schema,
     })
+}
+
+fn spawn_semantic_warmup(
+    drive_root: PathBuf,
+    semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
+    semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let db_path = smriti::db::db_path_for(&drive_root);
+        let conn = match smriti::db::open_secondary(&db_path) {
+            Ok(conn) => conn,
+            Err(err) => {
+                tracing::debug!("semantic warmup skipped: failed opening db: {}", err);
+                return;
+            }
+        };
+        let svc = SemanticSearchService::new(&drive_root);
+        let status = match svc.status(&conn) {
+            Ok(status) => status,
+            Err(err) => {
+                tracing::debug!("semantic warmup skipped: status failed: {}", err);
+                return;
+            }
+        };
+        if !status.assets_installed || !status.onnx_runtime_installed || status.indexed_photos == 0
+        {
+            return;
+        }
+
+        let mut cache = match semantic_index.lock() {
+            Ok(cache) => cache,
+            Err(_) => {
+                tracing::debug!("semantic warmup skipped: index cache poisoned");
+                return;
+            }
+        };
+        let mut runner_guard = match semantic_runner.lock() {
+            Ok(runner) => runner,
+            Err(_) => {
+                tracing::debug!("semantic warmup skipped: model cache poisoned");
+                return;
+            }
+        };
+        if runner_guard.is_none() {
+            match SemanticSearchService::model_runner() {
+                Ok(runner) => *runner_guard = Some(runner),
+                Err(err) => {
+                    tracing::debug!("semantic warmup skipped: model unavailable: {}", err);
+                    return;
+                }
+            }
+        }
+
+        if let Some(runner) = runner_guard.as_mut() {
+            if let Err(err) = svc.search_text_cached(
+                &conn,
+                &mut cache,
+                runner,
+                "photo",
+                SEMANTIC_TEXT_SEARCH_LIMIT,
+            ) {
+                tracing::debug!("semantic warmup skipped: search cache failed: {}", err);
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -247,6 +321,7 @@ pub async fn library_close(state: State<'_, AppState>) -> CommandResult<()> {
         // away the Database's Drop impl triggers a passive WAL checkpoint.
         drop(lib);
     }
+    state.assistant.lock().await.sessions.clear();
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 //! Search service - executes parsed queries against the database.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::{params, params_from_iter, types::Value, Connection, Result as SqliteResult};
 
@@ -127,6 +127,18 @@ struct SmartIntent {
     albums: Vec<ResolvedAlbum>,
     favorite: Option<bool>,
     media_type: Option<SmartMediaType>,
+    semantic_photo_ids: Vec<i64>,
+}
+
+impl SmartIntent {
+    fn has_structured_filters(&self) -> bool {
+        self.date_range.is_some()
+            || !self.people_all.is_empty()
+            || !self.places.is_empty()
+            || !self.albums.is_empty()
+            || self.favorite.is_some()
+            || self.media_type.is_some()
+    }
 }
 
 impl SearchService {
@@ -313,12 +325,21 @@ impl SearchService {
         conn: &Connection,
         raw_query: &str,
     ) -> SqliteResult<UnifiedSearchResults> {
+        Self::search_unified_with_semantic(conn, raw_query, Vec::new())
+    }
+
+    pub fn search_unified_with_semantic(
+        conn: &Connection,
+        raw_query: &str,
+        semantic_photo_ids: Vec<i64>,
+    ) -> SqliteResult<UnifiedSearchResults> {
         let query = raw_query.trim();
         if query.is_empty() {
             return Ok(UnifiedSearchResults::default());
         }
 
-        let intent = Self::parse_smart_intent(conn, query)?;
+        let mut intent = Self::parse_smart_intent(conn, query)?;
+        intent.semantic_photo_ids = semantic_photo_ids;
         let mut results = UnifiedSearchResults {
             interpreted: Self::interpreted_filters(&intent),
             people: Self::search_people(conn, query)?,
@@ -416,7 +437,16 @@ impl SearchService {
         if !remaining.trim().is_empty() {
             let places = Self::resolve_places(conn, remaining.trim())?;
             if !places.is_empty() {
-                remaining.clear();
+                remaining =
+                    Self::remove_entity_names(&remaining, places.iter().map(|p| p.label.as_str()));
+                remaining = Self::remove_entity_names(
+                    &remaining,
+                    places.iter().filter_map(|p| p.city.as_deref()),
+                );
+                remaining = Self::remove_entity_names(
+                    &remaining,
+                    places.iter().filter_map(|p| p.country.as_deref()),
+                );
                 intent.places = places;
             }
         }
@@ -490,9 +520,21 @@ impl SearchService {
             });
         }
         if let Some(text) = &intent.text {
+            if intent.semantic_photo_ids.is_empty() {
+                out.push(InterpretedFilter {
+                    kind: "text".into(),
+                    label: text.clone(),
+                });
+            } else {
+                out.push(InterpretedFilter {
+                    kind: "semantic".into(),
+                    label: text.clone(),
+                });
+            }
+        } else if !intent.semantic_photo_ids.is_empty() {
             out.push(InterpretedFilter {
-                kind: "text".into(),
-                label: text.clone(),
+                kind: "semantic".into(),
+                label: "Visual meaning".into(),
             });
         }
         out
@@ -637,7 +679,17 @@ impl SearchService {
             }
         }
         if let Some(t) = &intent.text {
-            sql.push_str(
+            let semantic_clause = if intent.semantic_photo_ids.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " OR p.id IN ({})",
+                    std::iter::repeat_n("?", intent.semantic_photo_ids.len())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            sql.push_str(&format!(
                 " AND (
                     LOWER(p.file_name) LIKE LOWER(?) OR
                     LOWER(p.location_city) LIKE LOWER(?) OR
@@ -645,15 +697,36 @@ impl SearchService {
                     LOWER(p.camera_make) LIKE LOWER(?) OR
                     LOWER(p.camera_model) LIKE LOWER(?) OR
                     LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?)
+                    {semantic_clause}
                 )",
-            );
+            ));
             let like = Value::Text(format!("%{}%", t));
             for _ in 0..6 {
                 bind.push(like.clone());
             }
+            for id in &intent.semantic_photo_ids {
+                bind.push(Value::Integer(*id));
+            }
+        } else if !intent.semantic_photo_ids.is_empty() && !intent.has_structured_filters() {
+            sql.push_str(&format!(
+                " AND p.id IN ({})",
+                std::iter::repeat_n("?", intent.semantic_photo_ids.len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            for id in &intent.semantic_photo_ids {
+                bind.push(Value::Integer(*id));
+            }
         }
 
-        sql.push_str(" ORDER BY p.date_taken DESC, p.id DESC LIMIT 1000");
+        let limit = if intent.semantic_photo_ids.is_empty() {
+            1000
+        } else {
+            5000
+        };
+        sql.push_str(&format!(
+            " ORDER BY p.date_taken DESC, p.id DESC LIMIT {limit}"
+        ));
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
             Ok(SearchResult {
@@ -664,7 +737,28 @@ impl SearchService {
                 thumbnail_path: row.get(4)?,
             })
         })?;
-        rows.collect()
+        let mut results = rows.collect::<SqliteResult<Vec<_>>>()?;
+        if !intent.semantic_photo_ids.is_empty() {
+            let rank: HashMap<i64, usize> = intent
+                .semantic_photo_ids
+                .iter()
+                .enumerate()
+                .map(|(idx, id)| (*id, idx))
+                .collect();
+            results.sort_by(
+                |a, b| match (rank.get(&a.photo_id), rank.get(&b.photo_id)) {
+                    (Some(ra), Some(rb)) => ra.cmp(rb),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => b
+                        .date_taken
+                        .cmp(&a.date_taken)
+                        .then(b.photo_id.cmp(&a.photo_id)),
+                },
+            );
+            results.truncate(1000);
+        }
+        Ok(results)
     }
 
     fn resolve_people(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPerson>> {
@@ -708,25 +802,23 @@ impl SearchService {
     }
 
     fn resolve_places(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPlace>> {
-        let like = format!("%{}%", text.trim());
         let mut stmt = conn.prepare(
             "SELECT location_city, location_country, COUNT(*) AS cnt
              FROM photos
              WHERE is_trashed = FALSE
-               AND (LOWER(location_city) LIKE LOWER(?1)
-                    OR LOWER(location_country) LIKE LOWER(?1))
+               AND (location_city IS NOT NULL OR location_country IS NOT NULL)
              GROUP BY location_city, location_country
              ORDER BY cnt DESC
-             LIMIT 3",
+             LIMIT 100",
         )?;
-        let rows = stmt.query_map(params![like], |row| {
+        let rows = stmt.query_map([], |row| {
             let city: Option<String> = row.get(0)?;
             let country: Option<String> = row.get(1)?;
             let label = match (&city, &country) {
                 (Some(c), Some(country)) => format!("{}, {}", c, country),
                 (Some(c), None) => c.clone(),
                 (None, Some(country)) => country.clone(),
-                (None, None) => text.to_string(),
+                (None, None) => String::new(),
             };
             Ok(ResolvedPlace {
                 city,
@@ -734,7 +826,28 @@ impl SearchService {
                 label,
             })
         })?;
-        rows.collect()
+        let lower = text.to_lowercase();
+        let mut out = Vec::new();
+        for row in rows {
+            let place = row?;
+            let city_match = place
+                .city
+                .as_deref()
+                .is_some_and(|city| Self::contains_phrase(&lower, &city.to_lowercase()));
+            let country_match = place
+                .country
+                .as_deref()
+                .is_some_and(|country| Self::contains_phrase(&lower, &country.to_lowercase()));
+            let label_match = !place.label.is_empty()
+                && Self::contains_phrase(&lower, &place.label.to_lowercase());
+            if city_match || country_match || label_match {
+                out.push(place);
+                if out.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn contains_word(lower: &str, needle: &str) -> bool {
@@ -858,5 +971,227 @@ impl SearchService {
             })
         })?;
         rows.collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                date_taken TEXT,
+                location_city TEXT,
+                location_country TEXT,
+                camera_make TEXT,
+                camera_model TEXT,
+                thumbnail_path TEXT,
+                faces_processed BOOLEAN DEFAULT FALSE,
+                media_type TEXT NOT NULL DEFAULT 'photo',
+                is_favorite BOOLEAN DEFAULT FALSE,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            CREATE TABLE face_clusters (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                photo_count INTEGER NOT NULL DEFAULT 0,
+                representative_face_id INTEGER
+            );
+            CREATE TABLE faces (
+                id INTEGER PRIMARY KEY,
+                photo_id INTEGER NOT NULL,
+                cluster_id INTEGER
+            );
+            CREATE TABLE photo_inferred_identities (
+                photo_id INTEGER NOT NULL,
+                cluster_id INTEGER NOT NULL
+            );
+            CREATE TABLE albums (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                photo_count INTEGER NOT NULL DEFAULT 0,
+                cover_photo_id INTEGER,
+                updated_at TEXT
+            );
+            CREATE TABLE album_photos (
+                album_id INTEGER NOT NULL,
+                photo_id INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_photo(conn: &Connection, id: i64, file_name: &str, date_taken: &str) {
+        conn.execute(
+            "INSERT INTO photos
+                (id, file_path, file_name, file_hash, file_size, date_taken, media_type, thumbnail_path)
+             VALUES (?1, ?2, ?3, ?4, 100, ?5, 'photo', ?6)",
+            params![
+                id,
+                format!("{file_name}.jpg"),
+                file_name,
+                format!("hash-{id}"),
+                date_taken,
+                format!(".photovault/thumbs/{file_name}.jpg")
+            ],
+        )
+        .unwrap();
+    }
+
+    fn set_location(conn: &Connection, id: i64, city: &str, country: &str) {
+        conn.execute(
+            "UPDATE photos SET location_city = ?2, location_country = ?3 WHERE id = ?1",
+            params![id, city, country],
+        )
+        .unwrap();
+    }
+
+    fn insert_person(conn: &Connection, id: i64, name: &str, photo_ids: &[i64]) {
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, photo_count) VALUES (?1, ?2, ?3)",
+            params![id, name, photo_ids.len() as i64],
+        )
+        .unwrap();
+        for (idx, photo_id) in photo_ids.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO faces (id, photo_id, cluster_id) VALUES (?1, ?2, ?3)",
+                params![10_000 + idx as i64 + id * 100, photo_id, id],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn unified_search_returns_semantic_matches_when_text_does_not_match_metadata() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-01-02T10:00:00Z");
+        insert_photo(&conn, 3, "img003", "2024-01-03T10:00:00Z");
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "group photo", vec![3, 1]).unwrap();
+
+        assert_eq!(results.photo_ids, vec![3, 1]);
+        assert_eq!(
+            results
+                .interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("media", "Photos"), ("semantic", "group")]
+        );
+    }
+
+    #[test]
+    fn unified_search_ands_date_filter_with_semantic_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2023-06-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-06-01T10:00:00Z");
+        insert_photo(&conn, 3, "img003", "2024-07-01T10:00:00Z");
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "family 2024", vec![1, 3, 2])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![3, 2]);
+        assert!(results
+            .interpreted
+            .iter()
+            .any(|f| f.kind == "semantic" && f.label == "family"));
+        assert!(results.interpreted.iter().any(|f| f.kind == "date"));
+    }
+
+    #[test]
+    fn unified_search_excludes_trashed_semantic_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "img001", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "img002", "2024-01-02T10:00:00Z");
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 1", [])
+            .unwrap();
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "beach", vec![1, 2]).unwrap();
+
+        assert_eq!(results.photo_ids, vec![2]);
+    }
+
+    #[test]
+    fn unified_search_resolves_person_and_place_independent_of_order() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-other", "2024-01-02T10:00:00Z");
+        insert_photo(&conn, 3, "goa-tata", "2024-01-03T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        set_location(&conn, 3, "Goa", "India");
+        insert_person(&conn, 7, "Tata", &[1, 3]);
+
+        let a = SearchService::search_unified_with_semantic(&conn, "tata vizianagaram", vec![])
+            .unwrap();
+        let b = SearchService::search_unified_with_semantic(&conn, "vizianagaram tata", vec![])
+            .unwrap();
+
+        assert_eq!(a.photo_ids, vec![1]);
+        assert_eq!(b.photo_ids, vec![1]);
+        assert_eq!(
+            a.interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("person", "Tata"), ("place", "Vizianagaram, India")]
+        );
+        assert_eq!(
+            b.interpreted
+                .iter()
+                .map(|f| (f.kind.as_str(), f.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("person", "Tata"), ("place", "Vizianagaram, India")]
+        );
+    }
+
+    #[test]
+    fn semantic_does_not_delete_fully_structured_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-tata-older", "2023-01-01T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        insert_person(&conn, 7, "Tata", &[1, 2]);
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "tata vizianagaram", vec![1])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn semantic_visual_text_still_filters_inside_structured_matches() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "vizag-tata-car", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "vizag-tata-home", "2024-01-02T10:00:00Z");
+        set_location(&conn, 1, "Vizianagaram", "India");
+        set_location(&conn, 2, "Vizianagaram", "India");
+        insert_person(&conn, 7, "Tata", &[1, 2]);
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "car tata vizianagaram", vec![1])
+                .unwrap();
+
+        assert_eq!(results.photo_ids, vec![1]);
+        assert!(results
+            .interpreted
+            .iter()
+            .any(|f| f.kind == "semantic" && f.label == "car"));
     }
 }

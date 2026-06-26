@@ -1,6 +1,7 @@
 //! Application services
 
 pub mod album_suggestions;
+pub mod assistant;
 pub mod burst_detector;
 pub mod camera_names;
 pub mod document_detector;
@@ -27,6 +28,7 @@ pub mod reindexer;
 pub mod scanner;
 pub mod search;
 pub mod self_replace;
+pub mod semantic;
 pub mod thumbnail;
 pub mod tile_cache;
 pub mod trash;
@@ -49,6 +51,10 @@ pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;
 pub use search::{
     AlbumHit, PersonHit, PlaceHit, SearchResult, SearchService, UnifiedSearchResults,
+};
+pub use semantic::{
+    SemanticIndexCache, SemanticIndexStats, SemanticModelRunner, SemanticSearchService,
+    SemanticStatus,
 };
 pub use thumbnail::{ThumbnailService, ThumbnailSize};
 pub use tile_cache::TileCache;

@@ -63,6 +63,7 @@ fn favorites_album(conn: &rusqlite::Connection) -> CommandResult<Option<AlbumDto
         created_at: now.clone(),
         updated_at: now,
         is_virtual: true,
+        created_by: "user".into(),
     }))
 }
 

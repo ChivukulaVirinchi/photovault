@@ -36,12 +36,19 @@ pub struct SettingsUpdateArgs {
     pub thumbnail_cache_gb: Option<f64>,
     pub face_gpu_bridge_url: Option<Option<String>>,
     pub face_gpu_bridge_enabled: Option<bool>,
+    pub assistant_enabled: Option<bool>,
+    pub ai_features_enabled: Option<bool>,
+    pub assistant_provider: Option<String>,
+    pub assistant_base_url: Option<String>,
+    pub assistant_model: Option<String>,
+    pub assistant_api_key: Option<Option<String>>,
 }
 
 #[tauri::command]
 pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<SettingsDto> {
     use smriti::config::{AppTheme, DateFormat};
     let mut cfg = smriti::config::AppConfig::load();
+    let assistant_enabled_was_patched = args.assistant_enabled.is_some();
     if let Some(t) = args.theme {
         cfg.theme = match t.as_str() {
             "dark" => AppTheme::Dark,
@@ -146,8 +153,99 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
             cfg.face_gpu_bridge_url = None;
         }
     }
+    if let Some(v) = args.assistant_enabled {
+        cfg.assistant_enabled = v;
+    }
+    if let Some(v) = args.ai_features_enabled {
+        apply_ai_feature_toggle(&mut cfg, v, assistant_enabled_was_patched);
+    }
+    if let Some(v) = args.assistant_provider {
+        cfg.assistant_provider = match v.as_str() {
+            "local" | "openai_compatible" => v,
+            other => {
+                return Err(CommandError::Validation {
+                    field: "assistant_provider".into(),
+                    reason: format!("unknown assistant provider {other}"),
+                })
+            }
+        };
+    }
+    if let Some(v) = args.assistant_base_url {
+        let trimmed = v.trim().trim_end_matches('/').to_string();
+        let allowed = trimmed.starts_with("https://")
+            || trimmed.starts_with("http://localhost")
+            || trimmed.starts_with("http://127.0.0.1");
+        if !allowed {
+            return Err(CommandError::Validation {
+                field: "assistant_base_url".into(),
+                reason: "must use https:// or local http://".into(),
+            });
+        }
+        cfg.assistant_base_url = trimmed;
+    }
+    if let Some(v) = args.assistant_model {
+        let trimmed = v.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(CommandError::Validation {
+                field: "assistant_model".into(),
+                reason: "model is required".into(),
+            });
+        }
+        cfg.assistant_model = trimmed;
+    }
+    if let Some(v) = args.assistant_api_key {
+        cfg.assistant_api_key = v.and_then(|key| {
+            let trimmed = key.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+    }
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
     Ok((&cfg).into())
+}
+
+fn apply_ai_feature_toggle(
+    cfg: &mut smriti::config::AppConfig,
+    ai_enabled: bool,
+    assistant_enabled_was_patched: bool,
+) {
+    cfg.ai_features_enabled = ai_enabled;
+    if !ai_enabled || !assistant_enabled_was_patched {
+        cfg.assistant_enabled = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use smriti::config::AppConfig;
+
+    #[test]
+    fn reenabling_ai_keeps_assistant_off_by_default() {
+        let mut cfg = AppConfig::default();
+
+        super::apply_ai_feature_toggle(&mut cfg, false, false);
+        assert!(!cfg.ai_features_enabled);
+        assert!(!cfg.assistant_enabled);
+
+        super::apply_ai_feature_toggle(&mut cfg, true, false);
+        assert!(cfg.ai_features_enabled);
+        assert!(!cfg.assistant_enabled);
+    }
+
+    #[test]
+    fn explicit_assistant_patch_wins_when_ai_is_enabled() {
+        let mut cfg = AppConfig {
+            assistant_enabled: false,
+            ..Default::default()
+        };
+
+        super::apply_ai_feature_toggle(&mut cfg, true, true);
+        assert!(cfg.ai_features_enabled);
+        assert!(!cfg.assistant_enabled);
+    }
 }

@@ -31,8 +31,23 @@ Changes are persisted locally in user config storage.
 
 Assets live outside the main app binary so the installer stays small.
 Timeline browsing still works when optional assets are missing; local
-face recognition, place lookup, and future local AI features depend on
-the matching assets being installed.
+face recognition, place lookup, and local visual search depend on the
+matching assets being installed.
+
+### Visual search
+
+- **Download visual model** — installs the optional local
+  `ViT-B-32 SigLIP2 256` semantic search model. The download is large
+  and is stored in the user asset directory, not bundled into Smriti.
+- **Index visual search** — creates per-library image vectors under
+  `<library>/.photovault/semantic`. It also requires the ONNX Runtime
+  installed by **Download assets**. It is resumable; rerun it after adding
+  new files.
+- **Recheck visual search** — refreshes the status counts shown in
+  Settings.
+
+Once installed and indexed, Search can match text such as `beach sunset`
+against image meaning, and Photo Detail can show visually similar photos.
 
 ## Face Recognition
 

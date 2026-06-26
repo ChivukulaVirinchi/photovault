@@ -10,12 +10,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use smriti::db::Database;
+use smriti::services::semantic::{SemanticIndexCache, SemanticModelRunner};
 use smriti::services::thumbnail::ThumbnailService;
 use tokio::sync::{Mutex, RwLock};
+
+use smriti::services::assistant::{AssistantDraft, AssistantRun};
 
 pub struct AppState {
     pub library: RwLock<Option<OpenLibrary>>,
     pub jobs: Mutex<JobRegistry>,
+    pub assistant: Mutex<AssistantRuntime>,
 }
 
 impl AppState {
@@ -23,6 +27,7 @@ impl AppState {
         Self {
             library: RwLock::new(None),
             jobs: Mutex::new(JobRegistry::default()),
+            assistant: Mutex::new(AssistantRuntime::default()),
         }
     }
 }
@@ -39,6 +44,8 @@ pub struct OpenLibrary {
     /// On-demand thumbnail generator. Shared across handlers so the
     /// 8-permit concurrency limiter applies globally, not per-request.
     pub thumbnails: Arc<ThumbnailService>,
+    pub semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
+    pub semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
 }
 
 impl OpenLibrary {
@@ -51,6 +58,8 @@ impl OpenLibrary {
             drive_root,
             db: Arc::new(Mutex::new(database)),
             thumbnails,
+            semantic_index: Arc::new(std::sync::Mutex::new(SemanticIndexCache::default())),
+            semantic_runner: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -69,6 +78,25 @@ impl OpenLibrary {
 #[derive(Default)]
 pub struct JobRegistry {
     inner: HashMap<String, JobHandle>,
+}
+
+#[derive(Default)]
+pub struct AssistantRuntime {
+    pub sessions: HashMap<String, AssistantSession>,
+}
+
+pub struct AssistantSession {
+    pub run: AssistantRun,
+    pub draft: Option<AssistantDraft>,
+    pub library_root: String,
+    pub messages: Vec<AssistantMessage>,
+    pub current_result_ids: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssistantMessage {
+    pub role: String,
+    pub content: String,
 }
 
 impl JobRegistry {
@@ -112,6 +140,8 @@ pub enum JobKind {
     Geocoding,
     Thumbnails,
     AssetInstall,
+    SemanticAssets,
+    SemanticIndex,
     UpdateDownload,
     /// Trip / event detection over photo metadata. Long enough on
     /// large libraries to deserve background-job tracking so the user

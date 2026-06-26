@@ -11,11 +11,6 @@ use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
-#[cfg(target_os = "windows")]
-const ORT_LIB_NAME: &str = "onnxruntime.dll";
-#[cfg(not(target_os = "windows"))]
-const ORT_LIB_NAME: &str = "libonnxruntime.so";
-
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
     let h = smriti::bootstrap::asset_health();
@@ -111,14 +106,8 @@ fn build_asset_inventory() -> AssetInventoryDto {
         "runtime.onnx",
         "ONNX Runtime",
         "runtime",
-        smriti::bootstrap::onnx_runtime_path().or_else(|| {
-            Some(
-                install_root
-                    .join("libs")
-                    .join("onnxruntime")
-                    .join(ORT_LIB_NAME),
-            )
-        }),
+        smriti::bootstrap::onnx_runtime_path()
+            .or_else(|| Some(smriti::bootstrap::onnx_runtime_install_path())),
         true,
         true,
         "Required for local face detection and future local models.",
@@ -157,11 +146,61 @@ fn build_asset_inventory() -> AssetInventoryDto {
         "model",
         "Not installed in this build.",
     ));
-    assets.push(planned_asset(
-        "vision.semantic",
-        "Semantic image search",
+    assets.push(asset_file(
+        "vision.semantic.visual",
+        "Semantic visual encoder",
         "model",
-        "Planned for a later local model pack.",
+        smriti::bootstrap::asset_roots()
+            .into_iter()
+            .map(|root| {
+                root.join("models")
+                    .join("semantic")
+                    .join("vit-b-32-siglip2-256-webli")
+                    .join("visual")
+                    .join("model.onnx")
+            })
+            .find(|p| p.exists())
+            .or_else(|| {
+                Some(
+                    install_root
+                        .join("models")
+                        .join("semantic")
+                        .join("vit-b-32-siglip2-256-webli")
+                        .join("visual")
+                        .join("model.onnx"),
+                )
+            }),
+        false,
+        true,
+        "Optional local visual search model.",
+    ));
+    assets.push(asset_file(
+        "vision.semantic.text",
+        "Semantic text encoder",
+        "model",
+        smriti::bootstrap::asset_roots()
+            .into_iter()
+            .map(|root| {
+                root.join("models")
+                    .join("semantic")
+                    .join("vit-b-32-siglip2-256-webli")
+                    .join("textual")
+                    .join("model.onnx")
+            })
+            .find(|p| p.exists())
+            .or_else(|| {
+                Some(
+                    install_root
+                        .join("models")
+                        .join("semantic")
+                        .join("vit-b-32-siglip2-256-webli")
+                        .join("textual")
+                        .join("model.onnx"),
+                )
+            }),
+        false,
+        true,
+        "Optional local text-to-image search model.",
     ));
 
     let total_size_bytes = assets.iter().filter_map(|a| a.size_bytes).sum();

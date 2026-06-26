@@ -13,5 +13,6 @@ expression: dto
   "date_range_end": "2024-01-08T18:00:00",
   "created_at": "2024-01-10T00:00:00Z",
   "updated_at": "2024-01-11T00:00:00Z",
-  "is_virtual": false
+  "is_virtual": false,
+  "created_by": "agent"
 }

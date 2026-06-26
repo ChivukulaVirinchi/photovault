@@ -205,6 +205,8 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 |---|---|---|---|
 | `album_export:progress` | server → client | `JobProgress` | while copying originals to the export folder |
 | `album_export:complete` | server → client | `AlbumExportComplete` | after export finishes or is cancelled |
+| `semantic:progress` | server → client | `JobProgress` | while downloading semantic model assets or indexing vectors |
+| `semantic:complete` | server → client | `JobProgress` | after semantic model install/index finishes or is cancelled |
 | `scan:progress` | server → client | `ScanProgress` | every 200ms during active scan |
 | `scan:complete` | server → client | `ScanResult` | on scan finish (ok or error) |
 | `faces:progress` | server → client | `FacesProgress` | every chunk (25 photos) |
@@ -341,6 +343,7 @@ struct AlbumDto {
     date_range: Option<(String, String)>,  // earliest, latest
     created_at: String,
     updated_at: String,
+    created_by: String,                    // "user" | "agent"
 }
 
 struct AlbumSuggestionDto {
@@ -402,6 +405,7 @@ struct DriveDto { path: String, label: Option<String>, available_bytes: Option<u
 struct AssetHealthDto { missing_face_models: bool, missing_onnx_runtime: bool, missing_geonames_db: bool, summary: String }
 struct AssetInventoryDto { install_root: String, roots: Vec<String>, total_size_bytes: u64, assets: Vec<AssetItemDto> }
 struct AssetItemDto { id: String, label: String, kind: String, status: String, required: bool, active: bool, installable: bool, removable: bool, size_bytes: Option<u64>, path: Option<String>, note: Option<String> }
+struct SemanticStatusDto { model_key: String, display_name: String, model_dir: String, assets_installed: bool, onnx_runtime_installed: bool, indexed_photos: u64, pending_photos: u64, failed_photos: u64, vector_bytes: u64 }
 struct UpdateStatusDto { current: String, latest: Option<String>, newer_available: bool, release_url: Option<String>, body: Option<String> }
 struct MapPinDto { photo_id: i64, lat: f64, lng: f64, thumbnail_path: Option<String> }
 struct SearchResultsDto {
@@ -523,6 +527,97 @@ struct AlbumExportComplete {
 }
 ```
 
+### 4a. `assistant` — photo Assistant
+
+The Assistant is a first-class app surface for finding photos from natural
+language and, when explicitly requested, creating albums from the result set.
+Showing matching photos is the default behavior. Album creation requires an
+explicit album intent, a candidate preview, and user approval.
+
+It cannot access original photo bytes, raw thumbnails, filesystem paths,
+embeddings, or raw SQL handles. Agent-created albums are normal albums with
+`created_by = "agent"`.
+
+| Command | Args | Returns |
+|---|---|---|
+| `assistant.start` | `{ message: String }` | `AssistantRunDto` |
+| `assistant.continue` | `{ run_id: String, message: String }` | `AssistantRunDto` |
+| `assistant.state` | `{ run_id: String }` | `AssistantRunDto` |
+| `assistant.stop` | `{ run_id: String }` | `AssistantRunDto` |
+| `assistant.approve` | `{ run_id: String, approval_id: String }` | `AssistantRunDto` |
+| `assistant.reject` | `{ run_id: String, approval_id: String }` | `AssistantRunDto` |
+| `assistant.clear` | `{}` | `()` |
+
+```rust
+struct AssistantRunDto {
+    run_id: String,
+    library_root: String,
+    status: AssistantRunStatus,
+    message: String,
+    response: Option<String>,
+    clarification_options: Vec<String>,
+    activity: Vec<AssistantActivityDto>,
+    preview: Option<AssistantAlbumPreviewDto>,
+    album_id: Option<i64>,
+}
+
+#[serde(rename_all = "snake_case")]
+enum AssistantRunStatus {
+    Running,
+    WaitingForApproval,
+    WaitingForClarification,
+    ResultsReady,
+    Completed,
+    Stopped,
+    Failed,
+}
+
+struct AssistantAlbumPreviewDto {
+    approval_id: String,
+    album_name: String,
+    photo_count: usize,
+    sample: Vec<AssistantPhotoSampleDto>,
+    people: Vec<AssistantPersonRefDto>,
+    places: Vec<AssistantPlaceRefDto>,
+    date: Option<AssistantDateRefDto>,
+    media_type: Option<String>,
+    people_only: bool,
+    semantic_text: Option<String>,
+    intent: AssistantIntent,           // "create_album" | "search"
+}
+```
+
+Assistant runs are scoped to the open library. Opening or closing a library
+clears in-memory Assistant sessions.
+
+The provider-backed Assistant is a bounded tool loop. Each turn includes only a
+minimal state summary: active photo count, current result-set count, pending
+album-preview summary, current album summary, and semantic-search availability.
+Recent conversation messages are capped; older chat text is not summarized or
+persisted. The model can call `resolve_people`, `resolve_places`,
+`resolve_date_range`, `search_photos`, `search_albums`,
+`add_photos_to_album`, `preview_album`, and `ask_user` when it
+needs facts or follow-up state. `ask_user` may return `clarification_options`
+for option-button UI. The app validates and executes those tools. Continuations
+are sent with recent session context; the backend does not concatenate turns or
+derive album names from leftover prompt text.
+Current result ids and the current album id are recorded into recent Assistant
+conversation history after result-producing steps; follow-up references use
+that history rather than a separate lookup tool.
+`search_photos.semantic_text` is rejected when it contains command/reference
+language or short unresolved aliases, so unknown place/person shorthand must be
+resolved or clarified. `preview_album` can only prepare an approval draft; album
+creation still happens only through `assistant.approve`. Adding photos to an
+existing album is a separate explicit tool action and requires an existing
+album id plus explicit photo ids or the current result set.
+
+Provider-backed Assistant requires an OpenAI-compatible provider and stored API
+key. The old local parser fallback is disabled for Assistant execution.
+
+| Event | Direction | Payload | Notes |
+|---|---|---|---|
+| `assistant:activity` | server -> client | `{ run_id, library_root, label }` | operational activity only; no chain-of-thought |
+
 ### 5. `search` — unified query
 
 | Command | Args | Returns |
@@ -541,6 +636,29 @@ favourites, and media type are ANDed together. Multiple people mean
 "contains all". `only <people>` is strict: the photo must be face-processed,
 must contain every requested person, and must not contain another assigned
 or unassigned detected face.
+
+If the optional semantic model is installed and the library has indexed
+vectors, `search.query` also asks the local text encoder for semantic
+photo candidates. Those candidates are not a separate shortcut: they are
+fed into the same smart-search filter path, so date/person/place/media
+constraints still apply.
+
+### 5a. `semantic` — optional visual search
+
+Semantic search uses the local `immich-app/ViT-B-32-SigLIP2-256__webli`
+ONNX model. The model files live outside the app binary under the asset
+root; per-library vectors live under `.photovault/semantic/...`.
+
+| Command | Args | Returns |
+|---|---|---|
+| `semantic.status` | `{}` | `SemanticStatusDto` |
+| `semantic.install_model` | `{}` | `{ job_id: String }` | emits `semantic:progress`, `semantic:complete` while downloading the visual/text encoders and tokenizer |
+| `semantic.start_indexing` | `{}` | `{ job_id: String }` | resumable; emits `semantic:progress`, `semantic:complete` |
+| `semantic.similar_photos` | `{ photo_id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` | HNSW nearest-neighbour lookup over indexed visual vectors |
+
+`semantic.start_indexing` requires both the visual search model and ONNX
+Runtime asset pack. It indexes non-trashed photos and videos. Videos
+use their poster thumbnail, so thumbnail generation must have run first.
 
 ### 6. `memories` — N-years-ago rediscovery
 
@@ -674,6 +792,12 @@ struct SettingsDto {
     show_timeline_stacks: bool,
     auto_update_check_enabled: bool,
     map_cache_limit_mb: u32,
+    assistant_enabled: bool,
+    ai_features_enabled: bool,
+    assistant_provider: String,        // default "openai_compatible"
+    assistant_base_url: String,        // default "https://openrouter.ai/api/v1"
+    assistant_model: String,           // default "deepseek/deepseek-v4-flash"
+    assistant_api_key_set: bool,       // key is write-only through settings.update
 }
 ```
 
