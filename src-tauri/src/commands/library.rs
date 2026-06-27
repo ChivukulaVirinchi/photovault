@@ -195,17 +195,7 @@ pub async fn library_open(
     state: State<'_, AppState>,
     args: LibraryOpenArgs,
 ) -> CommandResult<LibraryOpenResult> {
-    let requested_root = PathBuf::from(&args.drive_path);
-    let remembered_stable_id = smriti::config::AppConfig::load()
-        .remembered_libraries
-        .into_iter()
-        .find(|entry| entry.path == requested_root)
-        .and_then(|entry| entry.stable_id);
-    let drive_root = DriveDetector::resolve_remembered_library_path(
-        &requested_root,
-        remembered_stable_id.as_deref(),
-    )
-    .unwrap_or_else(|| requested_root.clone());
+    let drive_root = PathBuf::from(&args.drive_path);
     if !drive_root.exists() {
         return Err(CommandError::DriveNotMounted {
             path: args.drive_path,

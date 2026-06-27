@@ -113,25 +113,7 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
         cfg.sidebar_collapsed = v;
     }
     if let Some(v) = args.remembered_drives {
-        let previous = cfg.remembered_libraries.clone();
-        let paths: Vec<std::path::PathBuf> = v.into_iter().map(std::path::PathBuf::from).collect();
-        cfg.remembered_libraries = paths
-            .iter()
-            .map(|path| {
-                let stable_id =
-                    smriti::services::DriveDetector::stable_id_for_path(path).or_else(|| {
-                        previous
-                            .iter()
-                            .find(|entry| entry.path == *path)
-                            .and_then(|entry| entry.stable_id.clone())
-                    });
-                smriti::config::RememberedLibrary {
-                    path: path.clone(),
-                    stable_id,
-                }
-            })
-            .collect();
-        cfg.remembered_drives = paths;
+        cfg.remembered_drives = v.into_iter().map(std::path::PathBuf::from).collect();
     }
     if let Some(v) = args.thumbnail_cache_gb {
         cfg.thumbnail_cache_gb = v;
