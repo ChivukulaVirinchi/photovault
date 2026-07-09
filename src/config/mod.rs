@@ -318,7 +318,7 @@ impl AppConfig {
     }
 
     /// Clamp all values to valid ranges.
-    fn validate(&mut self) {
+    pub fn validate(&mut self) {
         // Sanity-check GPU bridge URL if set. Plain HTTP is allowed
         // only for local notebooks / tunnels bound to loopback.
         if let Some(ref url) = self.face_gpu_bridge_url {
@@ -330,6 +330,22 @@ impl AppConfig {
                 self.face_gpu_bridge_url = None;
                 self.face_gpu_bridge_enabled = false;
             }
+        }
+
+        if !self.face_detection_confidence.is_finite() {
+            self.face_detection_confidence = Self::default().face_detection_confidence;
+        }
+        if !self.face_clustering_threshold.is_finite() {
+            self.face_clustering_threshold = Self::default().face_clustering_threshold;
+        }
+        if !self.weight_cooccurrence.is_finite() {
+            self.weight_cooccurrence = default_weight_cooccurrence();
+        }
+        if !self.weight_temporal.is_finite() {
+            self.weight_temporal = default_weight_temporal();
+        }
+        if !self.thumbnail_cache_gb.is_finite() {
+            self.thumbnail_cache_gb = default_thumbnail_cache_gb();
         }
 
         self.face_detection_confidence = self.face_detection_confidence.clamp(0.1, 0.95);
@@ -455,6 +471,32 @@ mod tests {
         cfg.validate();
 
         assert_eq!(cfg.face_embedder_model, default_face_embedder_model());
+    }
+
+    #[test]
+    fn validate_replaces_non_finite_numeric_settings() {
+        let mut cfg = AppConfig {
+            face_detection_confidence: f32::NAN,
+            face_clustering_threshold: f32::INFINITY,
+            weight_cooccurrence: f32::NEG_INFINITY,
+            weight_temporal: f32::NAN,
+            thumbnail_cache_gb: f64::NAN,
+            ..Default::default()
+        };
+
+        cfg.validate();
+
+        assert_eq!(
+            cfg.face_detection_confidence,
+            AppConfig::default().face_detection_confidence
+        );
+        assert_eq!(
+            cfg.face_clustering_threshold,
+            AppConfig::default().face_clustering_threshold
+        );
+        assert_eq!(cfg.weight_cooccurrence, default_weight_cooccurrence());
+        assert_eq!(cfg.weight_temporal, default_weight_temporal());
+        assert_eq!(cfg.thumbnail_cache_gb, default_thumbnail_cache_gb());
     }
 
     #[test]

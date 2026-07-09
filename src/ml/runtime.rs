@@ -313,9 +313,3 @@ impl OnnxRuntime {
         }
     }
 }
-
-impl Default for OnnxRuntime {
-    fn default() -> Self {
-        Self::init().expect("Failed to initialize ONNX Runtime")
-    }
-}

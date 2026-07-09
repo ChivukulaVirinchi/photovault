@@ -23,6 +23,21 @@ use crate::{CommandError, CommandResult};
 
 pub const FAVORITES_ALBUM_ID: i64 = -1;
 const FAVORITES_ALBUM_NAME: &str = "Favourites";
+const MAX_BULK_PHOTO_IDS: usize = 10_000;
+
+fn normalize_bulk_photo_ids(ids: Vec<i64>, field: &str) -> CommandResult<Vec<i64>> {
+    if ids.len() > MAX_BULK_PHOTO_IDS {
+        return Err(CommandError::Validation {
+            field: field.into(),
+            reason: format!("too many ids; maximum is {MAX_BULK_PHOTO_IDS}"),
+        });
+    }
+    let mut seen = HashSet::new();
+    Ok(ids
+        .into_iter()
+        .filter(|id| *id > 0 && seen.insert(*id))
+        .collect())
+}
 
 fn is_reserved_album_name(name: &str) -> bool {
     let normalized = name.trim().to_lowercase();
@@ -56,6 +71,7 @@ fn favorites_album(conn: &rusqlite::Connection) -> CommandResult<Option<AlbumDto
         id: FAVORITES_ALBUM_ID,
         name: FAVORITES_ALBUM_NAME.to_string(),
         photo_count: count,
+        photos_added: None,
         cover_photo_id,
         cover_thumbnail_path,
         date_range_start: start,
@@ -205,11 +221,45 @@ fn sanitize_export_folder_name(name: &str) -> String {
         .join(" ")
         .trim_matches(['.', ' ', '-'])
         .to_string();
-    if compact.is_empty() {
+    if compact.is_empty() || is_windows_reserved_file_stem(&compact) {
         "Smriti Album".to_string()
     } else {
         compact.chars().take(120).collect()
     }
+}
+
+fn is_windows_reserved_file_stem(name: &str) -> bool {
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    matches!(
+        stem.as_str(),
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    )
 }
 
 fn unique_export_folder(root: &Path, preferred_name: &str) -> PathBuf {
@@ -367,6 +417,31 @@ pub async fn albums_get(
 }
 
 #[tauri::command]
+pub async fn albums_photo_ids(
+    state: State<'_, AppState>,
+    args: AlbumsGetArgs,
+) -> CommandResult<Vec<i64>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    if args.id == FAVORITES_ALBUM_ID {
+        let mut stmt = db.conn.prepare(
+            "SELECT id
+               FROM photos
+              WHERE is_favorite = TRUE AND is_trashed = 0
+              ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC",
+        )?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        return Ok(ids);
+    }
+    let repo = AlbumRepo::new(&db.conn);
+    fetch_album(&repo, args.id)?;
+    Ok(repo.get_album_photo_ids(args.id)?)
+}
+
+#[tauri::command]
 pub async fn albums_export(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -414,15 +489,22 @@ pub async fn albums_export(
         });
     }
 
-    let folder_name = args.folder_name.as_deref().unwrap_or(&album_name);
-    std::fs::create_dir_all(&export_root)?;
-    let export_folder = unique_export_folder(&export_root, folder_name);
-    std::fs::create_dir_all(&export_folder)?;
-
     let job = jobs::start_job(&state, JobKind::AlbumExport).await?;
     let job_id = job.id.clone();
     let started = job.started_at;
     let cancel = job.cancel.clone();
+
+    let folder_name = args.folder_name.as_deref().unwrap_or(&album_name);
+    if let Err(e) = std::fs::create_dir_all(&export_root) {
+        jobs::finish_job(&state, &job_id).await;
+        return Err(e.into());
+    }
+    let export_folder = unique_export_folder(&export_root, folder_name);
+    if let Err(e) = std::fs::create_dir_all(&export_folder) {
+        jobs::finish_job(&state, &job_id).await;
+        return Err(e.into());
+    }
+
     let total = items.len() as u64;
     let app_clone = app.clone();
     let app_for_finish = app.clone();
@@ -568,7 +650,7 @@ pub async fn albums_suggestions_preview(
         .find(|s| s.id == args.id)
         .ok_or_else(|| CommandError::not_found("album_suggestion", args.id))?;
 
-    let limit = args.limit.unwrap_or(60) as usize;
+    let limit = args.limit.unwrap_or(60).clamp(1, 500) as usize;
     let mut ids = s.photo_ids();
     ids.truncate(limit);
 
@@ -591,28 +673,35 @@ pub async fn albums_create(
     state: State<'_, AppState>,
     args: AlbumsCreateArgs,
 ) -> CommandResult<AlbumDto> {
-    if args.name.trim().is_empty() {
+    let name = args.name.trim();
+    if name.is_empty() {
         return Err(CommandError::Validation {
             field: "name".into(),
             reason: "must not be empty".into(),
         });
     }
-    if is_reserved_album_name(&args.name) {
+    if is_reserved_album_name(name) {
         return Err(CommandError::Validation {
             field: "name".into(),
             reason: "reserved for the Favourites smart album".into(),
         });
     }
+    let photo_ids = normalize_bulk_photo_ids(args.photo_ids, "photo_ids")?;
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = AlbumRepo::new(&db.conn);
-    let id = repo.create(&args.name)?;
-    if !args.photo_ids.is_empty() {
-        repo.add_photos(id, &args.photo_ids)?;
-        repo.auto_pick_cover(id)?;
+    let id = repo.create(name)?;
+    let mut photos_added = 0;
+    if !photo_ids.is_empty() {
+        photos_added = repo.add_photos(id, &photo_ids)?;
+        if photos_added > 0 {
+            repo.auto_pick_cover(id)?;
+        }
     }
-    fetch_album(&repo, id)
+    let mut album = fetch_album(&repo, id)?;
+    album.photos_added = Some(photos_added as u64);
+    Ok(album)
 }
 
 #[derive(Debug, Deserialize)]
@@ -629,13 +718,14 @@ pub async fn albums_rename(
     if args.id == FAVORITES_ALBUM_ID {
         return Err(reject_virtual_album("id"));
     }
-    if args.name.trim().is_empty() {
+    let name = args.name.trim();
+    if name.is_empty() {
         return Err(CommandError::Validation {
             field: "name".into(),
             reason: "must not be empty".into(),
         });
     }
-    if is_reserved_album_name(&args.name) {
+    if is_reserved_album_name(name) {
         return Err(CommandError::Validation {
             field: "name".into(),
             reason: "reserved for the Favourites smart album".into(),
@@ -645,7 +735,8 @@ pub async fn albums_rename(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = AlbumRepo::new(&db.conn);
-    repo.rename(args.id, &args.name)?;
+    fetch_album(&repo, args.id)?;
+    repo.rename(args.id, name)?;
     fetch_album(&repo, args.id)
 }
 
@@ -665,7 +756,9 @@ pub async fn albums_delete(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    AlbumRepo::new(&db.conn).delete(args.id)?;
+    let repo = AlbumRepo::new(&db.conn);
+    fetch_album(&repo, args.id)?;
+    repo.delete(args.id)?;
     Ok(())
 }
 
@@ -688,10 +781,13 @@ pub async fn albums_add_photos(
     if args.id == FAVORITES_ALBUM_ID {
         return Err(reject_virtual_album("id"));
     }
+    let photo_ids = normalize_bulk_photo_ids(args.photo_ids, "photo_ids")?;
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    let count = AlbumRepo::new(&db.conn).add_photos(args.id, &args.photo_ids)?;
+    let repo = AlbumRepo::new(&db.conn);
+    fetch_album(&repo, args.id)?;
+    let count = repo.add_photos(args.id, &photo_ids)?;
     Ok(AlbumsAddRemoveResult {
         count: count as u64,
     })
@@ -711,12 +807,15 @@ pub async fn albums_remove_photos(
     if args.id == FAVORITES_ALBUM_ID {
         return Err(reject_virtual_album("id"));
     }
+    let photo_ids = normalize_bulk_photo_ids(args.photo_ids, "photo_ids")?;
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    AlbumRepo::new(&db.conn).remove_photos(args.id, &args.photo_ids)?;
+    let repo = AlbumRepo::new(&db.conn);
+    fetch_album(&repo, args.id)?;
+    let count = repo.remove_photos(args.id, &photo_ids)?;
     Ok(AlbumsAddRemoveResult {
-        count: args.photo_ids.len() as u64,
+        count: count as u64,
     })
 }
 
@@ -804,6 +903,7 @@ pub async fn albums_suggestions_run_detection(
 
     let job = jobs::start_job(&state, JobKind::AlbumSuggestions).await?;
     let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
     let started = job.started_at;
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -833,18 +933,15 @@ pub async fn albums_suggestions_run_detection(
                 tracing::error!("album suggestions: failed to open secondary db: {}", e);
                 emit(
                     &app_clone,
-                    EV_ALBUM_SUGGESTIONS_COMPLETE,
-                    AlbumSuggestionsCompleteDto {
+                    EV_ALBUM_SUGGESTIONS_PROGRESS,
+                    JobProgress {
                         job_id: job_id_clone.clone(),
-                        total_photos_with_date: 0,
-                        photos_with_city: 0,
-                        photos_with_gps: 0,
-                        home_city: None,
-                        trip_candidates_passed: 0,
-                        event_windows: 0,
-                        created: 0,
+                        stage: "error".into(),
+                        processed: 0,
+                        total: Some(1),
                         elapsed_ms: started.elapsed().as_millis() as u64,
-                        message: format!("Couldn't open library: {}", e),
+                        eta_ms: None,
+                        message: Some(format!("Couldn't open library: {}", e)),
                     },
                 );
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -874,16 +971,20 @@ pub async fn albums_suggestions_run_detection(
         );
 
         let (suggestions, diag) =
-            smriti::services::album_suggestions::detect_suggestions_with_diagnostics(
+            smriti::services::album_suggestions::detect_suggestions_with_diagnostics_cancel(
                 &conn,
                 home_override.as_deref(),
+                Some(cancel.as_ref()),
             );
 
         // Friendly, context-aware summary so the user understands why
         // a run found nothing on a metadata-poor library instead of
         // staring at a silent indicator. Order matters — more specific
         // diagnoses first.
-        let message = if !suggestions.is_empty() {
+        let was_cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+        let message = if was_cancelled {
+            "Album suggestion detection cancelled.".to_string()
+        } else if !suggestions.is_empty() {
             format!(
                 "{} suggestion{} ready to review.",
                 suggestions.len(),
@@ -916,7 +1017,7 @@ pub async fn albums_suggestions_run_detection(
                 home_city: diag.home_city,
                 trip_candidates_passed: diag.trip_candidates_passed,
                 event_windows: diag.event_windows,
-                created: suggestions.len(),
+                created: if was_cancelled { 0 } else { suggestions.len() },
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 message,
             },
@@ -972,7 +1073,13 @@ pub async fn albums_suggestions_accept(
         album_repo.add_photos(album_id, &photo_ids)?;
         album_repo.auto_pick_cover(album_id)?;
     }
-    suggestion_repo.accept(args.id)?;
+    match suggestion_repo.accept(args.id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("album_suggestion", args.id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     fetch_album(&album_repo, album_id)
 }
 
@@ -1009,7 +1116,13 @@ pub async fn albums_suggestions_dismiss(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    AlbumSuggestionRepo::new(&db.conn).dismiss(args.id)?;
+    match AlbumSuggestionRepo::new(&db.conn).dismiss(args.id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("album_suggestion", args.id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
@@ -1025,6 +1138,18 @@ mod tests {
         );
         assert_eq!(sanitize_export_folder_name("..."), "Smriti Album");
         assert_eq!(sanitize_export_folder_name(""), "Smriti Album");
+        assert_eq!(sanitize_export_folder_name("CON"), "Smriti Album");
+        assert_eq!(sanitize_export_folder_name("aux.jpg"), "Smriti Album");
+    }
+
+    #[test]
+    fn bulk_photo_ids_are_positive_deduped_and_bounded() {
+        assert_eq!(
+            normalize_bulk_photo_ids(vec![3, -1, 3, 0, 4], "photo_ids").unwrap(),
+            vec![3, 4]
+        );
+        let too_many = vec![1; MAX_BULK_PHOTO_IDS + 1];
+        assert!(normalize_bulk_photo_ids(too_many, "photo_ids").is_err());
     }
 
     #[test]

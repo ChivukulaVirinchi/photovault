@@ -18,6 +18,7 @@ use crate::ml::{
     ClusterInput, FaceClusterer, FaceDetector, FaceEmbedder, FaceEmbedding, OnnxRuntime,
 };
 use crate::services::image_utils::apply_exif_orientation;
+use crate::services::path_util::safe_join_relative;
 
 /// Coarse progress phase. The UI uses this to keep the bar moving past
 /// the per-photo loop into clustering, so we never sit at "x/x" while
@@ -462,7 +463,21 @@ impl FaceProcessor {
                     // vs ~5 ms for the 860 px thumb — for the ~80% of
                     // photos that have zero faces, we skip the full
                     // decode entirely.
-                    let full_path = drive_path_arc.join(file_path);
+                    let full_path = match safe_join_relative(&drive_path_arc, file_path) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            tracing::debug!("Invalid stored photo path {}: {}", file_path, e);
+                            processed_count.fetch_add(1, Ordering::Relaxed);
+                            return PhotoFaceResult {
+                                photo_id: *photo_id,
+                                file_path: file_path.clone(),
+                                faces: Vec::new(),
+                                taken_ts: *taken_ts,
+                                brightness: 0.0,
+                                had_error: true,
+                            };
+                        }
+                    };
                     let large_thumb = drive_path_arc
                         .join(".photovault")
                         .join("thumbnails")
@@ -680,7 +695,10 @@ impl FaceProcessor {
                     // Record summary BEFORE handing the result off — the
                     // writer thread takes ownership of `result`, but
                     // Stage 3 still needs the photo metadata.
-                    summaries.lock().unwrap().push(ProcessedPhotoSummary {
+                    summaries
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(ProcessedPhotoSummary {
                         photo_id: result.photo_id,
                         file_path: result.file_path.clone(),
                         taken_ts: result.taken_ts,
@@ -693,7 +711,7 @@ impl FaceProcessor {
                     // FLUSH_CHUNK, ship the chunk to the writer thread
                     // so the user sees faces appear mid-run AND the
                     // photos are persisted as faces_processed=TRUE.
-                    let mut buf = buffer.lock().unwrap();
+                    let mut buf = buffer.lock().unwrap_or_else(|e| e.into_inner());
                     buf.push(result);
                     if buf.len() >= FLUSH_CHUNK {
                         let chunk = std::mem::replace(&mut *buf, Vec::with_capacity(FLUSH_CHUNK));
@@ -708,7 +726,7 @@ impl FaceProcessor {
 
         // Final flush of any sub-FLUSH_CHUNK leftover photos.
         {
-            let leftover = std::mem::take(&mut *buffer.lock().unwrap());
+            let leftover = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             if !leftover.is_empty() {
                 let _ = chunk_tx.send(leftover);
             }
@@ -752,12 +770,38 @@ impl FaceProcessor {
             );
         }
 
+        if was_cancelled {
+            stage_flag.store(2, Ordering::Relaxed);
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.try_send(FaceProcessingProgress {
+                    processed: photos_processed,
+                    total,
+                    faces_found: total_faces,
+                    elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
+                    stage: FaceProcessingStage::Done,
+                    chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
+                    embedder_route,
+                });
+            }
+            let _ = progress_handle.join();
+            return Ok(FaceProcessingResult {
+                photos_processed,
+                faces_detected: total_faces,
+                clusters_created: 0,
+                rejected_small: rej_small,
+                rejected_lowconf: rej_lowconf,
+                rejected_blurry: rej_blurry,
+                rejected_yaw: rej_yaw,
+            });
+        }
+
         // ---- Stage 3: Contextual Identity Propagation ----
         // Build a brightness map from successful summaries so propagation
         // can compare lighting between target and neighbor photos
         // without reopening images. Errored photos are excluded — their
         // brightness was never measured.
-        let summaries_vec = std::mem::take(&mut *summaries.lock().unwrap());
+        let summaries_vec =
+            std::mem::take(&mut *summaries.lock().unwrap_or_else(|e| e.into_inner()));
         let brightness_map: HashMap<i64, f32> = summaries_vec
             .iter()
             .filter(|s| !s.had_error)
@@ -780,8 +824,6 @@ impl FaceProcessor {
                 let _ = Self::propagate_identity_from_context(&face_repo, &inferred_repo, &params);
             }
         }
-        let _ = was_cancelled;
-
         // Mid-tail progress nudge so the UI sees an immediate "Finishing"
         // tick once Stages 2-3 wrap up — the reporter would catch this on
         // the next 250 ms cycle anyway, but an explicit send eliminates
@@ -1053,7 +1095,17 @@ impl FaceProcessor {
         drive_path: &Path,
         relative_path: &str,
     ) -> Option<f32> {
-        let path = drive_path.join(relative_path);
+        let path = match safe_join_relative(drive_path, relative_path) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::trace!(
+                    "context-brightness lookup skipped invalid path {}: {}",
+                    relative_path,
+                    e
+                );
+                return None;
+            }
+        };
         match crate::services::image_io::open_image(&path) {
             Ok(image) => Some(Self::average_brightness(&image)),
             Err(e) => {

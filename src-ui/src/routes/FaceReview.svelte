@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { people, type FaceDetailDto, type ReviewFaceCountDto } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -14,8 +15,9 @@
   let rejected = $state(0);
   let skipped = $state(0);
   let error = $state<string | null>(null);
-  // One-step undo stack
-  let undoEntry = $state<{ faceId: number; kind: "confirm" | "reject" } | null>(null);
+  let mounted = true;
+  let loadSeq = 0;
+  let skippedFaceIds = new Set<number>();
 
   const current = $derived(faces[cursor] ?? null);
   const remaining = $derived(Math.max(0, faces.length - cursor));
@@ -24,59 +26,32 @@
     return thumbUrl(libraryStore.driveRoot, `.photovault/faces/${faceId}.jpg`);
   }
 
-  async function loadStats() {
-    try {
-      stats = await people.reviewFaceCount();
-    } catch (e) {
-      error = String(e);
-    }
-  }
-
-  async function loadFaces(personId: number) {
-    try {
-      const page = await people.faceList(personId, "unconfirmed", null, 200);
-      faces = page.items;
-      cursor = 0;
-    } catch (e) {
-      error = String(e);
-    }
-  }
-
   /// Find the first person with unconfirmed faces and load them.
   async function loadNextCluster() {
-    await loadStats();
-    if (!stats || stats.unconfirmed_total === 0) {
-      faces = [];
-      cursor = 0;
-      return;
-    }
-    // We need to iterate over people to find one with unconfirmed faces.
-    // Use a simple approach: list all people and probe.
-    // For now, load via faceList with status="unconfirmed" for the first person.
-    // Actually, the backend doesn't expose a global unconfirmed list directly.
-    // We'll need to list people and find the first one with unconfirmed faces.
-    // Let's use a different approach: try loading unconfirmed faces globally
-    // by passing person_id=0 or a sentinel. Actually, let me check - the
-    // backend has people_face_list which takes person_id.
-    //
-    // The plan says: Load clusters with unconfirmed faces (via review_face_count
-    // to get the list). Since we don't have a "list clusters with unconfirmed"
-    // endpoint, we need to iterate. Let's list all people, then call faceList
-    // for each until we find one with unconfirmed faces.
+    const seq = ++loadSeq;
+    error = null;
     try {
-      const allPeople = await people.list({});
-      for (const p of allPeople) {
-        const page = await people.faceList(p.id, "unconfirmed", null, 1);
-        if (page.items.length > 0) {
-          await loadFaces(p.id);
-          return;
-        }
+      const nextStats = await people.reviewFaceCount();
+      if (!mounted || seq !== loadSeq) return;
+      stats = nextStats;
+
+      if (nextStats.unconfirmed_total === 0) {
+        faces = [];
+        cursor = 0;
+        return;
       }
-      // No unconfirmed faces anywhere
+
+      const page = await people.nextUnconfirmedFaces(200, Array.from(skippedFaceIds));
+      if (!mounted || seq !== loadSeq) return;
+      if (page.items.length > 0) {
+        faces = page.items;
+        cursor = 0;
+        return;
+      }
       faces = [];
       cursor = 0;
     } catch (e) {
-      error = String(e);
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }
   }
 
@@ -87,13 +62,15 @@
     try {
       if (kind === "confirm") {
         await people.faceConfirm(item.face_id);
+        if (!mounted) return;
         confirmed += 1;
-        undoEntry = { faceId: item.face_id, kind: "confirm" };
       } else if (kind === "reject") {
         await people.faceReject(item.face_id);
+        if (!mounted) return;
         rejected += 1;
-        undoEntry = { faceId: item.face_id, kind: "reject" };
       } else {
+        if (!mounted) return;
+        skippedFaceIds.add(item.face_id);
         skipped += 1;
       }
       // Remove current from list
@@ -103,36 +80,9 @@
         await loadNextCluster();
       }
     } catch (e) {
-      error = String(e);
+      if (mounted) error = commandErrorMessage(e);
     } finally {
-      busy = false;
-    }
-  }
-
-  async function undo() {
-    if (!undoEntry || busy) return;
-    busy = true;
-    const entry = undoEntry;
-    undoEntry = null;
-    try {
-      if (entry.kind === "reject") {
-        // Revert a reject - re-confirm
-        // Actually, we can't easily undo a reject in the database.
-        // For now, skip undo for non-trivial reversals.
-        // Simplification: just decrement counters
-      }
-
-      // Reload current cluster faces
-      // This is simple but effective. Actually, let's just
-      // add the face back to the front of the list
-      if (entry) {
-        // Reload faces for current cluster (simplest approach)
-        await loadNextCluster();
-      }
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
+      if (mounted) busy = false;
     }
   }
 
@@ -154,9 +104,6 @@
     } else if (e.key === "s" || e.key === "S") {
       e.preventDefault();
       answer("skip");
-    } else if (e.key === "z" || e.key === "Z") {
-      e.preventDefault();
-      undo();
     } else if (e.key === "Escape" || e.key === "q" || e.key === "Q") {
       e.preventDefault();
       window.location.hash = "/people";
@@ -164,9 +111,13 @@
   }
 
   onMount(() => {
-    loadNextCluster();
+    void loadNextCluster();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+      window.removeEventListener("keydown", onKey);
+    };
   });
 </script>
 
@@ -177,7 +128,7 @@
   {#snippet subtitle()}
     <span class="hint">
       Confirm or reject unconfirmed faces within each person cluster.
-      Y = confirm, N = reject, S = skip, Z = undo, Esc = close.
+      Y = confirm, N = reject, S = skip, Esc = close.
     </span>
   {/snippet}
   {#snippet actions()}
@@ -192,7 +143,11 @@
 <div class="page">
   {#if !current && faces.length === 0}
     <div class="empty">
-      <p class="done">All caught up — no unconfirmed faces left to review.</p>
+      {#if (stats?.unconfirmed_total ?? 0) > 0 && skippedFaceIds.size > 0}
+        <p class="done">All caught up for this session — skipped faces will stay available for a later pass.</p>
+      {:else}
+        <p class="done">All caught up — no unconfirmed faces left to review.</p>
+      {/if}
     </div>
   {:else if !current}
     <div class="empty">
@@ -233,16 +188,6 @@
         <SkipForward size={16} strokeWidth={2} />
         <span>Skip</span>
       </button>
-      {#if undoEntry}
-        <button
-          class="action undo"
-          onclick={undo}
-          disabled={busy}
-          title="Undo (Z)"
-        >
-          <span>Undo</span>
-        </button>
-      {/if}
       <button
         class="action yes"
         onclick={() => answer("confirm")}
@@ -374,14 +319,6 @@
   }
   .action.skip {
     color: var(--ink-muted);
-  }
-  .action.undo {
-    color: var(--ink-muted);
-    padding: 12px 16px;
-  }
-  .action.undo:hover:not(:disabled) {
-    color: var(--accent);
-    border-color: var(--accent);
   }
   .progress {
     color: var(--ink-faint);

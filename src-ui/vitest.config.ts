@@ -18,7 +18,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 //   - Test files end in `.test.ts` and live next to the code they
 //     exercise.
 export default defineConfig({
-  plugins: [svelte({ hot: false })],
+  plugins: [svelte()],
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

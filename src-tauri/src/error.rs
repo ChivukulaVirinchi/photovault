@@ -36,6 +36,9 @@ pub enum CommandError {
     #[error("database error: {message}")]
     Database { message: String },
 
+    #[error("library schema v{db_version} requires a newer Smriti build; this build supports up to v{max_supported}")]
+    SchemaTooNew { db_version: i32, max_supported: i32 },
+
     #[error("io error: {message}")]
     Io { message: String },
 

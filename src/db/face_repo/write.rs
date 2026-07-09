@@ -1,6 +1,6 @@
 //! Write/mutation methods for FaceRepo.
 
-use rusqlite::{params, Result as SqliteResult};
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 use super::FaceRepo;
 
@@ -354,10 +354,13 @@ impl<'a> FaceRepo<'a> {
     /// resurface in the next review session (but can be re-queued on a
     /// future scan if the situation changes).
     pub fn resolve_review_skip(&self, queue_id: i64) -> SqliteResult<()> {
-        self.conn.execute(
+        let updated = self.conn.execute(
             "UPDATE face_review_queue SET resolved_at = CURRENT_TIMESTAMP, resolved_as = 'skipped' WHERE id = ?1",
             params![queue_id],
         )?;
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -429,7 +432,8 @@ impl<'a> FaceRepo<'a> {
                 params![face_id],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
 
         tx.execute(
             "UPDATE faces SET cluster_id = NULL, user_confirmed = -1 WHERE id = ?1",

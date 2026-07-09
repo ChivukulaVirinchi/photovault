@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { people, trash, type FaceDetailDto } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
@@ -24,6 +25,7 @@
 
   let person = $state<PersonDto | null>(null);
   let photos = $state<PhotoSummaryDto[]>([]);
+  let personPhotoIds = $state<number[]>([]);
   let editing = $state(false);
   let editName = $state("");
   let error = $state<string | null>(null);
@@ -32,16 +34,30 @@
   let showReassignDialog = $state<number | null>(null);
   let showKSimilarDialog = $state(false);
   let unconfirmedFaces = $state<FaceDetailDto[]>([]);
+  let nextCursor = $state<string | null>(null);
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
+  let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   let verifyBusy = $state(false);
+  let actionBusy = $state(false);
+  let loadSeq = 0;
+  let mounted = true;
+  const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
+  const ALL_IDS_NAV_LIMIT = 5000;
 
   async function notAPerson() {
-    if (!person) return;
+    if (!person || actionBusy) return;
+    const seq = loadSeq;
+    const personId = id;
     const label = person.name ?? `Person ${person.id}`;
     if (!confirm(`Remove ${label} as a person?\n\nFaces stay in their photos and may be re-clustered next time face detection runs.`)) return;
     try {
+      actionBusy = true;
       await people.delete(person.id);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
       window.location.hash = "/people";
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted) actionBusy = false; }
   }
 
   function onCellClick(e: MouseEvent, photoId: number) {
@@ -53,22 +69,36 @@
     ));
   }
   async function bulkTrash() {
-    const ids = selection.list();
+    if (actionBusy) return;
+    const ids = selection.listIn(photos.map((p) => p.id));
     if (ids.length === 0) return;
+    const seq = loadSeq;
+    const personId = id;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
+    const idSnapshot = personPhotoIds
+      .map((photoId, idx) => ({ idx, photoId }))
+      .filter((e) => dropSet.has(e.photoId));
     try {
-      await trash.trashPhotos(ids);
+      actionBusy = true;
+      const result = await trash.trashPhotos(ids);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos needed trashing");
+        return;
+      }
       photoVisibility.markTrashed(ids);
       photos = photos.filter((p) => !dropSet.has(p.id));
+      personPhotoIds = personPhotoIds.filter((photoId) => !dropSet.has(photoId));
       browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(ids);
+          if (!mounted || personId !== id) return;
           photoVisibility.markRestored(ids);
           const next = photos.slice();
           for (const e of snapshot) {
@@ -76,10 +106,22 @@
             next.splice(at, 0, e.photo);
           }
           photos = next;
-          browseContext.set(`person:${id}`, photos.map((p) => p.id));
+          const nextIds = personPhotoIds.slice();
+          for (const e of idSnapshot) {
+            if (!nextIds.includes(e.photoId)) {
+              const at = Math.min(e.idx, nextIds.length);
+              nextIds.splice(at, 0, e.photoId);
+            }
+          }
+          personPhotoIds = nextIds;
+          browseContext.set(`person:${personId}`, nextIds);
         },
       );
-    } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
+    } catch (e) {
+      if (mounted && seq === loadSeq && personId === id) toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -92,42 +134,110 @@
     }
   }
   onMount(() => {
+    mounted = true;
     window.addEventListener("keydown", onGlobalKey);
-    return () => window.removeEventListener("keydown", onGlobalKey);
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+      window.removeEventListener("keydown", onGlobalKey);
+    };
   });
 
   async function load() {
+    const seq = ++loadSeq;
+    const personId = id;
+    error = null;
+    loadingMore = false;
+    verifyBusy = false;
+    actionBusy = false;
+    person = null;
+    photos = [];
+    personPhotoIds = [];
+    unconfirmedFaces = [];
+    showAddDialog = false;
+    showMergeDialog = false;
+    showReassignDialog = null;
+    showKSimilarDialog = false;
+    nextCursor = null;
+    hasMore = false;
+    selection.clear();
     try {
-      person = await people.get(id);
-      editName = person.name ?? "";
-      const [photoPage, facePage] = await Promise.all([
-        people.photosByPerson(id),
-        people.faceList(id, "unconfirmed", null, 12),
+      const [nextPerson, photoPage, facePage] = await Promise.all([
+        people.get(personId),
+        people.photosByPerson(personId, null, 500),
+        people.faceList(personId, "unconfirmed", null, 12),
       ]);
+      if (!mounted || seq !== loadSeq) return;
+      let allIds = photoPage.items.map((p) => p.id);
+      if (nextPerson.photo_count <= ALL_IDS_NAV_LIMIT) {
+        allIds = await people.photoIds(personId);
+        if (!mounted || seq !== loadSeq) return;
+      }
+      person = nextPerson;
+      editName = nextPerson.name ?? "";
       photos = photoPage.items;
+      personPhotoIds = allIds;
+      nextCursor = photoPage.next_cursor;
+      hasMore = photoPage.has_more;
       unconfirmedFaces = facePage.items;
-      browseContext.set(`person:${id}`, photos.map((p) => p.id));
-    } catch (e) { error = JSON.stringify(e); }
+      browseContext.set(`person:${personId}`, allIds);
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
+  }
+
+  async function loadMorePhotos() {
+    if (!mounted || loadingMore || !hasMore || !nextCursor) return;
+    const seq = loadSeq;
+    const personId = id;
+    const cursor = nextCursor;
+    loadingMore = true;
+    try {
+      const page = await people.photosByPerson(personId, cursor, 500);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
+      photos = photos.concat(page.items);
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      browseContext.extend(page.items.map((p) => p.id));
+    } catch (e) {
+      if (mounted && seq === loadSeq && personId === id) {
+        toasts.error(`Couldn't load more photos: ${commandErrorMessage(e)}`);
+      }
+    } finally {
+      if (mounted && seq === loadSeq && personId === id) loadingMore = false;
+    }
+  }
+
+  function onPhotoScroll() {
+    if (!scrollEl || !hasMore || loadingMore) return;
+    const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    if (remaining < 900) void loadMorePhotos();
   }
 
   async function confirmFace(faceId: number) {
     if (verifyBusy) return;
+    const seq = loadSeq;
+    const personId = id;
     verifyBusy = true;
     try {
       await people.faceConfirm(faceId);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
       unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
-    } catch (e) { error = String(e); }
-    finally { verifyBusy = false; }
+    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
   }
 
   async function rejectFace(faceId: number) {
     if (verifyBusy) return;
+    const seq = loadSeq;
+    const personId = id;
     verifyBusy = true;
     try {
       await people.faceReject(faceId);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
       unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
-    } catch (e) { error = String(e); }
-    finally { verifyBusy = false; }
+    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
   }
 
   async function reassignFace(faceId: number) {
@@ -135,11 +245,17 @@
   }
 
   async function save() {
-    if (!person) return;
+    if (!person || actionBusy) return;
+    const seq = loadSeq;
+    const personId = id;
     try {
-      person = await people.rename(id, editName.trim() || null);
+      actionBusy = true;
+      const renamed = await people.rename(personId, editName.trim() || null);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
+      person = renamed;
       editing = false;
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted) actionBusy = false; }
   }
 
   function onEditKey(e: KeyboardEvent) {
@@ -180,18 +296,18 @@
         {/snippet}
         {#snippet actions()}
           {#if editing}
-            <button class="primary" onclick={save}>Save</button>
-            <button class="ghost" onclick={() => (editing = false)}>Cancel</button>
+            <button class="primary" onclick={save} disabled={actionBusy}>Save</button>
+            <button class="ghost" onclick={() => (editing = false)} disabled={actionBusy}>Cancel</button>
           {:else}
-            <button class="ghost" onclick={() => (editing = true)}>
+            <button class="ghost" onclick={() => (editing = true)} disabled={actionBusy}>
               {p.name ? "Rename" : "Name them"}
             </button>
-            <button class="ghost" onclick={() => (showMergeDialog = true)}>Merge…</button>
-            <button class="ghost" onclick={() => (showKSimilarDialog = true)}>
+            <button class="ghost" onclick={() => (showMergeDialog = true)} disabled={actionBusy}>Merge…</button>
+            <button class="ghost" onclick={() => (showKSimilarDialog = true)} disabled={actionBusy}>
               <Search size={14} strokeWidth={1.75} />
               Find more like this
             </button>
-            <button class="danger" onclick={notAPerson}>Not a person</button>
+            <button class="danger" onclick={notAPerson} disabled={actionBusy}>Not a person</button>
           {/if}
         {/snippet}
       </DetailHeader>
@@ -221,7 +337,7 @@
   </div>
 {/if}
 
-<div class="page-scroll" use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
+<div class="page-scroll" bind:this={scrollEl} onscroll={onPhotoScroll} use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
   <div class="pv-photo-grid">
     {#each photos as p (p.id)}
       <a
@@ -247,11 +363,14 @@
       </a>
     {/each}
   </div>
+  {#if loadingMore}
+    <p class="loading-more mono">Loading more…</p>
+  {/if}
 </div>
 
-{#if selection.active()}
+{#if selectedVisibleIds.length > 0}
   <SelectionBar
-    count={selection.size()}
+    count={selectedVisibleIds.length}
     onAddToAlbum={() => (showAddDialog = true)}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
@@ -260,7 +379,7 @@
 
 {#if showAddDialog}
   <AddToAlbumDialog
-    photoIds={selection.list()}
+    photoIds={selectedVisibleIds}
     onclose={() => (showAddDialog = false)}
     onsuccess={() => selection.clear()}
   />
@@ -288,7 +407,10 @@
 {#if showKSimilarDialog}
   <KSimilarDialog
     clusterId={id}
-    onclose={() => (showKSimilarDialog = false)}
+    onclose={() => {
+      showKSimilarDialog = false;
+      load();
+    }}
   />
 {/if}
 
@@ -334,6 +456,12 @@
     justify-content: center;
     box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     pointer-events: none;
+  }
+  .loading-more {
+    margin: var(--s-4) 0 0;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
   }
   .dim { color: var(--ink-faint); }
 

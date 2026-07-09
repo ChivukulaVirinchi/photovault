@@ -93,6 +93,10 @@ pub fn retrieve_candidates(
     min_similarity: f32,
     exclude: &std::collections::HashSet<i64>,
 ) -> Vec<RetrievalHit> {
+    if top_k == 0 {
+        return Vec::new();
+    }
+
     let mut hits: Vec<RetrievalHit> = Vec::with_capacity(galleries.len());
 
     for (cluster_id, members) in galleries {
@@ -182,6 +186,16 @@ mod tests {
     fn empty_galleries_yield_no_hits() {
         let q = emb(vec![1.0, 0.0, 0.0]);
         let hits = retrieve_candidates(&q, &[], 3, 0.3, &HashSet::new());
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn zero_top_k_yields_no_hits() {
+        let q = emb(vec![1.0, 0.0, 0.0]);
+        let galleries = vec![(1, vec![(10, emb(vec![1.0, 0.0, 0.0]))])];
+
+        let hits = retrieve_candidates(&q, &galleries, 0, 0.3, &HashSet::new());
+
         assert!(hits.is_empty());
     }
 

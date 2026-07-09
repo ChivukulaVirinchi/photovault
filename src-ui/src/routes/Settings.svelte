@@ -9,6 +9,7 @@
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import { commandErrorMessage } from "../lib/api";
   import type { AssetInventory, AssetItem, LibraryHealthData, SemanticStatus, Settings } from "../lib/api/all";
   import type { ExcludedFolderDto } from "../lib/api/types";
 
@@ -25,17 +26,32 @@
   let testBusy = $state(false);
   let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
   let assistantApiKey = $state("");
+  let updateChecking = $state(false);
+  let updateStatus = $state<Awaited<ReturnType<typeof systemEx.updatesCheck>> | null>(null);
+  let updateError = $state<string | null>(null);
+  let mounted = false;
+  let assetsSeq = 0;
+  let semanticSeq = 0;
+  let exclusionsSeq = 0;
+  let bridgeSeq = 0;
+  let healthSeq = 0;
+  let saveSeq = 0;
+  let updateSeq = 0;
+
   async function testBridge() {
     if (!s?.face_gpu_bridge_url) return;
+    const seq = ++bridgeSeq;
     testBusy = true;
     testResult = null;
     try {
       const r = await systemEx.testGpuBridge(s.face_gpu_bridge_url);
+      if (!mounted || seq !== bridgeSeq) return;
       testResult = { ok: r.ok, gpu_name: r.gpu_name, latency_ms: r.latency_ms, model: r.model };
     } catch (e) {
+      if (!mounted || seq !== bridgeSeq) return;
       testResult = { ok: false, gpu_name: "Unreachable", latency_ms: 0 };
     } finally {
-      testBusy = false;
+      if (mounted && seq === bridgeSeq) testBusy = false;
     }
   }
   // Backfill state derived from the global jobs store so progress
@@ -51,6 +67,7 @@
   const visualSearchStatus = $derived(
     visualSearchReady ? "ready" : visualSearchMissingRuntime ? "runtime missing" : "missing",
   );
+  const hasLibrary = $derived(libraryStore.isOpen);
 
   // React to backfill completion via the global store. Same reasoning
   // as Albums.svelte: a per-page Tauri `listen()` races with fast
@@ -59,10 +76,11 @@
   let toastedGeoIds = new Set<string>();
   $effect(() => {
     if (!geocodingJob) return;
-    if (geocodingJob.status === "complete" && !toastedGeoIds.has(geocodingJob.id)) {
+    if ((geocodingJob.status === "complete" || geocodingJob.status === "error") && !toastedGeoIds.has(geocodingJob.id)) {
       toastedGeoIds.add(geocodingJob.id);
       const msg = geocodingJob.message || "Geocoding finished.";
       const isError =
+        geocodingJob.status === "error" ||
         msg.toLowerCase().startsWith("geocoding failed") ||
         msg.toLowerCase().startsWith("geonames database not found");
       if (isError) toasts.error(msg);
@@ -78,9 +96,32 @@
   });
 
   onMount(() => {
+    mounted = true;
     settingsStore.load();
-    health.compute().then((d) => (healthData = d)).catch(() => {});
     loadAssets();
+    return () => {
+      mounted = false;
+      assetsSeq += 1;
+      semanticSeq += 1;
+      exclusionsSeq += 1;
+      bridgeSeq += 1;
+      healthSeq += 1;
+      updateSeq += 1;
+    };
+  });
+
+  $effect(() => {
+    if (!mounted) return;
+    if (!hasLibrary) {
+      healthSeq += 1;
+      semanticSeq += 1;
+      exclusionsSeq += 1;
+      healthData = null;
+      semanticStatus = null;
+      exclusions = null;
+      return;
+    }
+    loadHealth();
     loadSemanticStatus();
     loadExclusions();
   });
@@ -88,10 +129,10 @@
   let toastedAssetIds = new Set<string>();
   $effect(() => {
     if (!assetsJob) return;
-    if (assetsJob.status === "complete" && !toastedAssetIds.has(assetsJob.id)) {
+    if ((assetsJob.status === "complete" || assetsJob.status === "error") && !toastedAssetIds.has(assetsJob.id)) {
       toastedAssetIds.add(assetsJob.id);
       const msg = assetsJob.message || "Asset setup finished.";
-      if (msg.toLowerCase().startsWith("asset install failed")) {
+      if (assetsJob.status === "error" || msg.toLowerCase().startsWith("asset install failed")) {
         toasts.error(msg);
       } else {
         toasts.success("Assets ready.");
@@ -103,11 +144,14 @@
   let toastedSemanticIds = new Set<string>();
   $effect(() => {
     if (!semanticJob) return;
-    if (semanticJob.status === "complete" && !toastedSemanticIds.has(semanticJob.id)) {
+    if ((semanticJob.status === "complete" || semanticJob.status === "error") && !toastedSemanticIds.has(semanticJob.id)) {
       toastedSemanticIds.add(semanticJob.id);
       const msg = semanticJob.message || "Visual search updated.";
-      if (msg.toLowerCase().includes("failed")) toasts.error(msg);
-      else toasts.success(msg);
+      if (semanticJob.status === "error" || msg.toLowerCase().includes("failed")) {
+        toasts.error(msg);
+      } else {
+        toasts.success(msg);
+      }
       loadAssets();
       loadSemanticStatus();
     }
@@ -117,14 +161,21 @@
 
   async function patch(p: Partial<Settings>) {
     if (!s) return;
+    const seq = ++saveSeq;
     saving = true;
-    try { await settingsStore.update(p); }
-    catch (e) { error = JSON.stringify(e); }
-    finally { saving = false; }
+    error = null;
+    try {
+      await settingsStore.update(p);
+      if (mounted && seq === saveSeq) error = null;
+    } catch (e) {
+      if (mounted && seq === saveSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === saveSeq) saving = false;
+    }
   }
 
   async function backfillGeocoding(force = false) {
-    if (backfilling) return;
+    if (backfilling || !hasLibrary) return;
     const placeholderId = `pending-geocoding-${Date.now()}`;
     jobs.register(placeholderId, "geocoding");
     toasts.success(force ? "Refreshing all place names…" : "Filling in place names…");
@@ -134,7 +185,7 @@
       jobs.register(r.job_id, "geocoding");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -144,9 +195,34 @@
   /// — progress shows in the global JobsIndicator.
   const regeneratingThumbs = $derived(jobs.isRunning("thumbnails"));
   const refreshingDates = $derived(jobs.isRunning("metadata"));
+  const metadataJob = $derived(jobs.byKind("metadata"));
+  const thumbnailsJob = $derived(jobs.byKind("thumbnails"));
   let refreshingStacks = $state(false);
+
+  let toastedMetadataIds = new Set<string>();
+  $effect(() => {
+    if (!metadataJob) return;
+    if ((metadataJob.status === "complete" || metadataJob.status === "error") && !toastedMetadataIds.has(metadataJob.id)) {
+      toastedMetadataIds.add(metadataJob.id);
+      const msg = metadataJob.message || "Metadata refresh finished.";
+      if (metadataJob.status === "error") toasts.error(msg);
+      else toasts.success(msg);
+    }
+  });
+
+  let toastedThumbnailIds = new Set<string>();
+  $effect(() => {
+    if (!thumbnailsJob) return;
+    if ((thumbnailsJob.status === "complete" || thumbnailsJob.status === "error") && !toastedThumbnailIds.has(thumbnailsJob.id)) {
+      toastedThumbnailIds.add(thumbnailsJob.id);
+      const msg = thumbnailsJob.message || "Thumbnail generation finished.";
+      if (thumbnailsJob.status === "error") toasts.error(msg);
+      else toasts.success(msg);
+    }
+  });
+
   async function refreshPhotoDates() {
-    if (refreshingDates) return;
+    if (refreshingDates || !hasLibrary) return;
     if (
       !confirm(
         "Refresh capture dates for every photo and video?\n\nSmriti will re-read embedded metadata and strict filename dates, then use file modified time only as a fallback. You can keep using the app while it runs.",
@@ -162,12 +238,12 @@
       jobs.register(r.job_id, "metadata");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
 
   async function regenerateThumbs() {
-    if (regeneratingThumbs) return;
+    if (regeneratingThumbs || !hasLibrary) return;
     if (
       !confirm(
         "Re-generate every thumbnail at the current quality?\n\nThis overwrites the cached JPEGs on disk and takes a while on big libraries (each photo is decoded + resampled once). You can keep using the app while it runs.",
@@ -183,26 +259,65 @@
       jobs.register(r.job_id, "thumbnails");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
 
   async function loadAssets() {
+    const seq = ++assetsSeq;
     assetsBusy = true;
     try {
-      assets = await systemEx.assetsInventory();
+      const next = await systemEx.assetsInventory();
+      if (!mounted || seq !== assetsSeq) return;
+      assets = next;
     } catch (e) {
-      toasts.error(`Couldn't read assets: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      if (mounted && seq === assetsSeq) {
+        toasts.error(`Couldn't read assets: ${commandErrorMessage(e)}`);
+      }
     } finally {
-      assetsBusy = false;
+      if (mounted && seq === assetsSeq) assetsBusy = false;
+    }
+  }
+
+  async function checkUpdatesNow() {
+    if (updateChecking) return;
+    const seq = ++updateSeq;
+    updateChecking = true;
+    updateError = null;
+    try {
+      const next = await systemEx.updatesCheck();
+      if (!mounted || seq !== updateSeq) return;
+      updateStatus = next;
+    } catch (e) {
+      if (mounted && seq === updateSeq) updateError = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === updateSeq) updateChecking = false;
     }
   }
 
   async function loadSemanticStatus() {
-    try {
-      semanticStatus = await semantic.status();
-    } catch {
+    const seq = ++semanticSeq;
+    if (!hasLibrary) {
       semanticStatus = null;
+      return;
+    }
+    try {
+      const next = await semantic.status();
+      if (!mounted || seq !== semanticSeq) return;
+      semanticStatus = next;
+    } catch {
+      if (mounted && seq === semanticSeq) semanticStatus = null;
+    }
+  }
+
+  async function loadHealth() {
+    const seq = ++healthSeq;
+    try {
+      const next = await health.compute();
+      if (!mounted || seq !== healthSeq) return;
+      healthData = next;
+    } catch {
+      if (mounted && seq === healthSeq) healthData = null;
     }
   }
 
@@ -217,7 +332,7 @@
       jobs.register(r.job_id, "assets");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start asset setup: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start asset setup: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -232,12 +347,12 @@
       jobs.register(r.job_id, "semantic");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start visual search model install: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start visual search model install: ${commandErrorMessage(e)}`);
     }
   }
 
   async function startSemanticIndexing() {
-    if (semanticRunning) return;
+    if (semanticRunning || !hasLibrary) return;
     const placeholderId = `pending-semantic-index-${Date.now()}`;
     jobs.register(placeholderId, "semantic");
     toasts.success("Indexing visual search...");
@@ -247,23 +362,30 @@
       jobs.register(r.job_id, "semantic");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start visual search indexing: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't start visual search indexing: ${commandErrorMessage(e)}`);
     }
   }
 
   async function loadExclusions() {
+    const seq = ++exclusionsSeq;
+    if (!hasLibrary) {
+      exclusions = null;
+      return;
+    }
     exclusionsBusy = true;
     try {
-      exclusions = await library.exclusions.list();
+      const next = await library.exclusions.list();
+      if (!mounted || seq !== exclusionsSeq) return;
+      exclusions = next;
     } catch {
-      exclusions = null;
+      if (mounted && seq === exclusionsSeq) exclusions = null;
     } finally {
-      exclusionsBusy = false;
+      if (mounted && seq === exclusionsSeq) exclusionsBusy = false;
     }
   }
 
   async function addExclusion() {
-    if (exclusionsActing) return;
+    if (exclusionsActing || !hasLibrary) return;
     let selected: string | string[] | null;
     try {
       selected = await openDialog({
@@ -293,21 +415,21 @@
       await loadExclusions();
       toasts.success(`Excluded ${preview.relative_path}`);
     } catch (e) {
-      toasts.error(`Couldn't exclude folder: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't exclude folder: ${commandErrorMessage(e)}`);
     } finally {
       exclusionsActing = false;
     }
   }
 
   async function removeExclusion(relativePath: string) {
-    if (exclusionsActing) return;
+    if (exclusionsActing || !hasLibrary) return;
     exclusionsActing = true;
     try {
       await library.exclusions.remove(relativePath);
       await loadExclusions();
       toasts.success("Exclusion removed. Run scan to index this folder again.");
     } catch (e) {
-      toasts.error(`Couldn't remove exclusion: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Couldn't remove exclusion: ${commandErrorMessage(e)}`);
     } finally {
       exclusionsActing = false;
     }
@@ -341,14 +463,13 @@
   }
 
   async function refreshStacks() {
-    if (refreshingStacks) return;
+    if (refreshingStacks || !hasLibrary) return;
     refreshingStacks = true;
     try {
       const result = await stacks.refresh();
       toasts.success(`${result.stacks_found} ${result.stacks_found === 1 ? "stack" : "stacks"} ready`);
     } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      toasts.error(`Couldn't refresh stacks: ${msg}`);
+      toasts.error(`Couldn't refresh stacks: ${commandErrorMessage(e)}`);
     } finally {
       refreshingStacks = false;
     }
@@ -359,7 +480,7 @@
   // commands run synchronously on the backend (small, atomic SQL).
 
   async function runFacesFromScratch() {
-    if (acting) return;
+    if (acting || !hasLibrary) return;
     if (
       !confirm(
         "Wipe every detected face, every cluster, and every face crop on disk, then re-run face detection?\n\nThis is irreversible. Names you've assigned to clusters will be lost.",
@@ -382,17 +503,17 @@
         jobs.register(j.job_id, "faces");
       } catch (e) {
         jobs.dismiss(placeholderId);
-        toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+        toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
       }
     } catch (e) {
-      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
       acting = false;
     }
   }
 
   async function resetFaceClusters() {
-    if (acting) return;
+    if (acting || !hasLibrary) return;
     if (
       !confirm(
         "Drop every cluster and re-cluster from existing face embeddings?\n\nThis keeps the detected faces themselves but throws away grouping decisions and any names you've assigned. Useful when you've changed the clustering threshold.",
@@ -413,17 +534,17 @@
         jobs.register(j.job_id, "faces");
       } catch (e) {
         jobs.dismiss(placeholderId);
-        toasts.error(`Couldn't start: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+        toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
       }
     } catch (e) {
-      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
       acting = false;
     }
   }
 
   async function resetSuggestions() {
-    if (acting) return;
+    if (acting || !hasLibrary) return;
     if (
       !confirm(
         "Wipe every album suggestion, including ones you've already dismissed?\n\nUseful if you reflexively dismissed everything early on.",
@@ -437,7 +558,7 @@
         `Cleared ${r.dropped.toLocaleString()} suggestion${r.dropped === 1 ? "" : "s"}. Run Detect in Albums to repopulate.`,
       );
     } catch (e) {
-      toasts.error(`Reset failed: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
       acting = false;
     }
@@ -445,6 +566,9 @@
 </script>
 
 <PageHeader title="Settings">
+  {#if !hasLibrary}
+    <a class="ghost header-link" href="#/timeline">Open library</a>
+  {/if}
   {#if saving}
     <span class="status mono">Saving…</span>
   {/if}
@@ -607,10 +731,13 @@
               Re-read dates for every photo and video using embedded metadata first, filename dates next, and file modified time only as a fallback.
             </p>
           </div>
-          <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates}>
+          <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates || !hasLibrary}>
             {refreshingDates ? "Refreshing dates..." : "Refresh dates"}
           </button>
         </div>
+        {#if !hasLibrary}
+          <p class="hint blurb">Open a library to refresh capture dates.</p>
+        {/if}
       </div>
       <div class="subsection">
         <div class="section-heading-row">
@@ -620,7 +747,7 @@
               Folders Smriti skips during scans and reindexing. Existing files are removed from Smriti only; files on disk stay untouched.
             </p>
           </div>
-          <button class="ghost" onclick={addExclusion} disabled={exclusionsBusy || exclusionsActing}>
+          <button class="ghost" onclick={addExclusion} disabled={exclusionsBusy || exclusionsActing || !hasLibrary}>
             {exclusionsActing ? "Working..." : "Exclude folder..."}
           </button>
         </div>
@@ -707,7 +834,7 @@
           <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticStatus?.assets_installed}>
             {semanticRunning ? "Working..." : "Download visual model"}
           </button>
-          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady}>
+          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
             {semanticRunning ? "Indexing..." : "Index visual search"}
           </button>
           <button class="ghost" onclick={loadSemanticStatus} disabled={semanticRunning}>
@@ -775,10 +902,10 @@
       </p>
       {#if devMode.enabled}
         <div class="action-row">
-          <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting}>
+          <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting || !hasLibrary}>
             Reset face clusters only
           </button>
-          <button class="ghost danger" onclick={runFacesFromScratch} disabled={acting}>
+          <button class="ghost danger" onclick={runFacesFromScratch} disabled={acting || !hasLibrary}>
             Run faces from scratch
           </button>
         </div>
@@ -830,7 +957,7 @@
       </label>
       {#if devMode.enabled}
         <div class="action-row">
-          <button class="ghost danger-soft" onclick={resetSuggestions} disabled={acting}>
+          <button class="ghost danger-soft" onclick={resetSuggestions} disabled={acting || !hasLibrary}>
             Reset all suggestions
           </button>
         </div>
@@ -848,16 +975,19 @@
         Run this once after first setup, or after a scan that ran with the database missing.
       </p>
       <div class="action-row">
-        <button class="primary" onclick={() => backfillGeocoding(false)} disabled={backfilling}>
+        <button class="primary" onclick={() => backfillGeocoding(false)} disabled={backfilling || !hasLibrary}>
           {backfilling ? "Resolving…" : "Fill in place names"}
         </button>
         {#if devMode.enabled}
-          <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling}
+          <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling || !hasLibrary}
             title="Re-resolve every GPS-tagged photo, overwriting stale matches">
             Refresh all
           </button>
         {/if}
       </div>
+      {#if !hasLibrary}
+        <p class="hint blurb">Open a library to run place-name backfill.</p>
+      {/if}
     </section>
 
     {#if devMode.enabled && healthData}
@@ -896,10 +1026,10 @@
           thumbs, or if the cache files have rotted on disk.
         </p>
         <div class="action-row">
-          <button class="ghost" onclick={regenerateThumbs} disabled={regeneratingThumbs}>
+          <button class="ghost" onclick={regenerateThumbs} disabled={regeneratingThumbs || !hasLibrary}>
             {regeneratingThumbs ? "Regenerating…" : "Regenerate thumbnails"}
           </button>
-          <button class="ghost" onclick={refreshStacks} disabled={refreshingStacks}>
+          <button class="ghost" onclick={refreshStacks} disabled={refreshingStacks || !hasLibrary}>
             {refreshingStacks ? "Refreshing…" : "Refresh stacks"}
           </button>
         </div>
@@ -913,6 +1043,26 @@
           onchange={(e) => patch({ auto_update_check_enabled: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Check for updates automatically</span>
       </label>
+      <div class="action-row">
+        <button class="ghost" onclick={checkUpdatesNow} disabled={updateChecking}>
+          {updateChecking ? "Checking..." : "Check now"}
+        </button>
+        {#if updateStatus?.newer_available && updateStatus.release_url}
+          <a class="ghost inline-action" href={updateStatus.release_url} target="_blank" rel="noopener">
+            Download update
+          </a>
+        {/if}
+      </div>
+      {#if updateStatus}
+        <p class="hint blurb">
+          {updateStatus.newer_available
+            ? `Smriti ${updateStatus.latest} is available. Current version: ${updateStatus.current}.`
+            : `Smriti is up to date (${updateStatus.current}).`}
+        </p>
+      {/if}
+      {#if updateError}
+        <p class="error">{updateError}</p>
+      {/if}
     </section>
 
     {#if devMode.enabled}
@@ -993,6 +1143,21 @@
      are tiles, not prose. */
   section.full-width { max-width: none; }
   .status { font-size: var(--t-sm); color: var(--accent); }
+  .header-link {
+    text-decoration: none;
+    font-size: var(--t-sm);
+    padding: 6px var(--s-3);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: transparent;
+    transition: background var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+  }
+  .header-link:hover {
+    background: var(--bg-paper);
+    border-color: var(--ink-faint);
+  }
   section { margin-bottom: var(--s-6); }
   .section-title {
     font-size: var(--t-xs);
@@ -1061,6 +1226,18 @@
     margin: 0 0 var(--s-3);
   }
   .action-row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+  .inline-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .inline-action:hover { background: var(--bg-paper); }
   .exclusion-list {
     border-top: 1px solid var(--line-soft);
     border-bottom: 1px solid var(--line-soft);
@@ -1243,7 +1420,7 @@
     border-color: var(--hot, #d05a4a);
   }
 
-  /* Library health counters — moved here from the dedicated /health route. */
+  /* Library health counters. */
   .counters {
     list-style: none;
     padding: 0;

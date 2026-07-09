@@ -29,7 +29,7 @@
   .title {
     font-size: var(--t-xl);
     font-weight: 600;
-    letter-spacing: -0.012em;
+    letter-spacing: 0;
     color: var(--ink);
     flex: 1;
     min-width: 0;

@@ -13,6 +13,7 @@
   const preview = $derived(run?.preview ?? null);
   const busy = $derived(assistantStore.busy);
   const activity = $derived(assistantStore.activity);
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   function responseHtml(text: string): string {
     const escaped = text
@@ -56,9 +57,10 @@
     const unlistenPromise = listen<AssistantActivityEvent>("assistant:activity", (event) => {
       assistantStore.appendActivity(event.payload);
     });
-    setTimeout(focus, 0);
+    focusTimer = setTimeout(focus, 0);
     return () => {
       document.removeEventListener("smriti:assistant-focus", focus);
+      if (focusTimer != null) clearTimeout(focusTimer);
       unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
     };
   });

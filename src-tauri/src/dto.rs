@@ -434,6 +434,8 @@ pub struct AlbumDto {
     pub id: i64,
     pub name: String,
     pub photo_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photos_added: Option<u64>,
     pub cover_photo_id: Option<i64>,
     pub cover_thumbnail_path: Option<String>,
     pub date_range_start: Option<String>,
@@ -450,6 +452,7 @@ impl From<AlbumRecord> for AlbumDto {
             id: a.id,
             name: a.name,
             photo_count: a.photo_count,
+            photos_added: None,
             cover_photo_id: a.cover_photo_id,
             cover_thumbnail_path: a.cover_thumbnail_path,
             date_range_start: a.date_range_start,
@@ -564,6 +567,7 @@ pub struct AlbumHitDto {
     pub album_id: i64,
     pub name: String,
     pub photo_count: i64,
+    pub cover_photo_id: Option<i64>,
     pub cover_thumbnail_path: Option<String>,
 }
 
@@ -573,6 +577,7 @@ impl From<AlbumHit> for AlbumHitDto {
             album_id: h.album_id,
             name: h.name,
             photo_count: h.photo_count,
+            cover_photo_id: h.cover_photo_id,
             cover_thumbnail_path: h.cover_thumbnail_path,
         }
     }
@@ -1106,6 +1111,14 @@ impl From<DriveInfo> for DriveDto {
 pub struct LibraryHandleDto {
     pub drive_root: String,
     pub photo_count: i64,
+    pub read_only: bool,
+    pub schema_too_new: Option<SchemaTooNewDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SchemaTooNewDto {
+    pub db_version: i32,
+    pub max_supported: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1307,6 +1320,8 @@ pub struct MetadataProgressDto {
     pub done: u64,
     pub elapsed_ms: u64,
     pub is_complete: bool,
+    pub stage: Option<String>,
+    pub message: Option<String>,
 }
 
 /// Per-chunk update emitted by the thumbnail worker so the Timeline can

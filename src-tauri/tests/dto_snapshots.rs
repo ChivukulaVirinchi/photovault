@@ -463,6 +463,7 @@ fn album_hit_dto() {
         album_id: 4,
         name: "Goa 2024".into(),
         photo_count: 32,
+        cover_photo_id: Some(7),
         cover_thumbnail_path: Some(".photovault/thumbnails/cover.jpg".into()),
     };
     let dto: AlbumHitDto = hit.into();
@@ -510,6 +511,7 @@ fn search_results_dto() {
             album_id: 4,
             name: "Goa 2024".into(),
             photo_count: 32,
+            cover_photo_id: Some(7),
             cover_thumbnail_path: Some(".photovault/thumbnails/cover.jpg".into()),
         }],
         places: vec![PlaceHit {

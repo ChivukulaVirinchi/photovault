@@ -91,6 +91,23 @@ fn open_image_decodes_each_raw_extension_via_the_same_path() {
     }
 }
 
+#[test]
+fn open_image_reports_raf_as_unsupported_container() {
+    let dir = tempfile::Builder::new()
+        .prefix("smriti-test-")
+        .tempdir()
+        .unwrap();
+    let path = dir.path().join("shot.raf");
+    std::fs::write(&path, b"not-a-fuji-raw").unwrap();
+
+    let err = open_image(&path).unwrap_err();
+    assert!(
+        err.contains("RAF support is not available yet"),
+        "unexpected error message: {}",
+        err
+    );
+}
+
 #[cfg(not(feature = "raw"))]
 #[test]
 fn open_image_without_raw_feature_errors_on_nef() {

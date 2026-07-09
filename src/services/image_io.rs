@@ -31,6 +31,10 @@ pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
 
     match ext.as_deref() {
         Some("heic") | Some("heif") => decode_heic(path),
+        Some("raf") => Err(format!(
+            "RAF support is not available yet ({} is a Fujifilm RAW container, not TIFF-based)",
+            path.display()
+        )),
         Some(e) if is_raw_extension(e) => decode_raw_via_preview(path),
         _ => image::open(path).map_err(|e| e.to_string()),
     }
@@ -43,7 +47,7 @@ pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
 fn is_raw_extension(e: &str) -> bool {
     matches!(
         e,
-        "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw" | "raf"
+        "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw"
     )
 }
 
@@ -101,6 +105,14 @@ fn decode_heic(path: &Path) -> Result<DynamicImage, String> {
     for y in 0..(h as usize) {
         let row_start = y * stride;
         let row_end = row_start + (w as usize) * 3;
+        if row_end > plane.data.len() {
+            return Err(format!(
+                "HEIC: RGB plane too short at row {} (need {}, have {})",
+                y,
+                row_end,
+                plane.data.len()
+            ));
+        }
         buf.extend_from_slice(&plane.data[row_start..row_end]);
     }
     image::RgbImage::from_raw(w, h, buf)

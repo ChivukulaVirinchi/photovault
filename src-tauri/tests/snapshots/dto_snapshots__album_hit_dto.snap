@@ -6,5 +6,6 @@ expression: dto
   "album_id": 4,
   "name": "Goa 2024",
   "photo_count": 32,
+  "cover_photo_id": 7,
   "cover_thumbnail_path": ".photovault/thumbnails/cover.jpg"
 }

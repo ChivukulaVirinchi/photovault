@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { people, type FaceDetailDto } from "../api/all";
+  import { commandErrorMessage } from "../api";
   import FaceCell from "./FaceCell.svelte";
   import { X } from "lucide-svelte";
 
@@ -14,12 +15,16 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let message = $state<string | null>(null);
+  let mounted = true;
 
   async function load() {
     try {
-      faces = await people.kSimilarToCluster(clusterId, 20);
+      const next = await people.kSimilarToCluster(clusterId, 20);
+      if (!mounted) return;
+      faces = next;
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     }
   }
 
@@ -27,13 +32,15 @@
     if (busy) return;
     busy = true;
     try {
-      await people.faceConfirm(faceId);
+      await people.faceConfirmToCluster(faceId, clusterId);
+      if (!mounted) return;
       faces = faces.filter((f) => f.face_id !== faceId);
       message = "Face confirmed.";
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     } finally {
-      busy = false;
+      if (mounted) busy = false;
     }
   }
 
@@ -41,25 +48,35 @@
     if (busy) return;
     busy = true;
     try {
-      await people.faceReject(faceId);
+      await people.faceReject(faceId, clusterId);
+      if (!mounted) return;
       faces = faces.filter((f) => f.face_id !== faceId);
       message = "Face rejected.";
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     } finally {
-      busy = false;
+      if (mounted) busy = false;
     }
+  }
+
+  function requestClose() {
+    if (!busy) onclose();
   }
 
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      onclose();
+      requestClose();
     }
   }
 
   onMount(() => {
+    mounted = true;
     load();
+    return () => {
+      mounted = false;
+    };
   });
 </script>
 
@@ -67,7 +84,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="overlay"
-  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
 >
   <div
     class="dialog"
@@ -85,7 +102,8 @@
       </p>
       <button
         class="close-btn"
-        onclick={onclose}
+        onclick={requestClose}
+        disabled={busy}
         aria-label="Close"
       >
         <X size={16} strokeWidth={1.75} />
@@ -119,7 +137,7 @@
 
     <footer>
       <span class="count mono">{faces.length} face{faces.length === 1 ? "" : "s"}</span>
-      <button class="ghost" onclick={onclose}>Done</button>
+      <button class="ghost" onclick={requestClose} disabled={busy}>Done</button>
     </footer>
   </div>
 </div>

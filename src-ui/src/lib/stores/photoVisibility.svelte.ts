@@ -17,6 +17,12 @@ class PhotoVisibilityStore {
     this.trashedIds = next;
     this.version += 1;
   }
+
+  clear() {
+    if (this.trashedIds.size === 0) return;
+    this.trashedIds = new Set();
+    this.version += 1;
+  }
 }
 
 export const photoVisibility = new PhotoVisibilityStore();

@@ -7,6 +7,7 @@ use image::DynamicImage;
 use rusqlite::{params, Connection, Result as SqliteResult};
 
 use crate::db::{PhotoStackRepo, StackCandidate};
+use crate::services::path_util::safe_join_relative;
 
 #[derive(Debug, Clone, Default)]
 pub struct StackRefreshResult {
@@ -125,7 +126,17 @@ impl PhotoStackService {
     ) -> Vec<CandidatePhoto> {
         let mut by_hash: HashMap<String, Vec<CandidatePhoto>> = HashMap::new();
         for p in photos {
-            let abs = drive_root.join(&p.file_path);
+            let abs = match safe_join_relative(drive_root, &p.file_path) {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::debug!(
+                        "stack exact verification skipped invalid path {}: {}",
+                        p.file_path,
+                        e
+                    );
+                    continue;
+                }
+            };
             match crate::services::scanner::calculate_hash(&abs) {
                 Ok(hash) => by_hash.entry(hash).or_default().push(p),
                 Err(e) => {
@@ -266,8 +277,8 @@ impl PhotoStackService {
         let path = photo
             .thumbnail_path
             .as_ref()
-            .map(|p| drive_root.join(p))
-            .unwrap_or_else(|| drive_root.join(&photo.file_path));
+            .and_then(|p| safe_join_relative(drive_root, p).ok())
+            .or_else(|| safe_join_relative(drive_root, &photo.file_path).ok())?;
         crate::services::image_io::open_image(&path).ok()
     }
 

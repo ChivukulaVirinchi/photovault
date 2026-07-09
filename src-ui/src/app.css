@@ -184,10 +184,10 @@ h1, h2, h3, h4 {
   color: var(--ink);
   font-family: var(--font-body);
   font-weight: 600;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
   line-height: 1.2;
 }
-h1 { font-size: var(--t-3xl); font-weight: 700; letter-spacing: -0.02em; }
+h1 { font-size: var(--t-3xl); font-weight: 700; letter-spacing: 0; }
 h2 { font-size: var(--t-xl); }
 h3 { font-size: var(--t-lg); }
 h4 { font-size: var(--t-base); font-weight: 600; }
@@ -197,7 +197,7 @@ h4 { font-size: var(--t-base); font-weight: 600; }
   font-family: var(--font-display);
   font-weight: 500;
   font-variation-settings: "opsz" 96, "wdth" 100;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   line-height: 1.02;
 }
 

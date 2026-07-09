@@ -57,10 +57,11 @@ impl FaceEmbedding {
             return None;
         }
 
-        let vector: Array1<f32> = Array1::from_iter(bytes.chunks(4).map(|chunk| {
-            let arr: [u8; 4] = chunk.try_into().unwrap();
-            f32::from_le_bytes(arr)
-        }));
+        let vector: Array1<f32> = Array1::from_iter(
+            bytes
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
+        );
 
         Some(Self { vector })
     }

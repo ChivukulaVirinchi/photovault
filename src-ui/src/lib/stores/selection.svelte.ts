@@ -19,6 +19,9 @@ class SelectionStore {
   list(): number[] {
     return Array.from(this.ids);
   }
+  listIn(allIds: number[]): number[] {
+    return allIds.filter((id) => this.ids.has(id));
+  }
   active(): boolean {
     return this.ids.size > 0;
   }
@@ -43,6 +46,15 @@ class SelectionStore {
   set(id: number) {
     this.ids = new Set([id]);
     this.anchor = id;
+  }
+
+  /// Replace the selection with a prepared set/list while keeping the
+  /// range-selection anchor valid.
+  replace(ids: Iterable<number>) {
+    const next = new Set(ids);
+    this.ids = next;
+    if (this.anchor != null && next.has(this.anchor)) return;
+    this.anchor = next.values().next().value ?? null;
   }
 
   /// Select an inclusive range from `anchor` (last-clicked) to `id`,

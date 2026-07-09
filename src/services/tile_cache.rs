@@ -99,6 +99,7 @@ impl TileCache {
         }
 
         std::fs::write(&path, &bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
+        let _ = self.evict_if_over_limit();
         Ok(path)
     }
 

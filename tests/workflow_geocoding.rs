@@ -98,6 +98,16 @@ fn make_test_geonames() -> (TempDir, std::path::PathBuf) {
         (
             "Tokyo", "Tokyo", 35.6762, 139.6503, "JP", "Japan", 8_336_599, "PPLA",
         ),
+        (
+            "Dateline City",
+            "Dateline City",
+            0.1,
+            -179.7,
+            "FJ",
+            "Fiji",
+            200_000,
+            "PPL",
+        ),
     ];
 
     let mut stmt = conn
@@ -177,6 +187,16 @@ fn coords_with_no_city_in_range_return_none() {
         svc.reverse_geocode(0.0, -150.0).is_none(),
         "open ocean should not resolve to anything"
     );
+}
+
+#[test]
+fn dateline_crossing_coords_can_match_nearby_city() {
+    let (_dir, db) = make_test_geonames();
+    let svc = GeocodingService::new(&db).unwrap();
+    let r = svc
+        .reverse_geocode(0.1, 179.8)
+        .expect("city just across the dateline should geocode");
+    assert_eq!(r.city, "Dateline City");
 }
 
 #[test]

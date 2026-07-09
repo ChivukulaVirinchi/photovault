@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { memories, trash } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
@@ -26,7 +27,11 @@
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
+  let actionBusy = $state(false);
+  let loadSeq = 0;
+  let mounted = true;
   const scrollStorageKey = $derived(`smriti:memory-scroll:${id}`);
+  const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
 
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, photos.map((p) => p.id));
@@ -37,22 +42,32 @@
     ));
   }
   async function bulkTrash() {
-    const ids = selection.list();
+    if (actionBusy) return;
+    const ids = selection.listIn(photos.map((p) => p.id));
     if (ids.length === 0) return;
+    const seq = loadSeq;
+    const memoryId = id;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
     try {
-      await trash.trashPhotos(ids);
+      actionBusy = true;
+      const result = await trash.trashPhotos(ids);
+      if (!mounted || seq !== loadSeq || memoryId !== id) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos needed trashing");
+        return;
+      }
       photoVisibility.markTrashed(ids);
       photos = photos.filter((p) => !dropSet.has(p.id));
       browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(ids);
+          if (!mounted || memoryId !== id) return;
           photoVisibility.markRestored(ids);
           const next = photos.slice();
           for (const e of snapshot) {
@@ -63,7 +78,11 @@
           browseContext.set(`memory:${id}`, photos.map((p) => p.id));
         },
       );
-    } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
+    } catch (e) {
+      if (mounted && seq === loadSeq && memoryId === id) toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted && seq === loadSeq && memoryId === id) actionBusy = false;
+    }
   }
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -76,8 +95,13 @@
     }
   }
   onMount(() => {
+    mounted = true;
     window.addEventListener("keydown", onGlobalKey);
-    return () => window.removeEventListener("keydown", onGlobalKey);
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+      window.removeEventListener("keydown", onGlobalKey);
+    };
   });
 
   $effect(() => {
@@ -85,7 +109,7 @@
     const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
     if (raw) {
       const y = Number(raw);
-      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = y; });
+      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (mounted && scrollEl) scrollEl.scrollTop = y; });
     }
     const onScroll = () => {
       try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
@@ -95,18 +119,39 @@
   });
 
   async function load() {
+    const seq = ++loadSeq;
+    const memoryId = id;
+    error = null;
+    card = null;
+    photos = [];
+    savedAlbumId = null;
+    showAddDialog = false;
+    actionBusy = false;
+    selection.clear();
     try {
-      const r = await memories.detail(id);
+      const r = await memories.detail(memoryId);
+      if (!mounted || seq !== loadSeq) return;
       card = r.card;
       photos = r.photos;
-      browseContext.set(`memory:${id}`, photos.map((p) => p.id));
-    } catch (e) { error = JSON.stringify(e); }
+      browseContext.set(`memory:${memoryId}`, photos.map((p) => p.id));
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
 
   async function saveAsAlbum() {
-    if (!card) return;
-    const a = await memories.saveAsAlbum(card.id);
-    savedAlbumId = a.id;
+    if (!card || actionBusy) return;
+    const seq = loadSeq;
+    const memoryId = id;
+    try {
+      actionBusy = true;
+      const a = await memories.saveAsAlbum(card.id);
+      if (mounted && seq === loadSeq && memoryId === id) savedAlbumId = a.id;
+    } catch (e) {
+      if (mounted && seq === loadSeq && memoryId === id) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq && memoryId === id) actionBusy = false;
+    }
   }
 
   function startMemorySlideshow() {
@@ -138,7 +183,7 @@
       {#if savedAlbumId}
         <a class="saved-link" href="#/album?id={savedAlbumId}">Saved as album →</a>
       {:else}
-        <button class="primary" onclick={saveAsAlbum}>Save as album</button>
+        <button class="primary" onclick={saveAsAlbum} disabled={actionBusy}>Save as album</button>
       {/if}
     {/snippet}
   </DetailHeader>
@@ -157,6 +202,7 @@
         use:thumbnailOnVisible={{
           id: p.id,
           thumbnailPath: p.thumbnail_path,
+          mediaType: p.media_type,
           onReady: (path) => patchThumbnail(p.id, path),
         }}
         onclick={(e) => onCellClick(e, p.id)}
@@ -174,9 +220,9 @@
   </div>
 </div>
 
-{#if selection.active()}
+{#if selectedVisibleIds.length > 0}
   <SelectionBar
-    count={selection.size()}
+    count={selectedVisibleIds.length}
     onAddToAlbum={() => (showAddDialog = true)}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
@@ -185,7 +231,7 @@
 
 {#if showAddDialog}
   <AddToAlbumDialog
-    photoIds={selection.list()}
+    photoIds={selectedVisibleIds}
     onclose={() => (showAddDialog = false)}
     onsuccess={() => selection.clear()}
   />

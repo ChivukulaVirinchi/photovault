@@ -25,6 +25,11 @@ pub async fn start_job(state: &AppState, kind: JobKind) -> Result<Job, CommandEr
     let id = Uuid::new_v4().to_string();
     let cancel = Arc::new(AtomicBool::new(false));
     let mut jobs = state.jobs.lock().await;
+    if jobs.has_any_of_kind(kind) {
+        return Err(CommandError::Conflict {
+            reason: format!("{kind:?} is already in progress"),
+        });
+    }
     jobs.register(
         id.clone(),
         JobHandle {

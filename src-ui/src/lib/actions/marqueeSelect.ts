@@ -12,18 +12,20 @@ interface MarqueeSelectOptions {
 const DEFAULT_CELL_SELECTOR = "[data-photo-id]";
 const DEFAULT_INTERACTIVE_SELECTOR = [
   "[data-no-marquee]",
-  "a",
   "button",
   "input",
   "textarea",
   "select",
 ].join(", ");
+const DRAG_THRESHOLD_PX = 4;
 
 export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) {
   let opts = options;
   let start: Point | null = null;
   let current: Point | null = null;
   let pointer: Point | null = null;
+  let dragging = false;
+  let suppressClick = false;
   let base = new Set<number>();
   let raf = 0;
   let autoScrollRaf = 0;
@@ -55,7 +57,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   }
 
   function renderOverlay() {
-    if (!start || !current) {
+    if (!dragging || !start || !current) {
       overlay.style.display = "none";
       return;
     }
@@ -69,6 +71,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   }
 
   function queueUpdate() {
+    if (!dragging) return;
     if (raf !== 0) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
@@ -77,7 +80,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   }
 
   function updateAutoScroll() {
-    if (!start || !pointer) {
+    if (!dragging || !start || !pointer) {
       scrollVelocity = 0;
       return;
     }
@@ -100,7 +103,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
 
   function stepAutoScroll() {
     autoScrollRaf = 0;
-    if (!start || !pointer || scrollVelocity === 0) return;
+    if (!dragging || !start || !pointer || scrollVelocity === 0) return;
     const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
     const before = node.scrollTop;
     node.scrollTop = Math.max(0, Math.min(maxScroll, before + scrollVelocity));
@@ -115,7 +118,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   }
 
   function updateSelection() {
-    if (!start || !current) return;
+    if (!dragging || !start || !current) return;
     const contentRect = rectFromPoints(start, current);
     const next = new Set(base);
     const allowed = new Set(opts.getAllIds());
@@ -140,7 +143,13 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
         cellRect.y + cellRect.h > contentRect.y;
       if (intersects) next.add(id);
     });
-    selection.ids = next;
+    if (!setsEqual(selection.ids, next)) selection.replace(next);
+  }
+
+  function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+    if (a.size !== b.size) return false;
+    for (const value of a) if (!b.has(value)) return false;
+    return true;
   }
 
   function onPointerDown(e: PointerEvent) {
@@ -148,22 +157,26 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
     const target = e.target as HTMLElement;
     if (target.closest(opts.interactiveSelector ?? DEFAULT_INTERACTIVE_SELECTOR)) return;
     base = e.shiftKey ? new Set(selection.ids) : new Set();
-    if (!e.shiftKey) selection.clear();
     pointer = { x: e.clientX, y: e.clientY };
     start = pointFromClient(e.clientX, e.clientY);
     current = start;
+    dragging = false;
     node.setPointerCapture(e.pointerId);
-    renderOverlay();
-    e.preventDefault();
   }
 
   function onPointerMove(e: PointerEvent) {
     if (!start) return;
     pointer = { x: e.clientX, y: e.clientY };
     current = pointFromClient(e.clientX, e.clientY);
+    if (!dragging && Math.hypot(current.x - start.x, current.y - start.y) >= DRAG_THRESHOLD_PX) {
+      dragging = true;
+      if (!e.shiftKey) selection.clear();
+    }
+    if (!dragging) return;
     renderOverlay();
     updateAutoScroll();
     queueUpdate();
+    e.preventDefault();
   }
 
   function finish(e: PointerEvent) {
@@ -174,6 +187,8 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
     raf = 0;
     autoScrollRaf = 0;
     scrollVelocity = 0;
+    suppressClick = dragging;
+    dragging = false;
     start = null;
     current = null;
     pointer = null;
@@ -181,10 +196,17 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   }
 
   function onScroll() {
-    if (!start || !pointer) return;
+    if (!dragging || !start || !pointer) return;
     current = pointFromClient(pointer.x, pointer.y);
     renderOverlay();
     queueUpdate();
+  }
+
+  function onClick(e: MouseEvent) {
+    if (!suppressClick) return;
+    suppressClick = false;
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   node.addEventListener("pointerdown", onPointerDown);
@@ -192,6 +214,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
   node.addEventListener("pointerup", finish);
   node.addEventListener("pointercancel", finish);
   node.addEventListener("scroll", onScroll, { passive: true });
+  node.addEventListener("click", onClick, true);
 
   return {
     update(next: MarqueeSelectOptions) {
@@ -203,6 +226,7 @@ export function marqueeSelect(node: HTMLElement, options: MarqueeSelectOptions) 
       node.removeEventListener("pointerup", finish);
       node.removeEventListener("pointercancel", finish);
       node.removeEventListener("scroll", onScroll);
+      node.removeEventListener("click", onClick, true);
       if (raf !== 0) cancelAnimationFrame(raf);
       if (autoScrollRaf !== 0) cancelAnimationFrame(autoScrollRaf);
       overlay.remove();

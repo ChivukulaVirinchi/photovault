@@ -9,8 +9,29 @@ use crate::state::AppState;
 use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
 use crate::{CommandError, CommandResult};
 
+fn validated_album_name(name: String) -> CommandResult<String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "must not be empty".into(),
+        });
+    }
+    let normalized = name.to_lowercase();
+    if normalized == "favourites" || normalized == "favorites" {
+        return Err(CommandError::Validation {
+            field: "name".into(),
+            reason: "reserved for the Favourites smart album".into(),
+        });
+    }
+    Ok(name)
+}
+
 #[tauri::command]
 pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<MemoryCardDto>> {
+    if !smriti::config::AppConfig::load().memories_enabled {
+        return Ok(Vec::new());
+    }
     let (cards, hero_inputs, drive_root, thumbs) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -51,6 +72,9 @@ pub async fn memories_detail(
     state: State<'_, AppState>,
     args: MemoriesDetailArgs,
 ) -> CommandResult<MemoryDetailDto> {
+    if !smriti::config::AppConfig::load().memories_enabled {
+        return Err(CommandError::not_found("memory", args.memory_id));
+    }
     let (mut dto, photos, hero_input, drive_root, thumbs) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -164,6 +188,9 @@ pub async fn memories_save_as_album(
     state: State<'_, AppState>,
     args: MemoriesSaveAsAlbumArgs,
 ) -> CommandResult<crate::dto::AlbumDto> {
+    if !smriti::config::AppConfig::load().memories_enabled {
+        return Err(CommandError::not_found("memory", args.memory_id));
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -176,14 +203,7 @@ pub async fn memories_save_as_album(
         .ok_or_else(|| CommandError::not_found("memory", args.memory_id.clone()))?;
 
     let album_repo = smriti::db::album_repo::AlbumRepo::new(&db.conn);
-    let name = args.name.unwrap_or(card.title.clone());
-    let normalized = name.trim().to_lowercase();
-    if normalized == "favourites" || normalized == "favorites" {
-        return Err(CommandError::Validation {
-            field: "name".into(),
-            reason: "reserved for the Favourites smart album".into(),
-        });
-    }
+    let name = validated_album_name(args.name.unwrap_or(card.title.clone()))?;
     let album_id = album_repo.create(&name)?;
     if !card.photo_ids.is_empty() {
         album_repo.add_photos(album_id, &card.photo_ids)?;
@@ -215,4 +235,23 @@ fn collect_hero_inputs(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_album_name;
+    use crate::CommandError;
+
+    #[test]
+    fn memory_album_name_matches_album_validation() {
+        assert_eq!(validated_album_name(" Trip ".into()).unwrap(), "Trip");
+        assert!(matches!(
+            validated_album_name("   ".into()),
+            Err(CommandError::Validation { .. })
+        ));
+        assert!(matches!(
+            validated_album_name("Favorites".into()),
+            Err(CommandError::Validation { .. })
+        ));
+    }
 }

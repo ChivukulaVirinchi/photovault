@@ -58,17 +58,21 @@ impl<'a> DuplicateRepo<'a> {
         use std::collections::{HashMap, HashSet};
 
         // Load existing groups by hash
-        let mut existing_hashes: HashMap<String, i64> = HashMap::new();
+        let mut existing_hashes: HashMap<String, (i64, bool)> = HashMap::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, group_hash FROM duplicate_groups")?;
+                .prepare("SELECT id, group_hash, resolved FROM duplicate_groups")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
             })?;
             for row in rows {
-                let (id, hash) = row?;
-                existing_hashes.insert(hash, id);
+                let (id, hash, resolved) = row?;
+                existing_hashes.insert(hash, (id, resolved));
             }
         }
 
@@ -78,7 +82,10 @@ impl<'a> DuplicateRepo<'a> {
         for (hash, photo_ids, suggested_keep, dup_type) in groups {
             seen_hashes.insert(hash.clone());
 
-            if let Some(group_id) = existing_hashes.get(hash).copied() {
+            if let Some((group_id, resolved)) = existing_hashes.get(hash).copied() {
+                if resolved {
+                    continue;
+                }
                 let existing_keep: Option<i64> = tx
                     .query_row(
                         "SELECT photo_id FROM duplicate_group_members
@@ -119,7 +126,7 @@ impl<'a> DuplicateRepo<'a> {
         }
 
         // Remove groups whose hash no longer has duplicates
-        for (hash, group_id) in &existing_hashes {
+        for (hash, (group_id, _)) in &existing_hashes {
             if !seen_hashes.contains(hash) {
                 tx.execute(
                     "DELETE FROM duplicate_group_members WHERE group_id = ?1",
@@ -144,23 +151,30 @@ impl<'a> DuplicateRepo<'a> {
     ) -> SqliteResult<()> {
         use std::collections::HashMap;
 
-        let mut existing_hashes: HashMap<String, i64> = HashMap::new();
+        let mut existing_hashes: HashMap<String, (i64, bool)> = HashMap::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, group_hash FROM duplicate_groups")?;
+                .prepare("SELECT id, group_hash, resolved FROM duplicate_groups")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
             })?;
             for row in rows {
-                let (id, hash) = row?;
-                existing_hashes.insert(hash, id);
+                let (id, hash, resolved) = row?;
+                existing_hashes.insert(hash, (id, resolved));
             }
         }
 
         let tx = self.conn.unchecked_transaction()?;
         for (hash, photo_ids, suggested_keep, dup_type) in groups {
-            if let Some(group_id) = existing_hashes.get(hash).copied() {
+            if let Some((group_id, resolved)) = existing_hashes.get(hash).copied() {
+                if resolved {
+                    continue;
+                }
                 let existing_keep: Option<i64> = tx
                     .query_row(
                         "SELECT photo_id FROM duplicate_group_members
@@ -200,6 +214,10 @@ impl<'a> DuplicateRepo<'a> {
     /// otherwise the lowest-id member. We pull the cover with a
     /// correlated sub-query so the result is one round-trip per listing.
     pub fn get_all_groups(&self) -> SqliteResult<Vec<DuplicateGroupRecord>> {
+        self.get_groups(i64::MAX, 0)
+    }
+
+    pub fn get_groups(&self, limit: i64, offset: i64) -> SqliteResult<Vec<DuplicateGroupRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT
@@ -226,13 +244,15 @@ impl<'a> DuplicateRepo<'a> {
             FROM duplicate_groups dg
             LEFT JOIN duplicate_group_members dgm ON dg.id = dgm.group_id
             LEFT JOIN photos p ON p.id = dgm.photo_id AND p.is_trashed = FALSE
+            WHERE dg.resolved = FALSE
             GROUP BY dg.id
             HAVING COUNT(p.id) > 1
             ORDER BY member_count DESC
+            LIMIT ?1 OFFSET ?2
             "#,
         )?;
 
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![limit.max(0), offset.max(0)], |row| {
             Ok(DuplicateGroupRecord {
                 id: row.get(0)?,
                 member_count: row.get(1)?,
@@ -263,8 +283,7 @@ impl<'a> DuplicateRepo<'a> {
         for g in groups.iter_mut() {
             let ids: Vec<i64> = members_stmt
                 .query_map(params![g.id], |row| row.get::<_, i64>(0))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<SqliteResult<Vec<_>>>()?;
             g.member_photo_ids = ids;
         }
 
@@ -286,8 +305,9 @@ impl<'a> DuplicateRepo<'a> {
                 p.file_size,
                 p.date_taken
             FROM duplicate_group_members dgm
+            JOIN duplicate_groups dg ON dg.id = dgm.group_id
             JOIN photos p ON dgm.photo_id = p.id
-            WHERE dgm.group_id = ?1 AND p.is_trashed = FALSE
+            WHERE dgm.group_id = ?1 AND dg.resolved = FALSE AND p.is_trashed = FALSE
             ORDER BY dgm.is_suggested_keep DESC, p.date_taken ASC
             "#,
         )?;
@@ -315,6 +335,20 @@ impl<'a> DuplicateRepo<'a> {
     pub fn set_keep_photo(&self, group_id: i64, photo_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
 
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*)
+               FROM duplicate_group_members dgm
+               JOIN duplicate_groups dg ON dg.id = dgm.group_id
+              WHERE dgm.group_id = ?1
+                AND dgm.photo_id = ?2
+                AND dg.resolved = FALSE",
+            params![group_id, photo_id],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
         tx.execute(
             "UPDATE duplicate_group_members SET is_suggested_keep = FALSE WHERE group_id = ?1",
             params![group_id],
@@ -341,13 +375,30 @@ impl<'a> DuplicateRepo<'a> {
         Ok(())
     }
 
+    /// Mark a duplicate group as handled without deleting its hash.
+    pub fn dismiss_group(&self, group_id: i64) -> SqliteResult<()> {
+        let updated = self.conn.execute(
+            "UPDATE duplicate_groups SET resolved = TRUE WHERE id = ?1",
+            params![group_id],
+        )?;
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    }
+
     /// Get photos to trash (all members except the one to keep)
     pub fn get_photos_to_trash(&self, group_id: i64) -> SqliteResult<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT photo_id
-            FROM duplicate_group_members
-            WHERE group_id = ?1 AND is_suggested_keep = FALSE
+            SELECT dgm.photo_id
+              FROM duplicate_group_members dgm
+              JOIN duplicate_groups dg ON dg.id = dgm.group_id
+              JOIN photos p ON p.id = dgm.photo_id
+             WHERE dgm.group_id = ?1
+               AND dgm.is_suggested_keep = FALSE
+               AND dg.resolved = FALSE
+               AND p.is_trashed = FALSE
             "#,
         )?;
 
@@ -394,4 +445,90 @@ fn insert_duplicate_members(
         conn.execute(&sql, params_refs.as_slice())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::create_schema;
+
+    #[test]
+    fn invalid_keep_photo_does_not_clear_existing_keep() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+             VALUES (1, 'a.jpg', 'a.jpg', 'a', 10),
+                    (2, 'b.jpg', 'b.jpg', 'b', 10)",
+            [],
+        )
+        .unwrap();
+
+        let repo = DuplicateRepo::new(&conn);
+        repo.sync_duplicate_groups(&[("group".into(), vec![1, 2], Some(1), "exact")])
+            .unwrap();
+        let group_id = repo.get_all_groups().unwrap()[0].id;
+
+        assert!(repo.set_keep_photo(group_id, 999).is_err());
+
+        let keep_id: i64 = conn
+            .query_row(
+                "SELECT photo_id FROM duplicate_group_members
+                 WHERE group_id = ?1 AND is_suggested_keep = TRUE",
+                params![group_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(keep_id, 1);
+    }
+
+    #[test]
+    fn dismissed_group_does_not_reappear_on_next_detection() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+             VALUES (1, 'a.jpg', 'a.jpg', 'a', 10),
+                    (2, 'b.jpg', 'b.jpg', 'b', 10)",
+            [],
+        )
+        .unwrap();
+
+        let repo = DuplicateRepo::new(&conn);
+        let detected = [("group".into(), vec![1, 2], Some(1), "exact")];
+        repo.sync_duplicate_groups(&detected).unwrap();
+        let group_id = repo.get_all_groups().unwrap()[0].id;
+
+        repo.dismiss_group(group_id).unwrap();
+        assert!(repo.get_all_groups().unwrap().is_empty());
+
+        repo.upsert_duplicate_groups(&detected).unwrap();
+        assert!(repo.get_all_groups().unwrap().is_empty());
+
+        repo.sync_duplicate_groups(&detected).unwrap();
+        assert!(repo.get_all_groups().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dismissed_group_cannot_be_mutated_or_trashed_from_stale_detail() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+             VALUES (1, 'a.jpg', 'a.jpg', 'a', 10),
+                    (2, 'b.jpg', 'b.jpg', 'b', 10)",
+            [],
+        )
+        .unwrap();
+
+        let repo = DuplicateRepo::new(&conn);
+        repo.sync_duplicate_groups(&[("group".into(), vec![1, 2], Some(1), "exact")])
+            .unwrap();
+        let group_id = repo.get_all_groups().unwrap()[0].id;
+
+        repo.dismiss_group(group_id).unwrap();
+
+        assert!(repo.set_keep_photo(group_id, 2).is_err());
+        assert!(repo.get_photos_to_trash(group_id).unwrap().is_empty());
+    }
 }

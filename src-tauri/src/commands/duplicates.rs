@@ -12,15 +12,42 @@ use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
 
+fn duplicate_group_exists(repo: &DuplicateRepo<'_>, group_id: i64) -> CommandResult<bool> {
+    Ok(!repo.get_group_members(group_id)?.is_empty())
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DuplicatesListArgs {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
 #[tauri::command]
 pub async fn duplicates_list(
     state: State<'_, AppState>,
+    args: DuplicatesListArgs,
 ) -> CommandResult<Vec<DuplicateGroupSummaryDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = DuplicateRepo::new(&db.conn);
-    Ok(repo.get_all_groups()?.into_iter().map(Into::into).collect())
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    let limit = args.limit.unwrap_or(200).clamp(1, 500) as i64;
+    let offset = args.offset.unwrap_or(0) as i64;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(
+            DuplicateRepo::new(&conn)
+                .get_groups(limit, offset)?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("duplicate list worker failed: {e}"),
+    })?
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,10 +81,19 @@ pub struct WastedSpaceDto {
 
 #[tauri::command]
 pub async fn duplicates_wasted_space(state: State<'_, AppState>) -> CommandResult<WastedSpaceDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let bytes = DuplicateDetector::calculate_wasted_space(&db.conn)?;
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(DuplicateDetector::calculate_wasted_space(&conn)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("duplicate wasted-space worker failed: {e}"),
+    })??;
     Ok(WastedSpaceDto { bytes })
 }
 
@@ -78,8 +114,20 @@ pub async fn duplicates_set_keep(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = DuplicateRepo::new(&db.conn);
-    repo.set_keep_photo(args.group_id, args.photo_id)?;
+    match repo.set_keep_photo(args.group_id, args.photo_id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found(
+                "duplicate_group_member",
+                args.photo_id,
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
     let members = repo.get_group_members(args.group_id)?;
+    if members.is_empty() {
+        return Err(CommandError::not_found("duplicate_group", args.group_id));
+    }
     Ok(DuplicateGroupDto {
         id: args.group_id,
         members: members.into_iter().map(DuplicateMemberDto::from).collect(),
@@ -105,7 +153,15 @@ pub async fn duplicates_trash_others(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = DuplicateRepo::new(&db.conn);
+    if !duplicate_group_exists(&repo, args.group_id)? {
+        return Err(CommandError::not_found("duplicate_group", args.group_id));
+    }
     let to_trash = repo.get_photos_to_trash(args.group_id)?;
+    if to_trash.is_empty() {
+        return Err(CommandError::Conflict {
+            reason: "duplicate group has no non-keep photos to trash".into(),
+        });
+    }
     let trashed = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
     repo.delete_group(args.group_id)?;
     Ok(CountResultDto { count: trashed })
@@ -119,7 +175,17 @@ pub async fn duplicates_dismiss(
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    DuplicateRepo::new(&db.conn).delete_group(args.group_id)?;
+    let repo = DuplicateRepo::new(&db.conn);
+    if !duplicate_group_exists(&repo, args.group_id)? {
+        return Err(CommandError::not_found("duplicate_group", args.group_id));
+    }
+    match repo.dismiss_group(args.group_id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("duplicate_group", args.group_id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
@@ -150,6 +216,13 @@ pub async fn duplicates_run(
     state: State<'_, AppState>,
     args: DuplicatesRunArgs,
 ) -> CommandResult<JobIdDto> {
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+
     let job = jobs::start_job(&state, JobKind::Duplicates).await?;
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
@@ -162,13 +235,6 @@ pub async fn duplicates_run(
     // Arc<Mutex<Database>> for the entire detection blocks every
     // foreground read for ~seconds, which is what makes the timeline
     // appear empty until detection finishes.
-    let drive_root = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        lib.drive_root.clone()
-    };
-    let db_path = smriti::db::db_path_for(&drive_root);
-
     emit(
         &app_clone,
         EV_DUPLICATES_PROGRESS,
@@ -189,6 +255,26 @@ pub async fn duplicates_run(
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("duplicates: open secondary DB failed: {}", e);
+                emit(
+                    &app_clone,
+                    EV_DUPLICATES_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: "error".into(),
+                        processed: 0,
+                        total: None,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("Opening the library database failed: {e}")),
+                    },
+                );
+                let rt = tokio::runtime::Handle::current();
+                let app_for_finish = app_clone.clone();
+                let finish_job_id = job_id_clone.clone();
+                rt.spawn(async move {
+                    let st: tauri::State<AppState> = app_for_finish.state();
+                    jobs::finish_job(&st, &finish_job_id).await;
+                });
                 return;
             }
         };
@@ -211,7 +297,33 @@ pub async fn duplicates_run(
             });
             return;
         }
-        let exact = DuplicateDetector::find_duplicates(&conn).unwrap_or_default();
+        let exact = match DuplicateDetector::find_duplicates(&conn, &drive_root) {
+            Ok(groups) => groups,
+            Err(e) => {
+                tracing::error!("duplicates: exact pass failed: {}", e);
+                emit(
+                    &app_clone,
+                    EV_DUPLICATES_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: "error".into(),
+                        processed: 0,
+                        total: None,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("Duplicate detection failed: {e}")),
+                    },
+                );
+                let rt = tokio::runtime::Handle::current();
+                let app_for_finish = app_clone.clone();
+                let finish_job_id = job_id_clone.clone();
+                rt.spawn(async move {
+                    let st: tauri::State<AppState> = app_for_finish.state();
+                    jobs::finish_job(&st, &finish_job_id).await;
+                });
+                return;
+            }
+        };
         let mut groups_found = exact.len();
         let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
             Vec::with_capacity(exact.len());
@@ -257,12 +369,14 @@ pub async fn duplicates_run(
             }
         }
 
+        let mut job_error: Option<String> = None;
+
         if args.include_perceptual && !cancel.load(Ordering::Relaxed) {
             let exclude_ids: std::collections::HashSet<i64> = exact
                 .iter()
                 .flat_map(|g| g.photo_ids.iter().copied())
                 .collect();
-            if let Ok(perc) = DuplicateDetector::find_perceptual_duplicates_with_progress(
+            match DuplicateDetector::find_perceptual_duplicates_with_progress(
                 &conn,
                 &drive_root,
                 &exclude_ids,
@@ -283,54 +397,61 @@ pub async fn duplicates_run(
                     );
                 },
             ) {
-                groups_found += perc.len();
-                to_persist.reserve(perc.len());
-                for g in &perc {
-                    to_persist.push((
-                        g.hash.clone(),
-                        g.photo_ids.clone(),
-                        g.suggested_keep_id,
-                        g.duplicate_type,
-                    ));
-                }
-                if !perc.is_empty() && !cancel.load(Ordering::Relaxed) {
-                    let batch: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = perc
-                        .iter()
-                        .map(|g| {
-                            (
-                                g.hash.clone(),
-                                g.photo_ids.clone(),
-                                g.suggested_keep_id,
-                                g.duplicate_type,
-                            )
-                        })
-                        .collect();
-                    let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
-                    if let Err(e) = repo.upsert_duplicate_groups(&batch) {
-                        tracing::warn!("dup perceptual live persist: {}", e);
-                    } else {
-                        emit(
-                            &app_clone,
-                            EV_DUPLICATES_PROGRESS,
-                            JobProgress {
-                                job_id: job_id_clone.clone(),
-                                stage: "persisted".into(),
-                                processed: batch.len() as u64,
-                                total: None,
-                                elapsed_ms: started.elapsed().as_millis() as u64,
-                                eta_ms: None,
-                                message: Some(format!(
-                                    "{} visual duplicate groups available",
-                                    batch.len()
-                                )),
-                            },
-                        );
+                Ok(perc) => {
+                    groups_found += perc.len();
+                    to_persist.reserve(perc.len());
+                    for g in &perc {
+                        to_persist.push((
+                            g.hash.clone(),
+                            g.photo_ids.clone(),
+                            g.suggested_keep_id,
+                            g.duplicate_type,
+                        ));
                     }
+                    if !perc.is_empty() && !cancel.load(Ordering::Relaxed) {
+                        let batch: Vec<(String, Vec<i64>, Option<i64>, &'static str)> = perc
+                            .iter()
+                            .map(|g| {
+                                (
+                                    g.hash.clone(),
+                                    g.photo_ids.clone(),
+                                    g.suggested_keep_id,
+                                    g.duplicate_type,
+                                )
+                            })
+                            .collect();
+                        let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
+                        if let Err(e) = repo.upsert_duplicate_groups(&batch) {
+                            tracing::warn!("dup perceptual live persist: {}", e);
+                        } else {
+                            emit(
+                                &app_clone,
+                                EV_DUPLICATES_PROGRESS,
+                                JobProgress {
+                                    job_id: job_id_clone.clone(),
+                                    stage: "persisted".into(),
+                                    processed: batch.len() as u64,
+                                    total: None,
+                                    elapsed_ms: started.elapsed().as_millis() as u64,
+                                    eta_ms: None,
+                                    message: Some(format!(
+                                        "{} visual duplicate groups available",
+                                        batch.len()
+                                    )),
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("visual duplicate detection failed: {e}");
+                    tracing::error!("{msg}");
+                    job_error = Some(msg);
                 }
             }
         }
 
-        if !cancel.load(Ordering::Relaxed) {
+        if job_error.is_none() && !cancel.load(Ordering::Relaxed) {
             emit(
                 &app_clone,
                 EV_DUPLICATES_PROGRESS,
@@ -346,10 +467,12 @@ pub async fn duplicates_run(
             );
             let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
             if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
-                tracing::warn!("dup persist: {}", e);
+                let msg = format!("saving duplicate groups failed: {e}");
+                tracing::error!("{msg}");
+                job_error = Some(msg);
             }
         }
-        if !cancel.load(Ordering::Relaxed) {
+        if job_error.is_none() && !cancel.load(Ordering::Relaxed) {
             emit(
                 &app_clone,
                 EV_DUPLICATES_PROGRESS,
@@ -363,18 +486,36 @@ pub async fn duplicates_run(
                     message: Some("refreshing stacks".into()),
                 },
             );
-            let _ = smriti::services::PhotoStackService::refresh(&conn, &drive_root);
+            if let Err(e) = smriti::services::PhotoStackService::refresh(&conn, &drive_root) {
+                tracing::warn!("duplicate stack refresh failed: {}", e);
+            }
         }
 
-        emit(
-            &app_clone,
-            EV_DUPLICATES_COMPLETE,
-            DuplicatesCompleteDto {
-                job_id: job_id_clone.clone(),
-                groups_found: groups_found as u64,
-                elapsed_ms: started.elapsed().as_millis() as u64,
-            },
-        );
+        if let Some(message) = job_error {
+            emit(
+                &app_clone,
+                EV_DUPLICATES_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "error".into(),
+                    processed: groups_found as u64,
+                    total: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(message),
+                },
+            );
+        } else {
+            emit(
+                &app_clone,
+                EV_DUPLICATES_COMPLETE,
+                DuplicatesCompleteDto {
+                    job_id: job_id_clone.clone(),
+                    groups_found: groups_found as u64,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                },
+            );
+        }
         // finish_job is async; bridge via a runtime handle.
         let rt = tokio::runtime::Handle::current();
         let app_for_finish = app_clone.clone();

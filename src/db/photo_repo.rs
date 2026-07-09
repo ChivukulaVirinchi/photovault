@@ -71,7 +71,7 @@ impl<'a> PhotoRepo<'a> {
         let mut count = 0;
 
         for photo in photos {
-            tx.execute(
+            let changed = tx.execute(
                 r#"
                 INSERT INTO photos (
                     file_path, file_name, file_hash, file_size, file_mtime,
@@ -89,7 +89,7 @@ impl<'a> PhotoRepo<'a> {
                     photo.media_type.as_str(),
                 ],
             )?;
-            count += 1;
+            count += changed;
         }
 
         tx.commit()?;
@@ -212,19 +212,22 @@ impl<'a> PhotoRepo<'a> {
             return self.count();
         }
         self.conn.query_row(
-            r#"
+            &format!(
+                r#"
+            WITH live_stacks AS ({live_stacks_cte})
             SELECT COUNT(*)
               FROM photos p
              WHERE p.is_trashed = FALSE
                AND NOT EXISTS (
                    SELECT 1
                      FROM photo_stack_members m
-                     JOIN photo_stacks s ON s.id = m.stack_id
+                     JOIN live_stacks s ON s.id = m.stack_id
                     WHERE m.photo_id = p.id
-                      AND s.dismissed = FALSE
                       AND p.id != s.cover_photo_id
                )
             "#,
+                live_stacks_cte = LIVE_STACKS_CTE
+            ),
             [],
             |row| row.get(0),
         )
@@ -433,6 +436,52 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
+    fn insert_batch_stub_counts_only_new_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let repo = PhotoRepo::new(&conn);
+        let photo = PhotoInsert {
+            relative_path: "img.jpg".into(),
+            file_name: "img.jpg".into(),
+            file_hash: "hash".into(),
+            file_size: 12,
+            file_mtime: Some(100),
+            date_taken: None,
+            date_taken_source: None,
+            gps_latitude: None,
+            gps_longitude: None,
+            location_city: None,
+            location_country: None,
+            camera_make: None,
+            camera_model: None,
+            iso: None,
+            aperture: None,
+            shutter_speed: None,
+            focal_length: None,
+            lens_model: None,
+            flash: None,
+            gps_altitude: None,
+            width: None,
+            height: None,
+            orientation: 1,
+            media_type: MediaType::Photo,
+            duration_ms: None,
+            video_codec: None,
+            audio_codec: None,
+            frame_rate: None,
+            bitrate: None,
+            has_audio: false,
+        };
+
+        assert_eq!(
+            repo.insert_batch_stub(std::slice::from_ref(&photo))
+                .unwrap(),
+            1
+        );
+        assert_eq!(repo.insert_batch_stub(&[photo]).unwrap(), 0);
+    }
+
+    #[test]
     fn list_after_by_person_uses_valid_stack_aliases() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
@@ -460,6 +509,46 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, 1);
         assert!(rows[0].stack_id.is_none());
+    }
+
+    #[test]
+    fn list_after_by_person_includes_inferred_identity_photos() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO face_clusters (id, face_count, photo_count) VALUES (7, 1, 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'direct.jpg', 'direct.jpg', 'hash-direct', 12, '2024-02-01T00:00:00Z', 0),
+             (2, 'inferred.jpg', 'inferred.jpg', 'hash-inferred', 12, '2024-01-01T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, cluster_id, confidence)
+             VALUES (1, 0.0, 0.0, 0.1, 0.1, zeroblob(16), 7, 0.9)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_inferred_identities (photo_id, cluster_id, source_photo_id, confidence)
+             VALUES (2, 7, 1, 0.8)",
+            [],
+        )
+        .unwrap();
+
+        let ids = PhotoRepo::new(&conn)
+            .list_after_by_person(7, None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![1, 2]);
     }
 
     #[test]
@@ -512,6 +601,47 @@ mod tests {
     }
 
     #[test]
+    fn list_at_offset_uses_timeline_order_and_skip_trash() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-04T00:00:00Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-03T00:00:00Z', 0),
+             (3, 'c.jpg', 'c.jpg', 'hash-c', 12, '2025-01-02T00:00:00Z', 1),
+             (4, 'd.jpg', 'd.jpg', 'hash-d', 12, '2025-01-01T00:00:00Z', 0),
+             (5, 'e.jpg', 'e.jpg', 'hash-e', 12, NULL, 0)",
+            [],
+        )
+        .unwrap();
+
+        let rows = PhotoRepo::new(&conn)
+            .list_at_offset(1, 2, false, false)
+            .unwrap();
+        assert_eq!(rows.iter().map(|p| p.id).collect::<Vec<_>>(), vec![2, 4]);
+    }
+
+    #[test]
+    fn list_after_by_date_uses_half_open_end() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-01T23:59:59Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-02T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+
+        let rows = PhotoRepo::new(&conn)
+            .list_after_by_date("2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", None, 10)
+            .unwrap();
+        assert_eq!(rows.iter().map(|p| p.id).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
     fn timeline_neighbors_hide_non_cover_stack_members_when_enabled() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
@@ -545,6 +675,75 @@ mod tests {
 
         let unstacked = repo.timeline_neighbors(2, false).unwrap().unwrap();
         assert_eq!(unstacked.next_id, Some(3));
+    }
+
+    #[test]
+    fn stacked_timeline_counts_only_live_members() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-04T00:00:00Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-03T00:00:00Z', 0),
+             (3, 'c.jpg', 'c.jpg', 'hash-c', 12, '2025-01-02T00:00:00Z', 1),
+             (4, 'd.jpg', 'd.jpg', 'hash-d', 12, '2025-01-01T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stacks (id, kind, source_group_id, cover_photo_id)
+             VALUES (10, 'burst', 99, 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stack_members (stack_id, photo_id, is_cover)
+             VALUES (10, 2, 1), (10, 3, 0), (10, 4, 0)",
+            [],
+        )
+        .unwrap();
+
+        let repo = PhotoRepo::new(&conn);
+        let rows = repo.list_after(None, 10, false, true).unwrap();
+        let stacked = rows.iter().find(|p| p.id == 2).unwrap();
+        assert_eq!(stacked.stack_member_count, Some(2));
+        assert!(rows.iter().all(|p| p.id != 4));
+    }
+
+    #[test]
+    fn stacked_timeline_ignores_stack_when_cover_is_trashed() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+             VALUES
+             (1, 'a.jpg', 'a.jpg', 'hash-a', 12, '2025-01-04T00:00:00Z', 0),
+             (2, 'b.jpg', 'b.jpg', 'hash-b', 12, '2025-01-03T00:00:00Z', 1),
+             (3, 'c.jpg', 'c.jpg', 'hash-c', 12, '2025-01-02T00:00:00Z', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stacks (id, kind, source_group_id, cover_photo_id)
+             VALUES (10, 'burst', 99, 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photo_stack_members (stack_id, photo_id, is_cover)
+             VALUES (10, 2, 1), (10, 3, 0)",
+            [],
+        )
+        .unwrap();
+
+        let repo = PhotoRepo::new(&conn);
+        let rows = repo.list_after(None, 10, false, true).unwrap();
+        let photo = rows.iter().find(|p| p.id == 3).unwrap();
+        assert_eq!(photo.stack_id, None);
+
+        let neighbors = repo.timeline_neighbors(1, true).unwrap().unwrap();
+        assert_eq!(neighbors.next_id, Some(3));
     }
 }
 
@@ -696,8 +895,22 @@ const PHOTO_LITE_STACKED_COLUMNS: &str = r#"
     p.width, p.height, p.orientation, p.is_trashed, p.is_favorite,
     p.gps_latitude, p.gps_longitude,
     p.media_type, p.duration_ms,
-    s.id AS stack_id, s.kind AS stack_kind, COUNT(sm_all.photo_id) AS stack_member_count,
+    s.id AS stack_id, s.kind AS stack_kind, s.stack_member_count AS stack_member_count,
     s.cover_photo_id AS stack_cover_photo_id
+"#;
+
+const LIVE_STACKS_CTE: &str = r#"
+    SELECT s.id,
+           s.kind,
+           s.cover_photo_id,
+           COUNT(live_p.id) AS stack_member_count
+      FROM photo_stacks s
+      JOIN photos cover ON cover.id = s.cover_photo_id AND cover.is_trashed = FALSE
+      JOIN photo_stack_members live_m ON live_m.stack_id = s.id
+      JOIN photos live_p ON live_p.id = live_m.photo_id AND live_p.is_trashed = FALSE
+     WHERE s.dismissed = FALSE
+     GROUP BY s.id
+    HAVING COUNT(live_p.id) >= 2
 "#;
 
 impl<'a> PhotoRepo<'a> {
@@ -780,6 +993,38 @@ impl<'a> PhotoRepo<'a> {
         Ok(rows)
     }
 
+    /// Offset-addressed timeline window. Used only for fast jumps into
+    /// very large timelines; cursor paging remains the normal path.
+    pub fn list_at_offset(
+        &self,
+        offset: i64,
+        limit: i64,
+        include_trashed: bool,
+        show_stacks: bool,
+    ) -> SqliteResult<Vec<PhotoLite>> {
+        if show_stacks && !include_trashed {
+            return self.list_at_offset_stacked(offset, limit);
+        }
+        let trash_clause = if include_trashed {
+            "1=1"
+        } else {
+            "is_trashed = 0"
+        };
+        let sql = format!(
+            "SELECT {cols} FROM photos
+             WHERE {trash}
+             ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
+             LIMIT ?1 OFFSET ?2",
+            cols = PHOTO_LITE_COLUMNS,
+            trash = trash_clause
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![limit, offset], row_to_photo_lite)?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     fn list_after_stacked(
         &self,
         cursor: Option<(Option<DateTime<Utc>>, i64)>,
@@ -787,15 +1032,16 @@ impl<'a> PhotoRepo<'a> {
     ) -> SqliteResult<Vec<PhotoLite>> {
         let base = format!(
             r#"
+            WITH live_stacks AS ({live_stacks_cte})
             SELECT {cols}
               FROM photos p
               LEFT JOIN photo_stack_members sm ON sm.photo_id = p.id
-              LEFT JOIN photo_stacks s ON s.id = sm.stack_id AND s.dismissed = FALSE
-              LEFT JOIN photo_stack_members sm_all ON sm_all.stack_id = s.id
+              LEFT JOIN live_stacks s ON s.id = sm.stack_id
              WHERE p.is_trashed = 0
                AND (s.id IS NULL OR p.id = s.cover_photo_id)
             "#,
-            cols = PHOTO_LITE_STACKED_COLUMNS
+            cols = PHOTO_LITE_STACKED_COLUMNS,
+            live_stacks_cte = LIVE_STACKS_CTE
         );
         let group = " GROUP BY p.id, s.id";
 
@@ -840,6 +1086,30 @@ impl<'a> PhotoRepo<'a> {
         }
     }
 
+    fn list_at_offset_stacked(&self, offset: i64, limit: i64) -> SqliteResult<Vec<PhotoLite>> {
+        let sql = format!(
+            r#"
+            WITH live_stacks AS ({live_stacks_cte})
+            SELECT {cols}
+              FROM photos p
+              LEFT JOIN photo_stack_members sm ON sm.photo_id = p.id
+              LEFT JOIN live_stacks s ON s.id = sm.stack_id
+             WHERE p.is_trashed = 0
+               AND (s.id IS NULL OR p.id = s.cover_photo_id)
+             GROUP BY p.id, s.id
+             ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
+             LIMIT ?1 OFFSET ?2
+            "#,
+            cols = PHOTO_LITE_STACKED_COLUMNS,
+            live_stacks_cte = LIVE_STACKS_CTE
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![limit, offset], row_to_photo_lite)?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn timeline_neighbors(
         &self,
         photo_id: i64,
@@ -853,7 +1123,7 @@ impl<'a> PhotoRepo<'a> {
             "p.is_trashed = 0 AND NOT EXISTS (
                 SELECT 1
                   FROM photo_stack_members sm
-                  JOIN photo_stacks s ON s.id = sm.stack_id AND s.dismissed = FALSE
+                  JOIN live_stacks s ON s.id = sm.stack_id
                  WHERE sm.photo_id = p.id
                    AND p.id <> s.cover_photo_id
             )"
@@ -863,26 +1133,30 @@ impl<'a> PhotoRepo<'a> {
 
         let prev_id = if current.date_taken.is_some() {
             let sql = format!(
-                "SELECT p.id FROM photos p
+                "WITH live_stacks AS ({live_stacks_cte})
+                 SELECT p.id FROM photos p
                  JOIN photos cur ON cur.id = ?1
                  WHERE {visible}
                    AND p.date_taken IS NOT NULL
                    AND p.id <> cur.id
                    AND (p.date_taken > cur.date_taken OR (p.date_taken = cur.date_taken AND p.id > cur.id))
                  ORDER BY p.date_taken ASC, p.id ASC
-                 LIMIT 1"
+                 LIMIT 1",
+                live_stacks_cte = LIVE_STACKS_CTE
             );
             self.conn
                 .query_row(&sql, params![current.id], |r| r.get(0))
                 .optional()?
         } else {
             let sql = format!(
-                "SELECT p.id FROM photos p
+                "WITH live_stacks AS ({live_stacks_cte})
+                 SELECT p.id FROM photos p
                  WHERE {visible}
                    AND p.date_taken IS NULL
                    AND p.id > ?1
                  ORDER BY p.id ASC
-                 LIMIT 1"
+                 LIMIT 1",
+                live_stacks_cte = LIVE_STACKS_CTE
             );
             let null_prev: Option<i64> = self
                 .conn
@@ -892,11 +1166,13 @@ impl<'a> PhotoRepo<'a> {
                 null_prev
             } else {
                 let sql = format!(
-                    "SELECT p.id FROM photos p
+                    "WITH live_stacks AS ({live_stacks_cte})
+                     SELECT p.id FROM photos p
                      WHERE {visible}
                        AND p.date_taken IS NOT NULL
                      ORDER BY p.date_taken ASC, p.id ASC
-                     LIMIT 1"
+                     LIMIT 1",
+                    live_stacks_cte = LIVE_STACKS_CTE
                 );
                 self.conn.query_row(&sql, [], |r| r.get(0)).optional()?
             }
@@ -904,7 +1180,8 @@ impl<'a> PhotoRepo<'a> {
 
         let next_id = if current.date_taken.is_some() {
             let sql = format!(
-                "SELECT p.id FROM photos p
+                "WITH live_stacks AS ({live_stacks_cte})
+                 SELECT p.id FROM photos p
                  JOIN photos cur ON cur.id = ?1
                  WHERE {visible}
                    AND (
@@ -913,19 +1190,22 @@ impl<'a> PhotoRepo<'a> {
                         OR p.date_taken IS NULL
                    )
                  ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
-                 LIMIT 1"
+                 LIMIT 1",
+                live_stacks_cte = LIVE_STACKS_CTE
             );
             self.conn
                 .query_row(&sql, params![current.id], |r| r.get(0))
                 .optional()?
         } else {
             let sql = format!(
-                "SELECT p.id FROM photos p
+                "WITH live_stacks AS ({live_stacks_cte})
+                 SELECT p.id FROM photos p
                  WHERE {visible}
                    AND p.date_taken IS NULL
                    AND p.id < ?1
                  ORDER BY p.id DESC
-                 LIMIT 1"
+                 LIMIT 1",
+                live_stacks_cte = LIVE_STACKS_CTE
             );
             self.conn
                 .query_row(&sql, params![current.id], |r| r.get(0))
@@ -1057,8 +1337,12 @@ impl<'a> PhotoRepo<'a> {
     ) -> SqliteResult<Vec<PhotoLite>> {
         let base = format!(
             "SELECT DISTINCT {cols} FROM photos p
-             JOIN faces f ON f.photo_id = p.id
-             WHERE f.cluster_id = ?1 AND p.is_trashed = 0",
+             JOIN (
+                 SELECT photo_id FROM faces WHERE cluster_id = ?1
+                 UNION
+                 SELECT photo_id FROM photo_inferred_identities WHERE cluster_id = ?1
+             ) matches ON matches.photo_id = p.id
+             WHERE p.is_trashed = 0",
             cols = PHOTO_LITE_P_COLUMNS
         );
 
@@ -1105,7 +1389,7 @@ impl<'a> PhotoRepo<'a> {
         }
     }
 
-    /// Cursor-paginated photos in a date range (inclusive).
+    /// Cursor-paginated photos in a half-open date range: [start, end).
     pub fn list_after_by_date(
         &self,
         start_iso: &str,
@@ -1117,7 +1401,7 @@ impl<'a> PhotoRepo<'a> {
             "SELECT {cols} FROM photos
              WHERE is_trashed = 0
                AND date_taken IS NOT NULL
-               AND date_taken >= ?1 AND date_taken <= ?2",
+               AND date_taken >= ?1 AND date_taken < ?2",
             cols = PHOTO_LITE_COLUMNS
         );
         match cursor {

@@ -19,12 +19,20 @@ use crate::{CommandError, CommandResult};
 
 #[tauri::command]
 pub async fn semantic_status(state: State<'_, AppState>) -> CommandResult<SemanticStatusDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    Ok(SemanticSearchService::new(&lib.drive_root)
-        .status(&db.conn)?
-        .into())
+    let (drive_root, db_path) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), db_path_for(&lib.drive_root))
+    };
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        Ok::<_, CommandError>(SemanticSearchService::new(&drive_root).status(&conn)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("semantic status worker failed: {e}"),
+    })??;
+    Ok(status.into())
 }
 
 #[tauri::command]
@@ -71,25 +79,47 @@ pub async fn semantic_install_model(
         )
         .await;
 
-        emit(
-            &app_clone,
-            EV_SEMANTIC_COMPLETE,
-            JobProgress {
-                job_id: job_id_clone.clone(),
-                stage: "install-complete".into(),
-                processed: 1,
-                total: Some(1),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                eta_ms: None,
-                message: Some(match result {
-                    Ok(()) => "Semantic search model installed".into(),
-                    Err(err) if err.to_lowercase().contains("cancelled") => {
-                        "Semantic model install cancelled".into()
-                    }
-                    Err(err) => format!("Semantic model install failed: {err}"),
-                }),
-            },
-        );
+        match result {
+            Ok(()) => emit(
+                &app_clone,
+                EV_SEMANTIC_COMPLETE,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "install-complete".into(),
+                    processed: 1,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("Semantic search model installed".into()),
+                },
+            ),
+            Err(err) if err.to_lowercase().contains("cancelled") => emit(
+                &app_clone,
+                EV_SEMANTIC_COMPLETE,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "install-cancelled".into(),
+                    processed: 0,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some("Semantic model install cancelled".into()),
+                },
+            ),
+            Err(err) => emit(
+                &app_clone,
+                EV_SEMANTIC_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "error".into(),
+                    processed: 0,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(format!("Semantic model install failed: {err}")),
+                },
+            ),
+        }
 
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
@@ -117,21 +147,28 @@ pub async fn semantic_start_indexing(
     let (drive_root, db_path) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        let db = lib.db.lock().await;
-        let status = SemanticSearchService::new(&lib.drive_root).status(&db.conn)?;
-        if !status.assets_installed {
-            return Err(CommandError::MlUnavailable {
-                reason: "Install the visual search model from Settings -> Assets first.".into(),
-            });
-        }
-        if !status.onnx_runtime_installed {
-            return Err(CommandError::MlUnavailable {
-                reason: "Install ONNX Runtime from Settings -> Assets -> Download assets first."
-                    .into(),
-            });
-        }
         (lib.drive_root.clone(), db_path_for(&lib.drive_root))
     };
+    let status_drive = drive_root.clone();
+    let status_db_path = db_path.clone();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&status_db_path)?;
+        Ok::<_, CommandError>(SemanticSearchService::new(&status_drive).status(&conn)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("semantic status worker failed: {e}"),
+    })??;
+    if !status.assets_installed {
+        return Err(CommandError::MlUnavailable {
+            reason: "Install the visual search model from Settings -> Assets first.".into(),
+        });
+    }
+    if !status.onnx_runtime_installed {
+        return Err(CommandError::MlUnavailable {
+            reason: "Install ONNX Runtime from Settings -> Assets -> Download assets first.".into(),
+        });
+    }
     let job = jobs::start_job(&state, JobKind::SemanticIndex).await?;
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
@@ -182,22 +219,34 @@ pub async fn semantic_start_indexing(
         .map_err(|e| e.to_string())
         .and_then(|r| r);
 
-        emit(
-            &app_clone,
-            EV_SEMANTIC_COMPLETE,
-            JobProgress {
-                job_id: job_id_clone.clone(),
-                stage: "index-complete".into(),
-                processed: 1,
-                total: Some(1),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                eta_ms: None,
-                message: Some(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("Semantic indexing failed: {err}"),
-                }),
-            },
-        );
+        match result {
+            Ok(msg) => emit(
+                &app_clone,
+                EV_SEMANTIC_COMPLETE,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "index-complete".into(),
+                    processed: 1,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(msg),
+                },
+            ),
+            Err(err) => emit(
+                &app_clone,
+                EV_SEMANTIC_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "error".into(),
+                    processed: 0,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(format!("Semantic indexing failed: {err}")),
+                },
+            ),
+        }
 
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
@@ -217,24 +266,35 @@ pub async fn semantic_similar_photos(
     state: State<'_, AppState>,
     args: SemanticSimilarArgs,
 ) -> CommandResult<Vec<PhotoSummaryDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let svc = SemanticSearchService::new(&lib.drive_root);
-    let mut cache = lib
-        .semantic_index
-        .lock()
-        .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
-    let candidates = svc
-        .similar_to_photo_cached(
-            &db.conn,
-            &mut cache,
-            args.photo_id,
-            args.limit.unwrap_or(24).min(100) as usize,
+    let (drive_root, db_path, semantic_index) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            lib.drive_root.clone(),
+            db_path_for(&lib.drive_root),
+            lib.semantic_index.clone(),
         )
-        .map_err(|reason| CommandError::MlUnavailable { reason })?;
-    let ids: Vec<i64> = candidates.iter().map(|c| c.photo_id).collect();
-    let photos = PhotoRepo::new(&db.conn).get_by_ids(&ids)?;
+    };
+    let limit = args.limit.unwrap_or(24).clamp(1, 100) as usize;
+    let photo_id = args.photo_id;
+    let (ids, photos) = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let svc = SemanticSearchService::new(&drive_root);
+        let candidates = {
+            let mut cache = semantic_index
+                .lock()
+                .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+            svc.similar_to_photo_cached(&conn, &mut cache, photo_id, limit)
+                .map_err(|reason| CommandError::MlUnavailable { reason })?
+        };
+        let ids: Vec<i64> = candidates.iter().map(|c| c.photo_id).collect();
+        let photos = PhotoRepo::new(&conn).get_by_ids(&ids)?;
+        Ok::<_, CommandError>((ids, photos))
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("semantic similarity worker failed: {e}"),
+    })??;
     let mut by_id: HashMap<i64, PhotoSummaryDto> =
         photos.into_iter().map(|p| (p.id, p.into())).collect();
     Ok(ids.into_iter().filter_map(|id| by_id.remove(&id)).collect())

@@ -8,13 +8,14 @@
   import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
   import { stacks, trash, type PhotoStack } from "../lib/api/all";
-  import { call } from "../lib/api/index";
+  import { call, commandErrorMessage } from "../lib/api/index";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { probeVideoPoster } from "../lib/videoProbe";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
   import ZoomImage from "../lib/components/ZoomImage.svelte";
@@ -50,7 +51,10 @@
   /// We can't read ZoomImage's internal scale directly, so this mirrors
   /// the user's fit ↔ 1:1 intent across photo changes.
   let atActual = $state(false);
+  let actionBusy = $state(false);
   let loadSeq = 0;
+  let mounted = true;
+  const RESOLVED_IMAGE_CACHE_CAP = 200;
   const resolvedImageCache = new Map<number, string>();
 
   // Mouse-activity fade for viewer chrome (toolbar, chevrons, position,
@@ -73,6 +77,16 @@
   let miniMap: MapInstance | null = null;
 
   function back() { history.back(); }
+
+  function patchStackThumbnail(photoId: number, thumbnailPath: string) {
+    if (!stack) return;
+    stack = {
+      ...stack,
+      members: stack.members.map((m) => (
+        m.photo_id === photoId ? { ...m, thumbnail_path: thumbnailPath } : m
+      )),
+    };
+  }
 
   /// Navigate between photos via replaceState so the photo journey
   /// collapses into a single history entry — pressing X / Esc takes
@@ -179,27 +193,49 @@
     const img = new Image();
     img.decoding = "async";
     img.src = url;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 8000);
+    });
     if (img.decode) {
       try {
-        await img.decode();
+        await Promise.race([img.decode(), timeout]);
+        if (timer != null) clearTimeout(timer);
         return;
       } catch {
         // Fall through to the event path; some WebView decoders reject
         // decode() even though the image still paints.
       }
     }
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("image decode failed"));
-    });
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("image decode failed"));
+      }),
+      timeout,
+    ]);
+    if (timer != null) clearTimeout(timer);
+  }
+
+  function rememberImageUrl(photoId: number, url: string) {
+    resolvedImageCache.set(photoId, url);
+    while (resolvedImageCache.size > RESOLVED_IMAGE_CACHE_CAP) {
+      const oldest = resolvedImageCache.keys().next().value;
+      if (oldest == null) break;
+      resolvedImageCache.delete(oldest);
+    }
   }
 
   async function imageUrlFor(photoId: number): Promise<string> {
     const cached = resolvedImageCache.get(photoId);
-    if (cached) return cached;
+    if (cached) {
+      resolvedImageCache.delete(photoId);
+      resolvedImageCache.set(photoId, cached);
+      return cached;
+    }
     const { absolute_path } = await library.resolvePath(photoId);
     const url = convertFileSrc(absolute_path);
-    resolvedImageCache.set(photoId, url);
+    rememberImageUrl(photoId, url);
     return url;
   }
 
@@ -214,6 +250,7 @@
 
   async function load() {
     const seq = ++loadSeq;
+    const photoId = id;
     error = null;
     people = [];
     albums = [];
@@ -221,9 +258,11 @@
     stack = null;
     timelineNeighbors = null;
     stackTrayOpen = false;
+    showAddDialog = false;
     tint = null;
     manualRotate = 0;
     atActual = false;
+    actionBusy = false;
     destroyMini();
     try {
       // Parallelise the two IPC calls — they're independent. As soon
@@ -234,36 +273,45 @@
       // background fallback covers the visible transition. Awaiting
       // decode used to gate the entire UI update on a 100-500ms
       // image read which made arrow-key nav feel sticky on big RAWs.
-      const [p, url] = await Promise.all([photos.get(id), imageUrlFor(id)]);
-      if (seq !== loadSeq) return;
+      const [p, url] = await Promise.all([photos.get(photoId), imageUrlFor(photoId)]);
+      if (!mounted || seq !== loadSeq) return;
       photo = p;
       imageUrl = url;
-      try {
-        const nextPeople = await call<PersonDto[]>("photos_people_in_photo", { photo_id: id });
-        if (seq === loadSeq) people = nextPeople;
-      } catch {}
-      try {
-        const nextAlbums = await call<AlbumDto[]>("photos_albums_for_photo", { photo_id: id });
-        if (seq === loadSeq) albums = nextAlbums;
-      } catch {}
-      try {
-        const nextStack = await stacks.getForPhoto(id);
-        if (seq === loadSeq) stack = nextStack;
-      } catch {}
+      void call<PersonDto[]>("photos_people_in_photo", { photo_id: photoId })
+        .then((nextPeople) => {
+          if (mounted && seq === loadSeq) people = nextPeople;
+        })
+        .catch(() => {});
+      void call<AlbumDto[]>("photos_albums_for_photo", { photo_id: photoId })
+        .then((nextAlbums) => {
+          if (mounted && seq === loadSeq) albums = nextAlbums;
+        })
+        .catch(() => {});
+      void stacks.getForPhoto(photoId)
+        .then((nextStack) => {
+          if (mounted && seq === loadSeq) stack = nextStack;
+        })
+        .catch(() => {});
       if (p.media_type === "video" && !p.thumbnail_path) {
-        probeVideoPoster(id)
+        probeVideoPoster(photoId)
           .then(async () => {
-            const refreshed = await photos.get(id);
-            if (photo?.id === id) photo = refreshed;
+            const refreshed = await photos.get(photoId);
+            if (mounted && seq === loadSeq && photo?.id === photoId) photo = refreshed;
           })
           .catch(() => {});
       }
       // Tier-2 EXIF — re-parsed off the file at request time. Non-blocking.
-      photos.exifExtras(id).then((e) => { if (photo?.id === id) extras = e; }).catch(() => {});
-      if (photo?.gps && metaOpen) {
-        setTimeout(initMini, 0);
+      photos.exifExtras(photoId).then((e) => {
+        if (mounted && seq === loadSeq && photo?.id === photoId) extras = e;
+      }).catch(() => {});
+      if (p.gps && metaOpen) {
+        setTimeout(() => {
+          if (mounted && seq === loadSeq) initMini();
+        }, 0);
       }
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
 
   function initMini() {
@@ -311,7 +359,7 @@
     if (!photo) return;
     try { await system.openInExplorer(photo.id); }
     catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      const msg = commandErrorMessage(e);
       error = `Couldn't reveal this photo in the file manager: ${msg}`;
     }
   }
@@ -347,17 +395,25 @@
   }
 
   async function trashAndAdvance() {
-    if (!photo) return;
+    if (!photo || actionBusy) return;
+    const seq = loadSeq;
     const id = photo.id;
     const advanceTo = effectiveNextId ?? effectivePrevId ?? null;
     try {
-      await trash.trashPhotos([id]);
+      actionBusy = true;
+      const result = await trash.trashPhotos([id]);
+      if (!mounted || seq !== loadSeq || photo?.id !== id) return;
+      if (result.count === 0) {
+        toasts.info("Photo was already out of the library view");
+        return;
+      }
       photoVisibility.markTrashed([id]);
       browseContext.remove([id]);
       toasts.undoable(
         "Photo moved to trash",
         async () => {
           await trash.restore([id]);
+          if (!mounted) return;
           photoVisibility.markRestored([id]);
           // Re-load the trashed-then-restored photo back into view.
           gotoId(id);
@@ -366,68 +422,103 @@
       if (advanceTo != null) gotoId(advanceTo);
       else back();
     } catch (e) {
-      toasts.error(`Couldn't move to trash: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
   async function toggleFavorite() {
-    if (!photo) return;
+    if (!photo || actionBusy) return;
+    const seq = loadSeq;
+    const photoId = photo.id;
     try {
-      photo = await photos.setFavorite(photo.id, !photo.is_favorite);
+      actionBusy = true;
+      const updated = await photos.setFavorite(photoId, !photo.is_favorite);
+      if (!mounted || seq !== loadSeq || photo?.id !== photoId) return;
+      photo = updated;
     } catch (e) {
-      toasts.error(`Couldn't update favourite: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't update favourite: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
   async function setStackCover(photoId: number) {
-    if (!stack) return;
+    if (!stack || actionBusy) return;
+    const seq = loadSeq;
+    const stackId = stack.id;
     try {
-      stack = await stacks.setCover(stack.id, photoId);
+      actionBusy = true;
+      const updated = await stacks.setCover(stackId, photoId);
+      if (!mounted || seq !== loadSeq || stack?.id !== stackId) return;
+      stack = updated;
       if (photo?.id !== photoId) gotoId(photoId);
     } catch (e) {
-      toasts.error(`Couldn't set best photo: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't set best photo: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
   async function removeFromStack(photoId: number) {
-    if (!stack) return;
+    if (!stack || actionBusy) return;
+    const seq = loadSeq;
+    const stackId = stack.id;
     try {
-      stack = await stacks.removeMember(stack.id, photoId);
+      actionBusy = true;
+      const updated = await stacks.removeMember(stackId, photoId);
+      if (!mounted || seq !== loadSeq || stack?.id !== stackId) return;
+      stack = updated;
       if (photo?.id === photoId) {
         const next = stack?.cover_photo_id ?? effectiveNextId ?? effectivePrevId;
         if (next) gotoId(next);
       }
     } catch (e) {
-      toasts.error(`Couldn't remove from stack: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't remove from stack: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
   async function unstack() {
-    if (!stack) return;
+    if (!stack || actionBusy) return;
+    const seq = loadSeq;
+    const stackId = stack.id;
     try {
-      await stacks.unstack(stack.id);
+      actionBusy = true;
+      await stacks.unstack(stackId);
+      if (!mounted || seq !== loadSeq || stack?.id !== stackId) return;
       stack = null;
       toasts.success("Stack removed from timeline");
     } catch (e) {
-      toasts.error(`Couldn't unstack: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't unstack: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
   async function trashStackOthers() {
-    if (!stack) return;
+    if (!stack || actionBusy) return;
     if (!confirm("Move all other photos in this stack to trash?")) return;
+    const seq = loadSeq;
+    const stackId = stack.id;
     const keepId = stack.cover_photo_id;
     const viewingKeep = photo?.id === keepId;
     const trashedIds = stack.members.filter((member) => member.photo_id !== keepId).map((member) => member.photo_id);
     try {
-      const result = await stacks.trashOthers(stack.id);
+      actionBusy = true;
+      const result = await stacks.trashOthers(stackId);
+      if (!mounted || seq !== loadSeq || stack?.id !== stackId) return;
       photoVisibility.markTrashed(trashedIds);
       browseContext.remove(trashedIds);
       toasts.success(`${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`);
       stack = null;
       if (!viewingKeep) gotoId(keepId);
     } catch (e) {
-      toasts.error(`Couldn't trash stack members: ${e}`);
+      if (mounted && seq === loadSeq) toasts.error(`Couldn't trash stack members: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
@@ -479,6 +570,7 @@
   }
 
   onMount(() => {
+    mounted = true;
     const onFullscreenChange = () => {
       if (!document.fullscreenElement && immersive) immersive = false;
     };
@@ -491,6 +583,8 @@
   });
 
   onDestroy(() => {
+    mounted = false;
+    loadSeq += 1;
     destroyMini();
     if (idleTimer) clearTimeout(idleTimer);
   });
@@ -544,14 +638,21 @@
     const url = thumbUrl(libraryStore.driveRoot, tpath);
     if (!url) return;
     let cancelled = false;
-    extractDominantColor(url).then((rgb) => {
-      if (!cancelled && photo?.id === pid) tint = rgb;
-    });
+    extractDominantColor(url)
+      .then((rgb) => {
+        if (!cancelled && photo?.id === pid) tint = rgb;
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   });
 
   $effect(() => {
-    if (metaOpen && photo?.gps && !miniMap) setTimeout(initMini, 50);
+    const seq = loadSeq;
+    if (metaOpen && photo?.gps && !miniMap) {
+      setTimeout(() => {
+        if (mounted && seq === loadSeq) initMini();
+      }, 50);
+    }
     if (!metaOpen) destroyMini();
   });
 
@@ -652,6 +753,7 @@
           class="tool"
           class:on={photo?.is_favorite ?? false}
           onclick={toggleFavorite}
+          disabled={actionBusy}
           title={photo?.is_favorite ? "Remove from favourites (S)" : "Add to favourites (S)"}
           aria-label={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
         >
@@ -675,7 +777,7 @@
             <span class="tool-count mono">{stack.member_count}</span>
           </button>
         {/if}
-        <button class="tool danger" onclick={trashAndAdvance} title="Move to trash (Del)" aria-label="Move to trash">
+        <button class="tool danger" onclick={trashAndAdvance} disabled={actionBusy} title="Move to trash (Del)" aria-label="Move to trash">
           <Trash2 size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
@@ -708,8 +810,8 @@
           <div class="stack-head">
             <span class="stack-title mono">{stack.member_count} stacked</span>
             <div class="stack-actions">
-              <button onclick={unstack}>Unstack</button>
-              <button class="danger-text" onclick={trashStackOthers}>Trash others</button>
+              <button onclick={unstack} disabled={actionBusy}>Unstack</button>
+              <button class="danger-text" onclick={trashStackOthers} disabled={actionBusy}>Trash others</button>
             </div>
           </div>
           <div class="stack-strip">
@@ -720,6 +822,11 @@
                 class:cover={member.is_cover}
                 href="#/photo?id={member.photo_id}"
                 title={member.score_reasons ?? "Stack member"}
+                use:thumbnailOnVisible={{
+                  id: member.photo_id,
+                  thumbnailPath: member.thumbnail_path,
+                  onReady: (path) => patchStackThumbnail(member.photo_id, path),
+                }}
               >
                 {#if member.thumbnail_path}
                   <img src={thumbUrl(libraryStore.driveRoot, member.thumbnail_path) ?? ""} alt="" />
@@ -734,8 +841,8 @@
               <div class="stack-current">
                 <span class="stack-reason">{currentMember.score_reasons ?? "Suggested from image quality"}</span>
                 {#if !currentMember.is_cover}
-                  <button onclick={() => setStackCover(currentMember.photo_id)}>Set as best</button>
-                  <button onclick={() => removeFromStack(currentMember.photo_id)}>Remove</button>
+                  <button onclick={() => setStackCover(currentMember.photo_id)} disabled={actionBusy}>Set as best</button>
+                  <button onclick={() => removeFromStack(currentMember.photo_id)} disabled={actionBusy}>Remove</button>
                 {/if}
               </div>
             {/if}

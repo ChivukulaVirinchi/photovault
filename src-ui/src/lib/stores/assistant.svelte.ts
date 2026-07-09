@@ -12,6 +12,7 @@ class AssistantStore {
   activity = $state<Array<{ label: string }>>([]);
   busy = $state(false);
   error = $state<string | null>(null);
+  private seq = 0;
 
   show() {
     this.open = true;
@@ -27,17 +28,24 @@ class AssistantStore {
   async start(message: string) {
     const trimmed = message.trim();
     if (!trimmed) return;
+    const seq = ++this.seq;
+    const previousRun = this.run;
+    const previousActivity = this.activity;
     this.busy = true;
     this.error = null;
     this.activity = [];
+    let createdOptimisticRun = false;
     try {
       if (
         this.run &&
         !["stopped", "failed"].includes(this.run.status)
       ) {
-        this.run = await assistant.continueRun(this.run.run_id, trimmed);
+        const nextRun = await assistant.continueRun(this.run.run_id, trimmed);
+        if (seq !== this.seq) return;
+        this.run = nextRun;
       } else {
         const runId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        createdOptimisticRun = true;
         this.run = {
           run_id: runId,
           library_root: "",
@@ -49,26 +57,37 @@ class AssistantStore {
           preview: null,
           album_id: null,
         };
-        this.run = await assistant.start(trimmed, runId);
+        const nextRun = await assistant.start(trimmed, runId);
+        if (seq !== this.seq) return;
+        this.run = nextRun;
       }
       if (this.run) this.activity = mergeActivity(this.activity, this.run.activity);
     } catch (e) {
-      this.error = formatError(e);
+      if (seq === this.seq) {
+        if (createdOptimisticRun) {
+          this.run = previousRun;
+          this.activity = previousActivity;
+        }
+        this.error = formatError(e);
+      }
     } finally {
-      this.busy = false;
+      if (seq === this.seq) this.busy = false;
     }
   }
 
   async stop() {
     if (!this.run) return;
-    this.busy = false;
+    const seq = ++this.seq;
+    this.busy = true;
     try {
-      this.run = await assistant.stop(this.run.run_id);
+      const nextRun = await assistant.stop(this.run.run_id);
+      if (seq !== this.seq) return;
+      this.run = nextRun;
       this.activity = mergeActivity(this.activity, this.run.activity);
     } catch (e) {
-      this.error = formatError(e);
+      if (seq === this.seq) this.error = formatError(e);
     } finally {
-      this.busy = false;
+      if (seq === this.seq) this.busy = false;
     }
   }
 
@@ -79,34 +98,41 @@ class AssistantStore {
   async approve() {
     const preview = this.run?.preview;
     if (!this.run || !preview) return;
+    const seq = ++this.seq;
     this.busy = true;
     this.error = null;
     try {
-      this.run = await assistant.approve(this.run.run_id, preview.approval_id);
+      const nextRun = await assistant.approve(this.run.run_id, preview.approval_id);
+      if (seq !== this.seq) return;
+      this.run = nextRun;
       this.activity = mergeActivity(this.activity, this.run.activity);
       if (this.run.album_id) window.location.hash = `/album?id=${this.run.album_id}`;
     } catch (e) {
-      this.error = formatError(e);
+      if (seq === this.seq) this.error = formatError(e);
     } finally {
-      this.busy = false;
+      if (seq === this.seq) this.busy = false;
     }
   }
 
   async reject() {
     const preview = this.run?.preview;
     if (!this.run || !preview) return;
+    const seq = ++this.seq;
     this.busy = true;
     try {
-      this.run = await assistant.reject(this.run.run_id, preview.approval_id);
+      const nextRun = await assistant.reject(this.run.run_id, preview.approval_id);
+      if (seq !== this.seq) return;
+      this.run = nextRun;
       this.activity = mergeActivity(this.activity, this.run.activity);
     } catch (e) {
-      this.error = formatError(e);
+      if (seq === this.seq) this.error = formatError(e);
     } finally {
-      this.busy = false;
+      if (seq === this.seq) this.busy = false;
     }
   }
 
   async clear() {
+    this.seq += 1;
     this.run = null;
     this.activity = [];
     this.error = null;
@@ -118,13 +144,15 @@ class AssistantStore {
   }
 
   appendActivity(event: AssistantActivityEvent) {
-    if (this.run && this.run.run_id !== event.run_id) return;
-    if (this.run && this.run.library_root && this.run.library_root !== event.library_root) return;
+    if (!this.run) return;
+    if (this.run.run_id !== event.run_id) return;
+    if (this.run.library_root && this.run.library_root !== event.library_root) return;
     const item = { label: event.label };
     this.activity = mergeActivity(this.activity, [item]);
   }
 
   resetForLibrary() {
+    this.seq += 1;
     this.open = false;
     this.run = null;
     this.activity = [];

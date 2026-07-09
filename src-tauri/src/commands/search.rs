@@ -4,6 +4,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use smriti::db::recent_search_repo::RecentSearchRepo;
+use smriti::db::{db_path_for, open_secondary};
 use smriti::services::search::SearchService;
 use smriti::services::semantic::{
     relevant_text_search_candidates, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
@@ -23,66 +24,109 @@ pub async fn search_query(
     state: State<'_, AppState>,
     args: SearchQueryArgs,
 ) -> CommandResult<SearchResultsDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let semantic_ids = if should_try_semantic(&args.q) {
-        let svc = SemanticSearchService::new(&lib.drive_root);
-        match svc.status(&db.conn) {
-            Ok(status)
-                if status.assets_installed
-                    && status.onnx_runtime_installed
-                    && status.indexed_photos > 0 =>
-            {
-                let mut cache = match lib.semantic_index.lock() {
-                    Ok(cache) => cache,
-                    Err(_) => return Err(CommandError::internal("semantic index cache poisoned")),
-                };
-                let mut runner_guard = match lib.semantic_runner.lock() {
-                    Ok(runner) => runner,
-                    Err(_) => return Err(CommandError::internal("semantic model cache poisoned")),
-                };
-                if runner_guard.is_none() {
-                    match SemanticSearchService::model_runner() {
-                        Ok(runner) => *runner_guard = Some(runner),
-                        Err(err) => {
-                            tracing::debug!("semantic model unavailable: {}", err);
-                            return Ok(SearchService::search_unified(&db.conn, &args.q)?.into());
-                        }
-                    }
-                }
-                let runner = runner_guard
-                    .as_mut()
-                    .expect("semantic runner initialized above");
-                match svc.search_text_cached(
-                    &db.conn,
-                    &mut cache,
-                    runner,
-                    &args.q,
-                    SEMANTIC_TEXT_SEARCH_LIMIT,
-                ) {
-                    Ok(candidates) => relevant_text_search_candidates(candidates)
-                        .into_iter()
-                        .map(|c| c.photo_id)
-                        .collect(),
-                    Err(err) => {
-                        tracing::debug!("semantic search skipped: {}", err);
-                        Vec::new()
-                    }
-                }
-            }
-            _ => Vec::new(),
-        }
-    } else {
-        Vec::new()
+    let (db_path, drive_root, semantic_index, semantic_runner) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            db_path_for(&lib.drive_root),
+            lib.drive_root.clone(),
+            lib.semantic_index.clone(),
+            lib.semantic_runner.clone(),
+        )
     };
-    let unified = SearchService::search_unified_with_semantic(&db.conn, &args.q, semantic_ids)?;
+    let q = args.q;
+    let unified = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let semantic_ids =
+            semantic_photo_ids(&conn, &drive_root, &semantic_index, &semantic_runner, &q)?;
+        Ok::<_, CommandError>(SearchService::search_unified_with_semantic(
+            &conn,
+            &q,
+            semantic_ids,
+        )?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("search worker failed: {e}"),
+    })??;
     Ok(unified.into())
 }
 
 fn should_try_semantic(q: &str) -> bool {
     let trimmed = q.trim();
     trimmed.len() >= 3 && trimmed.chars().any(char::is_alphabetic)
+}
+
+fn semantic_photo_ids(
+    conn: &rusqlite::Connection,
+    drive_root: &std::path::Path,
+    semantic_index: &std::sync::Arc<
+        std::sync::Mutex<smriti::services::semantic::SemanticIndexCache>,
+    >,
+    semantic_runner: &std::sync::Arc<
+        std::sync::Mutex<Option<smriti::services::semantic::SemanticModelRunner>>,
+    >,
+    q: &str,
+) -> Result<Vec<i64>, CommandError> {
+    if !should_try_semantic(q) {
+        return Ok(Vec::new());
+    }
+
+    let svc = SemanticSearchService::new(drive_root);
+    let ready = matches!(
+        svc.status(conn),
+        Ok(status)
+            if status.assets_installed
+                && status.onnx_runtime_installed
+                && status.indexed_photos > 0
+    );
+    if !ready {
+        return Ok(Vec::new());
+    }
+
+    let vector = {
+        let mut runner_guard = semantic_runner
+            .lock()
+            .map_err(|_| CommandError::internal("semantic model cache poisoned"))?;
+        if runner_guard.is_none() {
+            match SemanticSearchService::model_runner() {
+                Ok(runner) => *runner_guard = Some(runner),
+                Err(err) => {
+                    tracing::debug!("semantic model unavailable: {}", err);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+        let Some(runner) = runner_guard.as_mut() else {
+            tracing::debug!("semantic runner missing after initialization");
+            return Ok(Vec::new());
+        };
+        match runner.embed_text(q) {
+            Ok(vector) => vector,
+            Err(err) => {
+                tracing::debug!("semantic text embedding skipped: {}", err);
+                return Ok(Vec::new());
+            }
+        }
+    };
+
+    let candidates = {
+        let mut cache = semantic_index
+            .lock()
+            .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+        match svc.search_vector_cached(conn, &mut cache, &vector, SEMANTIC_TEXT_SEARCH_LIMIT) {
+            Ok(candidates) => candidates,
+            Err(err) => {
+                tracing::debug!("semantic search skipped: {}", err);
+                return Ok(Vec::new());
+            }
+        }
+    };
+
+    Ok(relevant_text_search_candidates(candidates)
+        .into_iter()
+        .map(|c| c.photo_id)
+        .collect())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,7 +143,7 @@ pub async fn search_recent_list(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = RecentSearchRepo::new(&db.conn);
-    let limit = args.limit.unwrap_or(10).min(100) as i64;
+    let limit = args.limit.unwrap_or(10).clamp(1, 100) as i64;
     Ok(repo
         .get_recent(limit)?
         .into_iter()

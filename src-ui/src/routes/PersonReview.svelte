@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { people } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -20,16 +21,23 @@
   let split = $state(0);
   let skipped = $state(0);
   let error = $state<string | null>(null);
+  let mounted = true;
+  let loadSeq = 0;
 
   const current = $derived(queue[cursor] ?? null);
   const remaining = $derived(Math.max(0, queue.length - cursor));
 
   async function load() {
+    const seq = ++loadSeq;
+    error = null;
     try {
-      queue = await people.reviewQueue(50);
+      const items = await people.reviewQueue(50);
+      if (!mounted || seq !== loadSeq) return;
+      queue = items;
       cursor = 0;
     } catch (e) {
-      error = JSON.stringify(e);
+      if (!mounted || seq !== loadSeq) return;
+      error = commandErrorMessage(e);
     }
   }
 
@@ -44,12 +52,15 @@
     try {
       if (kind === "same") {
         await people.reviewSame(item.queue_id);
+        if (!mounted) return;
         confirmed += 1;
       } else if (kind === "different") {
         await people.reviewDifferent(item.queue_id);
+        if (!mounted) return;
         split += 1;
       } else {
         await people.reviewSkip(item.queue_id);
+        if (!mounted) return;
         skipped += 1;
       }
       cursor += 1;
@@ -57,8 +68,9 @@
       if (cursor >= queue.length - 5) {
         try {
           const more = await people.reviewQueue(50);
-          // Drop any items we've already seen this session.
-          const seen = new Set(queue.slice(0, cursor).map((q) => q.queue_id));
+          if (!mounted) return;
+          // Drop any items already loaded this session.
+          const seen = new Set(queue.map((q) => q.queue_id));
           const fresh = more.filter((m) => !seen.has(m.queue_id));
           if (fresh.length > 0) {
             queue = [...queue, ...fresh];
@@ -66,9 +78,9 @@
         } catch {}
       }
     } catch (e) {
-      error = JSON.stringify(e);
+      if (mounted) error = commandErrorMessage(e);
     } finally {
-      busy = false;
+      if (mounted) busy = false;
     }
   }
 
@@ -88,9 +100,14 @@
   }
 
   onMount(() => {
+    mounted = true;
     load();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+      window.removeEventListener("keydown", onKey);
+    };
   });
 </script>
 

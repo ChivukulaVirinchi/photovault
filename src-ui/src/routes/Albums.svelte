@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { albums } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -14,8 +15,12 @@
   let list = $state<AlbumDto[]>([]);
   let suggestions = $state<AlbumSuggestionDto[]>([]);
   let creating = $state(false);
+  let createBusy = $state(false);
+  let detectBusy = $state(false);
   let newName = $state("");
   let error = $state<string | null>(null);
+  let mounted = true;
+  let loadSeq = 0;
   // Detection state derived from the global jobs store so it survives
   // page navigation. The store gets fed by `album_suggestions:progress`
   // / `album_suggestions:complete` events emitted by the Rust shell.
@@ -37,22 +42,38 @@
   let previewPhotos = $state<PhotoSummaryDto[]>([]);
   let previewLoading = $state(false);
   let previewActing = $state(false);
+  let previewSeq = 0;
 
   async function load() {
+    const seq = ++loadSeq;
+    error = null;
     try {
-      list = await albums.list();
-      suggestions = await albums.suggestions.list();
-    } catch (e) { error = JSON.stringify(e); }
+      const [nextList, nextSuggestions] = await Promise.all([
+        albums.list(),
+        albums.suggestions.list(),
+      ]);
+      if (!mounted || seq !== loadSeq) return;
+      list = nextList;
+      suggestions = nextSuggestions;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
 
   async function createAlbum() {
-    if (!newName.trim()) return;
+    if (createBusy || !newName.trim()) return;
+    createBusy = true;
     try {
       await albums.create(newName.trim());
+      if (!mounted) return;
       newName = "";
       creating = false;
       await load();
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      if (mounted) error = commandErrorMessage(e);
+    } finally {
+      if (mounted) createBusy = false;
+    }
   }
 
   function onCreateKey(e: KeyboardEvent) {
@@ -65,37 +86,49 @@
   }
 
   async function runDetection() {
-    if (detecting) return;
+    if (detecting || detectBusy) return;
     // Optimistic placeholder so the indicator pops on the click
     // frame, before the IPC even returns.
     const placeholderId = `pending-album-${Date.now()}`;
     jobs.register(placeholderId, "albumSuggestions");
     toasts.success("Looking for trip and event patterns…");
     try {
+      detectBusy = true;
       const r = await albums.suggestions.runDetection();
       jobs.dismiss(placeholderId);
       jobs.register(r.job_id, "albumSuggestions");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't detect: ${msg}`);
+    } finally {
+      if (mounted) detectBusy = false;
     }
   }
 
   async function openPreview(s: AlbumSuggestionDto) {
+    const seq = ++previewSeq;
     previewSugg = s;
     previewPhotos = [];
     previewLoading = true;
+    error = null;
     try {
       // Load every photo in the suggestion — the modal scrolls so the
       // user can scan the whole set before accepting. Cap matches the
       // backend preview limit; suggestions almost never exceed 200.
-      previewPhotos = await albums.suggestions.preview(s.id, Math.max(s.photo_ids.length, 12));
-    } catch (e) { error = JSON.stringify(e); }
-    finally { previewLoading = false; }
+      const photos = await albums.suggestions.preview(s.id, Math.max(s.photo_ids.length, 12));
+      if (mounted && seq === previewSeq) previewPhotos = photos;
+    } catch (e) {
+      if (mounted && seq === previewSeq) error = commandErrorMessage(e);
+    }
+    finally {
+      if (mounted && seq === previewSeq) previewLoading = false;
+    }
   }
   function closePreview() {
+    previewSeq++;
     previewSugg = null;
     previewPhotos = [];
   }
@@ -106,18 +139,42 @@
     ));
   }
 
+  function patchAlbumCover(photoId: number, thumbnailPath: string) {
+    list = list.map((a) => (
+      a.cover_photo_id === photoId ? { ...a, cover_thumbnail_path: thumbnailPath } : a
+    ));
+  }
+
+  function patchSuggestionCover(photoId: number, thumbnailPath: string) {
+    suggestions = suggestions.map((s) => (
+      s.cover_photo_id === photoId ? { ...s, cover_thumbnail_path: thumbnailPath } : s
+    ));
+  }
+
   async function acceptSuggestion(id: number) {
+    if (previewActing) return;
     previewActing = true;
-    try { await albums.suggestions.accept(id); closePreview(); await load(); }
-    catch (e) { error = JSON.stringify(e); }
-    finally { previewActing = false; }
+    try {
+      await albums.suggestions.accept(id);
+      if (!mounted) return;
+      closePreview();
+      await load();
+    }
+    catch (e) { if (mounted) error = commandErrorMessage(e); }
+    finally { if (mounted) previewActing = false; }
   }
 
   async function dismissSuggestion(id: number) {
+    if (previewActing) return;
     previewActing = true;
-    try { await albums.suggestions.dismiss(id); closePreview(); await load(); }
-    catch (e) { error = JSON.stringify(e); }
-    finally { previewActing = false; }
+    try {
+      await albums.suggestions.dismiss(id);
+      if (!mounted) return;
+      closePreview();
+      await load();
+    }
+    catch (e) { if (mounted) error = commandErrorMessage(e); }
+    finally { if (mounted) previewActing = false; }
   }
 
   function onPreviewKey(e: KeyboardEvent) {
@@ -132,11 +189,11 @@
   let toastedJobIds = new Set<string>();
   $effect(() => {
     if (!detectJob) return;
-    if (detectJob.status === "complete" && !toastedJobIds.has(detectJob.id)) {
+    if ((detectJob.status === "complete" || detectJob.status === "error") && !toastedJobIds.has(detectJob.id)) {
       toastedJobIds.add(detectJob.id);
-      load();
+      if (detectJob.status === "complete") load();
       const msg = detectJob.message || "Suggestion detection finished.";
-      if (msg.toLowerCase().startsWith("couldn't")) {
+      if (detectJob.status === "error" || msg.toLowerCase().startsWith("couldn't")) {
         toasts.error(msg);
       } else {
         toasts.success(msg);
@@ -145,9 +202,13 @@
   });
 
   onMount(() => {
+    mounted = true;
     load();
     window.addEventListener("keydown", onPreviewKey);
     return () => {
+      mounted = false;
+      loadSeq += 1;
+      previewSeq += 1;
       window.removeEventListener("keydown", onPreviewKey);
     };
   });
@@ -155,13 +216,13 @@
 
 <PageHeader title="Albums">
   <span class="count mono">{list.length}<span class="muted"> albums</span></span>
-  <button class="ghost" onclick={runDetection} disabled={detecting}>
-    {detecting ? "Detecting…" : "Detect"}
+  <button class="ghost" onclick={runDetection} disabled={detecting || detectBusy}>
+    {detecting || detectBusy ? "Detecting…" : "Detect"}
   </button>
   {#if creating}
     <!-- svelte-ignore a11y_autofocus -->
     <input bind:value={newName} onkeydown={onCreateKey} placeholder="Album name" autofocus />
-    <button class="primary" onclick={createAlbum}>Create</button>
+    <button class="primary" onclick={createAlbum} disabled={createBusy || !newName.trim()}>Create</button>
     <button class="ghost" onclick={() => (creating = false)}>Cancel</button>
   {:else}
     <button class="primary" onclick={() => (creating = true)}>New album</button>
@@ -179,7 +240,16 @@
       </div>
       <div class="suggest-grid">
         {#each suggestions as s (s.id)}
-          <button class="suggestion" onclick={() => openPreview(s)} aria-label="Preview suggestion {s.title}">
+          <button
+            class="suggestion"
+            onclick={() => openPreview(s)}
+            aria-label="Preview suggestion {s.title}"
+            use:thumbnailOnVisible={{
+              id: s.cover_photo_id ?? 0,
+              thumbnailPath: s.cover_thumbnail_path,
+              onReady: (path) => s.cover_photo_id != null && patchSuggestionCover(s.cover_photo_id, path),
+            }}
+          >
             {#if s.cover_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, s.cover_thumbnail_path) ?? ""} alt="" />
             {/if}
@@ -200,8 +270,8 @@
       <p>Make one, or run detection to find what already groups itself.</p>
       <div class="row">
         <button class="primary" onclick={() => (creating = true)}>New album</button>
-        <button class="ghost" onclick={runDetection} disabled={detecting}>
-    {detecting ? "Detecting…" : "Detect"}
+        <button class="ghost" onclick={runDetection} disabled={detecting || detectBusy}>
+    {detecting || detectBusy ? "Detecting…" : "Detect"}
   </button>
       </div>
     </div>
@@ -274,7 +344,15 @@
     {/if}
     <div class="grid">
       {#each visibleList as a (a.id)}
-        <a class="card" href="#/album?id={a.id}">
+        <a
+          class="card"
+          href="#/album?id={a.id}"
+          use:thumbnailOnVisible={{
+            id: a.cover_photo_id ?? 0,
+            thumbnailPath: a.cover_thumbnail_path,
+            onReady: (path) => a.cover_photo_id != null && patchAlbumCover(a.cover_photo_id, path),
+          }}
+        >
           <div class="cover">
             {#if a.cover_thumbnail_path}
               <img src={thumbUrl(libraryStore.driveRoot, a.cover_thumbnail_path) ?? ""} alt="" />

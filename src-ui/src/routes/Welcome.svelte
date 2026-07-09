@@ -3,10 +3,20 @@
   import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { library } from "../lib/api/library";
+  import { commandErrorMessage } from "../lib/api";
+  import type { PhotoSummaryDto } from "../lib/api/types";
+  import { thumbUrl } from "../lib/thumbnail";
 
   let dragOver = $state(false);
   let droppedPath = $state<string | null>(null);
   let pickError = $state<string | null>(null);
+  let compatPhotos = $state<PhotoSummaryDto[]>([]);
+  let compatTotal = $state<number | null>(null);
+  let compatLoading = $state(false);
+  let compatError = $state<string | null>(null);
+  let compatSeq = 0;
+  let mounted = true;
 
   function shortRoot(p: string): string {
     const parts = p.split(/[\\/]/).filter(Boolean);
@@ -23,12 +33,14 @@
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
+      if (!mounted) return;
       droppedPath = shortRoot(path);
       try {
         await libraryStore.open(path);
       } catch {}
-      finally { droppedPath = null; }
+      finally { if (mounted) droppedPath = null; }
     } catch {
+      if (!mounted) return;
       pickError =
         "Couldn't open the folder picker. Run this in the Tauri window, not a browser tab.";
     }
@@ -37,9 +49,10 @@
   async function handleDrop(paths: string[]) {
     if (paths.length === 0) return;
     const first = paths[0];
+    if (!mounted) return;
     droppedPath = shortRoot(first);
     try { await libraryStore.open(first); } catch {}
-    finally { droppedPath = null; }
+    finally { if (mounted) droppedPath = null; }
   }
 
   const extraRemembered = $derived(
@@ -47,12 +60,42 @@
       (p) => !libraryStore.drives.some((d) => d.path === p),
     ),
   );
+  const schemaTooNew = $derived(
+    libraryStore.unsupportedSchema ??
+      (libraryStore.lastError?.kind === "schema_too_new" ? libraryStore.lastError : null),
+  );
+  const canLoadMoreCompat = $derived(
+    compatTotal == null || compatPhotos.length < compatTotal,
+  );
+
+  async function loadCompatPhotos(reset = false) {
+    const seq = ++compatSeq;
+    compatLoading = true;
+    compatError = null;
+    if (reset) {
+      compatPhotos = [];
+      compatTotal = null;
+    }
+    try {
+      const page = await library.compatPhotos(reset ? 0 : compatPhotos.length, 100);
+      if (!mounted || seq !== compatSeq) return;
+      compatPhotos = reset ? page.items : [...compatPhotos, ...page.items];
+      compatTotal = page.total;
+    } catch (e) {
+      if (!mounted || seq !== compatSeq) return;
+      compatError = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === compatSeq) compatLoading = false;
+    }
+  }
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    mounted = true;
     getCurrentWebview()
       .onDragDropEvent((event) => {
+        if (!mounted) return;
         const payload = event.payload as DragDropEvent;
         if (payload.type === "enter" || payload.type === "over") dragOver = true;
         else if (payload.type === "leave") dragOver = false;
@@ -68,8 +111,21 @@
       .catch(() => {});
     return () => {
       cancelled = true;
+      mounted = false;
       unlisten?.();
     };
+  });
+
+  $effect(() => {
+    if (libraryStore.unsupportedSchema && compatPhotos.length === 0 && !compatLoading) {
+      void loadCompatPhotos(true);
+    }
+    if (!libraryStore.unsupportedSchema && compatPhotos.length > 0) {
+      compatSeq += 1;
+      compatPhotos = [];
+      compatTotal = null;
+      compatError = null;
+    }
   });
 </script>
 
@@ -80,7 +136,46 @@
       <p class="hero-sub">Everything you've kept.</p>
     </header>
 
-    {#if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
+    {#if schemaTooNew}
+      <div class="schema-error">
+        <p class="error">
+          This library uses schema v{schemaTooNew.db_version}; this Smriti build supports v{schemaTooNew.max_supported}.
+        </p>
+        {#if libraryStore.driveRoot}
+          <p class="schema-note mono">{libraryStore.driveRoot}</p>
+        {/if}
+        <a class="primary small-action" href="#/settings">Open Settings</a>
+      </div>
+      {#if libraryStore.unsupportedSchema}
+        <section class="compat-preview">
+          <div class="compat-head">
+            <h3 class="section-title">Read-only preview</h3>
+            {#if compatTotal != null}
+              <span class="compat-count">{compatPhotos.length} / {compatTotal}</span>
+            {/if}
+          </div>
+          {#if compatError}
+            <p class="error">{compatError}</p>
+          {/if}
+          {#if compatPhotos.length > 0}
+            <div class="compat-grid">
+              {#each compatPhotos as photo (photo.id)}
+                <div class="compat-thumb">
+                  {#if photo.thumbnail_path}
+                    <img src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""} alt="" loading="lazy" />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if canLoadMoreCompat}
+            <button class="ghost load-more" onclick={() => loadCompatPhotos(false)} disabled={compatLoading}>
+              {compatLoading ? "Loading" : "Load more"}
+            </button>
+          {/if}
+        </section>
+      {/if}
+    {:else if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
 
     {#if extraRemembered.length > 0}
@@ -137,6 +232,7 @@
       <button class="primary cta" onclick={browseForFolder} disabled={libraryStore.loading}>
         Choose a folder
       </button>
+      <a class="ghost settings-link" href="#/settings">Settings</a>
       <span class="hint">or drag one onto this window</span>
     </div>
   </div>
@@ -212,6 +308,79 @@
   .hint {
     font-size: var(--t-sm);
     color: var(--ink-muted);
+  }
+  .schema-error {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+  }
+  .schema-error .error {
+    margin: 0;
+  }
+  .schema-note {
+    width: 100%;
+    margin: 0;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    overflow-wrap: anywhere;
+  }
+  .compat-preview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+  .compat-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+  .compat-count {
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+  }
+  .compat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+    gap: 2px;
+  }
+  .compat-thumb {
+    aspect-ratio: 1;
+    background: var(--bg-card);
+    overflow: hidden;
+  }
+  .compat-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .load-more {
+    align-self: flex-start;
+    font-size: var(--t-sm);
+    padding: 8px 12px;
+  }
+  .small-action {
+    text-decoration: none;
+    font-size: var(--t-sm);
+    font-weight: 600;
+    padding: 8px 12px;
+  }
+  .settings-link {
+    text-decoration: none;
+    font-size: var(--t-base);
+    padding: 11px 16px;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: transparent;
+    transition: background var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+  }
+  .settings-link:hover {
+    background: var(--bg-paper);
+    border-color: var(--ink-faint);
   }
 
   section {

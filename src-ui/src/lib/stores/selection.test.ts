@@ -39,6 +39,19 @@ describe("selection store", () => {
     expect(selection.anchor).toBe(99);
   });
 
+  it("replace keeps a valid anchor when replacing wholesale", () => {
+    selection.set(1);
+    selection.replace([2, 3]);
+    expect(selection.list()).toEqual([2, 3]);
+    expect(selection.anchor).toBe(2);
+  });
+
+  it("replace preserves the anchor when it is still selected", () => {
+    selection.set(2);
+    selection.replace([1, 2, 3]);
+    expect(selection.anchor).toBe(2);
+  });
+
   it("range selects an inclusive span from anchor to target", () => {
     const all = [10, 20, 30, 40, 50];
     selection.set(20);

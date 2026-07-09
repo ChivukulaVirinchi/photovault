@@ -8,15 +8,17 @@
 //!
 //! Performance strategy (matches production photo apps):
 //! 1. Extract embedded EXIF thumbnail first (~2ms vs ~200-500ms for full decode)
-//! 2. Fall back to fast downscale-on-decode for large images
+//! 2. Fall back to bounded full decode when no adequate embedded preview exists
 //! 3. Per-image timeout to prevent stuck queue from corrupt/huge images
-//! 4. Higher concurrency (8 workers) with streaming results
+//! 4. Priority-aware concurrency so visible cells beat background prewarm
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use std::{fs::File, io::BufReader};
 
+use exif::{In, Reader as ExifReader, Tag};
 use lru::LruCache;
 
 use image::codecs::jpeg::JpegEncoder;
@@ -83,15 +85,30 @@ const CACHE_ENTRY_CAPACITY: usize = 10_000;
 /// foreground IPC request, which the UI reported as a missing thumbnail.
 struct ConcurrencyLimiter {
     max: usize,
-    state: Mutex<usize>,
+    max_background: usize,
+    state: Mutex<LimiterState>,
     cv: Condvar,
 }
 
+#[derive(Debug, Default)]
+struct LimiterState {
+    foreground_active: usize,
+    background_active: usize,
+    foreground_waiting: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GenerationPriority {
+    Foreground,
+    Background,
+}
+
 impl ConcurrencyLimiter {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, max_background: usize) -> Self {
         Self {
             max,
-            state: Mutex::new(0),
+            max_background,
+            state: Mutex::new(LimiterState::default()),
             cv: Condvar::new(),
         }
     }
@@ -99,34 +116,115 @@ impl ConcurrencyLimiter {
     /// Block until a permit is available, then claim it. Safe to call
     /// from a `spawn_blocking` worker — Tokio has hundreds of blocking
     /// threads and parking one is fine.
-    fn acquire(self: &Arc<Self>) -> ConcurrencyPermit {
-        let mut current = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        while *current >= self.max {
-            current = self.cv.wait(current).unwrap_or_else(|e| e.into_inner());
+    fn acquire(self: &Arc<Self>, priority: GenerationPriority) -> ConcurrencyPermit {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(priority, GenerationPriority::Foreground) {
+            state.foreground_waiting += 1;
         }
-        *current += 1;
+
+        loop {
+            let active = state.foreground_active + state.background_active;
+            let can_acquire = match priority {
+                GenerationPriority::Foreground => active < self.max,
+                GenerationPriority::Background => {
+                    active < self.max
+                        && state.background_active < self.max_background
+                        && state.foreground_waiting == 0
+                }
+            };
+
+            if can_acquire {
+                match priority {
+                    GenerationPriority::Foreground => {
+                        state.foreground_waiting = state.foreground_waiting.saturating_sub(1);
+                        state.foreground_active += 1;
+                    }
+                    GenerationPriority::Background => {
+                        state.background_active += 1;
+                    }
+                }
+                break;
+            }
+
+            state = self.cv.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+
         ConcurrencyPermit {
             limiter: self.clone(),
+            priority,
         }
     }
 
     /// Release a permit and wake one waiter.
-    fn release(&self) {
+    fn release(&self, priority: GenerationPriority) {
         {
-            let mut current = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            *current = current.saturating_sub(1);
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            match priority {
+                GenerationPriority::Foreground => {
+                    state.foreground_active = state.foreground_active.saturating_sub(1);
+                }
+                GenerationPriority::Background => {
+                    state.background_active = state.background_active.saturating_sub(1);
+                }
+            }
         }
-        self.cv.notify_one();
+        self.cv.notify_all();
     }
 }
 
 struct ConcurrencyPermit {
     limiter: Arc<ConcurrencyLimiter>,
+    priority: GenerationPriority,
 }
 
 impl Drop for ConcurrencyPermit {
     fn drop(&mut self) {
-        self.limiter.release();
+        self.limiter.release(self.priority);
+    }
+}
+
+struct GenerationDeduper {
+    active: Mutex<std::collections::HashSet<String>>,
+    cv: Condvar,
+}
+
+impl GenerationDeduper {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(std::collections::HashSet::new()),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn enter(self: &Arc<Self>, key: String) -> GenerationGuard {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        while active.contains(&key) {
+            active = self.cv.wait(active).unwrap_or_else(|e| e.into_inner());
+        }
+        active.insert(key.clone());
+        GenerationGuard {
+            deduper: self.clone(),
+            key,
+        }
+    }
+
+    fn leave(&self, key: &str) {
+        {
+            let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+            active.remove(key);
+        }
+        self.cv.notify_all();
+    }
+}
+
+struct GenerationGuard {
+    deduper: Arc<GenerationDeduper>,
+    key: String,
+}
+
+impl Drop for GenerationGuard {
+    fn drop(&mut self) {
+        self.deduper.leave(&self.key);
     }
 }
 
@@ -154,8 +252,9 @@ pub struct ThumbnailService {
     /// Concurrency limiter for generation (std::sync for blocking context)
     generation_limiter: Arc<ConcurrencyLimiter>,
 
-    /// Set of hashes currently being generated
-    generating: Arc<RwLock<std::collections::HashSet<String>>>,
+    /// Hash+size keys currently being generated. Duplicate requests wait
+    /// for the first decode and then reuse its output from disk.
+    generating: Arc<GenerationDeduper>,
 }
 
 impl ThumbnailService {
@@ -187,8 +286,8 @@ impl ThumbnailService {
             // Cap concurrent decodes at 4. Each large JPEG holds ~50–80 MB
             // of decoded RGB while resizing — at 8-wide we saw OOM on
             // mid-spec laptops. 4 keeps the working set under ~320 MB.
-            generation_limiter: Arc::new(ConcurrencyLimiter::new(4)),
-            generating: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            generation_limiter: Arc::new(ConcurrencyLimiter::new(4, 1)),
+            generating: Arc::new(GenerationDeduper::new()),
         })
     }
 
@@ -218,14 +317,12 @@ impl ThumbnailService {
                 // Skip if a thumbnail file already exists on disk for this
                 // hash+size — that's the same key the on-demand generator
                 // uses, so the cost is one stat per photo.
-                let cached = self
-                    .cache_dir
-                    .join(size.dir_name())
-                    .join(format!("{}.jpg", file_hash));
+                let cached = self.thumbnail_path(file_hash, size);
                 if cached.exists() {
                     return;
                 }
-                match self.generate_thumbnail(photo_path, file_hash, *orientation, size) {
+                match self.generate_thumbnail_background(photo_path, file_hash, *orientation, size)
+                {
                     Ok(_) => {
                         generated.fetch_add(1, Ordering::Relaxed);
                     }
@@ -245,20 +342,53 @@ impl ThumbnailService {
         orientation: i32,
         size: ThumbnailSize,
     ) -> Result<PathBuf, String> {
-        // Block until a permit is free. Foreground (UI) callers wait
-        // their turn rather than fail-fast.
-        let _permit = self.generation_limiter.acquire();
+        self.generate_thumbnail_with_priority(
+            photo_path,
+            file_hash,
+            orientation,
+            size,
+            GenerationPriority::Foreground,
+        )
+    }
 
-        let start = Instant::now();
-        let result = self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start);
+    pub fn generate_thumbnail_background(
+        &self,
+        photo_path: &Path,
+        file_hash: &str,
+        orientation: i32,
+        size: ThumbnailSize,
+    ) -> Result<PathBuf, String> {
+        self.generate_thumbnail_with_priority(
+            photo_path,
+            file_hash,
+            orientation,
+            size,
+            GenerationPriority::Background,
+        )
+    }
 
-        // Remove from generating set
-        {
-            let mut generating = self.generating.write().unwrap_or_else(|e| e.into_inner());
-            generating.remove(file_hash);
+    fn generate_thumbnail_with_priority(
+        &self,
+        photo_path: &Path,
+        file_hash: &str,
+        orientation: i32,
+        size: ThumbnailSize,
+        priority: GenerationPriority,
+    ) -> Result<PathBuf, String> {
+        let thumb_path = self.thumbnail_path(file_hash, size);
+        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+            return Ok(thumb_path);
         }
 
-        result
+        let _permit = self.generation_limiter.acquire(priority);
+        let key = format!("{}:{file_hash}", size.dir_name());
+        let _generation = self.generating.enter(key);
+        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+            return Ok(thumb_path);
+        }
+
+        let start = Instant::now();
+        self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start)
     }
 
     /// Inner thumbnail generation (separated for clean permit release)
@@ -270,17 +400,14 @@ impl ThumbnailService {
         size: ThumbnailSize,
         start: Instant,
     ) -> Result<PathBuf, String> {
-        let thumb_path = self.thumbnail_path(file_hash, size);
-
         // Check if existing thumbnail is adequate quality (not a tiny EXIF extract)
+        let thumb_path = self.thumbnail_path(file_hash, size);
+        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+            return Ok(thumb_path);
+        }
+
+        // Otherwise, regenerate it by falling through.
         if thumb_path.exists() {
-            let file_size = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
-            // If thumbnail is >5KB, it's a proper generated one. Tiny ones are EXIF extracts.
-            if file_size > 5000 {
-                self.add_to_cache(file_hash, size, &thumb_path);
-                return Ok(thumb_path);
-            }
-            // Otherwise, regenerate it by falling through
             let _ = std::fs::remove_file(&thumb_path);
         }
 
@@ -329,6 +456,39 @@ impl ThumbnailService {
         Ok(thumb_path)
     }
 
+    fn try_existing_thumbnail(
+        &self,
+        file_hash: &str,
+        size: ThumbnailSize,
+        thumb_path: &Path,
+    ) -> bool {
+        if !thumb_path.exists() {
+            return false;
+        }
+        let file_size = std::fs::metadata(thumb_path).map(|m| m.len()).unwrap_or(0);
+        if file_size == 0 {
+            return false;
+        }
+        // Most generated thumbnails are >5KB. For simple images (solid
+        // colors, screenshots, graphics), valid JPEGs can be smaller, so
+        // fall back to a cheap dimension check before treating them as stale
+        // tiny EXIF extracts from older cache versions.
+        if file_size <= 5000 && !Self::thumbnail_dimensions_are_adequate(thumb_path, size) {
+            return false;
+        }
+        self.add_to_cache(file_hash, size, thumb_path);
+        true
+    }
+
+    fn thumbnail_dimensions_are_adequate(thumb_path: &Path, size: ThumbnailSize) -> bool {
+        ImageReader::open(thumb_path)
+            .ok()
+            .and_then(|r| r.with_guessed_format().ok())
+            .and_then(|r| r.into_dimensions().ok())
+            .map(|(width, height)| width.max(height) >= size.pixels())
+            .unwrap_or(false)
+    }
+
     /// Decode an image with fast downscaling for large files.
     ///
     /// For JPEGs, the underlying libjpeg can decode at 1/2, 1/4, or 1/8 scale
@@ -336,7 +496,7 @@ impl ThumbnailService {
     /// HEIC/HEIF route through `services::image_io::open_image` (libheif).
     fn decode_image_fast(
         photo_path: &Path,
-        _target_size: ThumbnailSize,
+        target_size: ThumbnailSize,
     ) -> Result<DynamicImage, String> {
         // Route HEIC/HEIF through the format-aware wrapper. The
         // `image` crate's reader doesn't recognise these formats so we
@@ -349,6 +509,12 @@ impl ThumbnailService {
             .map(|e| e.to_ascii_lowercase());
         if matches!(ext.as_deref(), Some("heic") | Some("heif")) {
             return crate::services::image_io::open_image(photo_path);
+        }
+
+        if matches!(ext.as_deref(), Some("jpg") | Some("jpeg")) {
+            if let Some(img) = Self::decode_embedded_jpeg_thumbnail(photo_path, target_size) {
+                return Ok(img);
+            }
         }
 
         let reader =
@@ -371,6 +537,29 @@ impl ThumbnailService {
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         Ok(img)
+    }
+
+    fn decode_embedded_jpeg_thumbnail(
+        photo_path: &Path,
+        target_size: ThumbnailSize,
+    ) -> Option<DynamicImage> {
+        let file = File::open(photo_path).ok()?;
+        let mut reader = BufReader::new(file);
+        let exif = ExifReader::new().read_from_container(&mut reader).ok()?;
+        let offset = exif
+            .get_field(Tag::JPEGInterchangeFormat, In::THUMBNAIL)
+            .and_then(|f| f.value.get_uint(0))? as usize;
+        let len = exif
+            .get_field(Tag::JPEGInterchangeFormatLength, In::THUMBNAIL)
+            .and_then(|f| f.value.get_uint(0))? as usize;
+        let end = offset.checked_add(len)?;
+        let bytes = exif.buf().get(offset..end)?;
+        let img = image::load_from_memory(bytes).ok()?;
+        let (width, height) = img.dimensions();
+        if width.max(height) < target_size.pixels() {
+            return None;
+        }
+        Some(img)
     }
 
     /// Track cache size after adding a thumbnail
@@ -579,13 +768,45 @@ mod tests {
     }
 
     #[test]
+    fn small_but_dimensionally_valid_thumbnail_is_reused() {
+        let temp = tempdir().unwrap();
+        let service = ThumbnailService::new(temp.path(), 1.0).unwrap();
+        let path = service.thumbnail_path("abcdef123456", ThumbnailSize::Small);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        DynamicImage::new_rgb8(ThumbnailSize::Small.pixels(), ThumbnailSize::Small.pixels())
+            .save(&path)
+            .unwrap();
+
+        assert!(std::fs::metadata(&path).unwrap().len() <= 5000);
+        assert!(service.try_existing_thumbnail("abcdef123456", ThumbnailSize::Small, &path));
+    }
+
+    #[test]
+    fn test_generation_deduper_serializes_same_key() {
+        let deduper = Arc::new(GenerationDeduper::new());
+        let first = deduper.enter("medium:abc".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let deduper_for_thread = deduper.clone();
+
+        let handle = std::thread::spawn(move || {
+            let _second = deduper_for_thread.enter("medium:abc".into());
+            tx.send(()).unwrap();
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn test_concurrency_limiter_blocks_until_release() {
         use std::sync::Arc;
         use std::thread;
         use std::time::Duration;
 
-        let limiter = Arc::new(ConcurrencyLimiter::new(1));
-        let permit = limiter.acquire();
+        let limiter = Arc::new(ConcurrencyLimiter::new(1, 1));
+        let permit = limiter.acquire(GenerationPriority::Foreground);
 
         // Second acquire should block. Spawn a thread that waits on
         // it, then release from the main thread after a short delay
@@ -594,7 +815,7 @@ mod tests {
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let s = started.clone();
         let handle = thread::spawn(move || {
-            l.acquire();
+            l.acquire(GenerationPriority::Foreground);
             s.store(true, std::sync::atomic::Ordering::Release);
         });
 
@@ -604,5 +825,77 @@ mod tests {
         drop(permit);
         handle.join().unwrap();
         assert!(started.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_background_generation_is_capped() {
+        use std::sync::mpsc;
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let limiter = Arc::new(ConcurrencyLimiter::new(4, 1));
+        let permit = limiter.acquire(GenerationPriority::Background);
+
+        let (tx, rx) = mpsc::channel();
+        let l = limiter.clone();
+        let handle = thread::spawn(move || {
+            let _permit = l.acquire(GenerationPriority::Background);
+            tx.send(()).unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        assert!(rx.try_recv().is_err());
+
+        drop(permit);
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_waiting_foreground_generation_preempts_background() {
+        use std::sync::mpsc;
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let limiter = Arc::new(ConcurrencyLimiter::new(1, 1));
+        let permit = limiter.acquire(GenerationPriority::Background);
+
+        let (tx, rx) = mpsc::channel();
+        let l = limiter.clone();
+        let tx_foreground = tx.clone();
+        let foreground = thread::spawn(move || {
+            let _permit = l.acquire(GenerationPriority::Foreground);
+            tx_foreground.send("foreground").unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        {
+            let state = limiter.state.lock().unwrap();
+            assert_eq!(state.foreground_waiting, 1);
+        }
+
+        let l = limiter.clone();
+        let background = thread::spawn(move || {
+            let _permit = l.acquire(GenerationPriority::Background);
+            tx.send("background").unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        assert!(rx.try_recv().is_err());
+
+        drop(permit);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "foreground"
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "background"
+        );
+
+        foreground.join().unwrap();
+        background.join().unwrap();
     }
 }

@@ -7,6 +7,7 @@ use super::*;
 /// when someone disables the feature for A/B testing.
 #[cfg(not(feature = "hnsw_clustering"))]
 const MAX_STAGE_B_INPUT: usize = 800;
+const MAX_POST_MERGE_CLUSTER_PAIRS: usize = 50_000;
 
 impl FaceProcessor {
     /// Run incremental clustering in two stages:
@@ -469,6 +470,16 @@ impl FaceProcessor {
         }
 
         let cluster_ids: Vec<i64> = gallery_by_cluster.keys().copied().collect();
+        let pair_count = post_merge_pair_count(cluster_ids.len());
+        if pair_count > MAX_POST_MERGE_CLUSTER_PAIRS {
+            tracing::info!(
+                "Skipping post-pass face-cluster merge: {} cluster pairs exceeds cap {}",
+                pair_count,
+                MAX_POST_MERGE_CLUSTER_PAIRS
+            );
+            return Ok(0);
+        }
+
         let mut candidates: Vec<(f32, i64, i64)> = Vec::new();
 
         for i in 0..cluster_ids.len() {
@@ -603,7 +614,18 @@ impl FaceProcessor {
                 continue;
             }
 
-            let full_path = drive_path.join(file_path);
+            let full_path =
+                match crate::services::path_util::safe_join_relative(drive_path, file_path) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::trace!(
+                            "regenerate face crop skipped invalid photo path {}: {}",
+                            file_path,
+                            e
+                        );
+                        continue;
+                    }
+                };
             let img = match image::open(&full_path) {
                 Ok(img) => apply_exif_orientation(img, *orientation),
                 Err(_) => continue,
@@ -747,5 +769,22 @@ impl FaceProcessor {
         }
 
         Ok(assigned)
+    }
+}
+
+fn post_merge_pair_count(cluster_count: usize) -> usize {
+    cluster_count.saturating_mul(cluster_count.saturating_sub(1)) / 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_merge_pair_count_bounds_quadratic_pass() {
+        assert_eq!(post_merge_pair_count(0), 0);
+        assert_eq!(post_merge_pair_count(1), 0);
+        assert_eq!(post_merge_pair_count(316), 49_770);
+        assert_eq!(post_merge_pair_count(317), 50_086);
     }
 }

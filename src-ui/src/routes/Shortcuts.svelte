@@ -38,7 +38,7 @@
 
 <div
   class="overlay"
-  onclick={onBackdrop}
+  onclick={(e) => { if (e.target === e.currentTarget) onBackdrop(e); }}
   onkeydown={onBackdrop}
   role="button"
   tabindex="-1"

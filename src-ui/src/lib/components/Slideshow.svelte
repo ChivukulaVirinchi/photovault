@@ -14,6 +14,7 @@
   } from "lucide-svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { commandErrorMessage } from "../api";
   import { photos } from "../api/photos";
   import { library } from "../api/library";
   import { slideshow } from "../stores/slideshow.svelte";
@@ -42,6 +43,7 @@
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let advanceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadSeq = 0;
+  const URL_CACHE_CAP = 200;
   const urlCache = new Map<number, string>();
 
   const currentId = $derived(slideshow.currentId());
@@ -132,10 +134,19 @@
 
   async function resolveUrl(id: number): Promise<string> {
     const cached = urlCache.get(id);
-    if (cached) return cached;
+    if (cached) {
+      urlCache.delete(id);
+      urlCache.set(id, cached);
+      return cached;
+    }
     const { absolute_path } = await library.resolvePath(id);
     const url = convertFileSrc(absolute_path);
     urlCache.set(id, url);
+    while (urlCache.size > URL_CACHE_CAP) {
+      const oldest = urlCache.keys().next().value;
+      if (oldest == null) break;
+      urlCache.delete(oldest);
+    }
     return url;
   }
 
@@ -145,8 +156,10 @@
     try {
       const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
       if (seq !== loadSeq) return;
-      await decodeOffscreen(url);
-      if (seq !== loadSeq) return;
+      if (p.media_type !== "video") {
+        await decodeOffscreen(url);
+        if (seq !== loadSeq) return;
+      }
       // Promote: assign the NEW slide to the back slot, then flip the
       // front pointer. Svelte's reactivity drives the crossfade via
       // class:ready bound to whether this slot is currently in front.
@@ -158,7 +171,7 @@
       void slideshow.ensureMoreAhead();
     } catch (e) {
       if (seq !== loadSeq) return;
-      loadError = typeof e === "string" ? e : JSON.stringify(e);
+      loadError = commandErrorMessage(e);
       booted = true;
     }
   }
@@ -172,8 +185,8 @@
     await Promise.all(
       candidates.map(async (id) => {
         try {
-          const url = await resolveUrl(id);
-          await decodeOffscreen(url);
+          const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
+          if (p.media_type !== "video") await decodeOffscreen(url);
         } catch {}
       }),
     );
@@ -188,6 +201,7 @@
   // shows the loading screen briefly until the first decode lands.
   $effect(() => {
     if (!slideshow.active) {
+      loadSeq++;
       booted = false;
       loadError = null;
       slots = [
@@ -219,6 +233,7 @@
   });
 
   onDestroy(() => {
+    loadSeq++;
     if (idleTimer) clearTimeout(idleTimer);
     clearAdvanceTimer();
   });
@@ -250,13 +265,27 @@
            never unmount, so there's no flash window. -->
       {#each slots as slot, idx (idx)}
         {#if slot.url && slot.photo}
-          <img
-            class="slide-image"
-            class:visible={idx === frontIdx && !loadError}
-            src={slot.url}
-            alt={slot.photo.file_name}
-            decoding="async"
-          />
+          {#if slot.photo.media_type === "video"}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video
+              class="slide-image"
+              class:visible={idx === frontIdx && !loadError}
+              src={slot.url}
+              poster={slot.photo.thumbnail_path ? thumbUrl(libraryStore.driveRoot, slot.photo.thumbnail_path) ?? undefined : undefined}
+              controls={idx === frontIdx}
+              autoplay={idx === frontIdx && slideshow.playing}
+              playsinline
+              preload="metadata"
+            ></video>
+          {:else}
+            <img
+              class="slide-image"
+              class:visible={idx === frontIdx && !loadError}
+              src={slot.url}
+              alt={slot.photo.file_name}
+              decoding="async"
+            />
+          {/if}
         {/if}
       {/each}
 
@@ -393,6 +422,9 @@
   .slide-image.visible {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
+  }
+  video.slide-image.visible {
+    pointer-events: auto;
   }
   .slide-loading,
   .slide-error {

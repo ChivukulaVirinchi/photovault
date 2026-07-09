@@ -40,6 +40,92 @@ pub struct LibraryHealth {
     pub face_processed_no_faces: i64,
 }
 
+pub struct LibraryHealthSnapshot {
+    health: LibraryHealth,
+    thumbnail_paths: Vec<String>,
+}
+
+pub fn compute_snapshot(conn: &Connection) -> SqliteResult<LibraryHealthSnapshot> {
+    let total_photos: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let inaccurate_dates: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos
+         WHERE is_trashed = FALSE
+           AND date_taken_source IN ('mtime', 'file_meta')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let missing_dates: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE AND date_taken IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let heic_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos
+         WHERE is_trashed = FALSE
+           AND (LOWER(file_path) LIKE '%.heic' OR LOWER(file_path) LIKE '%.heif')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let face_processed_no_faces: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos p
+         WHERE is_trashed = FALSE
+           AND faces_processed = TRUE
+           AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.photo_id = p.id)",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let null_thumbs: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos
+         WHERE is_trashed = FALSE AND thumbnail_path IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let mut thumbnail_paths = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT thumbnail_path FROM photos
+         WHERE is_trashed = FALSE AND thumbnail_path IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    for row in rows {
+        thumbnail_paths.push(row?);
+    }
+
+    Ok(LibraryHealthSnapshot {
+        health: LibraryHealth {
+            total_photos,
+            missing_thumbnails: null_thumbs,
+            inaccurate_dates,
+            missing_dates,
+            heic_count,
+            heic_decoder_available: cfg!(feature = "heic"),
+            face_processed_no_faces,
+        },
+        thumbnail_paths,
+    })
+}
+
+pub fn finish_compute(mut snapshot: LibraryHealthSnapshot, drive_root: &Path) -> LibraryHealth {
+    for row in snapshot.thumbnail_paths {
+        if safe_join_relative(drive_root, &row)
+            .map(|p| !p.exists())
+            .unwrap_or(true)
+        {
+            snapshot.health.missing_thumbnails += 1;
+        }
+    }
+    snapshot.health
+}
+
 /// Compute all library-health counters in one pass. Designed to run
 /// inside `spawn_blocking`.
 pub fn compute(conn: &Connection, drive_root: &Path) -> SqliteResult<LibraryHealth> {

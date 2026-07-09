@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -14,15 +16,35 @@
 
   let group = $state<{ id: number; members: DupMember[] } | null>(null);
   let error = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let loadSeq = 0;
+  let mounted = true;
 
   async function load() {
-    try { group = await duplicates.getGroup(id); }
-    catch (e) { error = JSON.stringify(e); }
+    const seq = ++loadSeq;
+    const groupId = id;
+    error = null;
+    group = null;
+    try {
+      const nextGroup = await duplicates.getGroup(groupId);
+      if (mounted && seq === loadSeq) group = nextGroup;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
 
   async function setKeep(photoId: number) {
-    try { group = await duplicates.setKeep(id, photoId); }
-    catch (e) { error = JSON.stringify(e); }
+    if (actionBusy) return;
+    const seq = loadSeq;
+    const groupId = id;
+    try {
+      actionBusy = true;
+      const nextGroup = await duplicates.setKeep(groupId, photoId);
+      if (!mounted || seq !== loadSeq || groupId !== id) return;
+      group = nextGroup;
+    }
+    catch (e) { if (mounted && seq === loadSeq && groupId === id) error = commandErrorMessage(e); }
+    finally { if (mounted && seq === loadSeq && groupId === id) actionBusy = false; }
   }
 
   function patchThumbnail(photoId: number, thumbnailPath: string) {
@@ -36,21 +58,50 @@
   }
 
   async function trashOthers() {
-    if (!group) return;
+    if (!group || actionBusy) return;
     if (!confirm("Trash all non-keep duplicates?")) return;
+    const seq = loadSeq;
+    const groupId = id;
     const trashedIds = group.members
       .filter((m) => !m.is_suggested_keep)
       .map((m) => m.photo_id);
-    await duplicates.trashOthers(id);
-    photoVisibility.markTrashed(trashedIds);
-    browseContext.remove(trashedIds);
-    window.location.hash = "/duplicates";
+    try {
+      actionBusy = true;
+      await duplicates.trashOthers(groupId);
+      if (!mounted || seq !== loadSeq || groupId !== id) return;
+      photoVisibility.markTrashed(trashedIds);
+      browseContext.remove(trashedIds);
+      window.location.hash = "/duplicates";
+    } catch (e) {
+      if (mounted && seq === loadSeq && groupId === id) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq && groupId === id) actionBusy = false;
+    }
   }
 
   async function dismiss() {
-    await duplicates.dismiss(id);
-    window.location.hash = "/duplicates";
+    if (actionBusy) return;
+    const seq = loadSeq;
+    const groupId = id;
+    try {
+      actionBusy = true;
+      await duplicates.dismiss(groupId);
+      if (!mounted || seq !== loadSeq || groupId !== id) return;
+      window.location.hash = "/duplicates";
+    } catch (e) {
+      if (mounted && seq === loadSeq && groupId === id) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq && groupId === id) actionBusy = false;
+    }
   }
+
+  onMount(() => {
+    mounted = true;
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+    };
+  });
 
   $effect(() => { void id; load(); });
 
@@ -72,8 +123,8 @@
   {/snippet}
   {#snippet actions()}
     {#if group && group.members.length > 1}
-      <button class="ghost" onclick={dismiss}>Dismiss</button>
-      <button class="danger" onclick={trashOthers}>
+      <button class="ghost" onclick={dismiss} disabled={actionBusy}>Dismiss</button>
+      <button class="danger" onclick={trashOthers} disabled={actionBusy}>
         Trash {group.members.length - 1} other{group.members.length - 1 === 1 ? "" : "s"}
       </button>
     {/if}
@@ -128,7 +179,7 @@
               Keeping this
             </button>
           {:else}
-            <button class="keep-btn primary" onclick={() => setKeep(m.photo_id)}>
+            <button class="keep-btn primary" onclick={() => setKeep(m.photo_id)} disabled={actionBusy}>
               Keep this one
             </button>
           {/if}

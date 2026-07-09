@@ -2,6 +2,8 @@
   import { toasts } from "../stores/toast.svelte";
   import { CheckCircle2, AlertCircle, Info, Undo2, X } from "lucide-svelte";
 
+  let undoing = $state<Set<number>>(new Set());
+
   function iconFor(kind: string) {
     if (kind === "success") return CheckCircle2;
     if (kind === "error") return AlertCircle;
@@ -10,9 +12,12 @@
   }
 
   async function handleUndo(id: number, onUndo?: () => void | Promise<void>) {
+    if (undoing.has(id)) return;
+    undoing = new Set([...undoing, id]);
     if (onUndo) {
       try { await onUndo(); } catch { /* the action's caller handles its own errors */ }
     }
+    undoing = new Set([...undoing].filter((item) => item !== id));
     toasts.dismiss(id);
   }
 </script>
@@ -24,7 +29,7 @@
       <span class="icon"><Icon size={15} strokeWidth={1.75} /></span>
       <span class="msg">{t.message}</span>
       {#if t.kind === "undo" && t.onUndo}
-        <button class="undo" onclick={() => handleUndo(t.id, t.onUndo)}>Undo</button>
+        <button class="undo" onclick={() => handleUndo(t.id, t.onUndo)} disabled={undoing.has(t.id)}>Undo</button>
       {/if}
       <button class="close" onclick={() => toasts.dismiss(t.id)} aria-label="Dismiss">
         <X size={13} strokeWidth={1.75} />

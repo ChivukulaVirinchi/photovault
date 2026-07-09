@@ -18,7 +18,16 @@ const queue = createThumbnailQueue(
     mediaType === "video"
       ? probeVideoPoster(id)
       : (await photos.requestThumbnail(id)).thumbnail_path,
-  6,
+  4,
+  async (ids, mediaType) => {
+    if (mediaType === "video") {
+      const pairs = await Promise.all(ids.map(async (id) => [id, await probeVideoPoster(id)] as const));
+      return new Map(pairs);
+    }
+    const result = await photos.requestThumbnails(ids);
+    return new Map(result.items.map((item) => [item.id, item.thumbnail_path]));
+  },
+  2,
 );
 
 export function enqueueThumbnail(
@@ -26,13 +35,15 @@ export function enqueueThumbnail(
   onReady: ThumbnailReadyHandler,
   priority = Date.now(),
   mediaType: "photo" | "video" = "photo",
+  batchable = true,
 ) {
-  return queue.enqueue(id, onReady, priority, mediaType);
+  return queue.enqueue(id, onReady, priority, mediaType, batchable);
 }
 
 export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestOptions) {
   let options = initial;
-  let observer: IntersectionObserver | null = null;
+  let prefetchObserver: IntersectionObserver | null = null;
+  let viewportObserver: IntersectionObserver | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe: (() => void) | null = null;
 
@@ -48,25 +59,50 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
   }
 
   function cleanupObserver() {
-    if (observer) {
-      observer.disconnect();
-      observer = null;
+    if (prefetchObserver) {
+      prefetchObserver.disconnect();
+      prefetchObserver = null;
+    }
+    if (viewportObserver) {
+      viewportObserver.disconnect();
+      viewportObserver = null;
     }
     cleanupPending();
   }
 
-  function schedule() {
+  function rootViewportRect(): DOMRect | null {
+    const root = options.root;
+    if (root && root instanceof Element) return root.getBoundingClientRect();
+    if (typeof window === "undefined") return null;
+    return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+  }
+
+  function isActuallyVisible(entry: IntersectionObserverEntry): boolean {
+    const rootRect = rootViewportRect();
+    if (!rootRect) return false;
+    const rect = entry.boundingClientRect;
+    return (
+      rect.bottom > rootRect.top &&
+      rect.top < rootRect.bottom &&
+      rect.right > rootRect.left &&
+      rect.left < rootRect.right
+    );
+  }
+
+  function schedule(visibleNow = false) {
     cleanupPending();
     if (options.thumbnailPath || options.id <= 0) return;
-    const debounceMs = options.debounceMs ?? 70;
+    const debounceMs = visibleNow ? 0 : (options.debounceMs ?? 70);
     timer = setTimeout(() => {
       timer = null;
       if (options.thumbnailPath) return;
+      const priority = options.priority ?? (Date.now() + (visibleNow ? 1_000_000_000 : 0));
       unsubscribe = enqueueThumbnail(
         options.id,
         options.onReady,
-        options.priority ?? Date.now(),
+        priority,
         options.mediaType ?? "photo",
+        !visibleNow,
       );
     }, debounceMs);
   }
@@ -74,11 +110,11 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
   function attach() {
     cleanupObserver();
     if (options.thumbnailPath || options.id <= 0) return;
-    observer = new IntersectionObserver(
+    prefetchObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            schedule();
+            schedule(false);
           } else {
             cleanupPending();
           }
@@ -89,7 +125,21 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
         rootMargin: options.rootMargin ?? "900px",
       },
     );
-    observer.observe(node);
+    viewportObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && isActuallyVisible(entry)) {
+            schedule(true);
+          }
+        }
+      },
+      {
+        root: options.root ?? null,
+        rootMargin: "0px",
+      },
+    );
+    prefetchObserver.observe(node);
+    viewportObserver.observe(node);
   }
 
   attach();
@@ -104,7 +154,7 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
         cleanupObserver();
         return;
       }
-      if (!observer || rootChanged || idChanged || pathChanged) attach();
+      if (!prefetchObserver || !viewportObserver || rootChanged || idChanged || pathChanged) attach();
     },
     destroy() {
       cleanupObserver();

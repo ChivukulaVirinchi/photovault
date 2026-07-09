@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { people, settings, type FaceDetailDto } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -27,9 +28,15 @@
   let unconfirmedTotal = $state(0);
   let clustersWithUnconfirmed = $state(0);
   let showModelUpgradeBanner = $state(false);
+  let faceActionBusy = $state(false);
+  let mounted = true;
+  let loadSeq = 0;
+  let liveSeq = 0;
+  let pendingSeq = 0;
   async function checkModelUpgrade() {
     try {
       const s = await settings.get();
+      if (!mounted) return;
       if (s.face_embedder_model === "adaface_ir101_webface12m.onnx" &&
           !localStorage.getItem("smriti_model_upgrade_dismissed")) {
         showModelUpgradeBanner = true;
@@ -37,7 +44,27 @@
     } catch {}
   }
   async function reRunFacesFromScratch() {
-    try { await people.resetClusters(); } catch {}
+    if (faceActionBusy || running) return;
+    if (
+      !confirm(
+        "Re-run face detection with the upgraded model?\n\nThis clears existing face groups and names so Smriti can rebuild embeddings from scratch.",
+      )
+    )
+      return;
+    faceActionBusy = true;
+    try {
+      await people.resetAll();
+    } catch (e) {
+      if (mounted) {
+        const msg = commandErrorMessage(e);
+        error = msg;
+        toasts.error(`Couldn't reset faces: ${msg}`);
+      }
+      return;
+    } finally {
+      if (mounted) faceActionBusy = false;
+    }
+    if (!mounted) return;
     localStorage.setItem("smriti_model_upgrade_dismissed", "1");
     showModelUpgradeBanner = false;
     startFaceProcessing();
@@ -66,16 +93,23 @@
   });
 
   async function load() {
+    const seq = ++loadSeq;
+    error = null;
     try {
-      clusters = await people.list({});
+      const next = await people.list({});
+      if (!mounted || seq !== loadSeq) return;
+      clusters = next;
     } catch (e) {
-      error = JSON.stringify(e);
+      if (!mounted || seq !== loadSeq) return;
+      error = commandErrorMessage(e);
     }
   }
 
   async function loadLiveFaces() {
+    const seq = ++liveSeq;
     try {
       const page = await people.unclusteredFaces(null, 24);
+      if (!mounted || seq !== liveSeq) return;
       liveFaces = page.items;
     } catch {
       // Non-critical: the canonical People grid still loads normally.
@@ -83,11 +117,13 @@
   }
 
   async function loadPending() {
+    const seq = ++pendingSeq;
     try {
       const [r, review] = await Promise.all([
         people.pendingFaceCount(),
         people.reviewFaceCount(),
       ]);
+      if (!mounted || seq !== pendingSeq) return;
       pendingPhotos = r.pending_photos;
       unconfirmedTotal = review.unconfirmed_total;
       clustersWithUnconfirmed = review.clusters_with_unconfirmed;
@@ -97,7 +133,8 @@
   }
 
   async function startFaceProcessing() {
-    if (running) return;
+    if (running || faceActionBusy) return;
+    faceActionBusy = true;
     // Optimistic placeholder so the user sees the click registered
     // even on a cold-started ONNX worker (which can take 2-3 s before
     // the first real progress event lands). Replaced with the real
@@ -108,12 +145,16 @@
     try {
       const r = await people.startProcessing();
       jobs.dismiss(placeholderId);
+      if (!mounted) return;
       jobs.register(r.job_id, "faces");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start face detection: ${msg}`);
+    } finally {
+      if (mounted) faceActionBusy = false;
     }
   }
 
@@ -149,6 +190,7 @@
 
   // Toast when new faces are found during a running job
   $effect(() => {
+    if (facesJob?.status !== "running") return;
     const currentFound = facesJob?.faces_found ?? 0;
     if (currentFound > lastFacesFound) {
       const diff = currentFound - lastFacesFound;
@@ -158,10 +200,17 @@
   });
 
   onMount(() => {
+    mounted = true;
     load();
     loadLiveFaces();
     loadPending();
     checkModelUpgrade();
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+      liveSeq += 1;
+      pendingSeq += 1;
+    };
   });
 
   // Refresh pending count when a face job completes (so the banner
@@ -184,7 +233,7 @@
     <button class="ghost" disabled>Finding…</button>
   {:else}
     <a class="ghost review-link" href="#/review-faces">Review faces</a>
-    <button class="primary" onclick={startFaceProcessing}>Find faces</button>
+    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Find faces</button>
   {/if}
 </PageHeader>
 
@@ -201,8 +250,8 @@
       We've upgraded the face recognition model to AdaFace.
       Re-run face detection to apply the improved embeddings.
     </div>
-    <button class="primary" onclick={reRunFacesFromScratch}>Re-run detection</button>
-    <button class="ghost" onclick={dismissModelUpgrade}>Dismiss</button>
+    <button class="primary" onclick={reRunFacesFromScratch} disabled={running || faceActionBusy}>Re-run detection</button>
+    <button class="ghost" onclick={dismissModelUpgrade} disabled={faceActionBusy}>Dismiss</button>
   </div>
 {/if}
 
@@ -215,7 +264,7 @@
         Pick up where you left off — works even if you moved the drive from another machine.
       </span>
     </div>
-    <button class="primary" onclick={startFaceProcessing}>Resume detection</button>
+    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Resume detection</button>
   </div>
 {/if}
 
@@ -238,7 +287,7 @@
   {#if clusters.length === 0 && !running}
     <div class="empty">
       <p>No faces yet. Run face detection to start finding the people in your library.</p>
-      <button class="primary" onclick={startFaceProcessing}>Find faces</button>
+      <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Find faces</button>
     </div>
   {:else if clusters.length === 0 && running}
     <div class="empty">

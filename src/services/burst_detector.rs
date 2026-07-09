@@ -144,9 +144,27 @@ impl BurstDetector {
                     row.get(4)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
+
+        if photos.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut photos: Vec<BurstPhotoCandidate> = photos
+            .into_iter()
+            .filter_map(|(id, date_str, file_path, file_hash, thumbnail_path)| {
+                Some(BurstPhotoCandidate {
+                    id,
+                    date: Self::parse_datetime(&date_str)?,
+                    file_path,
+                    file_hash,
+                    thumbnail_path,
+                    signature: None,
+                })
+            })
+            .collect();
+        photos.sort_by_key(|p| (p.date, p.id));
 
         if photos.is_empty() {
             return Ok(Vec::new());
@@ -163,28 +181,13 @@ impl BurstDetector {
         let mut current_group: Vec<BurstPhotoCandidate> = Vec::new();
         let tick = total.div_ceil(40).max(250);
 
-        for (idx, (id, date_str, file_path, file_hash, thumbnail_path)) in
-            photos.into_iter().enumerate()
-        {
+        for (idx, candidate) in photos.into_iter().enumerate() {
             if cancel
                 .map(|flag| flag.load(Ordering::Relaxed))
                 .unwrap_or(false)
             {
                 break;
             }
-            let date = match Self::parse_datetime(&date_str) {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let candidate = BurstPhotoCandidate {
-                id,
-                date,
-                file_path,
-                file_hash,
-                thumbnail_path,
-                signature: None,
-            };
 
             if current_group.is_empty() {
                 current_group.push(candidate);
@@ -202,9 +205,10 @@ impl BurstDetector {
                 } else {
                     // Finalize current group if candidate doesn't belong
                     if current_group.len() >= self.config.min_photos {
-                        let group = self.finalize_candidate_group(&current_group);
-                        on_group(&group);
-                        groups.push(group);
+                        if let Some(group) = self.finalize_candidate_group(&current_group) {
+                            on_group(&group);
+                            groups.push(group);
+                        }
                     }
                     current_group = vec![candidate];
                 }
@@ -227,30 +231,25 @@ impl BurstDetector {
             .unwrap_or(false)
             && current_group.len() >= self.config.min_photos
         {
-            let group = self.finalize_candidate_group(&current_group);
-            on_group(&group);
-            groups.push(group);
+            if let Some(group) = self.finalize_candidate_group(&current_group) {
+                on_group(&group);
+                groups.push(group);
+            }
         }
 
         Ok(groups)
     }
 
-    fn finalize_candidate_group(&self, photos: &[BurstPhotoCandidate]) -> BurstGroup {
+    fn finalize_candidate_group(&self, photos: &[BurstPhotoCandidate]) -> Option<BurstGroup> {
+        let first = photos.first()?;
+        let last = photos.last()?;
         let photo_ids: Vec<i64> = photos.iter().map(|p| p.id).collect();
-        let start_time = photos
-            .first()
-            .expect("finalize_candidate_group called with empty slice")
-            .date;
-        let end_time = photos
-            .last()
-            .expect("finalize_candidate_group called with empty slice")
-            .date;
 
-        BurstGroup {
+        Some(BurstGroup {
             photo_ids,
-            start_time,
-            end_time,
-        }
+            start_time: first.date,
+            end_time: last.date,
+        })
     }
 
     fn should_join_group(
@@ -270,7 +269,10 @@ impl BurstDetector {
             return false;
         }
 
-        let start = group.first().expect("group has at least one item").date;
+        let start = match group.first() {
+            Some(p) => p.date,
+            None => return true,
+        };
         let span = candidate.date.signed_duration_since(start);
         if span > Duration::seconds(self.config.max_burst_span_seconds) {
             return false;
@@ -282,9 +284,9 @@ impl BurstDetector {
             return false;
         }
 
-        let last = group
-            .last_mut()
-            .expect("group has at least one item after early return");
+        let Some(last) = group.last_mut() else {
+            return true;
+        };
         Self::ensure_signature(last, drive_root, thumb_root);
         Self::ensure_signature(candidate, drive_root, thumb_root);
 
@@ -317,7 +319,9 @@ impl BurstDetector {
     ) -> Option<PathBuf> {
         let mut candidates = Vec::with_capacity(5);
         if let (Some(root), Some(path)) = (drive_root, &photo.thumbnail_path) {
-            candidates.push(root.join(path));
+            if let Ok(path) = crate::services::path_util::safe_join_relative(root, path) {
+                candidates.push(path);
+            }
         }
 
         if let Some(root) = thumb_root {
@@ -337,7 +341,10 @@ impl BurstDetector {
                         .join(format!("{}.jpg", photo.file_hash)),
                 );
             }
-            candidates.push(root.join(&photo.file_path));
+            if let Ok(path) = crate::services::path_util::safe_join_relative(root, &photo.file_path)
+            {
+                candidates.push(path);
+            }
         }
 
         candidates.into_iter().find(|p| p.exists())
@@ -431,6 +438,47 @@ mod tests {
         let b = BurstDetector::signature_from_image(&img);
         let sim = BurstDetector::cosine_similarity(&a, &b);
         assert!(sim > 0.999);
+    }
+
+    #[test]
+    fn finalize_candidate_group_ignores_empty_input() {
+        let detector = BurstDetector::new(BurstConfig::default());
+        assert!(detector.finalize_candidate_group(&[]).is_none());
+    }
+
+    #[test]
+    fn bursts_sort_by_parsed_utc_time_not_raw_timestamp_text() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                date_taken TEXT,
+                file_path TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                thumbnail_path TEXT,
+                is_trashed BOOLEAN NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, date_taken, file_path, file_hash, is_trashed)
+             VALUES (1, '2024-01-01T00:00:00-09:00', 'a.jpg', 'aa111', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, date_taken, file_path, file_hash, is_trashed)
+             VALUES (2, '2024-01-01T00:00:20+09:00', 'b.jpg', 'bb222', 0)",
+            [],
+        )
+        .unwrap();
+
+        let detector = BurstDetector::new(BurstConfig::default());
+        let groups = detector.find_bursts(&conn, None, None).unwrap();
+
+        assert!(groups.is_empty());
     }
 
     #[test]

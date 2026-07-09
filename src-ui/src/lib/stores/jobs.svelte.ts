@@ -61,12 +61,13 @@ const KIND_TITLE: Record<JobKind, string> = {
 class JobsStore {
   jobs = $state<Map<string, Job>>(new Map());
   private installed = false;
+  private installPromise: Promise<void> | null = null;
   private unlisten: UnlistenFn[] = [];
 
   /// Active (still-running) jobs in stable insertion order. Completed
   /// entries linger for ~3s so the user sees the success flash.
   active = $derived.by(() => {
-    return Array.from(this.jobs.values()).filter((j) => j.status === "running");
+    return Array.from(this.jobs.values()).filter((j) => j.status !== "complete");
   });
 
   count = $derived(this.active.length);
@@ -74,7 +75,17 @@ class JobsStore {
   /// Subscribe once at app mount. Idempotent.
   async install() {
     if (this.installed) return;
-    this.installed = true;
+    if (this.installPromise) return this.installPromise;
+
+    this.installPromise = this.installInner();
+    try {
+      await this.installPromise;
+    } finally {
+      this.installPromise = null;
+    }
+  }
+
+  private async installInner() {
     type Wire = {
       job_id: string;
       stage?: string;
@@ -105,6 +116,7 @@ class JobsStore {
     };
     const handle = (kind: JobKind, complete: boolean) => (e: { payload: Wire }) => {
       const p = e.payload;
+      const isError = p.stage === "error";
       // Coalesce different progress shapes into one Job.
       const processed =
         p.files_processed ?? p.processed ?? p.photos_processed ?? p.done ?? 0;
@@ -120,13 +132,14 @@ class JobsStore {
           ? `${p.groups_found} group${p.groups_found === 1 ? "" : "s"}`
           : null);
       const id = p.job_id;
+      if (!id) return;
       const next = new Map(this.jobs);
       const prev = next.get(id);
       const route =
         p.embedder_route === "bridge" || p.embedder_route === "local"
           ? p.embedder_route
           : prev?.embedder_route;
-      next.set(id, {
+      const job: Job = {
         id,
         kind,
         title: prev?.title ?? KIND_TITLE[kind],
@@ -134,15 +147,18 @@ class JobsStore {
         processed,
         total: total != null ? total : null,
         elapsed_ms: p.elapsed_ms ?? prev?.elapsed_ms ?? 0,
-        status: complete ? "complete" : "running",
+        status: isError ? "error" : (complete ? "complete" : "running"),
         chunks_flushed: p.chunks_flushed ?? prev?.chunks_flushed ?? 0,
         faces_found: facesFound > 0 ? facesFound : (prev?.faces_found ?? 0),
         embedder_route: route,
-      });
+      };
+      next.set(id, job);
       this.jobs = next;
-      if (complete) {
+      if (complete || isError) {
         // Linger briefly so the user sees the run finish, then evict.
-        setTimeout(() => this.dismiss(id), 2500);
+        setTimeout(() => {
+          if (this.jobs.get(id) === job) this.dismiss(id);
+        }, isError ? 8000 : 2500);
       }
     };
     const subs: Array<[string, JobKind, boolean]> = [
@@ -171,10 +187,22 @@ class JobsStore {
       ["album_export:progress", "albumExport", false],
       ["album_export:complete", "albumExport", true ],
     ];
-    const unlistens = await Promise.all(
+    const results = await Promise.allSettled(
       subs.map(([ev, kind, done]) => listen<Wire>(ev, handle(kind, done))),
     );
+    const unlistens = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      for (const unlisten of unlistens) {
+        try { unlisten(); } catch {}
+      }
+      this.installed = false;
+      throw failed.reason;
+    }
     this.unlisten = unlistens;
+    this.installed = true;
   }
 
   /// Manually register a job whose start was triggered by a button
@@ -213,7 +241,11 @@ class JobsStore {
     let best: Job | null = null;
     for (const j of this.jobs.values()) {
       if (j.kind !== kind) continue;
-      if (best == null || j.elapsed_ms > best.elapsed_ms) best = j;
+      if (best == null || jobPriority(j) > jobPriority(best)) {
+        best = j;
+      } else if (jobPriority(j) === jobPriority(best) && j.elapsed_ms > best.elapsed_ms) {
+        best = j;
+      }
     }
     return best;
   }
@@ -233,6 +265,12 @@ class JobsStore {
     this.jobs = next;
   }
 
+}
+
+function jobPriority(j: Job): number {
+  if (j.status === "running") return 2;
+  if (j.status === "error") return 1;
+  return 0;
 }
 
 /// Compute a rough ETA in ms based on processed/total + elapsed_ms.

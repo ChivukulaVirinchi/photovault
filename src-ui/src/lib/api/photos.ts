@@ -12,6 +12,15 @@ export interface ThumbnailResult {
   thumbnail_path: string | null;
 }
 
+export interface ThumbnailBatchItem {
+  id: number;
+  thumbnail_path: string | null;
+}
+
+export interface ThumbnailBatchResult {
+  items: ThumbnailBatchItem[];
+}
+
 export interface TimelineNeighbors {
   prev_id: number | null;
   next_id: number | null;
@@ -36,6 +45,16 @@ export const photos = {
       limit: args.limit ?? null,
       include_trashed: args.includeTrashed ?? false,
     }),
+  listAt: (args: {
+    offset: number;
+    limit?: number;
+    includeTrashed?: boolean;
+  }) =>
+    call<Page<PhotoSummaryDto>>("photos_list_at", {
+      offset: args.offset,
+      limit: args.limit ?? null,
+      include_trashed: args.includeTrashed ?? false,
+    }),
   get: (id: number) => call<PhotoDto>("photos_get", { id }),
   getMany: (ids: number[]) => call<PhotoDto[]>("photos_get_many", { ids }),
   setFavorite: (id: number, isFavorite: boolean) =>
@@ -48,6 +67,8 @@ export const photos = {
   /// missing, decode error). Concurrency is capped server-side at 8.
   requestThumbnail: (id: number) =>
     call<ThumbnailResult>("photos_request_thumbnail", { id }),
+  requestThumbnails: (ids: number[]) =>
+    call<ThumbnailBatchResult>("photos_request_thumbnails", { ids }),
   saveVideoProbe: (args: SaveVideoProbeArgs) =>
     call<ThumbnailResult>("photos_save_video_probe", args),
   listByDate: (start: string, end: string, cursor: string | null = null, limit = 500) =>

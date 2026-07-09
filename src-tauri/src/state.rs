@@ -18,6 +18,7 @@ use smriti::services::assistant::{AssistantDraft, AssistantRun};
 
 pub struct AppState {
     pub library: RwLock<Option<OpenLibrary>>,
+    pub unsupported_library: RwLock<Option<UnsupportedLibrary>>,
     pub jobs: Mutex<JobRegistry>,
     pub assistant: Mutex<AssistantRuntime>,
 }
@@ -26,6 +27,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             library: RwLock::new(None),
+            unsupported_library: RwLock::new(None),
             jobs: Mutex::new(JobRegistry::default()),
             assistant: Mutex::new(AssistantRuntime::default()),
         }
@@ -42,10 +44,16 @@ pub struct OpenLibrary {
     pub drive_root: PathBuf,
     pub db: Arc<Mutex<Database>>,
     /// On-demand thumbnail generator. Shared across handlers so the
-    /// 8-permit concurrency limiter applies globally, not per-request.
+    /// concurrency limiter applies globally, not per-request.
     pub thumbnails: Arc<ThumbnailService>,
     pub semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
     pub semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
+}
+
+pub struct UnsupportedLibrary {
+    pub drive_root: PathBuf,
+    pub db_version: i32,
+    pub max_supported: i32,
 }
 
 impl OpenLibrary {
@@ -70,7 +78,9 @@ impl OpenLibrary {
         // surprised after a fresh install.
         let cfg = smriti::config::AppConfig::load();
         let svc = ThumbnailService::new(drive_root, cfg.thumbnail_cache_gb)?;
-        let _ = svc.load_existing_thumbnails();
+        if let Err(e) = svc.load_existing_thumbnails() {
+            tracing::warn!("failed to load existing thumbnails: {}", e);
+        }
         Ok(Arc::new(svc))
     }
 }
@@ -121,6 +131,16 @@ impl JobRegistry {
     pub fn has_any_of_kind(&self, kind: JobKind) -> bool {
         self.inner.values().any(|h| h.kind == kind)
     }
+
+    pub fn cancel_library_scoped(&mut self) {
+        for handle in self.inner.values() {
+            if handle.kind.is_library_scoped() {
+                handle
+                    .cancel_flag
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 pub struct JobHandle {
@@ -129,7 +149,7 @@ pub struct JobHandle {
 }
 
 #[allow(dead_code)] // variants used in M2
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobKind {
     Scan,
     MetadataExtraction,
@@ -148,4 +168,48 @@ pub enum JobKind {
     /// can navigate freely while it runs.
     AlbumSuggestions,
     AlbumExport,
+}
+
+impl JobKind {
+    pub fn is_library_scoped(self) -> bool {
+        !matches!(
+            self,
+            JobKind::AssetInstall | JobKind::SemanticAssets | JobKind::UpdateDownload
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn handle(kind: JobKind) -> (Arc<AtomicBool>, JobHandle) {
+        let flag = Arc::new(AtomicBool::new(false));
+        (
+            flag.clone(),
+            JobHandle {
+                cancel_flag: flag,
+                kind,
+            },
+        )
+    }
+
+    #[test]
+    fn cancel_library_scoped_leaves_install_jobs_running() {
+        let mut registry = JobRegistry::default();
+        let (scan_flag, scan) = handle(JobKind::Scan);
+        let (assets_flag, assets) = handle(JobKind::AssetInstall);
+        let (semantic_assets_flag, semantic_assets) = handle(JobKind::SemanticAssets);
+
+        registry.register("scan".into(), scan);
+        registry.register("assets".into(), assets);
+        registry.register("semantic-assets".into(), semantic_assets);
+
+        registry.cancel_library_scoped();
+
+        assert!(scan_flag.load(Ordering::Relaxed));
+        assert!(!assets_flag.load(Ordering::Relaxed));
+        assert!(!semantic_assets_flag.load(Ordering::Relaxed));
+    }
 }

@@ -6,6 +6,8 @@ import type {
   JobIdDto,
   LibraryHandleDto,
   LibraryOpenResult,
+  Page,
+  PhotoSummaryDto,
 } from "./types";
 
 export const library = {
@@ -13,6 +15,8 @@ export const library = {
   current: () => call<LibraryHandleDto | null>("library_current"),
   open: (drivePath: string) =>
     call<LibraryOpenResult>("library_open", { drive_path: drivePath }),
+  compatPhotos: (offset: number, limit = 100) =>
+    call<Page<PhotoSummaryDto>>("library_compat_photos_list", { offset, limit }),
   close: () => call<null>("library_close"),
   startScan: (scanHidden = false) =>
     call<JobIdDto>("library_start_scan", { scan_hidden_folders: scanHidden }),
@@ -56,5 +60,5 @@ export const library = {
   /// Tauri (the command takes a struct param even though every field
   /// in it is optional).
   regenerateThumbnails: () =>
-    call<JobIdDto>("library_regenerate_thumbnails", { args: { photo_ids: null } }),
+    call<JobIdDto>("library_regenerate_thumbnails", { photo_ids: null }),
 };

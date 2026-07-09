@@ -1,16 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { commandErrorMessage } from "../lib/api";
   import { bursts } from "../lib/api/all";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof bursts.list>>>([]);
   let error = $state<string | null>(null);
+  let mounted = true;
+  let loadSeq = 0;
+  let reloadedCompleteJobIds = new Set<string>();
+  const PAGE_SIZE = 200;
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
 
   // Detection runs in tokio::spawn on the backend. Local "running"
   // booleans were resetting on remount, so the UI lied about what
@@ -20,8 +28,59 @@
   const running = $derived(jobs.isRunning("bursts"));
 
   async function load() {
-    try { groups = await bursts.list(); }
-    catch (e) { error = JSON.stringify(e); }
+    const seq = ++loadSeq;
+    error = null;
+    try {
+      const nextGroups = await bursts.list(PAGE_SIZE, 0);
+      if (!mounted || seq !== loadSeq) return;
+      groups = nextGroups;
+      hasMore = nextGroups.length === PAGE_SIZE;
+    }
+    catch (e) { if (mounted && seq === loadSeq) error = commandErrorMessage(e); }
+  }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    const seq = loadSeq;
+    loadingMore = true;
+    try {
+      const nextGroups = await bursts.list(PAGE_SIZE, groups.length);
+      if (!mounted || seq !== loadSeq) return;
+      groups = [...groups, ...nextGroups];
+      hasMore = nextGroups.length === PAGE_SIZE;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq) loadingMore = false;
+    }
+  }
+
+  function coverSlots(g: Awaited<ReturnType<typeof bursts.list>>[number]) {
+    const ids = g.member_photo_ids.length > 0 ? g.member_photo_ids : g.cover_photo_ids;
+    return ids.slice(0, 6).map((id) => {
+      const idx = g.cover_photo_ids.indexOf(id);
+      return {
+        id,
+        thumbnailPath: idx >= 0 ? (g.cover_thumbnail_paths[idx] ?? null) : null,
+      };
+    });
+  }
+
+  function patchCoverThumbnail(groupId: number, photoId: number, thumbnailPath: string) {
+    groups = groups.map((g) => {
+      if (g.id !== groupId) return g;
+      const idx = g.cover_photo_ids.indexOf(photoId);
+      if (idx >= 0) {
+        const paths = g.cover_thumbnail_paths.slice();
+        paths[idx] = thumbnailPath;
+        return { ...g, cover_thumbnail_paths: paths };
+      }
+      return {
+        ...g,
+        cover_photo_ids: [...g.cover_photo_ids, photoId],
+        cover_thumbnail_paths: [...g.cover_thumbnail_paths, thumbnailPath],
+      };
+    });
   }
 
   async function run() {
@@ -35,7 +94,8 @@
       jobs.register(r.job_id, "bursts");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start: ${msg}`);
     }
@@ -45,15 +105,26 @@
   // each progress event, but groups don't appear until the writer has
   // committed everything — completion is the right moment.)
   $effect(() => {
-    if (burstsJob && burstsJob.status === "complete") load();
+    if (!burstsJob || burstsJob.status !== "complete" || reloadedCompleteJobIds.has(burstsJob.id)) return;
+    reloadedCompleteJobIds.add(burstsJob.id);
+    load();
   });
 
   onMount(() => {
+    mounted = true;
     load();
-    const unlisten = listen<{ stage?: string }>("bursts:progress", (e) => {
+    const unlisten = listen<{ stage?: string; message?: string | null }>("bursts:progress", (e) => {
+      if (!mounted) return;
       if (e.payload.stage === "persisted") load();
+      if (e.payload.stage === "error") {
+        const msg = e.payload.message ?? "Burst detection failed.";
+        error = msg;
+        toasts.error(msg);
+      }
     });
     return () => {
+      mounted = false;
+      loadSeq += 1;
       void unlisten.then((u) => u());
     };
   });
@@ -93,6 +164,7 @@
     <ul class="card-list">
       {#each groups as g (g.id)}
         {@const memberIds = g.member_photo_ids.length > 0 ? g.member_photo_ids : g.cover_photo_ids}
+        {@const slots = coverSlots(g)}
         <li class="burst-card">
           <header class="card-head">
             <a href="#/burst?id={g.id}" class="head-link">
@@ -108,26 +180,39 @@
             "compare and pick" surface).
           -->
           <div class="strip">
-            {#each g.cover_thumbnail_paths as path, i (path + i)}
-              {@const pid = g.cover_photo_ids[i]}
+            {#each slots as slot (slot.id)}
               <a
                 class="strip-cell"
-                href="#/photo?id={pid}"
+                href="#/photo?id={slot.id}"
                 onclick={() => browseContext.set(`burst:${g.id}`, memberIds)}
-                aria-label="Open photo {pid}"
+                aria-label="Open photo {slot.id}"
+                use:thumbnailOnVisible={{
+                  id: slot.id,
+                  thumbnailPath: slot.thumbnailPath,
+                  onReady: (path) => patchCoverThumbnail(g.id, slot.id, path),
+                }}
               >
-                <img src={thumbUrl(libraryStore.driveRoot, path) ?? ""} alt="" loading="lazy" />
+                {#if slot.thumbnailPath}
+                  <img src={thumbUrl(libraryStore.driveRoot, slot.thumbnailPath) ?? ""} alt="" loading="lazy" />
+                {/if}
               </a>
             {/each}
-            {#if g.photo_count > g.cover_thumbnail_paths.length}
+            {#if g.photo_count > slots.length}
               <a class="strip-more" href="#/burst?id={g.id}">
-                +{g.photo_count - g.cover_thumbnail_paths.length} more
+                +{g.photo_count - slots.length} more
               </a>
             {/if}
           </div>
         </li>
       {/each}
     </ul>
+    {#if hasMore}
+      <div class="more-row">
+        <button class="ghost" onclick={loadMore} disabled={loadingMore}>
+          {loadingMore ? "Loading..." : "Load more groups"}
+        </button>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -154,6 +239,11 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
+  }
+  .more-row {
+    display: flex;
+    justify-content: center;
+    padding: var(--s-5) 0 0;
   }
   .burst-card {
     background: var(--bg-card);

@@ -29,6 +29,8 @@ pub struct MetadataProgress {
     pub done: u64,
     pub is_complete: bool,
     pub elapsed_seconds: f64,
+    pub stage: Option<String>,
+    pub message: Option<String>,
 }
 
 pub fn start_metadata_job(
@@ -61,6 +63,8 @@ async fn run_metadata_job(
     };
     let total = total as u64;
     let mut done = 0u64;
+    let mut hard_error: Option<String> = None;
+    let mut failed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     let geonames_path = crate::db::geonames::geonames_db_path();
     let geocoder = if geonames_path.exists() {
@@ -74,39 +78,39 @@ async fn run_metadata_job(
             break;
         }
 
-        let chunk: Vec<(i64, String)> = {
+        let chunk: Vec<(i64, String, String)> = {
             let guard = db.lock().await;
-            let mut stmt = match guard.conn.prepare(
-                "SELECT id, file_path FROM photos \
-                 WHERE metadata_extracted = FALSE AND is_trashed = FALSE \
-                 LIMIT ?",
-            ) {
-                Ok(s) => s,
-                Err(_) => break,
-            };
-            stmt.query_map([METADATA_CHUNK_SIZE as i64], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
-            .unwrap_or_default()
+            match load_metadata_chunk(&guard.conn, &failed_ids, METADATA_CHUNK_SIZE) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    hard_error = Some(format!("metadata query failed: {e}"));
+                    Vec::new()
+                }
+            }
         };
 
-        if chunk.is_empty() {
+        if hard_error.is_some() || chunk.is_empty() {
             break;
         }
 
         let root = drive_root.clone();
-        let extracted: Vec<(i64, ExtractedMetadata)> = chunk
+        let extracted: Vec<(i64, String, ExtractedMetadata)> = chunk
             .par_iter()
-            .map(|(id, rel_path)| {
-                let abs = root.join(rel_path);
+            .map(|(id, rel_path, file_hash)| {
+                let abs = match crate::services::path_util::safe_join_relative(&root, rel_path) {
+                    Ok(abs) => abs,
+                    Err(e) => {
+                        tracing::debug!("metadata skipped unsafe path for photo_id={id}: {e}");
+                        return (*id, file_hash.clone(), ExtractedMetadata::Skipped);
+                    }
+                };
                 let meta = match media_type_for_path(&abs).unwrap_or_default() {
                     MediaType::Video => ExtractedMetadata::Video(VideoMetadata::from_path(&abs)),
                     MediaType::Photo => {
                         ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
                     }
                 };
-                (*id, meta)
+                (*id, file_hash.clone(), meta)
             })
             .collect();
 
@@ -117,11 +121,17 @@ async fn run_metadata_job(
                 Ok(t) => t,
                 Err(e) => {
                     tracing::error!("metadata tx start: {e}");
-                    continue;
+                    hard_error = Some(format!("metadata database transaction failed: {e}"));
+                    break;
                 }
             };
 
-            for (id, meta) in &extracted {
+            for (id, file_hash, meta) in &extracted {
+                if matches!(meta, ExtractedMetadata::Skipped) {
+                    errors_this_chunk += 1;
+                    failed_ids.insert(*id);
+                    continue;
+                }
                 let gps_latitude = meta.gps_latitude();
                 let gps_longitude = meta.gps_longitude();
                 let (city, country): (Option<String>, Option<String>) =
@@ -161,7 +171,7 @@ async fn run_metadata_job(
                         bitrate = ?,
                         has_audio = ?,
                         metadata_extracted = TRUE
-                     WHERE id = ?",
+                     WHERE id = ? AND file_hash = ?",
                     params![
                         meta.date_taken()
                             .map(|d: chrono::DateTime<chrono::Utc>| d.to_rfc3339()),
@@ -190,15 +200,25 @@ async fn run_metadata_job(
                         meta.bitrate(),
                         meta.has_audio(),
                         id,
+                        file_hash,
                     ],
                 );
-                if res.is_err() {
-                    errors_this_chunk += 1;
+                match res {
+                    Ok(0) => {
+                        errors_this_chunk += 1;
+                        failed_ids.insert(*id);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        errors_this_chunk += 1;
+                        failed_ids.insert(*id);
+                    }
                 }
             }
             if let Err(e) = tx.commit() {
                 tracing::error!("metadata tx commit: {e}");
-                continue;
+                hard_error = Some(format!("metadata database commit failed: {e}"));
+                break;
             }
         }
 
@@ -208,6 +228,8 @@ async fn run_metadata_job(
             done,
             is_complete: false,
             elapsed_seconds: start.elapsed().as_secs_f64(),
+            stage: Some("extract".to_string()),
+            message: None,
         });
     }
 
@@ -215,8 +237,13 @@ async fn run_metadata_job(
         .send(MetadataProgress {
             total,
             done,
-            is_complete: true,
+            is_complete: hard_error.is_none(),
             elapsed_seconds: start.elapsed().as_secs_f64(),
+            stage: hard_error
+                .as_ref()
+                .map(|_| "error".to_string())
+                .or_else(|| Some("complete".to_string())),
+            message: hard_error,
         })
         .await;
 }
@@ -224,6 +251,38 @@ async fn run_metadata_job(
 enum ExtractedMetadata {
     Photo(Box<crate::services::exif_extractor::ImageMetadata>),
     Video(VideoMetadata),
+    Skipped,
+}
+
+fn load_metadata_chunk(
+    conn: &rusqlite::Connection,
+    failed_ids: &std::collections::HashSet<i64>,
+    limit: usize,
+) -> rusqlite::Result<Vec<(i64, String, String)>> {
+    let mut sql = String::from(
+        "SELECT id, file_path, file_hash FROM photos \
+         WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
+    );
+    let mut params: Vec<i64> = Vec::with_capacity(failed_ids.len() + 1);
+    if !failed_ids.is_empty() {
+        sql.push_str(" AND id NOT IN (");
+        for idx in 0..failed_ids.len() {
+            if idx > 0 {
+                sql.push_str(", ");
+            }
+            sql.push('?');
+        }
+        sql.push(')');
+        params.extend(failed_ids.iter().copied());
+    }
+    sql.push_str(" ORDER BY id ASC LIMIT ?");
+    params.push(limit as i64);
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    rows.collect()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -343,6 +402,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => MediaType::Photo,
             Self::Video(_) => MediaType::Video,
+            Self::Skipped => MediaType::Photo,
         }
     }
 
@@ -350,6 +410,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.date_taken,
             Self::Video(m) => m.date_taken,
+            Self::Skipped => None,
         }
     }
 
@@ -357,6 +418,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.date_taken_source.clone(),
             Self::Video(m) => m.date_taken_source.clone(),
+            Self::Skipped => None,
         }
     }
 
@@ -364,6 +426,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.gps_latitude,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -371,6 +434,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.gps_longitude,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -378,6 +442,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.camera_make.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -385,6 +450,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.camera_model.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -392,6 +458,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.iso,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -399,6 +466,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.aperture.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -406,6 +474,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.shutter_speed.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -413,6 +482,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.focal_length.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -420,6 +490,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.lens_model.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -427,6 +498,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.flash.clone(),
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -434,6 +506,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.gps_altitude,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -441,6 +514,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.width,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -448,6 +522,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.height,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -455,6 +530,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(m) => m.orientation.unwrap_or(1),
             Self::Video(_) => 1,
+            Self::Skipped => 1,
         }
     }
 
@@ -462,6 +538,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => None,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -469,6 +546,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => None,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -476,6 +554,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => None,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -483,6 +562,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => None,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -490,6 +570,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => None,
             Self::Video(_) => None,
+            Self::Skipped => None,
         }
     }
 
@@ -497,6 +578,7 @@ impl ExtractedMetadata {
         match self {
             Self::Photo(_) => false,
             Self::Video(_) => false,
+            Self::Skipped => false,
         }
     }
 }
@@ -505,6 +587,7 @@ impl ExtractedMetadata {
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone, Timelike, Utc};
+    use std::collections::HashSet;
 
     #[test]
     fn quicktime_epoch_date_reads_mvhd_creation_time() {
@@ -536,5 +619,34 @@ mod tests {
         assert_eq!(dt.year(), 2024);
         assert_eq!(dt.hour(), 10);
         assert_eq!(dt.minute(), 16);
+    }
+
+    #[test]
+    fn metadata_chunk_skips_current_run_failures_without_hiding_pending_rows() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                metadata_extracted BOOLEAN NOT NULL DEFAULT FALSE,
+                is_trashed BOOLEAN NOT NULL DEFAULT FALSE
+            );
+            INSERT INTO photos (id, file_path, file_hash, metadata_extracted, is_trashed)
+            VALUES
+                (1, 'bad.jpg', 'aa111', FALSE, FALSE),
+                (2, 'good.jpg', 'bb222', FALSE, FALSE),
+                (3, 'done.jpg', 'cc333', TRUE, FALSE),
+                (4, 'trashed.jpg', 'dd444', FALSE, TRUE);
+            "#,
+        )
+        .unwrap();
+        let mut failed = HashSet::new();
+        failed.insert(1);
+
+        let rows = load_metadata_chunk(&conn, &failed, 20).unwrap();
+
+        assert_eq!(rows, vec![(2, "good.jpg".into(), "bb222".into())]);
     }
 }

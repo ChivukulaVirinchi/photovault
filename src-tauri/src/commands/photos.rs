@@ -1,11 +1,15 @@
 //! Photos: listing, fetching, lookups.
 
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use smriti::db::album_repo::AlbumRepo;
 use smriti::db::face_repo::FaceRepo;
+use smriti::db::photo_repo::PhotoLite;
 use smriti::db::PhotoRepo;
+use smriti::db::{db_path_for, open_secondary};
 
 use crate::dto::{AlbumDto, Page, PersonDto, PhotoDto, PhotoStackBadgeDto, PhotoSummaryDto};
 use crate::pagination::{self, Cursor};
@@ -14,42 +18,25 @@ use crate::{CommandError, CommandResult};
 
 use super::cursor_for_lite;
 
-#[derive(Debug, Deserialize)]
-pub struct PhotosListArgs {
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-    #[serde(default)]
-    pub include_trashed: bool,
+fn normalize_limited_photo_ids(ids: Vec<i64>, limit: usize) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    ids.into_iter()
+        .filter(|id| *id > 0 && seen.insert(*id))
+        .take(limit)
+        .collect()
 }
 
-#[tauri::command]
-pub async fn photos_list(
-    state: State<'_, AppState>,
-    args: PhotosListArgs,
-) -> CommandResult<Page<PhotoSummaryDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let cursor_in = pagination::decode(args.cursor.as_deref())?;
-    let limit = pagination::clamp_limit(args.limit) as i64;
+fn clamp_timeline_limit(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(200).clamp(1, 2_000)
+}
 
-    let db = lib.db.lock().await;
-    let repo = PhotoRepo::new(&db.conn);
-    let cfg = smriti::config::AppConfig::load();
-    let show_stacks = cfg.show_timeline_stacks && !args.include_trashed;
-    let rows = repo.list_after(
-        cursor_in.map(|c| (c.date_taken, c.id)),
-        limit,
-        args.include_trashed,
-        show_stacks,
-    )?;
-
+fn page_from_lite_rows(
+    rows: Vec<PhotoLite>,
+    limit: i64,
+    total: Option<u64>,
+) -> Page<PhotoSummaryDto> {
     let has_more = rows.len() as i64 == limit;
     let next_cursor = rows.last().map(|p| pagination::encode(cursor_for_lite(p)));
-    let total = if cursor_in.is_none() {
-        Some(repo.count_timeline_visible(show_stacks)? as u64)
-    } else {
-        None
-    };
     let items = rows
         .into_iter()
         .map(|p| PhotoSummaryDto {
@@ -73,12 +60,93 @@ pub async fn photos_list(
             }),
         })
         .collect();
-    Ok(Page {
+    Page {
         items,
         next_cursor,
         has_more,
         total,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhotosListArgs {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub include_trashed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhotosListAtArgs {
+    pub offset: u32,
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub include_trashed: bool,
+}
+
+#[tauri::command]
+pub async fn photos_list(
+    state: State<'_, AppState>,
+    args: PhotosListArgs,
+) -> CommandResult<Page<PhotoSummaryDto>> {
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
+    let cursor_in = pagination::decode(args.cursor.as_deref())?;
+    let limit = clamp_timeline_limit(args.limit) as i64;
+    let cfg = smriti::config::AppConfig::load();
+    let show_stacks = cfg.show_timeline_stacks && !args.include_trashed;
+
+    let first_page = cursor_in.is_none();
+    let cursor_key = cursor_in.map(|c| (c.date_taken, c.id));
+    let include_trashed = args.include_trashed;
+    let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let repo = PhotoRepo::new(&conn);
+        let rows = repo.list_after(cursor_key, limit, include_trashed, show_stacks)?;
+        let total = if first_page {
+            Some(repo.count_timeline_visible(show_stacks)? as u64)
+        } else {
+            None
+        };
+        Ok::<_, CommandError>((rows, total))
     })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("photo list worker failed: {e}"),
+    })??;
+    Ok(page_from_lite_rows(rows, limit, total))
+}
+
+#[tauri::command]
+pub async fn photos_list_at(
+    state: State<'_, AppState>,
+    args: PhotosListAtArgs,
+) -> CommandResult<Page<PhotoSummaryDto>> {
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
+    let offset = i64::from(args.offset);
+    let limit = clamp_timeline_limit(args.limit) as i64;
+    let cfg = smriti::config::AppConfig::load();
+    let show_stacks = cfg.show_timeline_stacks && !args.include_trashed;
+    let include_trashed = args.include_trashed;
+    let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let repo = PhotoRepo::new(&conn);
+        let rows = repo.list_at_offset(offset, limit, include_trashed, show_stacks)?;
+        let total = Some(repo.count_timeline_visible(show_stacks)? as u64);
+        Ok::<_, CommandError>((rows, total))
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("photo offset list worker failed: {e}"),
+    })??;
+    Ok(page_from_lite_rows(rows, limit, total))
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,8 +183,10 @@ pub async fn photos_get_many(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = PhotoRepo::new(&db.conn);
-    let ids: Vec<i64> = args.ids.into_iter().take(500).collect();
-    let photos = repo.get_by_ids(&ids)?;
+    let ids = normalize_limited_photo_ids(args.ids, 500);
+    let order: HashMap<i64, usize> = ids.iter().enumerate().map(|(idx, id)| (*id, idx)).collect();
+    let mut photos = repo.get_by_ids(&ids)?;
+    photos.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
     Ok(photos.into_iter().map(Into::into).collect())
 }
 
@@ -156,8 +226,8 @@ pub async fn photos_list_by_album(
     state: State<'_, AppState>,
     args: PhotosListByAlbumArgs,
 ) -> CommandResult<Page<PhotoSummaryDto>> {
-    paged(state, args.cursor, args.limit, |db, cur, limit| {
-        let repo = PhotoRepo::new(&db.conn);
+    paged(state, args.cursor, args.limit, move |db, cur, limit| {
+        let repo = PhotoRepo::new(db);
         if args.album_id == super::albums::FAVORITES_ALBUM_ID {
             repo.list_after_favorites(cur, limit).map_err(Into::into)
         } else {
@@ -180,8 +250,8 @@ pub async fn photos_list_by_person(
     state: State<'_, AppState>,
     args: PhotosListByPersonArgs,
 ) -> CommandResult<Page<PhotoSummaryDto>> {
-    paged(state, args.cursor, args.limit, |db, cur, limit| {
-        let repo = PhotoRepo::new(&db.conn);
+    paged(state, args.cursor, args.limit, move |db, cur, limit| {
+        let repo = PhotoRepo::new(db);
         repo.list_after_by_person(args.person_id, cur, limit)
             .map_err(Into::into)
     })
@@ -204,7 +274,7 @@ pub async fn photos_list_by_date(
     let start = args.start.clone();
     let end = args.end.clone();
     paged(state, args.cursor, args.limit, move |db, cur, limit| {
-        let repo = PhotoRepo::new(&db.conn);
+        let repo = PhotoRepo::new(db);
         repo.list_after_by_date(&start, &end, cur, limit)
             .map_err(Into::into)
     })
@@ -227,7 +297,7 @@ pub async fn photos_list_by_place(
     let city = args.city.clone();
     let country = args.country.clone();
     paged(state, args.cursor, args.limit, move |db, cur, limit| {
-        let repo = PhotoRepo::new(&db.conn);
+        let repo = PhotoRepo::new(db);
         repo.list_after_by_place(city.as_deref(), country.as_deref(), cur, limit)
             .map_err(Into::into)
     })
@@ -293,6 +363,7 @@ pub async fn photos_albums_for_photo(
             id,
             name,
             photo_count: 0,
+            photos_added: None,
             cover_photo_id: None,
             cover_thumbnail_path: None,
             date_range_start: None,
@@ -315,17 +386,29 @@ async fn paged<F>(
 ) -> CommandResult<Page<PhotoSummaryDto>>
 where
     F: FnOnce(
-        &smriti::db::Database,
-        Option<(Option<chrono::DateTime<chrono::Utc>>, i64)>,
-        i64,
-    ) -> Result<Vec<smriti::db::photo_repo::PhotoLite>, CommandError>,
+            &rusqlite::Connection,
+            Option<(Option<chrono::DateTime<chrono::Utc>>, i64)>,
+            i64,
+        ) -> Result<Vec<smriti::db::photo_repo::PhotoLite>, CommandError>
+        + Send
+        + 'static,
 {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
     let cursor_in = pagination::decode(cursor.as_deref())?;
     let limit_n = pagination::clamp_limit(limit) as i64;
-    let db = lib.db.lock().await;
-    let rows = f(&db, cursor_in.map(|c| (c.date_taken, c.id)), limit_n)?;
+    let cursor_key = cursor_in.map(|c| (c.date_taken, c.id));
+    let rows = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        f(&conn, cursor_key, limit_n)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("photo page worker failed: {e}"),
+    })??;
 
     let has_more = rows.len() as i64 == limit_n;
     let next_cursor: Option<String> = rows.last().map(|p| {
@@ -364,7 +447,7 @@ where
 //
 // The frontend calls this for cells whose `thumbnail_path` is null (not
 // yet generated). It runs a synchronous generate on a blocking pool —
-// the ThumbnailService's 8-permit limiter caps total concurrency across
+// the ThumbnailService limiter caps total concurrency across
 // all in-flight requests.
 //
 // On success the relative path is returned AND written back to the DB,
@@ -374,6 +457,22 @@ where
 #[derive(Debug, Serialize)]
 pub struct ThumbnailResultDto {
     pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhotosRequestThumbnailsArgs {
+    pub ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThumbnailBatchItemDto {
+    pub id: i64,
+    pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThumbnailBatchResultDto {
+    pub items: Vec<ThumbnailBatchItemDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -407,12 +506,19 @@ pub async fn photos_request_thumbnail(
     state: State<'_, AppState>,
     args: PhotosGetArgs,
 ) -> CommandResult<ThumbnailResultDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let (drive_root, db, svc) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            lib.drive_root.clone(),
+            lib.db.clone(),
+            lib.thumbnails.clone(),
+        )
+    };
 
     // Pull what we need to feed the generator without holding the DB lock.
     let (file_path, file_hash, orientation, media_type, existing) = {
-        let db = lib.db.lock().await;
+        let db = db.lock().await;
         let repo = PhotoRepo::new(&db.conn);
         let p = repo
             .get_by_id(args.id)?
@@ -439,12 +545,13 @@ pub async fn photos_request_thumbnail(
         });
     }
 
-    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &file_path)
-        .map_err(|e| CommandError::Validation {
-            field: "photo.file_path".into(),
-            reason: e,
+    let abs =
+        smriti::services::path_util::safe_join_relative(&drive_root, &file_path).map_err(|e| {
+            CommandError::Validation {
+                field: "photo.file_path".into(),
+                reason: e,
+            }
         })?;
-    let svc = lib.thumbnails.clone();
     let hash_for_thread = file_hash.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -474,10 +581,10 @@ pub async fn photos_request_thumbnail(
     // Write the relative path back into the DB so future list calls
     // return it. Failures here are non-fatal — we still return the path.
     {
-        let db = lib.db.lock().await;
+        let db = db.lock().await;
         if let Err(e) = db.conn.execute(
-            "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2",
-            rusqlite::params![&rel, args.id],
+            "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2 AND file_hash = ?3",
+            rusqlite::params![&rel, args.id, &file_hash],
         ) {
             tracing::warn!(
                 "UPDATE thumbnail_path failed for photo_id={}: {}",
@@ -490,6 +597,128 @@ pub async fn photos_request_thumbnail(
     Ok(ThumbnailResultDto {
         thumbnail_path: Some(rel),
     })
+}
+
+#[tauri::command]
+pub async fn photos_request_thumbnails(
+    state: State<'_, AppState>,
+    args: PhotosRequestThumbnailsArgs,
+) -> CommandResult<ThumbnailBatchResultDto> {
+    let ids = normalize_limited_photo_ids(args.ids, 200);
+    if ids.is_empty() {
+        return Ok(ThumbnailBatchResultDto { items: Vec::new() });
+    }
+
+    let (drive_root, db, svc) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            lib.drive_root.clone(),
+            lib.db.clone(),
+            lib.thumbnails.clone(),
+        )
+    };
+
+    let photos = {
+        let db = db.lock().await;
+        PhotoRepo::new(&db.conn).get_by_ids(&ids)?
+    };
+
+    let mut ready = Vec::new();
+    let mut work = Vec::new();
+    for p in photos {
+        if let Some(rel) = p.thumbnail_path {
+            ready.push(ThumbnailBatchItemDto {
+                id: p.id,
+                thumbnail_path: Some(rel),
+            });
+            continue;
+        }
+        if p.media_type != smriti::models::MediaType::Photo {
+            continue;
+        }
+        work.push((p.id, p.file_path, p.file_hash, p.orientation));
+    }
+
+    let generated = if work.is_empty() {
+        Vec::new()
+    } else {
+        let worker_count = work.len().min(4);
+        let mut buckets: Vec<Vec<_>> = (0..worker_count).map(|_| Vec::new()).collect();
+        for (idx, item) in work.into_iter().enumerate() {
+            buckets[idx % worker_count].push(item);
+        }
+
+        let mut handles = Vec::with_capacity(worker_count);
+        for bucket in buckets {
+            let drive = drive_root.clone();
+            let svc_for_thread = svc.clone();
+            handles.push(tauri::async_runtime::spawn_blocking(move || {
+                bucket
+                    .into_iter()
+                    .filter_map(|(id, file_path, file_hash, orientation)| {
+                        let abs =
+                            smriti::services::path_util::safe_join_relative(&drive, &file_path)
+                                .ok()?;
+                        match svc_for_thread.generate_thumbnail_background(
+                            &abs,
+                            &file_hash,
+                            orientation,
+                            smriti::services::thumbnail::ThumbnailSize::Medium,
+                        ) {
+                            Ok(_) => {
+                                let rel = relative_thumbnail_path(&file_hash);
+                                Some((id, file_hash, rel))
+                            }
+                            Err(e) => {
+                                tracing::debug!("thumbnail batch failed for photo_id={id}: {e}");
+                                None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        let mut out = Vec::new();
+        for handle in handles {
+            let mut chunk = handle.await.map_err(|e| CommandError::Internal {
+                message: e.to_string(),
+            })?;
+            out.append(&mut chunk);
+        }
+        out
+    };
+
+    if !generated.is_empty() {
+        let db = db.lock().await;
+        let tx = db.conn.unchecked_transaction()?;
+        for (id, file_hash, rel) in &generated {
+            tx.execute(
+                "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2 AND file_hash = ?3",
+                rusqlite::params![rel, id, file_hash],
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    ready.extend(
+        generated
+            .into_iter()
+            .map(|(id, _, rel)| ThumbnailBatchItemDto {
+                id,
+                thumbnail_path: Some(rel),
+            }),
+    );
+
+    let requested_order: HashMap<i64, usize> = ids
+        .into_iter()
+        .enumerate()
+        .map(|(idx, id)| (id, idx))
+        .collect();
+    ready.sort_by_key(|item| requested_order.get(&item.id).copied().unwrap_or(usize::MAX));
+
+    Ok(ThumbnailBatchResultDto { items: ready })
 }
 
 /// Compute the relative thumbnail path for a given file hash. Mirrors
@@ -521,6 +750,8 @@ pub struct SaveVideoProbeArgs {
     pub poster_jpeg_base64: Option<String>,
 }
 
+const MAX_VIDEO_POSTER_BYTES: usize = 4 * 1024 * 1024;
+
 #[tauri::command]
 pub async fn photos_save_video_probe(
     state: State<'_, AppState>,
@@ -528,10 +759,13 @@ pub async fn photos_save_video_probe(
 ) -> CommandResult<ThumbnailResultDto> {
     use base64::Engine as _;
 
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let (drive_root, db) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
     let (file_hash, media_type) = {
-        let db = lib.db.lock().await;
+        let db = db.lock().await;
         let repo = PhotoRepo::new(&db.conn);
         let p = repo
             .get_by_id(args.id)?
@@ -552,23 +786,42 @@ pub async fn photos_save_video_probe(
                 field: "poster_jpeg_base64".into(),
                 reason: e.to_string(),
             })?;
+        if bytes.len() > MAX_VIDEO_POSTER_BYTES {
+            return Err(CommandError::Validation {
+                field: "poster_jpeg_base64".into(),
+                reason: "poster image is too large".into(),
+            });
+        }
         let rel = relative_video_thumbnail_path(&file_hash);
-        let abs = lib.drive_root.join(&rel);
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| CommandError::Io {
+        let abs =
+            smriti::services::path_util::safe_join_relative(&drive_root, &rel).map_err(|e| {
+                CommandError::Validation {
+                    field: "thumbnail_path".into(),
+                    reason: e,
+                }
+            })?;
+        tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
+            if let Some(parent) = abs.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| CommandError::Io {
+                    message: e.to_string(),
+                })?;
+            }
+            std::fs::write(&abs, bytes).map_err(|e| CommandError::Io {
                 message: e.to_string(),
             })?;
-        }
-        std::fs::write(&abs, bytes).map_err(|e| CommandError::Io {
-            message: e.to_string(),
-        })?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("video poster write worker failed: {e}"),
+        })??;
         Some(rel)
     } else {
         None
     };
 
     {
-        let db = lib.db.lock().await;
+        let db = db.lock().await;
         db.conn.execute(
             "UPDATE photos SET
                 duration_ms = COALESCE(?1, duration_ms),
@@ -577,8 +830,15 @@ pub async fn photos_save_video_probe(
                 thumbnail_path = COALESCE(?4, thumbnail_path),
                 thumbnailed = CASE WHEN ?4 IS NULL THEN thumbnailed ELSE TRUE END,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?5",
-            rusqlite::params![args.duration_ms, args.width, args.height, rel, args.id],
+             WHERE id = ?5 AND file_hash = ?6",
+            rusqlite::params![
+                args.duration_ms,
+                args.width,
+                args.height,
+                rel,
+                args.id,
+                file_hash
+            ],
         )?;
     }
 
@@ -685,5 +945,25 @@ fn read_extras(path: &std::path::Path) -> ExifExtrasDto {
         exposure_bias,
         modified_at,
         created_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limited_photo_ids_are_positive_deduped_and_capped() {
+        assert_eq!(
+            normalize_limited_photo_ids(vec![2, -1, 2, 0, 3, 4], 2),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn timeline_limit_allows_large_scroll_runway() {
+        assert_eq!(clamp_timeline_limit(None), 200);
+        assert_eq!(clamp_timeline_limit(Some(2_000)), 2_000);
+        assert_eq!(clamp_timeline_limit(Some(10_000)), 2_000);
     }
 }

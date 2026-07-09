@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { people, type ClusterSuggestionDto } from "../api/all";
+  import { commandErrorMessage } from "../api";
   import type { PersonDto } from "../api/types";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";
@@ -20,6 +21,8 @@
   let error = $state<string | null>(null);
   let activeTab = $state<"suggestions" | "search">("suggestions");
   let inputEl: HTMLInputElement | undefined = $state(undefined);
+  let mounted = true;
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const filteredPeople = $derived.by(() => {
     const q = filter.trim().toLowerCase();
@@ -32,17 +35,23 @@
 
   async function loadSuggestions() {
     try {
-      suggestions = await people.faceSuggestClusters(faceId, 5);
+      const next = await people.faceSuggestClusters(faceId, 5);
+      if (!mounted) return;
+      suggestions = next;
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     }
   }
 
   async function loadAllPeople() {
     try {
-      allPeople = await people.list({});
+      const next = await people.list({});
+      if (!mounted) return;
+      allPeople = next;
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     }
   }
 
@@ -51,10 +60,12 @@
     busy = true;
     try {
       await people.faceReassign(faceId, clusterId);
+      if (!mounted) return;
       onsuccess?.();
       onclose();
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
       busy = false;
     }
   }
@@ -67,10 +78,14 @@
     );
   }
 
+  function requestClose() {
+    if (!busy) onclose();
+  }
+
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      onclose();
+      requestClose();
     } else if (e.key === "Enter" && activeTab === "search") {
       e.preventDefault();
       const first = filteredPeople[0];
@@ -79,9 +94,14 @@
   }
 
   onMount(() => {
+    mounted = true;
     loadSuggestions();
     loadAllPeople();
-    setTimeout(() => inputEl?.focus(), 0);
+    focusTimer = setTimeout(() => inputEl?.focus(), 0);
+    return () => {
+      mounted = false;
+      if (focusTimer != null) clearTimeout(focusTimer);
+    };
   });
 </script>
 
@@ -89,7 +109,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="overlay"
-  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
 >
   <div
     class="dialog"
@@ -121,7 +141,8 @@
         class:active={activeTab === "search"}
         onclick={() => {
           activeTab = "search";
-          setTimeout(() => inputEl?.focus(), 0);
+          if (focusTimer != null) clearTimeout(focusTimer);
+          focusTimer = setTimeout(() => inputEl?.focus(), 0);
         }}
       >
         All people

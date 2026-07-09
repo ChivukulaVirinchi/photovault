@@ -79,6 +79,8 @@
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45),
                 0 4px 12px rgba(0, 0, 0, 0.25);
     z-index: 50;
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
     backdrop-filter: blur(12px);
     animation: slide-up 180ms var(--ease) both;
   }

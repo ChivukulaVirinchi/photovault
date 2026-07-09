@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { search, trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -30,17 +31,47 @@
   let showAddDialog = $state(false);
   let debounceId: number | undefined;
   let inputEl: HTMLInputElement | undefined;
-  const visiblePhotoIds = $derived(results?.photos.slice(0, 200).map((p) => p.photo_id) ?? []);
+  let actionBusy = $state(false);
+  let runSeq = 0;
+  let mounted = true;
+  let lastInitialQuery = $state<string | null>(null);
+  let visiblePhotoLimit = $state(200);
+  const visiblePhotos = $derived(results?.photos.slice(0, visiblePhotoLimit) ?? []);
+  const visiblePhotoIds = $derived(visiblePhotos.map((p) => p.photo_id));
+  const selectedResultIds = $derived(selection.listIn(results?.photo_ids ?? []));
 
   async function run() {
-    if (!q.trim()) { results = null; selection.clear(); return; }
+    const seq = ++runSeq;
+    const query = q.trim();
+    error = null;
+    showAddDialog = false;
+    actionBusy = false;
+    if (!query) {
+      results = null;
+      loading = false;
+      selection.clear();
+      return;
+    }
     loading = true;
     try {
-      results = await search.query(q.trim());
-      if (results) browseContext.set(`search:${q.trim()}`, results.photo_ids);
+      const nextResults = await search.query(query);
+      if (!mounted || seq !== runSeq) return;
+      results = nextResults;
+      visiblePhotoLimit = 200;
+      if (results) browseContext.set(`search:${query}`, results.photo_ids);
       selection.clear();
-    } catch (e) { error = JSON.stringify(e); }
-    finally { loading = false; }
+    } catch (e) {
+      if (mounted && seq === runSeq) {
+        results = null;
+        visiblePhotoLimit = 200;
+        selection.clear();
+        if (browseContext.source?.startsWith("search:")) browseContext.clear();
+        error = commandErrorMessage(e);
+      }
+    }
+    finally {
+      if (mounted && seq === runSeq) loading = false;
+    }
   }
 
   function onInput() {
@@ -58,14 +89,26 @@
     };
   }
 
+  function patchAlbumCover(photoId: number, thumbnailPath: string) {
+    if (!results) return;
+    results = {
+      ...results,
+      albums: results.albums.map((a) => (
+        a.cover_photo_id === photoId ? { ...a, cover_thumbnail_path: thumbnailPath } : a
+      )),
+    };
+  }
+
   function onCellClick(e: MouseEvent, photoId: number) {
     handleCellClick(e, photoId, visiblePhotoIds);
   }
 
   async function bulkTrash() {
-    if (!results) return;
-    const ids = selection.list();
+    if (!results || actionBusy) return;
+    const ids = selection.listIn(results.photo_ids);
     if (ids.length === 0) return;
+    const seq = runSeq;
+    const query = q.trim();
     const drop = new Set(ids);
     const snapshot = results.photos
       .map((photo, idx) => ({ photo, idx }))
@@ -74,7 +117,13 @@
       .map((photoId, idx) => ({ photoId, idx }))
       .filter((entry) => drop.has(entry.photoId));
     try {
-      await trash.trashPhotos(ids);
+      actionBusy = true;
+      const result = await trash.trashPhotos(ids);
+      if (!mounted || seq !== runSeq || query !== q.trim() || !results) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos needed trashing");
+        return;
+      }
       photoVisibility.markTrashed(ids);
       results = {
         ...results,
@@ -84,11 +133,11 @@
       browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(ids);
+          if (!mounted || query !== q.trim() || !results) return;
           photoVisibility.markRestored(ids);
-          if (!results) return;
           const nextPhotos = results.photos.slice();
           for (const entry of snapshot) {
             nextPhotos.splice(Math.min(entry.idx, nextPhotos.length), 0, entry.photo);
@@ -102,11 +151,15 @@
             photo_ids: nextPhotoIds,
             photos: nextPhotos,
           };
-          browseContext.set(`search:${q.trim()}`, results.photo_ids);
+          browseContext.set(`search:${query}`, results.photo_ids);
         },
       );
     } catch (e) {
-      toasts.error(`Couldn't move to trash: ${e}`);
+      if (mounted && seq === runSeq && query === q.trim()) {
+        toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+      }
+    } finally {
+      if (mounted && seq === runSeq && query === q.trim()) actionBusy = false;
     }
   }
 
@@ -121,10 +174,28 @@
   }
 
   onMount(() => {
+    mounted = true;
     inputEl?.focus();
     if (q.trim()) run();
     window.addEventListener("keydown", onGlobalKey);
-    return () => window.removeEventListener("keydown", onGlobalKey);
+    return () => {
+      mounted = false;
+      runSeq += 1;
+      if (debounceId) window.clearTimeout(debounceId);
+      window.removeEventListener("keydown", onGlobalKey);
+    };
+  });
+
+  $effect(() => {
+    if (lastInitialQuery === null) {
+      lastInitialQuery = initialQuery;
+      return;
+    }
+    if (initialQuery === lastInitialQuery) return;
+    lastInitialQuery = initialQuery;
+    q = initialQuery;
+    if (debounceId) window.clearTimeout(debounceId);
+    void run();
   });
 </script>
 
@@ -183,7 +254,14 @@
         <ul class="row">
           {#each results.albums as a}
             <li>
-              <a href="#/album?id={a.album_id}">
+              <a
+                href="#/album?id={a.album_id}"
+                use:thumbnailOnVisible={{
+                  id: a.cover_photo_id ?? 0,
+                  thumbnailPath: a.cover_thumbnail_path,
+                  onReady: (path) => a.cover_photo_id != null && patchAlbumCover(a.cover_photo_id, path),
+                }}
+              >
                 {#if a.cover_thumbnail_path}
                   <img src={thumbUrl(libraryStore.driveRoot, a.cover_thumbnail_path) ?? ""} alt="" />
                 {:else}
@@ -215,9 +293,18 @@
     {/if}
     {#if results.photos.length > 0}
       <section>
-        <h3 class="section-title">Photos · {results.photos.length}</h3>
+        <div class="section-heading-row">
+          <h3 class="section-title">
+            Photos · {Math.min(visiblePhotoLimit, results.photos.length)} / {results.photos.length}
+          </h3>
+          {#if visiblePhotoLimit < results.photos.length}
+            <button class="ghost small-action" onclick={() => (visiblePhotoLimit += 200)}>
+              Show more
+            </button>
+          {/if}
+        </div>
         <div class="pv-photo-grid">
-          {#each results.photos.slice(0, 200) as p (p.photo_id)}
+          {#each visiblePhotos as p (p.photo_id)}
             <a
               class="pv-photo-cell"
               class:selected={selection.has(p.photo_id)}
@@ -260,9 +347,9 @@
   {/if}
 </div>
 
-{#if selection.active()}
+{#if selectedResultIds.length > 0}
   <SelectionBar
-    count={selection.size()}
+    count={selectedResultIds.length}
     onAddToAlbum={() => (showAddDialog = true)}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
@@ -271,7 +358,7 @@
 
 {#if showAddDialog}
   <AddToAlbumDialog
-    photoIds={selection.list()}
+    photoIds={selectedResultIds}
     onclose={() => (showAddDialog = false)}
     onsuccess={() => selection.clear()}
   />
@@ -343,13 +430,25 @@
     font-size: var(--t-xs);
   }
   section { margin-bottom: var(--s-6); }
+  .section-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    margin: 0 0 var(--s-3);
+  }
   .section-title {
     font-size: var(--t-xs);
     font-weight: 600;
     color: var(--ink-muted);
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    margin: 0 0 var(--s-3);
+    margin: 0;
+  }
+  .small-action {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: var(--t-xs);
   }
 
   .row {

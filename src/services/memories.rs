@@ -84,6 +84,7 @@ const SEASONAL_MIN_PHOTOS: i64 = 5;
 
 /// Cap on photos per YearRecap card.
 const YEAR_RECAP_MAX_PHOTOS: usize = 50;
+const MAX_MEMORY_PHOTOS: usize = 500;
 
 /// Top entry point: full pipeline. Runs all three generators, scores,
 /// filters blocks, picks heroes, returns cards.
@@ -201,23 +202,33 @@ fn on_this_day(
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
     let mut stmt = conn.prepare(
         r#"
-        SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
-               GROUP_CONCAT(id) AS photo_ids
-        FROM photos
-        WHERE is_trashed = FALSE
-          AND content_category = 'photo'
-          AND date_taken IS NOT NULL
-          AND strftime('%m-%d', date_taken) = ?1
-          AND date_taken < ?2
+        WITH matched AS (
+            SELECT id,
+                   CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
+                       ORDER BY date_taken DESC, id DESC
+                   ) AS rn
+            FROM photos
+            WHERE is_trashed = FALSE
+              AND content_category = 'photo'
+              AND date_taken IS NOT NULL
+              AND strftime('%m-%d', date_taken) = ?1
+              AND date_taken < ?2
+        )
+        SELECT yr, GROUP_CONCAT(id) AS photo_ids
+        FROM matched
+        WHERE rn <= ?3
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 10
         "#,
     )?;
 
-    let rows = stmt.query_map(params![today_md, cutoff_str], |row| {
-        Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
-    })?;
+    let rows = stmt.query_map(
+        params![today_md, cutoff_str, MAX_MEMORY_PHOTOS as i64],
+        |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
+    )?;
 
     let mut out = Vec::new();
     for row in rows {
@@ -261,14 +272,23 @@ fn fallback_window(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
-               GROUP_CONCAT(id) AS photo_ids
-        FROM photos
-        WHERE is_trashed = FALSE
-          AND content_category = 'photo'
-          AND date_taken IS NOT NULL
-          AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-          AND date_taken < ?8
+        WITH matched AS (
+            SELECT id,
+                   CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
+                       ORDER BY date_taken DESC, id DESC
+                   ) AS rn
+            FROM photos
+            WHERE is_trashed = FALSE
+              AND content_category = 'photo'
+              AND date_taken IS NOT NULL
+              AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+              AND date_taken < ?8
+        )
+        SELECT yr, GROUP_CONCAT(id) AS photo_ids
+        FROM matched
+        WHERE rn <= ?9
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 10
@@ -276,7 +296,17 @@ fn fallback_window(
     )?;
 
     let rows = stmt.query_map(
-        params![mds[0], mds[1], mds[2], mds[3], mds[4], mds[5], mds[6], cutoff_str],
+        params![
+            mds[0],
+            mds[1],
+            mds[2],
+            mds[3],
+            mds[4],
+            mds[5],
+            mds[6],
+            cutoff_str,
+            MAX_MEMORY_PHOTOS as i64
+        ],
         |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
     )?;
 
@@ -316,25 +346,42 @@ fn seasonal_recap(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
-               GROUP_CONCAT(id) AS photo_ids,
-               COUNT(*) AS photo_count
-        FROM photos
-        WHERE is_trashed = FALSE
-          AND content_category = 'photo'
-          AND date_taken IS NOT NULL
-          AND strftime('%m', date_taken) = ?1
-          AND date_taken < ?2
+        WITH matched AS (
+            SELECT id,
+                   CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+                   COUNT(*) OVER (
+                       PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
+                   ) AS total_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
+                       ORDER BY date_taken DESC, id DESC
+                   ) AS rn
+            FROM photos
+            WHERE is_trashed = FALSE
+              AND content_category = 'photo'
+              AND date_taken IS NOT NULL
+              AND strftime('%m', date_taken) = ?1
+              AND date_taken < ?2
+        )
+        SELECT yr, GROUP_CONCAT(id) AS photo_ids
+        FROM matched
+        WHERE rn <= ?4
         GROUP BY yr
-        HAVING photo_count >= ?3
+        HAVING MAX(total_count) >= ?3
         ORDER BY yr DESC
         LIMIT 5
         "#,
     )?;
 
-    let rows = stmt.query_map(params![month, cutoff_str, SEASONAL_MIN_PHOTOS], |row| {
-        Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
-    })?;
+    let rows = stmt.query_map(
+        params![
+            month,
+            cutoff_str,
+            SEASONAL_MIN_PHOTOS,
+            MAX_MEMORY_PHOTOS as i64
+        ],
+        |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
+    )?;
 
     let month_name = month_name(today.month());
     let mut out = Vec::new();
@@ -369,33 +416,39 @@ fn year_recap(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
-               GROUP_CONCAT(id) AS photo_ids
-        FROM photos
-        WHERE is_trashed = FALSE
-          AND content_category = 'photo'
-          AND date_taken IS NOT NULL
-          AND date_taken < ?1
+        WITH matched AS (
+            SELECT id,
+                   CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
+                       ORDER BY date_taken DESC, id DESC
+                   ) AS rn
+            FROM photos
+            WHERE is_trashed = FALSE
+              AND content_category = 'photo'
+              AND date_taken IS NOT NULL
+              AND date_taken < ?1
+        )
+        SELECT yr, GROUP_CONCAT(id) AS photo_ids
+        FROM matched
+        WHERE rn <= ?2
         GROUP BY yr
         ORDER BY yr DESC
         LIMIT 5
         "#,
     )?;
 
-    let rows = stmt.query_map(params![cutoff_str], |row| {
+    let rows = stmt.query_map(params![cutoff_str, YEAR_RECAP_MAX_PHOTOS as i64], |row| {
         Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let mut out = Vec::new();
     for row in rows {
         let (yr, csv) = row?;
-        let mut photo_ids = parse_ids(&csv);
+        let photo_ids = parse_ids(&csv);
         if photo_ids.is_empty() {
             continue;
         }
-        photo_ids.sort_unstable();
-        photo_ids.reverse();
-        photo_ids.truncate(YEAR_RECAP_MAX_PHOTOS);
 
         // Use July 1 of that year as a reasonable midpoint for age calculation.
         let photo_date =
@@ -475,6 +528,11 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
         all_ids.extend(m.photo_ids.iter().copied());
     }
     if all_ids.is_empty() {
+        for mem in memories.iter_mut() {
+            mem.hero_photo_id = 0;
+            mem.hero_thumbnail_path = None;
+            mem.has_faces = false;
+        }
         return Ok(());
     }
 
@@ -523,7 +581,12 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
     }
 
     for mem in memories.iter_mut() {
-        let mut best_id = mem.photo_ids[0];
+        let Some(mut best_id) = mem.photo_ids.first().copied() else {
+            mem.hero_photo_id = 0;
+            mem.hero_thumbnail_path = None;
+            mem.has_faces = false;
+            continue;
+        };
         let mut best_score = f32::MIN;
         let mut any_faces = false;
 
@@ -630,7 +693,7 @@ fn filter_blocked(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-    let blocked_photos: HashSet<i64> = rows.filter_map(|r| r.ok()).collect();
+    let blocked_photos: HashSet<i64> = rows.collect::<SqliteResult<HashSet<_>>>()?;
 
     memories.retain(|m| {
         let blocked_count = m
@@ -680,6 +743,28 @@ mod tests {
     }
 
     #[test]
+    fn hero_selection_tolerates_empty_memory_photo_ids() {
+        let conn = fresh_db();
+        let mut memories = vec![Memory {
+            id: "empty".into(),
+            kind: MemoryKind::FallbackWindow,
+            title: "Empty".into(),
+            photo_ids: Vec::new(),
+            hero_photo_id: 99,
+            hero_thumbnail_path: Some("stale.jpg".into()),
+            score: 0.0,
+            year: 2020,
+            has_faces: true,
+        }];
+
+        populate_hero_and_faces(&conn, &mut memories).unwrap();
+
+        assert_eq!(memories[0].hero_photo_id, 0);
+        assert!(memories[0].hero_thumbnail_path.is_none());
+        assert!(!memories[0].has_faces);
+    }
+
+    #[test]
     fn on_this_day_matches_prior_year() {
         let conn = fresh_db();
         insert_photo(&conn, 1, "2022-04-15 10:00:00");
@@ -688,6 +773,24 @@ mod tests {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].kind, MemoryKind::OnThisDay);
         assert_eq!(cards[0].photo_count, 1);
+    }
+
+    #[test]
+    fn dense_memory_day_is_capped_before_detail_payload() {
+        let conn = fresh_db();
+        for id in 1..=(MAX_MEMORY_PHOTOS as i64 + 25) {
+            insert_photo(&conn, id, "2022-04-15 10:00:00");
+        }
+
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let cards = generate_for_today(&conn, today).unwrap();
+        let on_this_day = cards
+            .iter()
+            .find(|card| card.kind == MemoryKind::OnThisDay)
+            .unwrap();
+
+        assert_eq!(on_this_day.photo_ids.len(), MAX_MEMORY_PHOTOS);
+        assert_eq!(on_this_day.photo_count, MAX_MEMORY_PHOTOS);
     }
 
     #[test]

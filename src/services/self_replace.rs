@@ -178,13 +178,17 @@ async fn download_and_verify(
 ) -> Result<PathBuf, UpdateError> {
     let expected_hash = fetch_expected_hash(all_assets, &asset.name).await?;
 
-    let temp_path = std::env::temp_dir().join(format!("smriti-update-{}", asset.name));
+    let temp_path = std::env::temp_dir().join(format!(
+        "smriti-update-{}",
+        safe_temp_file_name(&asset.name)
+    ));
     let client = build_client()?;
 
     let response = client
         .get(&asset.browser_download_url)
         .send()
         .await
+        .and_then(|r| r.error_for_status())
         .map_err(|e| UpdateError::Network(e.to_string()))?;
 
     let total = response.content_length().unwrap_or(asset.size_bytes);
@@ -248,6 +252,7 @@ async fn fetch_expected_hash(
         .get(&sums_asset.browser_download_url)
         .send()
         .await
+        .and_then(|r| r.error_for_status())
         .map_err(|e| UpdateError::Network(e.to_string()))?
         .text()
         .await
@@ -256,6 +261,23 @@ async fn fetch_expected_hash(
     parse_sha256sums(&body, asset_name).ok_or_else(|| UpdateError::ChecksumEntryMissing {
         asset: asset_name.to_string(),
     })
+}
+
+fn safe_temp_file_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().max(1));
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('.');
+    if trimmed.is_empty() {
+        "download".into()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Parse a single entry out of a standard `sha256sum` file. Each line
@@ -396,5 +418,14 @@ def456  Smriti-Setup-x64.msi
             parse_sha256sums(body, "Smriti-x86_64.AppImage"),
             Some("abc123".to_string())
         );
+    }
+
+    #[test]
+    fn temp_file_name_removes_path_separators() {
+        assert_eq!(
+            safe_temp_file_name("../Smriti Setup/x64.msi"),
+            "_Smriti_Setup_x64.msi"
+        );
+        assert_eq!(safe_temp_file_name("..."), "download");
     }
 }

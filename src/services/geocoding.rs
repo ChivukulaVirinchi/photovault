@@ -72,10 +72,9 @@ impl GeocodingService {
     }
 
     fn search_bounding_box(&self, lat: f64, lon: f64, radius_deg: f64) -> Option<GeocodingResult> {
-        let min_lat = lat - radius_deg;
-        let max_lat = lat + radius_deg;
-        let min_lon = lon - radius_deg;
-        let max_lon = lon + radius_deg;
+        let min_lat = (lat - radius_deg).max(-90.0);
+        let max_lat = (lat + radius_deg).min(90.0);
+        let lon_ranges = longitude_ranges(lon, radius_deg);
 
         // We DO still apply a population floor, but only as a sanity
         // gate against extremely small entries. Real ranking is by
@@ -84,10 +83,12 @@ impl GeocodingService {
         // chosen originally: rural photos without a major town nearby
         // should fall through to the "Approx. lat/lng" UI fallback
         // rather than getting tagged with a village no one recognises.
-        let mut stmt = self
-            .conn
-            .prepare(
-                r#"
+        let mut cities: Vec<(String, String, String, f64, f64, String)> = Vec::new();
+        for (min_lon, max_lon) in lon_ranges {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    r#"
                 SELECT
                     ascii_name,
                     country_name,
@@ -101,23 +102,25 @@ impl GeocodingService {
                   AND population >= 100000
                 LIMIT 200
                 "#,
-            )
-            .ok()?;
+                )
+                .ok()?;
 
-        let cities: Vec<(String, String, String, f64, f64, String)> = stmt
-            .query_map(params![min_lat, max_lat, min_lon, max_lon], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })
-            .ok()?
-            .filter_map(|r| r.ok())
-            .collect();
+            let mut rows = stmt
+                .query_map(params![min_lat, max_lat, min_lon, max_lon], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .ok()?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .ok()?;
+            cities.append(&mut rows);
+        }
 
         // Walk every candidate and keep the best one according to
         // (feature_priority asc, distance asc). Anything farther than
@@ -165,6 +168,18 @@ impl GeocodingService {
             return false;
         }
         !((lat.abs() < 0.001) && (lon.abs() < 0.001))
+    }
+}
+
+fn longitude_ranges(lon: f64, radius_deg: f64) -> Vec<(f64, f64)> {
+    let min_lon = lon - radius_deg;
+    let max_lon = lon + radius_deg;
+    if min_lon < -180.0 {
+        vec![(min_lon + 360.0, 180.0), (-180.0, max_lon)]
+    } else if max_lon > 180.0 {
+        vec![(min_lon, 180.0), (-180.0, max_lon - 360.0)]
+    } else {
+        vec![(min_lon, max_lon)]
     }
 }
 

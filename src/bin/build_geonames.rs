@@ -17,6 +17,9 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_root = PathBuf::from(".");
     smriti::db::geonames::build_geonames_db(&project_root)?;
-    println!("GeoNames database created at data/geonames.db");
+    println!(
+        "GeoNames database created at {}",
+        smriti::db::geonames::geonames_db_path().display()
+    );
     Ok(())
 }

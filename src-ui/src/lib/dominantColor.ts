@@ -13,12 +13,22 @@
 export type RGB = [number, number, number];
 
 const CACHE = new Map<string, Promise<RGB>>();
+const CACHE_CAP = 500;
 
 export function extractDominantColor(url: string): Promise<RGB> {
   const cached = CACHE.get(url);
-  if (cached) return cached;
+  if (cached) {
+    CACHE.delete(url);
+    CACHE.set(url, cached);
+    return cached;
+  }
   const p = doExtract(url).catch(() => [128, 128, 128] as RGB);
   CACHE.set(url, p);
+  while (CACHE.size > CACHE_CAP) {
+    const oldest = CACHE.keys().next().value;
+    if (oldest == null) break;
+    CACHE.delete(oldest);
+  }
   return p;
 }
 

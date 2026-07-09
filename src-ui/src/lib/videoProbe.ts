@@ -3,6 +3,8 @@ import { library } from "./api/library";
 import { photos } from "./api/photos";
 
 const MAX_POSTER_EDGE = 860;
+const VIDEO_METADATA_TIMEOUT_MS = 8_000;
+const VIDEO_SEEK_TIMEOUT_MS = 5_000;
 
 export async function probeVideoPoster(id: number): Promise<string | null> {
   const { absolute_path } = await library.resolvePath(id);
@@ -37,7 +39,12 @@ export async function probeVideoPoster(id: number): Promise<string | null> {
 
 function loadMetadata(video: HTMLVideoElement, src: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("video metadata decode timed out"));
+    }, VIDEO_METADATA_TIMEOUT_MS);
     const cleanup = () => {
+      window.clearTimeout(timer);
       video.onloadedmetadata = null;
       video.onerror = null;
     };
@@ -76,7 +83,12 @@ async function capturePoster(video: HTMLVideoElement): Promise<string | null> {
 
 function seek(video: HTMLVideoElement, seconds: number): Promise<void> {
   return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("video seek timed out"));
+    }, VIDEO_SEEK_TIMEOUT_MS);
     const cleanup = () => {
+      window.clearTimeout(timer);
       video.onseeked = null;
       video.onerror = null;
     };

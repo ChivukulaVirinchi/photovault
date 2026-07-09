@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { people } from "../api/all";
+  import { commandErrorMessage } from "../api";
   import type { PersonDto } from "../api/types";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";
@@ -18,6 +19,8 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let inputEl: HTMLInputElement | undefined;
+  let mounted = true;
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const filtered = $derived.by(() => {
     const q = filter.trim().toLowerCase();
@@ -29,8 +32,15 @@
   });
 
   async function load() {
-    try { all = await people.list({}); }
-    catch (e) { error = String(e); }
+    try {
+      const next = await people.list({});
+      if (!mounted) return;
+      all = next;
+    }
+    catch (e) {
+      if (!mounted) return;
+      error = commandErrorMessage(e);
+    }
   }
 
   async function pick(target: PersonDto) {
@@ -41,16 +51,22 @@
     busy = true;
     try {
       const merged = await people.merge(source.id, target.id);
+      if (!mounted) return;
       onsuccess?.(merged);
       onclose();
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
       busy = false;
     }
   }
 
+  function requestClose() {
+    if (!busy) onclose();
+  }
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") { e.preventDefault(); onclose(); }
+    if (e.key === "Escape") { e.preventDefault(); requestClose(); }
     else if (e.key === "Enter") {
       e.preventDefault();
       const first = filtered[0];
@@ -59,14 +75,19 @@
   }
 
   onMount(() => {
+    mounted = true;
     load();
-    setTimeout(() => inputEl?.focus(), 0);
+    focusTimer = setTimeout(() => inputEl?.focus(), 0);
+    return () => {
+      mounted = false;
+      if (focusTimer != null) clearTimeout(focusTimer);
+    };
   });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}>
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
   <div class="dialog" onkeydown={onKey} role="dialog" tabindex="-1" aria-modal="true" aria-label="Merge person">
     <header>
       <h3>Merge {source.name ?? `Person ${source.id}`} into…</h3>

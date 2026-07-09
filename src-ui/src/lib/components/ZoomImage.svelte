@@ -11,7 +11,7 @@
   ///   the parent owns the rotation state so toolbar buttons can mutate
   ///   it without reaching inside.
 
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import type { ZoomApi } from "../zoomApi";
 
   interface Props {
@@ -58,6 +58,8 @@
   /// the result if the stamp doesn't match — that's how rapid nav
   /// avoids late-arriving decodes clobbering a newer current src.
   let loadSeq = 0;
+  let mounted = true;
+  let lastAppliedRotation: number | null = null;
 
   let dragging = $state(false);
   let dragStart = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -192,7 +194,7 @@
     const probe = new Image();
     probe.src = target;
     const swap = () => {
-      if (seq !== loadSeq) return;
+      if (!mounted || seq !== loadSeq) return;
       // Mutating these state vars in a single synchronous block lets
       // Svelte batch them — the DOM updates once, with all four
       // changes applied together.
@@ -208,6 +210,10 @@
       probe.decode().then(swap).catch(() => {
         // Some webview codecs reject decode() even when paint succeeds —
         // fall back to onload, which fires once the bitmap is ready.
+        if (probe.complete && probe.naturalWidth > 0) {
+          swap();
+          return;
+        }
         probe.onload = swap;
         probe.onerror = () => {
           /* leave the old image visible; nothing we can do */
@@ -224,7 +230,19 @@
   // already calls api.fit() / api.actual() directly. Re-applying on
   // mode change here would undo any manual zoom the user did since.
 
+  $effect(() => {
+    const nextRotation = rotate;
+    if (lastAppliedRotation == null) {
+      lastAppliedRotation = nextRotation;
+      return;
+    }
+    if (nextRotation === lastAppliedRotation) return;
+    lastAppliedRotation = nextRotation;
+    applyPreferredMode();
+  });
+
   onMount(() => {
+    mounted = true;
     measure();
     const ro = new ResizeObserver(() => {
       measure();
@@ -238,6 +256,11 @@
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
+  });
+
+  onDestroy(() => {
+    mounted = false;
+    loadSeq += 1;
   });
 
   // Public API for parent toolbars / keyboard handlers.

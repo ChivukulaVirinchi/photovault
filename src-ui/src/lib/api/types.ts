@@ -20,12 +20,21 @@ export interface DriveDto {
 export interface LibraryHandleDto {
   drive_root: string;
   photo_count: number;
+  read_only: boolean;
+  schema_too_new: SchemaTooNewInfo | null;
 }
 
 export interface LibraryOpenResult {
   drive_root: string;
   photo_count: number;
   first_run: boolean;
+  read_only: boolean;
+  schema_too_new: SchemaTooNewInfo | null;
+}
+
+export interface SchemaTooNewInfo {
+  db_version: number;
+  max_supported: number;
 }
 
 export interface ExcludedFolderDto {
@@ -117,8 +126,10 @@ export interface AlbumDto {
   id: number;
   name: string;
   photo_count: number;
+  photos_added?: number | null;
   date_range_start: string | null;
   date_range_end: string | null;
+  cover_photo_id: number | null;
   cover_thumbnail_path: string | null;
   is_virtual: boolean;
   created_by: "user" | "agent";
@@ -129,6 +140,7 @@ export interface AlbumSuggestionDto {
   kind: string;
   title: string;
   photo_ids: number[];
+  cover_photo_id: number | null;
   cover_thumbnail_path: string | null;
 }
 
@@ -141,6 +153,7 @@ export type CommandError =
   | { kind: "conflict"; reason: string }
   | { kind: "cancelled" }
   | { kind: "database"; message: string }
+  | { kind: "schema_too_new"; db_version: number; max_supported: number }
   | { kind: "io"; message: string }
   | { kind: "network"; message: string }
   | { kind: "internal"; message: string };

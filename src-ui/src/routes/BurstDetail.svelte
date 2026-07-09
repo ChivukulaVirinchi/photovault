@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { bursts } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -16,21 +18,42 @@
   let group = $state<{ id: number; members: BurstMember[] } | null>(null);
   let summaries = $state<Map<number, PhotoSummaryDto>>(new Map());
   let error = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let loadSeq = 0;
+  let mounted = true;
 
   async function load() {
+    const seq = ++loadSeq;
+    const groupId = id;
+    error = null;
+    group = null;
+    summaries = new Map();
     try {
-      group = await bursts.getGroup(id);
-      const ids = group.members.map(m => m.photo_id);
+      const nextGroup = await bursts.getGroup(groupId);
+      const ids = nextGroup.members.map(m => m.photo_id);
       const full = await photosApi.getMany(ids);
+      if (!mounted || seq !== loadSeq) return;
       const m = new Map<number, PhotoSummaryDto>();
       for (const p of full) m.set(p.id, p);
+      group = nextGroup;
       summaries = m;
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
 
   async function setBest(photoId: number) {
-    try { group = await bursts.setBest(id, photoId); }
-    catch (e) { error = JSON.stringify(e); }
+    if (actionBusy) return;
+    const seq = loadSeq;
+    const groupId = id;
+    try {
+      actionBusy = true;
+      const nextGroup = await bursts.setBest(groupId, photoId);
+      if (!mounted || seq !== loadSeq || groupId !== id) return;
+      group = nextGroup;
+    }
+    catch (e) { if (mounted && seq === loadSeq && groupId === id) error = commandErrorMessage(e); }
+    finally { if (mounted && seq === loadSeq && groupId === id) actionBusy = false; }
   }
 
   function patchThumbnail(photoId: number, thumbnailPath: string) {
@@ -42,16 +65,34 @@
   }
 
   async function trashRest() {
-    if (!group) return;
+    if (!group || actionBusy) return;
     if (!confirm("Trash all non-best?")) return;
+    const seq = loadSeq;
+    const groupId = id;
     const trashedIds = group.members
       .filter((m) => !m.is_suggested_best)
       .map((m) => m.photo_id);
-    await bursts.trashNonBest(id);
-    photoVisibility.markTrashed(trashedIds);
-    browseContext.remove(trashedIds);
-    window.location.hash = "/bursts";
+    try {
+      actionBusy = true;
+      await bursts.trashNonBest(groupId);
+      if (!mounted || seq !== loadSeq || groupId !== id) return;
+      photoVisibility.markTrashed(trashedIds);
+      browseContext.remove(trashedIds);
+      window.location.hash = "/bursts";
+    } catch (e) {
+      if (mounted && seq === loadSeq && groupId === id) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq && groupId === id) actionBusy = false;
+    }
   }
+
+  onMount(() => {
+    mounted = true;
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+    };
+  });
 
   $effect(() => { void id; load(); });
 </script>
@@ -68,7 +109,7 @@
   {/snippet}
   {#snippet actions()}
     {#if group && group.members.length > 1}
-      <button class="danger" onclick={trashRest}>
+      <button class="danger" onclick={trashRest} disabled={actionBusy}>
         Trash {group.members.length - 1} other{group.members.length - 1 === 1 ? "" : "s"}
       </button>
     {/if}
@@ -78,6 +119,7 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 {#if group}
+  {@const memberIds = group.members.map((m) => m.photo_id)}
   <div class="grid">
     {#each group.members as m (m.photo_id)}
       {@const summary = summaries.get(m.photo_id)}
@@ -86,9 +128,11 @@
           class="frame"
           href="#/photo?id={m.photo_id}"
           aria-label="Open photo"
+          onclick={() => browseContext.set(`burst:${id}`, memberIds)}
           use:thumbnailOnVisible={{
             id: m.photo_id,
             thumbnailPath: summary?.thumbnail_path ?? null,
+            mediaType: summary?.media_type,
             onReady: (path) => patchThumbnail(m.photo_id, path),
           }}
         >
@@ -99,10 +143,18 @@
         </a>
         <div class="meta">
           {#if m.is_suggested_best}
-            <a class="open-link" href="#/photo?id={m.photo_id}">Open</a>
+            <a
+              class="open-link"
+              href="#/photo?id={m.photo_id}"
+              onclick={() => browseContext.set(`burst:${id}`, memberIds)}
+            >Open</a>
           {:else}
-            <a class="open-link" href="#/photo?id={m.photo_id}">Open</a>
-            <button class="pick" onclick={() => setBest(m.photo_id)}>Pick this</button>
+            <a
+              class="open-link"
+              href="#/photo?id={m.photo_id}"
+              onclick={() => browseContext.set(`burst:${id}`, memberIds)}
+            >Open</a>
+            <button class="pick" onclick={() => setBest(m.photo_id)} disabled={actionBusy}>Pick this</button>
           {/if}
         </div>
       </div>

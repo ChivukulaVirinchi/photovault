@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { albums } from "../api/all";
+  import { commandErrorMessage } from "../api";
   import type { AlbumDto } from "../api/types";
   import { FolderPlus, Search, Plus } from "lucide-svelte";
 
@@ -19,6 +20,8 @@
   let error = $state<string | null>(null);
   let searchEl = $state<HTMLInputElement | undefined>(undefined);
   let nameEl = $state<HTMLInputElement | undefined>(undefined);
+  let mounted = true;
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const filtered = $derived(
     filter.trim() === ""
@@ -28,11 +31,18 @@
         ),
   );
 
+  function requestClose() {
+    if (!busy) onclose();
+  }
+
   async function load() {
     try {
-      allAlbums = (await albums.list()).filter((a) => !a.is_virtual);
+      const next = (await albums.list()).filter((a) => !a.is_virtual);
+      if (!mounted) return;
+      allAlbums = next;
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
     }
   }
 
@@ -41,24 +51,29 @@
     busy = true;
     try {
       const r = await albums.addPhotos(album.id, photoIds);
+      if (!mounted) return;
       onsuccess?.(album, r.count);
       onclose();
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
       busy = false;
     }
   }
 
   async function createAndAdd() {
+    if (busy) return;
     const name = newName.trim();
     if (!name) return;
     busy = true;
     try {
       const a = await albums.create(name, photoIds);
-      onsuccess?.(a, photoIds.length);
+      if (!mounted) return;
+      onsuccess?.(a, a.photos_added ?? photoIds.length);
       onclose();
     } catch (e) {
-      error = String(e);
+      if (!mounted) return;
+      error = commandErrorMessage(e);
       busy = false;
     }
   }
@@ -66,7 +81,7 @@
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      onclose();
+      requestClose();
     } else if (e.key === "Enter" && !creating) {
       e.preventDefault();
       const first = filtered[0];
@@ -79,19 +94,25 @@
       e.preventDefault();
       creating = false;
       newName = "";
-      setTimeout(() => searchEl?.focus(), 0);
+      if (focusTimer != null) clearTimeout(focusTimer);
+      focusTimer = setTimeout(() => searchEl?.focus(), 0);
     }
   }
 
   onMount(() => {
+    mounted = true;
     load();
-    setTimeout(() => searchEl?.focus(), 0);
+    focusTimer = setTimeout(() => searchEl?.focus(), 0);
+    return () => {
+      mounted = false;
+      if (focusTimer != null) clearTimeout(focusTimer);
+    };
   });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}>
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
   <div class="dialog" onkeydown={onKey} role="dialog" tabindex="-1" aria-modal="true" aria-label="Add to album">
     <header>
       <h3>Add {photoIds.length} {photoIds.length === 1 ? "photo" : "photos"} to album</h3>
@@ -113,7 +134,12 @@
           autofocus
         />
         <button class="primary" onclick={createAndAdd} disabled={busy || !newName.trim()}>Create</button>
-        <button class="ghost" onclick={() => { creating = false; newName = ""; }}>Cancel</button>
+        <button class="ghost" disabled={busy} onclick={() => {
+          creating = false;
+          newName = "";
+          if (focusTimer != null) clearTimeout(focusTimer);
+          focusTimer = setTimeout(() => searchEl?.focus(), 0);
+        }}>Cancel</button>
       </div>
     {:else}
       <div class="search">
@@ -123,7 +149,11 @@
 
       <ul class="list">
         <li>
-          <button class="new" onclick={() => { creating = true; setTimeout(() => nameEl?.focus(), 0); }}>
+          <button class="new" onclick={() => {
+            creating = true;
+            if (focusTimer != null) clearTimeout(focusTimer);
+            focusTimer = setTimeout(() => nameEl?.focus(), 0);
+          }}>
             <FolderPlus size={16} strokeWidth={1.75} />
             <span class="name">New album…</span>
           </button>

@@ -1,6 +1,6 @@
 //! Read/query methods for FaceRepo.
 
-use rusqlite::{params, Result as SqliteResult};
+use rusqlite::{params, params_from_iter, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
@@ -30,9 +30,14 @@ impl<'a> FaceRepo<'a> {
     pub fn get_unclustered_faces_with_photo_embeddings(
         &self,
     ) -> SqliteResult<Vec<(i64, i64, FaceEmbedding)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, photo_id, embedding FROM faces WHERE cluster_id IS NULL")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.photo_id, f.embedding
+                 FROM faces f
+                 JOIN photos p ON p.id = f.photo_id
+                 WHERE f.cluster_id IS NULL
+                   AND f.user_confirmed >= 0
+                   AND p.is_trashed = FALSE",
+        )?;
 
         let rows = stmt.query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -160,8 +165,7 @@ impl<'a> FaceRepo<'a> {
             .query_map(params![photo_id], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<SqliteResult<Vec<_>>>()?;
 
         Ok(people)
     }
@@ -170,17 +174,20 @@ impl<'a> FaceRepo<'a> {
     pub fn get_photos_for_cluster(&self, cluster_id: i64) -> SqliteResult<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT DISTINCT photo_id FROM (
+            SELECT p.id
+            FROM photos p
+            JOIN (
                 SELECT f.photo_id
                 FROM faces f
-                JOIN photos p ON p.id = f.photo_id
-                WHERE f.cluster_id = ?1 AND p.is_trashed = FALSE
+                WHERE f.cluster_id = ?1
                 UNION
                 SELECT pii.photo_id
                 FROM photo_inferred_identities pii
-                JOIN photos p ON p.id = pii.photo_id
-                WHERE pii.cluster_id = ?1 AND p.is_trashed = FALSE
-            )
+                WHERE pii.cluster_id = ?1
+            ) matches ON matches.photo_id = p.id
+            WHERE p.is_trashed = FALSE
+            GROUP BY p.id
+            ORDER BY p.date_taken IS NULL ASC, p.date_taken DESC, p.id DESC
             "#,
         )?;
 
@@ -646,6 +653,112 @@ impl<'a> FaceRepo<'a> {
         Ok((total, cluster_count))
     }
 
+    /// Return the next batch of unconfirmed faces from the cluster with
+    /// the most pending review work. This keeps the review UI O(1)
+    /// instead of probing every person until it finds one with faces.
+    pub fn next_unconfirmed_face_batch(&self, limit: usize) -> SqliteResult<Vec<FaceDetail>> {
+        self.next_unconfirmed_face_batch_excluding(limit, &[])
+    }
+
+    /// Return the next review batch while ignoring faces the current UI
+    /// session has skipped. Skips are intentionally not persisted as a
+    /// reject/confirm decision, but they still need to be excluded from
+    /// the server-side cluster selection or the reviewer can be sent
+    /// straight back to the same skipped-only cluster.
+    pub fn next_unconfirmed_face_batch_excluding(
+        &self,
+        limit: usize,
+        excluded_face_ids: &[i64],
+    ) -> SqliteResult<Vec<FaceDetail>> {
+        if excluded_face_ids.is_empty() {
+            return self.next_unconfirmed_face_batch_without_exclusions(limit);
+        }
+
+        let placeholders = vec!["?"; excluded_face_ids.len()].join(", ");
+        let sql = format!(
+            r#"
+            WITH next_cluster AS (
+                SELECT cluster_id
+                FROM faces
+                WHERE cluster_id IS NOT NULL
+                  AND user_confirmed = 0
+                  AND id NOT IN ({placeholders})
+                GROUP BY cluster_id
+                ORDER BY COUNT(*) DESC, MIN(id) ASC
+                LIMIT 1
+            )
+            SELECT f.id, f.photo_id, f.cluster_id, f.confidence, f.user_confirmed
+            FROM faces f
+            JOIN next_cluster n ON n.cluster_id = f.cluster_id
+            WHERE f.user_confirmed = 0
+              AND f.id NOT IN ({placeholders})
+            ORDER BY f.id ASC
+            LIMIT ?
+            "#
+        );
+        let mut args = Vec::with_capacity(excluded_face_ids.len() * 2 + 1);
+        args.extend_from_slice(excluded_face_ids);
+        args.extend_from_slice(excluded_face_ids);
+        args.push(limit as i64);
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(args), |row| {
+            Ok(FaceDetail {
+                face_id: row.get(0)?,
+                photo_id: row.get(1)?,
+                cluster_id: row.get(2)?,
+                confidence: row.get(3)?,
+                user_confirmed: row.get(4)?,
+            })
+        })?;
+
+        let mut faces = Vec::new();
+        for row in rows {
+            faces.push(row?);
+        }
+        Ok(faces)
+    }
+
+    fn next_unconfirmed_face_batch_without_exclusions(
+        &self,
+        limit: usize,
+    ) -> SqliteResult<Vec<FaceDetail>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            WITH next_cluster AS (
+                SELECT cluster_id
+                FROM faces
+                WHERE cluster_id IS NOT NULL
+                  AND user_confirmed = 0
+                GROUP BY cluster_id
+                ORDER BY COUNT(*) DESC, MIN(id) ASC
+                LIMIT 1
+            )
+            SELECT f.id, f.photo_id, f.cluster_id, f.confidence, f.user_confirmed
+            FROM faces f
+            JOIN next_cluster n ON n.cluster_id = f.cluster_id
+            WHERE f.user_confirmed = 0
+            ORDER BY f.id ASC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(FaceDetail {
+                face_id: row.get(0)?,
+                photo_id: row.get(1)?,
+                cluster_id: row.get(2)?,
+                confidence: row.get(3)?,
+                user_confirmed: row.get(4)?,
+            })
+        })?;
+
+        let mut faces = Vec::new();
+        for row in rows {
+            faces.push(row?);
+        }
+        Ok(faces)
+    }
+
     /// Get negatives for a face (clusters it should NOT be in).
     pub fn get_negatives_for_face(&self, face_id: i64) -> SqliteResult<Vec<i64>> {
         let mut stmt = self
@@ -661,6 +774,10 @@ impl<'a> FaceRepo<'a> {
 
     /// K-similar: find K nearest unassigned faces to a cluster's confirmed gallery centroid.
     pub fn k_similar_to_cluster(&self, cluster_id: i64, k: usize) -> SqliteResult<Vec<(i64, f32)>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
         // Gather confirmed gallery embeddings for centroid.
         let mut stmt = self.conn.prepare(
             "SELECT embedding FROM person_gallery_embeddings WHERE cluster_id = ?1 AND source = 'user_confirmed'",
@@ -713,7 +830,10 @@ impl<'a> FaceRepo<'a> {
             r#"
             SELECT f.id, f.embedding
             FROM faces f
+            JOIN photos p ON p.id = f.photo_id
             WHERE (f.cluster_id IS NULL OR (f.cluster_id IS NOT NULL AND f.user_confirmed = 0))
+              AND f.user_confirmed >= 0
+              AND p.is_trashed = FALSE
               AND f.id NOT IN (
                   SELECT face_id FROM face_negatives WHERE not_cluster_id = ?1
               )
@@ -746,6 +866,14 @@ mod tests {
 
     use super::*;
     use crate::db::create_schema;
+    use ndarray::Array1;
+
+    fn embedding(seed: f32) -> Vec<u8> {
+        let mut values = vec![0.0; 512];
+        values[0] = seed;
+        values[1] = 1.0 - seed;
+        FaceEmbedding::new(Array1::from_vec(values)).to_bytes()
+    }
 
     fn seeded_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -774,11 +902,53 @@ mod tests {
                     embedding, cluster_id, confidence, user_confirmed
                  )
                  VALUES (?1, ?2, 0.1, 0.1, 0.2, 0.2, ?3, 10, 0.99, ?4)",
-                params![id, id, vec![id as u8; 16], if id == 3 { 1 } else { 0 }],
+                params![
+                    id,
+                    id,
+                    embedding(id as f32 / 10.0),
+                    if id == 3 { 1 } else { 0 }
+                ],
             )
             .unwrap();
         }
         conn
+    }
+
+    fn insert_cluster(conn: &Connection, id: i64, name: &str) {
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, face_count, photo_count) VALUES (?1, ?2, 0, 0)",
+            params![id, name],
+        )
+        .unwrap();
+    }
+
+    fn insert_face(conn: &Connection, id: i64, cluster_id: i64, confirmed: i32) {
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+             VALUES (?1, ?2, ?3, ?4, 100)",
+            params![
+                id + 100,
+                format!("photos/review-{id}.jpg"),
+                format!("review-{id}.jpg"),
+                format!("review-hash-{id}")
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO faces (
+                id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                embedding, cluster_id, confidence, user_confirmed
+             )
+             VALUES (?1, ?2, 0.1, 0.1, 0.2, 0.2, ?3, ?4, 0.99, ?5)",
+            params![
+                id,
+                id + 100,
+                embedding(id as f32 / 10.0),
+                cluster_id,
+                confirmed
+            ],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -808,6 +978,135 @@ mod tests {
         assert_eq!(
             faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),
             vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn next_unconfirmed_face_batch_uses_the_cluster_with_most_pending_faces() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        insert_cluster(&conn, 10, "Small");
+        insert_cluster(&conn, 20, "Large");
+        insert_face(&conn, 1, 10, 0);
+        insert_face(&conn, 2, 20, 0);
+        insert_face(&conn, 3, 20, 0);
+        insert_face(&conn, 4, 20, 1);
+        let repo = FaceRepo::new(&conn);
+
+        let faces = repo.next_unconfirmed_face_batch(10).unwrap();
+
+        assert_eq!(
+            faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(faces.iter().all(|f| f.cluster_id == Some(20)));
+    }
+
+    #[test]
+    fn next_unconfirmed_face_batch_excluding_skipped_faces_moves_to_next_cluster() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        insert_cluster(&conn, 10, "Small");
+        insert_cluster(&conn, 20, "Large");
+        insert_face(&conn, 1, 10, 0);
+        insert_face(&conn, 2, 20, 0);
+        insert_face(&conn, 3, 20, 0);
+        let repo = FaceRepo::new(&conn);
+
+        let faces = repo
+            .next_unconfirmed_face_batch_excluding(10, &[2, 3])
+            .unwrap();
+
+        assert_eq!(faces.iter().map(|f| f.face_id).collect::<Vec<_>>(), vec![1]);
+        assert!(faces.iter().all(|f| f.cluster_id == Some(10)));
+    }
+
+    #[test]
+    fn unclustered_embedding_candidates_skip_trashed_and_hidden_faces() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        for id in 1..=3 {
+            conn.execute(
+                "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, is_trashed)
+                 VALUES (?1, ?2, ?3, ?4, 100, ?5)",
+                params![
+                    id,
+                    format!("photos/{id}.jpg"),
+                    format!("{id}.jpg"),
+                    format!("hash-{id}"),
+                    if id == 2 { 1 } else { 0 }
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO faces (
+                id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                embedding, cluster_id, confidence, user_confirmed
+             )
+             VALUES
+                (1, 1, 0.1, 0.1, 0.2, 0.2, ?1, NULL, 0.9, 0),
+                (2, 2, 0.1, 0.1, 0.2, 0.2, ?2, NULL, 0.9, 0),
+                (3, 3, 0.1, 0.1, 0.2, 0.2, ?3, NULL, 0.9, -1)",
+            params![embedding(0.1), embedding(0.2), embedding(0.3)],
+        )
+        .unwrap();
+
+        let faces = FaceRepo::new(&conn)
+            .get_unclustered_faces_with_photo_embeddings()
+            .unwrap();
+
+        assert_eq!(
+            faces.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn k_similar_skips_trashed_candidates_and_zero_k_short_circuits() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        insert_cluster(&conn, 10, "Person");
+        for id in 1..=3 {
+            conn.execute(
+                "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, is_trashed)
+                 VALUES (?1, ?2, ?3, ?4, 100, ?5)",
+                params![
+                    id,
+                    format!("photos/{id}.jpg"),
+                    format!("{id}.jpg"),
+                    format!("hash-{id}"),
+                    if id == 3 { 1 } else { 0 }
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO faces (
+                id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                embedding, cluster_id, confidence, user_confirmed
+             )
+             VALUES
+                (1, 1, 0.1, 0.1, 0.2, 0.2, ?1, 10, 0.9, 1),
+                (2, 2, 0.1, 0.1, 0.2, 0.2, ?2, NULL, 0.9, 0),
+                (3, 3, 0.1, 0.1, 0.2, 0.2, ?3, NULL, 0.9, 0)",
+            params![embedding(0.9), embedding(0.8), embedding(0.9)],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO person_gallery_embeddings (cluster_id, face_id, embedding, quality_score, source)
+             VALUES (10, 1, ?1, 0.9, 'user_confirmed')",
+            params![embedding(0.9)],
+        )
+        .unwrap();
+        let repo = FaceRepo::new(&conn);
+
+        assert!(repo.k_similar_to_cluster(10, 0).unwrap().is_empty());
+        let similar = repo.k_similar_to_cluster(10, 10).unwrap();
+
+        assert_eq!(
+            similar.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2]
         );
     }
 }

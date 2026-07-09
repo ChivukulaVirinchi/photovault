@@ -4,17 +4,21 @@ import type { Settings } from "../api/all";
 class SettingsStore {
   data = $state<Settings | null>(null);
   loading = $state(false);
+  private seq = 0;
 
   async load() {
+    const seq = ++this.seq;
     this.loading = true;
     try {
-      this.data = await settings.get();
+      const next = await settings.get();
+      if (seq !== this.seq) return;
+      this.data = next;
       this.applyTheme();
     } catch {
       // Best-effort. Without a library opened, settings still works,
       // but if Tauri IPC isn't available we silently fall back.
     } finally {
-      this.loading = false;
+      if (seq === this.seq) this.loading = false;
     }
   }
 
@@ -34,16 +38,22 @@ class SettingsStore {
   }
 
   async update(patch: Partial<Settings>) {
+    const seq = ++this.seq;
     // Optimistic local update so UI is instant; backend reconciles.
+    const previous = this.data;
     if (this.data) this.data = { ...this.data, ...patch };
     this.applyTheme();
     try {
       const next = await settings.update(patch);
+      if (seq !== this.seq) return;
       this.data = next;
       this.applyTheme();
-    } catch {
-      // Revert? For now we rely on next load() to reconcile if the user
-      // opens settings. Mutations here are low-stakes (theme, sidebar).
+    } catch (e) {
+      if (seq === this.seq) {
+        this.data = previous;
+        this.applyTheme();
+      }
+      throw e;
     }
   }
 
@@ -56,7 +66,7 @@ class SettingsStore {
   }
 
   toggleSidebar() {
-    return this.update({ sidebar_collapsed: !this.sidebarCollapsed });
+    void this.update({ sidebar_collapsed: !this.sidebarCollapsed }).catch(() => {});
   }
 }
 

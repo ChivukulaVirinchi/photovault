@@ -48,7 +48,6 @@ pub struct SettingsUpdateArgs {
 pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<SettingsDto> {
     use smriti::config::{AppTheme, DateFormat};
     let mut cfg = smriti::config::AppConfig::load();
-    let assistant_enabled_was_patched = args.assistant_enabled.is_some();
     if let Some(t) = args.theme {
         cfg.theme = match t.as_str() {
             "dark" => AppTheme::Dark,
@@ -139,7 +138,7 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
         cfg.assistant_enabled = v;
     }
     if let Some(v) = args.ai_features_enabled {
-        apply_ai_feature_toggle(&mut cfg, v, assistant_enabled_was_patched);
+        apply_ai_feature_toggle(&mut cfg, v);
     }
     if let Some(v) = args.assistant_provider {
         cfg.assistant_provider = match v.as_str() {
@@ -185,19 +184,16 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
             }
         });
     }
+    cfg.validate();
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
     Ok((&cfg).into())
 }
 
-fn apply_ai_feature_toggle(
-    cfg: &mut smriti::config::AppConfig,
-    ai_enabled: bool,
-    assistant_enabled_was_patched: bool,
-) {
+fn apply_ai_feature_toggle(cfg: &mut smriti::config::AppConfig, ai_enabled: bool) {
     cfg.ai_features_enabled = ai_enabled;
-    if !ai_enabled || !assistant_enabled_was_patched {
+    if !ai_enabled {
         cfg.assistant_enabled = false;
     }
 }
@@ -210,11 +206,11 @@ mod tests {
     fn reenabling_ai_keeps_assistant_off_by_default() {
         let mut cfg = AppConfig::default();
 
-        super::apply_ai_feature_toggle(&mut cfg, false, false);
+        super::apply_ai_feature_toggle(&mut cfg, false);
         assert!(!cfg.ai_features_enabled);
         assert!(!cfg.assistant_enabled);
 
-        super::apply_ai_feature_toggle(&mut cfg, true, false);
+        super::apply_ai_feature_toggle(&mut cfg, true);
         assert!(cfg.ai_features_enabled);
         assert!(!cfg.assistant_enabled);
     }
@@ -222,12 +218,12 @@ mod tests {
     #[test]
     fn explicit_assistant_patch_wins_when_ai_is_enabled() {
         let mut cfg = AppConfig {
-            assistant_enabled: false,
+            assistant_enabled: true,
             ..Default::default()
         };
 
-        super::apply_ai_feature_toggle(&mut cfg, true, true);
+        super::apply_ai_feature_toggle(&mut cfg, true);
         assert!(cfg.ai_features_enabled);
-        assert!(!cfg.assistant_enabled);
+        assert!(cfg.assistant_enabled);
     }
 }

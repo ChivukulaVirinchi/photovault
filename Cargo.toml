@@ -9,7 +9,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 anyhow = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "multipart", "blocking", "json"] }
 
 [package]
 name = "smriti"
@@ -148,7 +148,7 @@ tracing = "0.1"
 
 # Update mechanism (Phase 3)
 semver = { version = "1", features = ["serde"] }
-self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-zip", "compression-zip-deflate"] }
+self_update = { version = "1.0.0-rc.3", default-features = false, features = ["reqwest", "rustls", "archive-zip", "compression-zip-deflate"] }
 futures = "0.3"
 open = "5"
 

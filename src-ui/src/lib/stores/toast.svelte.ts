@@ -17,6 +17,8 @@ export interface Toast {
   expiresAt: number;
 }
 
+const MAX_TOASTS = 8;
+
 class ToastStore {
   list = $state<Toast[]>([]);
   private nextId = 1;
@@ -32,7 +34,7 @@ class ToastStore {
       onUndo: opts.onUndo,
       expiresAt: Date.now() + duration,
     };
-    this.list = [...this.list, t];
+    this.list = [...this.list, t].slice(-MAX_TOASTS);
     setTimeout(() => this.dismiss(id), duration);
     return id;
   }

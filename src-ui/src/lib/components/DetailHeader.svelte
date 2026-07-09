@@ -80,7 +80,7 @@
     margin: 0;
     color: var(--ink);
     line-height: 1.15;
-    letter-spacing: -0.015em;
+    letter-spacing: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -9,6 +9,8 @@ use image_hasher::{HashAlg, HasherConfig};
 use rayon::prelude::*;
 use rusqlite::Connection;
 
+use crate::services::path_util::safe_join_relative;
+
 /// Result of duplicate detection
 #[derive(Debug, Clone)]
 pub struct DuplicateGroup {
@@ -66,61 +68,82 @@ impl DuplicateDetector {
     /// Find all exact duplicate groups in the database
     ///
     /// Returns groups where 2+ photos share the same SHA256 hash.
-    pub fn find_duplicates(conn: &Connection) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        // Query for duplicate hashes
+    pub fn find_duplicates(
+        conn: &Connection,
+        drive_root: &Path,
+    ) -> rusqlite::Result<Vec<DuplicateGroup>> {
+        // Fast scanner hashes include file metadata, so byte-identical
+        // copies with different mtimes may not share photos.file_hash.
+        // Use file_size only to narrow candidates, then compute the
+        // true full-file SHA-256 for exact duplicate grouping.
         let mut stmt = conn.prepare(
             r#"
-            SELECT file_hash, COUNT(*) as count
+            SELECT file_size, COUNT(*) as count
             FROM photos
             WHERE is_trashed = FALSE
-            GROUP BY file_hash
+            GROUP BY file_size
             HAVING count > 1
             ORDER BY count DESC
             "#,
         )?;
 
-        let hashes: Vec<String> = stmt
+        let sizes: Vec<i64> = stmt
             .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut groups = Vec::new();
 
-        for hash in hashes {
-            // Get all photos with this hash
+        for size in sizes {
             let mut photo_stmt = conn.prepare(
                 r#"
                 SELECT id, file_path, date_taken, file_size
                 FROM photos
-                WHERE file_hash = ?1 AND is_trashed = FALSE
+                WHERE file_size = ?1 AND is_trashed = FALSE
                 ORDER BY date_taken ASC, file_path ASC
                 "#,
             )?;
 
             let photos: Vec<(i64, String, Option<String>, i64)> = photo_stmt
-                .query_map([&hash], |row| {
+                .query_map([size], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             if photos.len() < 2 {
                 continue;
             }
 
-            let photo_ids: Vec<i64> = photos.iter().map(|(id, _, _, _)| *id).collect();
+            let mut by_full_hash: std::collections::HashMap<
+                String,
+                Vec<(i64, String, Option<String>, i64)>,
+            > = std::collections::HashMap::new();
+            for photo in photos {
+                let Ok(path) = safe_join_relative(drive_root, &photo.1) else {
+                    continue;
+                };
+                let Ok(full_hash) = crate::services::scanner::calculate_hash(&path) else {
+                    continue;
+                };
+                by_full_hash.entry(full_hash).or_default().push(photo);
+            }
 
-            // Determine which photo to suggest keeping
-            let suggested_keep_id = Self::suggest_keep(&photos);
+            for (hash, photos) in by_full_hash {
+                if photos.len() < 2 {
+                    continue;
+                }
+                let photo_ids: Vec<i64> = photos.iter().map(|(id, _, _, _)| *id).collect();
+                let suggested_keep_id = Self::suggest_keep(&photos);
 
-            groups.push(DuplicateGroup {
-                hash,
-                photo_ids,
-                suggested_keep_id,
-                duplicate_type: "exact",
-            });
+                groups.push(DuplicateGroup {
+                    hash,
+                    photo_ids,
+                    suggested_keep_id,
+                    duplicate_type: "exact",
+                });
+            }
         }
 
+        groups.sort_by(|a, b| b.photo_ids.len().cmp(&a.photo_ids.len()));
         Ok(groups)
     }
 
@@ -169,7 +192,8 @@ impl DuplicateDetector {
             .query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
-            .filter_map(|r| r.ok())
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
             .filter(|row| !exclude_ids.contains(&row.0))
             .collect();
 
@@ -318,8 +342,7 @@ impl DuplicateDetector {
                     thumbnail_path: r.get(4)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         if pending.is_empty() {
             return Ok(());
         }
@@ -382,7 +405,9 @@ impl DuplicateDetector {
     fn phash_source_path(drive_root: &Path, photo: &PendingHashPhoto) -> Option<(PathBuf, bool)> {
         let mut candidates = Vec::with_capacity(5);
         if let Some(path) = &photo.thumbnail_path {
-            candidates.push((drive_root.join(path), false));
+            if let Ok(path) = crate::services::path_util::safe_join_relative(drive_root, path) {
+                candidates.push((path, false));
+            }
         }
 
         let subdir = &photo.file_hash[..2.min(photo.file_hash.len())];
@@ -399,7 +424,11 @@ impl DuplicateDetector {
             ));
         }
 
-        candidates.push((drive_root.join(&photo.file_path), true));
+        if let Ok(path) =
+            crate::services::path_util::safe_join_relative(drive_root, &photo.file_path)
+        {
+            candidates.push((path, true));
+        }
         candidates.into_iter().find(|(p, _)| p.exists())
     }
 
@@ -495,7 +524,8 @@ impl DuplicateDetector {
                 let max: i64 = row.get(1)?;
                 Ok(total - max)
             })?
-            .filter_map(|r| r.ok())
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
             .sum();
 
         Ok(wasted.max(0) as u64)
@@ -540,6 +570,33 @@ mod tests {
 
         // Should prefer ID 2 (shorter path)
         assert_eq!(suggested, Some(2));
+    }
+
+    #[test]
+    fn exact_duplicates_use_full_file_hash_not_scanner_fast_hash() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        std::fs::create_dir_all(temp.path().join("photos")).unwrap();
+        std::fs::write(temp.path().join("photos/a.jpg"), b"identical bytes").unwrap();
+        std::fs::write(temp.path().join("photos/a-copy.jpg"), b"identical bytes").unwrap();
+
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, is_trashed)
+             VALUES
+             (1, 'photos/a.jpg', 'a.jpg', 'fast-hash-a', 15, FALSE),
+             (2, 'photos/a-copy.jpg', 'a-copy.jpg', 'fast-hash-b', 15, FALSE)",
+            [],
+        )
+        .unwrap();
+
+        let groups = DuplicateDetector::find_duplicates(&conn, temp.path()).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].duplicate_type, "exact");
+        let mut ids = groups[0].photo_ids.clone();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
     }
 
     #[test]

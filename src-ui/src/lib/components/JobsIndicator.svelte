@@ -4,6 +4,7 @@
   import { CircleX, Loader2, Minus } from "lucide-svelte";
 
   let expanded = $state(false);
+  let cancelling = $state<Set<string>>(new Set());
   // Auto-collapse when no jobs are running.
   $effect(() => {
     if (jobs.count === 0) expanded = false;
@@ -28,12 +29,15 @@
     return !["assets", "albumSuggestions"].includes(j.kind);
   }
   async function cancelJob(j: Job) {
+    if (cancelling.has(j.id)) return;
+    cancelling = new Set([...cancelling, j.id]);
     // Optimistic local-state flip so the row reads "Cancelling..."
     // immediately. The real status flip arrives via the complete event
     // when the engine actually stops.
     if (j.id.startsWith("pending-")) {
       // Optimistic placeholder — just dismiss locally.
       jobs.dismiss(j.id);
+      cancelling = new Set([...cancelling].filter((id) => id !== j.id));
       return;
     }
     jobs.markCancelling(j.id);
@@ -44,6 +48,8 @@
       // leave the row alone and let the natural complete event clean up.
       // eslint-disable-next-line no-console
       console.warn("jobs_cancel failed:", e);
+    } finally {
+      cancelling = new Set([...cancelling].filter((id) => id !== j.id));
     }
   }
 </script>
@@ -53,7 +59,7 @@
     {#if expanded}
       <header>
         <span class="title">
-          {jobs.count} {jobs.count === 1 ? "task" : "tasks"} running
+          {jobs.count} active {jobs.count === 1 ? "task" : "tasks"}
         </span>
         <button class="icon-btn" onclick={() => (expanded = false)} aria-label="Collapse">
           <Minus size={14} strokeWidth={2} />
@@ -66,16 +72,21 @@
           {@const eta = fmtEta(j)}
           <li>
             <div class="row">
-              <Loader2 class="spin" size={13} strokeWidth={2} />
+              {#if j.status === "error"}
+                <CircleX class="err" size={13} strokeWidth={2} />
+              {:else}
+                <Loader2 class="spin" size={13} strokeWidth={2} />
+              {/if}
               <span class="t">{j.title}</span>
               {#if p != null}<span class="pct mono">{p}%</span>{/if}
               {#if canCancel(j)}
                 <button
                   class="icon-btn cancel"
                   onclick={() => cancelJob(j)}
+                  disabled={cancelling.has(j.id) || j.status !== "running"}
                   aria-label={j.kind === "faces" ? "Pause" : "Cancel"}
                   title={j.kind === "faces"
-                    ? "Pause ? resume later, even after moving the drive to another machine"
+                    ? "Pause - resume later, even after moving the drive to another machine"
                     : "Cancel"}
                 >
                   <CircleX size={13} strokeWidth={2} />
@@ -261,6 +272,9 @@
   :global(.spin) {
     color: var(--accent);
     animation: spin 1.2s linear infinite;
+  }
+  :global(.err) {
+    color: var(--hot, #d05a4a);
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

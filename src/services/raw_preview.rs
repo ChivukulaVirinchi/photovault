@@ -110,6 +110,11 @@ fn is_jpeg_compression(code: u32) -> bool {
 /// of valid distinct IFDs could still spiral).
 const MAX_IFDS: usize = 64;
 
+/// Embedded JPEG previews are usually a few MB. Very high-resolution
+/// camera previews can be larger, but anything above this is more
+/// likely a corrupt length tag than a useful preview.
+const MAX_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
+
 impl TiffReader {
     fn new(mut file: BufReader<File>, file_len: u64) -> Result<Self, String> {
         let mut header = [0u8; 8];
@@ -313,6 +318,9 @@ impl TiffReader {
     /// for any out-of-range or zero-length candidate.
     fn bounded(&self, offset: u64, length: u64) -> Option<PreviewCandidate> {
         if length == 0 || offset == 0 {
+            return None;
+        }
+        if length > MAX_PREVIEW_BYTES {
             return None;
         }
         let end = offset.checked_add(length)?;
@@ -564,6 +572,29 @@ mod tests {
         bytes.extend_from_slice(&1024u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes()); // next IFD
         let f = write_tiff(&bytes);
+        assert!(extract_largest_preview(f.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn oversized_preview_length_is_skipped_without_allocation() {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(b"II");
+        bytes.extend_from_slice(&42u16.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&TAG_JPEG_INTERCHANGE_FORMAT.to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&64u32.to_le_bytes());
+        bytes.extend_from_slice(&TAG_JPEG_INTERCHANGE_FORMAT_LENGTH.to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&((MAX_PREVIEW_BYTES + 1) as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut f = write_tiff(&bytes);
+        f.as_file_mut().set_len(64 + MAX_PREVIEW_BYTES + 1).unwrap();
+
         assert!(extract_largest_preview(f.path()).unwrap().is_none());
     }
 }

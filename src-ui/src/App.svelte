@@ -19,14 +19,9 @@
   import Bursts from "./routes/Bursts.svelte";
   import BurstDetail from "./routes/BurstDetail.svelte";
   import Trash from "./routes/Trash.svelte";
-  // Documents tab deferred — see Sidebar.svelte. Route stub kept
-  // commented in case it returns; the engine still classifies content
-  // categories silently for the timeline badge.
-  // import Documents from "./routes/Documents.svelte";
   import Insights from "./routes/Insights.svelte";
   import Settings from "./routes/Settings.svelte";
   import MapView from "./routes/Map.svelte";
-  import Cull from "./routes/Cull.svelte";
   import Shortcuts from "./routes/Shortcuts.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
@@ -36,6 +31,7 @@
   import { jobs } from "./lib/stores/jobs.svelte";
   import { browseContext } from "./lib/stores/browseContext.svelte";
   import { selection } from "./lib/stores/selection.svelte";
+  import { photoVisibility } from "./lib/stores/photoVisibility.svelte";
   import { slideshow } from "./lib/stores/slideshow.svelte";
   import { assistantStore } from "./lib/stores/assistant.svelte";
 
@@ -46,16 +42,38 @@
 
   let showShortcuts = $state(false);
   let lastDriveRoot = $state<string | null | undefined>(undefined);
+  let lastRouteKey: string | null = null;
+
+  function safeDecode(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
 
   function parseHash() {
     const raw = window.location.hash.slice(1);
     const [path, q] = raw.split("?");
+    const nextPath = path || "/timeline";
+    const nextRouteKey = `${nextPath}?${q ?? ""}`;
+    if (lastRouteKey !== null && nextRouteKey !== lastRouteKey) {
+      selection.clear();
+    }
+    lastRouteKey = nextRouteKey;
     const params: Record<string, string> = {};
     if (q) for (const kv of q.split("&")) {
       const [k, v] = kv.split("=");
-      params[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
+      params[safeDecode(k)] = safeDecode(v ?? "");
     }
-    route = { path: path || "/timeline", params };
+    route = { path: nextPath, params };
+  }
+
+  function positiveIntParam(name: string): number | null {
+    const raw = route.params[name];
+    if (!raw || !/^\d+$/.test(raw)) return null;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -88,7 +106,7 @@
     // Single global subscription to all long-job progress events. Per-
     // route progress UI reads from this store, so navigation never
     // loses state — the work was already running in the background.
-    jobs.install();
+    jobs.install().catch((e) => console.warn("job event subscription failed", e));
     return () => {
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);
@@ -101,6 +119,7 @@
     if (previousRoot !== undefined && root !== previousRoot) {
       browseContext.clear();
       selection.clear();
+      photoVisibility.clear();
       slideshow.close();
       assistantStore.resetForLibrary();
       if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
@@ -112,56 +131,56 @@
 </script>
 
 {#if !libraryStore.isOpen}
-  <Welcome />
+  {#if route.path === "/settings"}
+    <div class="main no-library-main">
+      <Settings />
+    </div>
+  {:else}
+    <Welcome />
+  {/if}
 {:else}
   {#key libraryStore.driveRoot}
     <div class="shell">
       <Sidebar current={route.path} />
       <div class="main">
-        {#if route.path === "/photo"}
-          <PhotoDetail id={Number(route.params.id)} />
+        {#if route.path === "/photo" && positiveIntParam("id") != null}
+          <PhotoDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/people"}
           <People />
         {:else if route.path === "/people/review"}
           <PersonReview />
         {:else if route.path === "/review-faces"}
           <FaceReview />
-        {:else if route.path === "/person"}
-          <PersonDetail id={Number(route.params.id)} />
+        {:else if route.path === "/person" && positiveIntParam("id") != null}
+          <PersonDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/albums"}
           <Albums />
-        {:else if route.path === "/album"}
-          <AlbumDetail id={Number(route.params.id)} />
+        {:else if route.path === "/album" && positiveIntParam("id") != null}
+          <AlbumDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/search"}
           <Search initialQuery={route.params.q ?? ""} />
         {:else if route.path === "/memories"}
           <Memories />
-        {:else if route.path === "/memory"}
+        {:else if route.path === "/memory" && route.params.id}
           <MemoryDetail id={route.params.id} />
         {:else if route.path === "/duplicates"}
           <Duplicates />
-        {:else if route.path === "/duplicate"}
-          <DuplicateDetail id={Number(route.params.id)} />
+        {:else if route.path === "/duplicate" && positiveIntParam("id") != null}
+          <DuplicateDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/bursts"}
           <Bursts />
-        {:else if route.path === "/burst"}
-          <BurstDetail id={Number(route.params.id)} />
+        {:else if route.path === "/burst" && positiveIntParam("id") != null}
+          <BurstDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/trash"}
           <Trash />
-        <!-- {:else if route.path === "/documents"}
-          <Documents /> -->
         {:else if route.path === "/insights"}
           <Insights />
-        {:else if route.path === "/health"}
-          <Settings />
         {:else if route.path === "/settings"}
           <Settings />
         {:else if route.path === "/map"}
           <MapView />
-        {:else if route.path === "/cull"}
-          <Cull />
         {:else}
-          <Timeline revealId={route.params.photo ? Number(route.params.photo) : null} />
+          <Timeline revealId={positiveIntParam("photo")} />
         {/if}
       </div>
     </div>
@@ -187,5 +206,9 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+  .no-library-main {
+    height: 100vh;
+    background: var(--bg);
   }
 </style>

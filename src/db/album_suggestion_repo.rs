@@ -88,19 +88,25 @@ impl<'a> AlbumSuggestionRepo<'a> {
 
     /// Mark a suggestion as accepted.
     pub fn accept(&self, id: i64) -> SqliteResult<()> {
-        self.conn.execute(
+        let affected = self.conn.execute(
             "UPDATE album_suggestions SET status = 'accepted' WHERE id = ?1",
             params![id],
         )?;
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
     /// Mark a suggestion as dismissed (will never re-surface due to fingerprint).
     pub fn dismiss(&self, id: i64) -> SqliteResult<()> {
-        self.conn.execute(
+        let affected = self.conn.execute(
             "UPDATE album_suggestions SET status = 'dismissed' WHERE id = ?1",
             params![id],
         )?;
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -251,4 +257,26 @@ struct ActivePhoto {
     id: i64,
     media_type: String,
     thumbnail_path: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::create_schema;
+
+    #[test]
+    fn accept_and_dismiss_report_missing_suggestions() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let repo = AlbumSuggestionRepo::new(&conn);
+
+        assert!(matches!(
+            repo.accept(999),
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        ));
+        assert!(matches!(
+            repo.dismiss(999),
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        ));
+    }
 }

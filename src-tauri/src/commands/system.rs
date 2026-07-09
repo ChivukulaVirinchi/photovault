@@ -13,20 +13,28 @@ use crate::{CommandError, CommandResult};
 
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
-    let h = smriti::bootstrap::asset_health();
+    let h = tauri::async_runtime::spawn_blocking(smriti::bootstrap::asset_health)
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("asset health worker failed: {e}"),
+        })?;
     Ok(h.into())
 }
 
 #[tauri::command]
 pub async fn system_app_version() -> CommandResult<AppVersionDto> {
     Ok(AppVersionDto {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: smriti::services::update_checker::current_version().to_string(),
     })
 }
 
 #[tauri::command]
 pub async fn system_assets_inventory() -> CommandResult<AssetInventoryDto> {
-    Ok(build_asset_inventory())
+    tauri::async_runtime::spawn_blocking(build_asset_inventory)
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("asset inventory worker failed: {e}"),
+        })
 }
 
 #[tauri::command]
@@ -66,24 +74,34 @@ pub async fn system_install_assets(
             },
         );
 
-        let message = match smriti::bootstrap::install_asset_pack().await {
-            Ok(msg) => msg,
-            Err(err) => format!("Asset install failed: {err}"),
-        };
-
-        emit(
-            &app_clone,
-            EV_ASSETS_COMPLETE,
-            JobProgress {
-                job_id: job_id_clone.clone(),
-                stage: "complete".into(),
-                processed: 1,
-                total: Some(1),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                eta_ms: None,
-                message: Some(message),
-            },
-        );
+        match smriti::bootstrap::install_asset_pack().await {
+            Ok(message) => emit(
+                &app_clone,
+                EV_ASSETS_COMPLETE,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "complete".into(),
+                    processed: 1,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(message),
+                },
+            ),
+            Err(err) => emit(
+                &app_clone,
+                EV_ASSETS_PROGRESS,
+                JobProgress {
+                    job_id: job_id_clone.clone(),
+                    stage: "error".into(),
+                    processed: 0,
+                    total: Some(1),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    eta_ms: None,
+                    message: Some(format!("Asset install failed: {err}")),
+                },
+            ),
+        }
 
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
@@ -285,16 +303,19 @@ pub async fn system_open_in_explorer(
 ) -> CommandResult<()> {
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = smriti::db::PhotoRepo::new(&db.conn);
-    let photo = repo
-        .get_by_id(args.photo_id)?
-        .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path)
-        .map_err(|e| CommandError::Validation {
-            field: "photo.file_path".into(),
-            reason: e,
-        })?;
+    let abs = {
+        let db = lib.db.lock().await;
+        let repo = smriti::db::PhotoRepo::new(&db.conn);
+        let photo = repo
+            .get_by_id(args.photo_id)?
+            .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
+        smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path).map_err(
+            |e| CommandError::Validation {
+                field: "photo.file_path".into(),
+                reason: e,
+            },
+        )?
+    };
     select_in_file_manager(&abs).map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
@@ -582,13 +603,21 @@ pub struct BridgeTestResult {
 }
 
 #[tauri::command]
-pub fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestResult> {
+pub async fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestResult> {
     if !smriti::config::is_allowed_gpu_bridge_url(&args.url) {
         return Err(CommandError::Validation {
             field: "url".into(),
             reason: "must use https:// or local http://".into(),
         });
     }
+    tauri::async_runtime::spawn_blocking(move || test_gpu_bridge_blocking(args.url))
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("GPU bridge test worker failed: {e}"),
+        })?
+}
+
+fn test_gpu_bridge_blocking(url: String) -> CommandResult<BridgeTestResult> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -597,13 +626,18 @@ pub fn system_test_gpu_bridge(args: TestBridgeArgs) -> CommandResult<BridgeTestR
         })?;
     let start = std::time::Instant::now();
     let resp = client
-        .get(format!("{}/health", args.url))
+        .get(format!("{}/health", url.trim_end_matches('/')))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .map_err(|e: reqwest::Error| CommandError::Network {
             message: e.to_string(),
         })?;
     let latency_ms = start.elapsed().as_millis() as u64;
+    if !resp.status().is_success() {
+        return Err(CommandError::Network {
+            message: format!("bridge health returned {}", resp.status()),
+        });
+    }
     let body: serde_json::Value =
         resp.json()
             .map_err(|e: reqwest::Error| CommandError::Network {
@@ -648,4 +682,17 @@ fn bridge_models_match(a: &str, b: &str) -> bool {
             .to_ascii_lowercase()
     }
     !a.is_empty() && !b.is_empty() && norm(a) == norm(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bridge_models_match;
+
+    #[test]
+    fn bridge_model_match_ignores_case_and_onnx_suffix() {
+        assert!(bridge_models_match("AdaFace.onnx", "adaface"));
+        assert!(bridge_models_match(" adaface ", "ADAFACE.onnx"));
+        assert!(!bridge_models_match("", "adaface"));
+        assert!(!bridge_models_match("other", "adaface"));
+    }
 }

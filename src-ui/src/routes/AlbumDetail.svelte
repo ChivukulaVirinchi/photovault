@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { commandErrorMessage } from "../lib/api";
   import { albums, trash } from "../lib/api/all";
   import { system } from "../lib/api/system";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -24,18 +25,25 @@
 
   let album = $state<AlbumDto | null>(null);
   let photos = $state<PhotoSummaryDto[]>([]);
+  let albumPhotoIds = $state<number[]>([]);
   let renaming = $state(false);
   let editName = $state("");
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
   let nextCursor = $state<string | null>(null);
   let hasMore = $state(false);
+  let loadingMore = $state(false);
   let exporting = $state(false);
   let exportResult = $state<AlbumExportComplete | null>(null);
   let confirmingDelete = $state(false);
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
+  let actionBusy = $state(false);
+  let loadSeq = 0;
+  let mounted = true;
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
   const scrollStorageKey = $derived(`smriti:album-scroll:${id}`);
+  const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
+  const ALL_IDS_NAV_LIMIT = 5000;
 
   interface AlbumExportComplete {
     job_id: string;
@@ -56,22 +64,36 @@
     ));
   }
   async function bulkTrash() {
-    const ids = selection.list();
+    if (actionBusy) return;
+    const ids = selection.listIn(photos.map((p) => p.id));
     if (ids.length === 0) return;
+    const seq = loadSeq;
+    const albumId = id;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
+    const idSnapshot = albumPhotoIds
+      .map((photoId, idx) => ({ idx, photoId }))
+      .filter((e) => dropSet.has(e.photoId));
     try {
-      await trash.trashPhotos(ids);
+      actionBusy = true;
+      const result = await trash.trashPhotos(ids);
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos needed trashing");
+        return;
+      }
       photoVisibility.markTrashed(ids);
       photos = photos.filter((p) => !dropSet.has(p.id));
+      albumPhotoIds = albumPhotoIds.filter((photoId) => !dropSet.has(photoId));
       browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(ids);
+          if (!mounted || albumId !== id) return;
           photoVisibility.markRestored(ids);
           const next = photos.slice();
           for (const e of snapshot) {
@@ -79,41 +101,78 @@
             next.splice(at, 0, e.photo);
           }
           photos = next;
-          browseContext.set(`album:${id}`, photos.map((p) => p.id));
+          const nextIds = albumPhotoIds.slice();
+          for (const e of idSnapshot) {
+            if (!nextIds.includes(e.photoId)) {
+              const at = Math.min(e.idx, nextIds.length);
+              nextIds.splice(at, 0, e.photoId);
+            }
+          }
+          albumPhotoIds = nextIds;
+          browseContext.set(`album:${albumId}`, nextIds);
         },
       );
-    } catch (e) { toasts.error(`Couldn't move to trash: ${e}`); }
+    } catch (e) {
+      if (mounted && seq === loadSeq && albumId === id) toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
 
   /// Remove the selected photos from THIS album only — doesn't trash
   /// them, doesn't touch other albums they're in. Undoable: the toast
   /// re-adds them and restores the original index ordering.
   async function removeFromAlbum() {
-    if (isSmartAlbum) return;
-    const ids = selection.list();
+    if (isSmartAlbum || actionBusy) return;
+    const ids = selection.listIn(photos.map((p) => p.id));
     if (ids.length === 0) return;
+    const seq = loadSeq;
+    const albumId = id;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
+    const idSnapshot = albumPhotoIds
+      .map((photoId, idx) => ({ idx, photoId }))
+      .filter((e) => dropSet.has(e.photoId));
     try {
-      await albums.removePhotos(id, ids);
+      actionBusy = true;
+      const result = await albums.removePhotos(albumId, ids);
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos were in this album");
+        return;
+      }
       photos = photos.filter((p) => !dropSet.has(p.id));
+      albumPhotoIds = albumPhotoIds.filter((photoId) => !dropSet.has(photoId));
+      browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
-        `${ids.length} ${ids.length === 1 ? "photo" : "photos"} removed from album`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} removed from album`,
         async () => {
-          await albums.addPhotos(id, ids);
+          await albums.addPhotos(albumId, ids);
+          if (!mounted || albumId !== id) return;
           const next = photos.slice();
           for (const e of snapshot) {
             const at = Math.min(e.idx, next.length);
             next.splice(at, 0, e.photo);
           }
           photos = next;
+          const nextIds = albumPhotoIds.slice();
+          for (const e of idSnapshot) {
+            if (!nextIds.includes(e.photoId)) {
+              const at = Math.min(e.idx, nextIds.length);
+              nextIds.splice(at, 0, e.photoId);
+            }
+          }
+          albumPhotoIds = nextIds;
+          browseContext.set(`album:${albumId}`, nextIds);
         },
       );
     } catch (e) {
-      toasts.error(`Couldn't remove from album: ${e}`);
+      if (mounted && seq === loadSeq && albumId === id) toasts.error(`Couldn't remove from album: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
   function onGlobalKey(e: KeyboardEvent) {
@@ -127,14 +186,22 @@
     }
   }
   onMount(() => {
+    mounted = true;
     window.addEventListener("keydown", onGlobalKey);
     let unlisten: UnlistenFn | null = null;
+    let disposed = false;
     listen<AlbumExportComplete>("album_export:complete", (event) => {
       if (event.payload.album_id !== id) return;
       exporting = false;
       exportResult = event.payload;
-    }).then((fn) => (unlisten = fn));
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }).catch(() => {});
     return () => {
+      mounted = false;
+      loadSeq += 1;
+      disposed = true;
       window.removeEventListener("keydown", onGlobalKey);
       unlisten?.();
     };
@@ -145,31 +212,88 @@
     const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
     if (raw) {
       const y = Number(raw);
-      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = y; });
+      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (mounted && scrollEl) scrollEl.scrollTop = y; });
     }
     const onScroll = () => {
       try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
+      if (!scrollEl || !hasMore || loadingMore) return;
+      const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+      if (remaining < 900) void loadMorePhotos();
     };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
     return () => scrollEl?.removeEventListener("scroll", onScroll);
   });
 
   async function load() {
+    const seq = ++loadSeq;
+    const albumId = id;
+    error = null;
+    loadingMore = false;
+    album = null;
+    photos = [];
+    albumPhotoIds = [];
+    nextCursor = null;
+    hasMore = false;
+    exportResult = null;
+    selection.clear();
     try {
-      album = await albums.get(id);
-      editName = album.name;
-      const page = await albums.photos(id);
+      const [nextAlbum, page] = await Promise.all([
+        albums.get(albumId),
+        albums.photos(albumId, null, 500),
+      ]);
+      if (!mounted || seq !== loadSeq) return;
+      let allIds = page.items.map((p) => p.id);
+      if (nextAlbum.photo_count <= ALL_IDS_NAV_LIMIT) {
+        allIds = await albums.photoIds(albumId);
+        if (!mounted || seq !== loadSeq) return;
+      }
+      album = nextAlbum;
+      editName = nextAlbum.name;
       photos = page.items;
+      albumPhotoIds = allIds;
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
-      browseContext.set(`album:${id}`, photos.map((p) => p.id));
-    } catch (e) { error = JSON.stringify(e); }
+      browseContext.set(`album:${albumId}`, allIds);
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
+  }
+
+  async function loadMorePhotos() {
+    if (!mounted || loadingMore || !hasMore || !nextCursor) return;
+    const seq = loadSeq;
+    const albumId = id;
+    const cursor = nextCursor;
+    loadingMore = true;
+    try {
+      const page = await albums.photos(albumId, cursor, 500);
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
+      photos = photos.concat(page.items);
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      browseContext.extend(page.items.map((p) => p.id));
+    } catch (e) {
+      if (mounted && seq === loadSeq && albumId === id) {
+        toasts.error(`Couldn't load more album photos: ${commandErrorMessage(e)}`);
+      }
+    } finally {
+      if (mounted && seq === loadSeq && albumId === id) loadingMore = false;
+    }
   }
 
   async function rename() {
-    if (!album || isSmartAlbum) return;
-    try { album = await albums.rename(id, editName.trim()); renaming = false; }
-    catch (e) { error = JSON.stringify(e); }
+    if (!album || isSmartAlbum || actionBusy) return;
+    const seq = loadSeq;
+    const albumId = id;
+    try {
+      actionBusy = true;
+      const renamed = await albums.rename(albumId, editName.trim());
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
+      album = renamed;
+      renaming = false;
+    }
+    catch (e) { if (mounted && seq === loadSeq && albumId === id) error = commandErrorMessage(e); }
+    finally { if (mounted) actionBusy = false; }
   }
 
   function onRenameKey(e: KeyboardEvent) {
@@ -182,12 +306,20 @@
   }
 
   async function deleteAlbum() {
-    if (isSmartAlbum) return;
+    if (isSmartAlbum || actionBusy) return;
+    const seq = loadSeq;
+    const albumId = id;
     try {
-      await albums.delete(id);
+      actionBusy = true;
+      await albums.delete(albumId);
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
       confirmingDelete = false;
       window.location.hash = "/albums";
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      if (mounted && seq === loadSeq && albumId === id) error = commandErrorMessage(e);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
 
   function fmtRange(s: string | null, e: string | null): string {
@@ -200,7 +332,7 @@
     slideshow.start({
       kind: "album",
       label: album.name,
-      ids: photos.map((p) => p.id),
+      ids: albumPhotoIds.length > 0 ? albumPhotoIds : photos.map((p) => p.id),
       nextCursor,
       hasMore,
       loadMore: (cursor) => albums.photos(id, cursor, 200),
@@ -208,16 +340,24 @@
   }
 
   async function exportAlbum() {
-    if (!album || album.photo_count === 0 || exporting) return;
+    if (!album || album.photo_count === 0 || exporting || actionBusy) return;
+    const seq = loadSeq;
+    const albumId = id;
     try {
+      actionBusy = true;
       exporting = true;
       exportResult = null;
-      const job = await albums.export(id);
+      const job = await albums.export(albumId);
+      if (!mounted || seq !== loadSeq || albumId !== id) return;
       jobs.register(job.job_id, "albumExport");
       toasts.success("Album export started");
     } catch (e) {
-      exporting = false;
-      toasts.error(`Couldn't export album: ${e}`);
+      if (mounted && seq === loadSeq && albumId === id) {
+        exporting = false;
+        toasts.error(`Couldn't export album: ${commandErrorMessage(e)}`);
+      }
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
@@ -226,7 +366,7 @@
     try {
       await system.openPath(exportResult.folder_path);
     } catch (e) {
-      toasts.error(`Couldn't open export folder: ${e}`);
+      toasts.error(`Couldn't open export folder: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -252,19 +392,19 @@
     {/snippet}
     {#snippet actions()}
       {#if renaming}
-        <button class="primary" onclick={rename}>Save</button>
-        <button class="ghost" onclick={() => (renaming = false)}>Cancel</button>
+        <button class="primary" onclick={rename} disabled={actionBusy}>Save</button>
+        <button class="ghost" onclick={() => (renaming = false)} disabled={actionBusy}>Cancel</button>
       {:else}
         <button class="ghost icon-action" onclick={startAlbumSlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start album slideshow">
           <Play size={15} strokeWidth={2} />
         </button>
-        <button class="ghost export-action" onclick={exportAlbum} disabled={a.photo_count === 0 || exporting} title="Export album originals">
+        <button class="ghost export-action" onclick={exportAlbum} disabled={a.photo_count === 0 || exporting || actionBusy} title="Export album originals">
           <Download size={14} strokeWidth={1.9} />
           {exporting ? "Exporting" : "Export"}
         </button>
         {#if !isSmartAlbum}
-          <button class="ghost" onclick={() => (renaming = true)}>Rename</button>
-          <button class="danger" onclick={() => (confirmingDelete = true)}>Delete</button>
+          <button class="ghost" onclick={() => (renaming = true)} disabled={actionBusy}>Rename</button>
+          <button class="danger" onclick={() => (confirmingDelete = true)} disabled={actionBusy}>Delete</button>
         {/if}
       {/if}
     {/snippet}
@@ -300,6 +440,9 @@
       </a>
     {/each}
   </div>
+  {#if loadingMore}
+    <p class="loading-more mono">Loading more…</p>
+  {/if}
 </div>
 
 {#if exportResult}
@@ -345,16 +488,16 @@
       </header>
       <p class="export-note">Photos and videos stay in the library. Only this album is removed.</p>
       <footer>
-        <button class="danger" onclick={deleteAlbum}>Delete album</button>
-        <button class="ghost" onclick={() => (confirmingDelete = false)}>Cancel</button>
+        <button class="danger" onclick={deleteAlbum} disabled={actionBusy}>Delete album</button>
+        <button class="ghost" onclick={() => (confirmingDelete = false)} disabled={actionBusy}>Cancel</button>
       </footer>
     </div>
   </div>
 {/if}
 
-{#if selection.active()}
+{#if selectedVisibleIds.length > 0}
   <SelectionBar
-    count={selection.size()}
+    count={selectedVisibleIds.length}
     onAddToAlbum={() => (showAddDialog = true)}
     onRemoveFromAlbum={isSmartAlbum ? undefined : removeFromAlbum}
     onTrash={bulkTrash}
@@ -364,7 +507,7 @@
 
 {#if showAddDialog}
   <AddToAlbumDialog
-    photoIds={selection.list()}
+    photoIds={selectedVisibleIds}
     onclose={() => (showAddDialog = false)}
     onsuccess={() => selection.clear()}
   />
@@ -390,6 +533,12 @@
     justify-content: center;
     box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     pointer-events: none;
+  }
+  .loading-more {
+    margin: var(--s-4) 0 0;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
   }
   .dim { color: var(--ink-faint); }
   .icon-action {

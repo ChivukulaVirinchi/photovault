@@ -31,8 +31,10 @@ class SlideshowStore {
   nextCursor = $state<string | null>(null);
   loadingMore = $state(false);
   private loader: ((cursor: string | null) => Promise<Page<PhotoSummaryDto>>) | null = null;
+  private session = 0;
 
   start(opts: SlideshowStart) {
+    this.session += 1;
     const ids = uniquePhotoIds(opts.ids);
     this.ids = ids;
     this.index = resolveStartIndex(ids, opts.startId);
@@ -46,6 +48,7 @@ class SlideshowStore {
   }
 
   close() {
+    this.session += 1;
     this.active = false;
     this.playing = false;
     this.ids = [];
@@ -74,6 +77,7 @@ class SlideshowStore {
   }
 
   setInterval(ms: number) {
+    if (!Number.isFinite(ms)) return;
     this.intervalMs = Math.max(1500, Math.min(15000, ms));
   }
 
@@ -83,10 +87,15 @@ class SlideshowStore {
 
   async next() {
     if (!this.active) return;
+    let appended = 0;
     if (this.index >= this.ids.length - 1 && this.hasMore) {
-      await this.loadMoreNow();
+      appended = await this.loadMoreNow();
     } else {
       void this.ensureMoreAhead();
+    }
+    if (this.index >= this.ids.length - 1 && this.hasMore && appended === 0) {
+      this.playing = false;
+      return;
     }
     const next = moveIndex(this.index, this.ids.length, "next", this.loop);
     if (!this.loop && next === this.index && !this.hasMore) {
@@ -105,20 +114,26 @@ class SlideshowStore {
     await this.loadMoreNow();
   }
 
-  async loadMoreNow() {
-    if (!this.loader || this.loadingMore || !this.hasMore) return;
+  async loadMoreNow(): Promise<number> {
+    if (!this.loader || this.loadingMore || !this.hasMore) return 0;
+    const session = this.session;
+    const loader = this.loader;
+    const cursor = this.nextCursor;
     this.loadingMore = true;
     try {
-      const page = await this.loader(this.nextCursor);
+      const page = await loader(cursor);
+      if (session !== this.session || !this.active) return 0;
       const existing = new Set(this.ids);
       const fresh = page.items.map((p) => p.id).filter((id) => !existing.has(id));
       if (fresh.length > 0) this.ids = [...this.ids, ...fresh];
       this.nextCursor = page.next_cursor;
       this.hasMore = page.has_more;
+      return fresh.length;
     } catch {
-      this.hasMore = false;
+      if (session === this.session) this.hasMore = false;
+      return 0;
     } finally {
-      this.loadingMore = false;
+      if (session === this.session) this.loadingMore = false;
     }
   }
 }

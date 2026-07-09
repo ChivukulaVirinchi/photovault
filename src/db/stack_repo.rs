@@ -1,6 +1,6 @@
 //! Photo stack persistence.
 
-use rusqlite::{params, types::ToSql, Connection, Result as SqliteResult};
+use rusqlite::{params, params_from_iter, types::ToSql, Connection, Result as SqliteResult};
 
 use super::MAX_ROWS_PER_INSERT;
 
@@ -118,7 +118,9 @@ impl<'a> PhotoStackRepo<'a> {
             insert_members(&tx, stack_id, cover, &c.member_scores)?;
         }
 
-        let mut stmt = tx.prepare("SELECT id, kind, source_group_id FROM photo_stacks")?;
+        let mut stmt = tx.prepare(
+            "SELECT id, kind, source_group_id FROM photo_stacks WHERE dismissed = FALSE",
+        )?;
         let existing: Vec<(i64, String, i64)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<SqliteResult<Vec<_>>>()?;
@@ -139,8 +141,10 @@ impl<'a> PhotoStackRepo<'a> {
                    COUNT(m.id), s.confidence
               FROM photo_stacks s
               JOIN photo_stack_members m ON m.stack_id = s.id
+              JOIN photos p ON p.id = m.photo_id AND p.is_trashed = FALSE
              WHERE s.id = ?1 AND s.dismissed = FALSE
           GROUP BY s.id
+            HAVING COUNT(m.id) >= 2
             "#,
             params![stack_id],
             row_to_stack,
@@ -157,10 +161,13 @@ impl<'a> PhotoStackRepo<'a> {
             SELECT s.id, s.kind, s.source_group_id, s.cover_photo_id,
                    COUNT(all_m.id), s.confidence
               FROM photo_stack_members m
+              JOIN photos p ON p.id = m.photo_id AND p.is_trashed = FALSE
               JOIN photo_stacks s ON s.id = m.stack_id
               JOIN photo_stack_members all_m ON all_m.stack_id = s.id
+              JOIN photos all_p ON all_p.id = all_m.photo_id AND all_p.is_trashed = FALSE
              WHERE m.photo_id = ?1 AND s.dismissed = FALSE
           GROUP BY s.id
+            HAVING COUNT(all_m.id) >= 2
             "#,
             params![photo_id],
             row_to_stack,
@@ -199,7 +206,14 @@ impl<'a> PhotoStackRepo<'a> {
     pub fn set_cover(&self, stack_id: i64, photo_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
         let exists: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM photo_stack_members WHERE stack_id = ?1 AND photo_id = ?2",
+            "SELECT COUNT(*)
+               FROM photo_stack_members m
+               JOIN photo_stacks s ON s.id = m.stack_id
+               JOIN photos p ON p.id = m.photo_id
+              WHERE m.stack_id = ?1
+                AND m.photo_id = ?2
+                AND s.dismissed = FALSE
+                AND p.is_trashed = FALSE",
             params![stack_id, photo_id],
             |r| r.get(0),
         )?;
@@ -223,12 +237,24 @@ impl<'a> PhotoStackRepo<'a> {
 
     pub fn remove_member(&self, stack_id: i64, photo_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM photo_stack_members WHERE stack_id = ?1 AND photo_id = ?2",
+        let removed = tx.execute(
+            "DELETE FROM photo_stack_members
+              WHERE stack_id = ?1
+                AND photo_id = ?2
+                AND EXISTS (
+                    SELECT 1 FROM photo_stacks s
+                     WHERE s.id = ?1 AND s.dismissed = FALSE
+                )",
             params![stack_id, photo_id],
         )?;
+        if removed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM photo_stack_members WHERE stack_id = ?1",
+            "SELECT COUNT(*)
+               FROM photo_stack_members m
+               JOIN photos p ON p.id = m.photo_id
+              WHERE m.stack_id = ?1 AND p.is_trashed = FALSE",
             params![stack_id],
             |r| r.get(0),
         )?;
@@ -238,13 +264,21 @@ impl<'a> PhotoStackRepo<'a> {
             return Ok(());
         }
         let cover_exists: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM photo_stack_members WHERE stack_id = ?1 AND is_cover = TRUE",
+            "SELECT COUNT(*)
+               FROM photo_stack_members m
+               JOIN photos p ON p.id = m.photo_id
+              WHERE m.stack_id = ?1 AND m.is_cover = TRUE AND p.is_trashed = FALSE",
             params![stack_id],
             |r| r.get(0),
         )?;
         if cover_exists == 0 {
             let next_cover: i64 = tx.query_row(
-                "SELECT photo_id FROM photo_stack_members WHERE stack_id = ?1 ORDER BY quality_score DESC, photo_id ASC LIMIT 1",
+                "SELECT m.photo_id
+                   FROM photo_stack_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.stack_id = ?1 AND p.is_trashed = FALSE
+               ORDER BY m.quality_score DESC, m.photo_id ASC
+                  LIMIT 1",
                 params![stack_id],
                 |r| r.get(0),
             )?;
@@ -261,10 +295,15 @@ impl<'a> PhotoStackRepo<'a> {
     }
 
     pub fn unstack(&self, stack_id: i64) -> SqliteResult<()> {
-        self.conn.execute(
-            "UPDATE photo_stacks SET dismissed = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        let updated = self.conn.execute(
+            "UPDATE photo_stacks
+                SET dismissed = TRUE, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?1 AND dismissed = FALSE",
             params![stack_id],
         )?;
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -274,11 +313,90 @@ impl<'a> PhotoStackRepo<'a> {
             SELECT m.photo_id
               FROM photo_stack_members m
               JOIN photo_stacks s ON s.id = m.stack_id
+              JOIN photos p ON p.id = m.photo_id
              WHERE m.stack_id = ?1 AND m.photo_id != s.cover_photo_id
+               AND s.dismissed = FALSE
+               AND p.is_trashed = FALSE
             "#,
         )?;
         let rows = stmt.query_map(params![stack_id], |r| r.get(0))?;
         rows.collect()
+    }
+
+    pub fn reconcile_after_photos_trashed(&self, photo_ids: &[i64]) -> SqliteResult<()> {
+        let mut ids: Vec<i64> = photo_ids.iter().copied().filter(|id| *id > 0).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let placeholders = repeat_vars(ids.len());
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT DISTINCT stack_id FROM photo_stack_members WHERE photo_id IN ({placeholders})"
+        ))?;
+        let stack_ids: Vec<i64> = stmt
+            .query_map(params_from_iter(ids.iter()), |r| r.get(0))?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        drop(stmt);
+
+        self.conn.execute(
+            &format!("DELETE FROM photo_stack_members WHERE photo_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )?;
+
+        for stack_id in stack_ids {
+            let live_count: i64 = self.conn.query_row(
+                "SELECT COUNT(*)
+                   FROM photo_stack_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.stack_id = ?1 AND p.is_trashed = FALSE",
+                params![stack_id],
+                |r| r.get(0),
+            )?;
+            if live_count < 2 {
+                self.conn
+                    .execute("DELETE FROM photo_stacks WHERE id = ?1", params![stack_id])?;
+                continue;
+            }
+
+            let live_cover_exists: i64 = self.conn.query_row(
+                "SELECT COUNT(*)
+                   FROM photo_stack_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.stack_id = ?1 AND m.is_cover = TRUE AND p.is_trashed = FALSE",
+                params![stack_id],
+                |r| r.get(0),
+            )?;
+            if live_cover_exists > 0 {
+                continue;
+            }
+
+            let next_cover: i64 = self.conn.query_row(
+                "SELECT m.photo_id
+                   FROM photo_stack_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.stack_id = ?1 AND p.is_trashed = FALSE
+               ORDER BY m.quality_score DESC, m.photo_id ASC
+                  LIMIT 1",
+                params![stack_id],
+                |r| r.get(0),
+            )?;
+            self.conn.execute(
+                "UPDATE photo_stack_members SET is_cover = FALSE WHERE stack_id = ?1",
+                params![stack_id],
+            )?;
+            self.conn.execute(
+                "UPDATE photo_stack_members SET is_cover = TRUE WHERE stack_id = ?1 AND photo_id = ?2",
+                params![stack_id, next_cover],
+            )?;
+            self.conn.execute(
+                "UPDATE photo_stacks SET cover_photo_id = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                params![stack_id, next_cover],
+            )?;
+        }
+
+        Ok(())
     }
 
     pub fn delete_stack(&self, stack_id: i64) -> SqliteResult<()> {
@@ -327,6 +445,12 @@ fn insert_members(
         conn.execute(&sql, refs.as_slice())?;
     }
     Ok(())
+}
+
+fn repeat_vars(count: usize) -> String {
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -419,6 +543,30 @@ mod tests {
     }
 
     #[test]
+    fn sync_stacks_preserves_dismissed_stacks_not_seen_this_run() {
+        let conn = setup();
+        for id in 1..=3 {
+            insert_photo(&conn, id);
+        }
+
+        let repo = PhotoStackRepo::new(&conn);
+        repo.sync_stacks(&[candidate(2)]).expect("initial sync");
+        let stack_id = repo.get_stack_for_photo(1).unwrap().unwrap().id;
+        repo.unstack(stack_id).expect("dismiss stack");
+
+        repo.sync_stacks(&[]).expect("refresh with no candidates");
+
+        let dismissed: bool = conn
+            .query_row(
+                "SELECT dismissed FROM photo_stacks WHERE id = ?1",
+                params![stack_id],
+                |row| row.get(0),
+            )
+            .expect("dismissed row remains");
+        assert!(dismissed);
+    }
+
+    #[test]
     fn removing_cover_promotes_best_remaining_member_and_deletes_singleton() {
         let conn = setup();
         for id in 1..=3 {
@@ -436,5 +584,75 @@ mod tests {
         repo.remove_member(stack_id, 3)
             .expect("remove second member");
         assert!(repo.get_stack(stack_id).expect("load stack").is_none());
+    }
+
+    #[test]
+    fn trashed_members_are_hidden_from_stack_reads() {
+        let conn = setup();
+        for id in 1..=3 {
+            insert_photo(&conn, id);
+        }
+
+        let repo = PhotoStackRepo::new(&conn);
+        repo.sync_stacks(&[candidate(2)]).expect("sync stacks");
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 3", [])
+            .expect("trash photo");
+
+        let stack = repo.get_stack_for_photo(1).expect("load stack").unwrap();
+        assert_eq!(stack.member_count, 2);
+        let members = repo.get_members(stack.id).expect("load members");
+        assert_eq!(members.len(), 2);
+        assert!(members.iter().all(|m| m.photo_id != 3));
+        assert!(repo
+            .get_stack_for_photo(3)
+            .expect("trashed photo stack")
+            .is_none());
+    }
+
+    #[test]
+    fn reconcile_after_trash_prunes_singletons_and_promotes_live_cover() {
+        let conn = setup();
+        for id in 1..=3 {
+            insert_photo(&conn, id);
+        }
+
+        let repo = PhotoStackRepo::new(&conn);
+        repo.sync_stacks(&[candidate(2)]).expect("sync stacks");
+        let stack_id = repo.get_stack_for_photo(1).unwrap().unwrap().id;
+
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 2", [])
+            .expect("trash cover");
+        repo.reconcile_after_photos_trashed(&[2])
+            .expect("reconcile cover");
+        let stack = repo.get_stack(stack_id).expect("load stack").unwrap();
+        assert_eq!(stack.cover_photo_id, 3);
+        assert_eq!(stack.member_count, 2);
+
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 3", [])
+            .expect("trash second member");
+        repo.reconcile_after_photos_trashed(&[3])
+            .expect("reconcile singleton");
+        assert!(repo.get_stack(stack_id).expect("load stack").is_none());
+    }
+
+    #[test]
+    fn dismissed_stack_rejects_stale_detail_mutations() {
+        let conn = setup();
+        for id in 1..=3 {
+            insert_photo(&conn, id);
+        }
+
+        let repo = PhotoStackRepo::new(&conn);
+        repo.sync_stacks(&[candidate(2)]).expect("sync stacks");
+        let stack_id = repo.get_stack_for_photo(1).unwrap().unwrap().id;
+        repo.unstack(stack_id).expect("dismiss stack");
+
+        assert!(repo.set_cover(stack_id, 1).is_err());
+        assert!(repo.remove_member(stack_id, 1).is_err());
+        assert!(repo.unstack(stack_id).is_err());
+        assert!(repo
+            .photos_to_trash_except_cover(stack_id)
+            .unwrap()
+            .is_empty());
     }
 }

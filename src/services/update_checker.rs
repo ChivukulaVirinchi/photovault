@@ -69,6 +69,11 @@ pub struct UpdateStatus {
     pub newer_available: bool,
 }
 
+pub fn current_version() -> Version {
+    Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("CARGO_PKG_VERSION must be a valid semantic version")
+}
+
 /// Typed errors the UI/handler needs to distinguish so the user sees
 /// a useful message instead of a raw `reqwest` string.
 #[derive(Debug, thiserror::Error)]
@@ -128,8 +133,7 @@ pub async fn check_for_updates() -> Result<UpdateStatus, UpdateCheckError> {
         .map_err(|e| UpdateCheckError::Parse(e.to_string()))?;
 
     let latest_version = parse_tag_as_version(&payload.tag_name)?;
-    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|e| UpdateCheckError::InvalidSelfVersion(e.to_string()))?;
+    let current_version = current_version();
 
     let newer_available = latest_version > current_version;
 
@@ -203,5 +207,10 @@ mod tests {
             parse_tag_as_version(""),
             Err(UpdateCheckError::InvalidTag(_))
         ));
+    }
+
+    #[test]
+    fn current_version_matches_package_version() {
+        assert_eq!(current_version().to_string(), env!("CARGO_PKG_VERSION"));
     }
 }

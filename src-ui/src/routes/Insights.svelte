@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { insights } from "../lib/api/all";
   import { photos } from "../lib/api/photos";
   import { libraryStore } from "../lib/stores/library.svelte";
@@ -11,6 +13,8 @@
   let data = $state<InsightsData | null>(null);
   let year = $state<number | null>(null);
   let error = $state<string | null>(null);
+  let loadSeq = 0;
+  let mounted = true;
 
   /// Show the first N entries of long lists; "Show all" reveals the rest.
   const PEEK = 10;
@@ -22,9 +26,24 @@
   let tip = $state<{ x: number; y: number; label: string } | null>(null);
 
   async function load() {
-    try { data = await insights.compute(year); }
-    catch (e) { error = JSON.stringify(e); }
+    const seq = ++loadSeq;
+    const selectedYear = year;
+    error = null;
+    try {
+      const nextData = await insights.compute(selectedYear);
+      if (mounted && seq === loadSeq) data = nextData;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
   }
+
+  onMount(() => {
+    mounted = true;
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+    };
+  });
 
   $effect(() => { void year; load(); });
 
@@ -114,18 +133,25 @@
       const m = pad(next.getUTCMonth() + 1);
       const d = pad(next.getUTCDate());
       const end = `${y}-${m}-${d}T00:00:00Z`;
-      const page = await photos.listByDate(start, end, null, 500);
-      if (page.items.length === 0) {
+      let cursor: string | null = null;
+      const ids: number[] = [];
+      do {
+        const page = await photos.listByDate(start, end, cursor, 500);
+        if (!mounted) return;
+        ids.push(...page.items.map((p) => p.id));
+        cursor = page.has_more ? page.next_cursor : null;
+      } while (cursor && ids.length < count);
+
+      if (ids.length === 0) {
         toasts.success("No photos found for this day.");
         return;
       }
-      const ids = page.items.map((p) => p.id);
       browseContext.set(`day:${date}`, ids);
       window.location.hash = `/photo?id=${ids[0]}`;
     } catch (e) {
-      toasts.error(`Couldn't load day: ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      if (mounted) toasts.error(`Couldn't load day: ${commandErrorMessage(e)}`);
     } finally {
-      openingDay = false;
+      if (mounted) openingDay = false;
     }
   }
 </script>

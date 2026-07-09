@@ -22,6 +22,7 @@ export const people = {
       min_photos: args.minPhotos ?? null,
     }),
   get: (id: number) => call<PersonDto>("people_get", { id }),
+  photoIds: (id: number) => call<number[]>("people_photo_ids", { id }),
   rename: (id: number, name: string | null) =>
     call<PersonDto>("people_rename", { id, name }),
   merge: (sourceId: number, targetId: number) =>
@@ -82,8 +83,16 @@ export const people = {
     }),
   faceConfirm: (faceId: number) =>
     call<null>("people_face_confirm", { face_id: faceId }),
-  faceReject: (faceId: number) =>
-    call<null>("people_face_reject", { face_id: faceId }),
+  faceConfirmToCluster: (faceId: number, clusterId: number) =>
+    call<null>("people_face_confirm_to_cluster", {
+      face_id: faceId,
+      cluster_id: clusterId,
+    }),
+  faceReject: (faceId: number, notClusterId?: number) =>
+    call<null>("people_face_reject", {
+      face_id: faceId,
+      not_cluster_id: notClusterId ?? null,
+    }),
   faceHide: (faceId: number) =>
     call<null>("people_face_hide", { face_id: faceId }),
   faceReassign: (faceId: number, targetClusterId: number) =>
@@ -103,6 +112,11 @@ export const people = {
     }),
   reviewFaceCount: () =>
     call<ReviewFaceCountDto>("people_review_face_count"),
+  nextUnconfirmedFaces: (limit = 200, excludedFaceIds: number[] = []) =>
+    call<Page<FaceDetailDto>>("people_next_unconfirmed_faces", {
+      limit,
+      excluded_face_ids: excludedFaceIds,
+    }),
   clusteringDiagnostics: () =>
     call<unknown>("people_clustering_diagnostics"),
 };
@@ -144,6 +158,7 @@ export interface ReviewFaceCountDto {
 export const albums = {
   list: () => call<AlbumDto[]>("albums_list"),
   get: (id: number) => call<AlbumDto>("albums_get", { id }),
+  photoIds: (id: number) => call<number[]>("albums_photo_ids", { id }),
   create: (name: string, photoIds: number[] = []) =>
     call<AlbumDto>("albums_create", { name, photo_ids: photoIds }),
   rename: (id: number, name: string) =>
@@ -267,6 +282,7 @@ export interface SearchResults {
     album_id: number;
     name: string;
     photo_count: number;
+    cover_photo_id: number | null;
     cover_thumbnail_path: string | null;
   }>;
   places: Array<{
@@ -365,7 +381,8 @@ export interface DupMember {
   date_taken: string | null;
 }
 export const duplicates = {
-  list: () => call<DupGroupSummary[]>("duplicates_list"),
+  list: (limit = 200, offset = 0) =>
+    call<DupGroupSummary[]>("duplicates_list", { limit, offset }),
   getGroup: (id: number) =>
     call<{ id: number; members: DupMember[] }>("duplicates_get_group", { id }),
   wastedSpace: () => call<{ bytes: number }>("duplicates_wasted_space"),
@@ -401,7 +418,8 @@ export interface BurstMember {
   is_suggested_best: boolean;
 }
 export const bursts = {
-  list: () => call<BurstGroupSummary[]>("bursts_list"),
+  list: (limit = 200, offset = 0) =>
+    call<BurstGroupSummary[]>("bursts_list", { limit, offset }),
   getGroup: (id: number) =>
     call<{ id: number; members: BurstMember[] }>("bursts_get_group", { id }),
   setBest: (groupId: number, photoId: number) =>
@@ -475,19 +493,6 @@ export const trash = {
       "trash_empty",
     ),
 };
-
-// ---------- documents ----------
-// Documents feature deferred — the engine still classifies content
-// categories silently for the timeline badge, but there's no Documents
-// tab in the UI. Keep the wrapper commented for the day it returns.
-// export const documents = {
-//   list: (categories: string[] | null = null, cursor: string | null = null, limit = 200) =>
-//     call<Page<PhotoSummaryDto>>("documents_list", { categories, cursor, limit }),
-//   search: (q: string, cursor: string | null = null, limit = 200) =>
-//     call<Page<PhotoSummaryDto>>("documents_search", { q, cursor, limit }),
-//   setCategory: (photoId: number, category: string) =>
-//     call<null>("documents_set_category", { photo_id: photoId, category }),
-// };
 
 // ---------- insights ----------
 export interface InsightsData {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { commandErrorMessage } from "../lib/api";
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -12,6 +13,12 @@
   let groups = $state<Awaited<ReturnType<typeof duplicates.list>>>([]);
   let wasted = $state(0);
   let error = $state<string | null>(null);
+  let mounted = true;
+  let loadSeq = 0;
+  let reloadedCompleteJobIds = new Set<string>();
+  const PAGE_SIZE = 200;
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
 
   // Detection runs in tokio::spawn_blocking on the backend. Read state
   // from the global jobs store so it survives navigation.
@@ -19,11 +26,36 @@
   const running = $derived(jobs.isRunning("duplicates"));
 
   async function load() {
+    const seq = ++loadSeq;
+    error = null;
     try {
-      groups = await duplicates.list();
-      const w = await duplicates.wastedSpace();
+      const [nextGroups, w] = await Promise.all([
+        duplicates.list(PAGE_SIZE, 0),
+        duplicates.wastedSpace(),
+      ]);
+      if (!mounted || seq !== loadSeq) return;
+      groups = nextGroups;
+      hasMore = nextGroups.length === PAGE_SIZE;
       wasted = w.bytes;
-    } catch (e) { error = JSON.stringify(e); }
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
+  }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    const seq = loadSeq;
+    loadingMore = true;
+    try {
+      const nextGroups = await duplicates.list(PAGE_SIZE, groups.length);
+      if (!mounted || seq !== loadSeq) return;
+      groups = [...groups, ...nextGroups];
+      hasMore = nextGroups.length === PAGE_SIZE;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq) loadingMore = false;
+    }
   }
 
   async function run() {
@@ -37,7 +69,8 @@
       jobs.register(r.job_id, "duplicates");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start: ${msg}`);
     }
@@ -50,15 +83,26 @@
   }
 
   $effect(() => {
-    if (dupJob && dupJob.status === "complete") load();
+    if (!dupJob || dupJob.status !== "complete" || reloadedCompleteJobIds.has(dupJob.id)) return;
+    reloadedCompleteJobIds.add(dupJob.id);
+    load();
   });
 
   onMount(() => {
+    mounted = true;
     load();
-    const unlisten = listen<{ stage?: string }>("duplicates:progress", (e) => {
+    const unlisten = listen<{ stage?: string; message?: string | null }>("duplicates:progress", (e) => {
+      if (!mounted) return;
       if (e.payload.stage === "persisted") load();
+      if (e.payload.stage === "error") {
+        const msg = e.payload.message ?? "Duplicate detection failed.";
+        error = msg;
+        toasts.error(msg);
+      }
     });
     return () => {
+      mounted = false;
+      loadSeq += 1;
       void unlisten.then((u) => u());
     };
   });
@@ -126,6 +170,13 @@
         </li>
       {/each}
     </ul>
+    {#if hasMore}
+      <div class="more-row">
+        <button class="ghost" onclick={loadMore} disabled={loadingMore}>
+          {loadingMore ? "Loading..." : "Load more groups"}
+        </button>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -198,5 +249,10 @@
     font-weight: 600;
     letter-spacing: 0.02em;
     z-index: 1;
+  }
+  .more-row {
+    display: flex;
+    justify-content: center;
+    padding: var(--s-5) 0 0;
   }
 </style>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon, Bot,
-    Copy, Layers, /* FileText (Documents deferred) */ BarChart2, Trash2, Settings,
+    Copy, Layers, BarChart2, Trash2, Settings,
     ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
   } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
@@ -22,11 +22,6 @@
     { path: "/map",        label: "Map",        icon: MapIcon    },
     { path: "/duplicates", label: "Duplicates", icon: Copy       },
     { path: "/bursts",     label: "Bursts",     icon: Layers     },
-    // Documents tab deferred — the category badge in the timeline
-    // already surfaces the "this is a receipt / business card / etc"
-    // signal. A standalone Documents view is scope creep against the
-    // photos-central brief; revisit when there's a real need.
-    // { path: "/documents",  label: "Documents",  icon: FileText   },
     { path: "/insights",   label: "Insights",   icon: BarChart2  },
     { path: "/trash",      label: "Trash",      icon: Trash2     },
     { path: "/settings",   label: "Settings",   icon: Settings   },
@@ -64,7 +59,7 @@
   function cycleTheme() {
     const order: Array<"dark" | "light" | "system"> = ["dark", "light", "system"];
     const next = order[(order.indexOf(theme) + 1) % order.length];
-    settingsStore.update({ theme: next });
+    settingsStore.update({ theme: next }).catch(() => {});
   }
 
   const ThemeIcon = $derived(theme === "light" ? Sun : theme === "dark" ? Moon : Monitor);

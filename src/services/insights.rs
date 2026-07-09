@@ -150,7 +150,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
                 COUNT(DISTINCT CASE WHEN location_country IS NOT NULL AND location_country != ''
                                     THEN location_country END),
                 COUNT(DISTINCT CASE WHEN location_city IS NOT NULL AND location_city != ''
-                                    THEN location_city END),
+                                    THEN location_city || char(31) || COALESCE(location_country, '') END),
                 SUM(CASE WHEN gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL THEN 1 ELSE 0 END)
              FROM photos
              WHERE is_trashed = FALSE{}",
@@ -274,7 +274,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
              WHERE is_trashed = FALSE
                AND location_city IS NOT NULL
                AND location_city != ''{}
-             GROUP BY location_city
+             GROUP BY location_city, location_country
              ORDER BY cnt DESC
              LIMIT 30",
             yc
@@ -403,3 +403,41 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
 }
 
 use chrono::Datelike;
+
+#[cfg(test)]
+mod tests {
+    use super::compute;
+    use crate::db::create_schema;
+    use rusqlite::Connection;
+
+    #[test]
+    fn top_locations_keep_same_city_in_different_countries_separate() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos
+                (id, file_path, file_name, file_hash, file_size, date_taken, location_city, location_country, is_trashed)
+             VALUES
+                (1, 'a.jpg', 'a.jpg', 'hash-a', 10, '2026-01-02T00:00:00Z', 'Springfield', 'USA', 0),
+                (2, 'b.jpg', 'b.jpg', 'hash-b', 10, '2026-01-01T00:00:00Z', 'Springfield', 'Canada', 0)",
+            [],
+        )
+        .unwrap();
+
+        let data = compute(&conn, None).unwrap();
+        assert_eq!(data.city_count, 2);
+        let springfields = data
+            .top_locations
+            .iter()
+            .filter(|location| location.city == "Springfield")
+            .collect::<Vec<_>>();
+
+        assert_eq!(springfields.len(), 2);
+        assert!(springfields
+            .iter()
+            .any(|location| location.country == "USA"));
+        assert!(springfields
+            .iter()
+            .any(|location| location.country == "Canada"));
+    }
+}

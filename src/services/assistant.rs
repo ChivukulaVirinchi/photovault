@@ -344,7 +344,7 @@ impl AssistantService {
                     || city == normalized
                     || country == normalized
                     || label.contains(&normalized)
-                    || normalized.contains(&city)
+                    || (!city.is_empty() && normalized.contains(&city))
                 {
                     found.push(place.clone());
                 }
@@ -1239,6 +1239,20 @@ mod tests {
                 .unwrap();
         assert_eq!(draft.photo_ids, vec![2, 1]);
         assert_eq!(draft.preview.places[0].label, "India");
+    }
+
+    #[test]
+    fn place_query_does_not_match_empty_city() {
+        let conn = conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_name, date_taken, location_country) VALUES
+             (1, 'a.jpg', '2014-05-01T00:00:00Z', 'India')",
+            [],
+        )
+        .unwrap();
+
+        let resolved = AssistantService::resolve_place_queries(&conn, &["Goa".into()]).unwrap();
+        assert!(resolved.matches.is_empty());
     }
 
     #[test]

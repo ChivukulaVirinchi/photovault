@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection } from "../lib/stores/selection.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
   import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
@@ -13,14 +15,70 @@
   let items = $state<Awaited<ReturnType<typeof trash.list>>["items"]>([]);
   let stats = $state<{ count: number; total_size: number } | null>(null);
   let error = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let nextCursor = $state<string | null>(null);
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
+  let scrollEl = $state<HTMLDivElement | undefined>(undefined);
+  let mounted = true;
+  let loadSeq = 0;
+
+  const visibleIds = $derived(items.map((t) => t.photo_id));
+  const selectedTrashIds = $derived.by(() => {
+    const visible = new Set(visibleIds);
+    return selection.list().filter((id) => visible.has(id));
+  });
+  const selectedTrashCount = $derived(selectedTrashIds.length);
 
   async function load() {
+    const seq = ++loadSeq;
+    error = null;
+    loadingMore = false;
     try {
       const page = await trash.list(null, 500);
+      if (!mounted || seq !== loadSeq) return;
+      const nextVisibleIds = page.items.map((t) => t.photo_id);
       items = page.items;
-      browseContext.set("trash", items.map((t) => t.photo_id));
-      stats = await trash.stats();
-    } catch (e) { error = JSON.stringify(e); }
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      browseContext.set("trash", nextVisibleIds);
+      const nextStats = await trash.stats();
+      if (!mounted || seq !== loadSeq) return;
+      stats = nextStats;
+      const visible = new Set(nextVisibleIds);
+      if (selection.list().some((id) => !visible.has(id))) {
+        selection.replace(selection.list().filter((id) => visible.has(id)));
+      }
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    }
+  }
+
+  async function loadMoreTrash() {
+    if (!mounted || loadingMore || !hasMore || !nextCursor) return;
+    const seq = loadSeq;
+    const cursor = nextCursor;
+    loadingMore = true;
+    try {
+      const page = await trash.list(cursor, 500);
+      if (!mounted || seq !== loadSeq) return;
+      items = items.concat(page.items);
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      browseContext.extend(page.items.map((t) => t.photo_id));
+    } catch (e) {
+      if (mounted && seq === loadSeq) {
+        toasts.error(`Couldn't load more trash: ${commandErrorMessage(e)}`);
+      }
+    } finally {
+      if (mounted && seq === loadSeq) loadingMore = false;
+    }
+  }
+
+  function onTrashScroll() {
+    if (!scrollEl || !hasMore || loadingMore) return;
+    const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    if (remaining < 900) void loadMoreTrash();
   }
 
   function toggle(id: number) {
@@ -34,29 +92,71 @@
   }
 
   async function restore() {
-    if (selection.size() === 0) return;
-    const ids = selection.list();
-    await trash.restore(ids);
-    photoVisibility.markRestored(ids);
-    selection.clear();
-    await load();
+    if (selectedTrashCount === 0 || actionBusy) return;
+    const seq = loadSeq;
+    const ids = selectedTrashIds;
+    try {
+      actionBusy = true;
+      await trash.restore(ids);
+      if (!mounted || seq !== loadSeq) return;
+      photoVisibility.markRestored(ids);
+      selection.clear();
+      await load();
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
 
   async function deleteForever() {
-    if (selection.size() === 0) return;
-    if (!confirm(`Permanently delete ${selection.size()} photos? This cannot be undone.`)) return;
-    await trash.permanentDelete(selection.list());
-    selection.clear();
-    await load();
+    if (selectedTrashCount === 0 || actionBusy) return;
+    const ids = selectedTrashIds;
+    if (!confirm(`Permanently delete ${ids.length} photos? This cannot be undone.`)) return;
+    const seq = loadSeq;
+    try {
+      actionBusy = true;
+      await trash.permanentDelete(ids);
+      if (!mounted || seq !== loadSeq) return;
+      photoVisibility.markTrashed(ids);
+      browseContext.remove(ids);
+      selection.clear();
+      await load();
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
 
   async function emptyTrash() {
+    if (actionBusy) return;
     if (!confirm("Empty trash? All trashed photos and their files will be deleted from disk.")) return;
-    await trash.empty();
-    await load();
+    const seq = loadSeq;
+    const ids = visibleIds;
+    try {
+      actionBusy = true;
+      await trash.empty();
+      if (!mounted || seq !== loadSeq) return;
+      photoVisibility.markTrashed(ids);
+      browseContext.remove(ids);
+      selection.clear();
+      await load();
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
   }
 
-  onMount(load);
+  onMount(() => {
+    mounted = true;
+    load();
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+    };
+  });
 </script>
 
 <PageHeader title="Trash">
@@ -65,16 +165,16 @@
       {stats.count}<span class="muted"> · {(stats.total_size / 1024 / 1024).toFixed(0)} MB</span>
     </span>
   {/if}
-  <button onclick={restore} disabled={selection.size() === 0}>
-    Restore <span class="mono">{selection.size()}</span>
+  <button onclick={restore} disabled={selectedTrashCount === 0 || actionBusy}>
+    Restore <span class="mono">{selectedTrashCount}</span>
   </button>
-  <button class="danger" onclick={deleteForever} disabled={selection.size() === 0}>Delete forever</button>
-  <button class="danger" onclick={emptyTrash} disabled={items.length === 0}>Empty</button>
+  <button class="danger" onclick={deleteForever} disabled={selectedTrashCount === 0 || actionBusy}>Delete forever</button>
+  <button class="danger" onclick={emptyTrash} disabled={items.length === 0 || actionBusy}>Empty</button>
 </PageHeader>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page" use:marqueeSelect={{ getAllIds: () => items.map((t) => t.photo_id) }}>
+<div class="page" bind:this={scrollEl} onscroll={onTrashScroll} use:marqueeSelect={{ getAllIds: () => visibleIds }}>
   {#if items.length === 0}
     <div class="empty">
       <p>Nothing in trash. A clean shelf.</p>
@@ -104,6 +204,9 @@
         </button>
       {/each}
     </div>
+    {#if loadingMore}
+      <p class="loading-more mono">Loading more…</p>
+    {/if}
   {/if}
 </div>
 
@@ -115,6 +218,12 @@
     text-align: center;
   }
   .empty p { color: var(--ink-muted); font-style: italic; }
+  .loading-more {
+    margin: var(--s-4) 0 0;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+  }
   .trash-cell {
     padding: 0;
     border: 0;

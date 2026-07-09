@@ -17,10 +17,27 @@ pub struct GeocodingResolveOneArgs {
     pub lng: f64,
 }
 
+fn validate_lat_lng(lat: f64, lng: f64) -> CommandResult<()> {
+    if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) {
+        return Err(CommandError::Validation {
+            field: "lat".into(),
+            reason: "latitude must be between -90 and 90".into(),
+        });
+    }
+    if !lng.is_finite() || !(-180.0..=180.0).contains(&lng) {
+        return Err(CommandError::Validation {
+            field: "lng".into(),
+            reason: "longitude must be between -180 and 180".into(),
+        });
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn geocoding_resolve_one(
     args: GeocodingResolveOneArgs,
 ) -> CommandResult<Option<LocationDto>> {
+    validate_lat_lng(args.lat, args.lng)?;
     let path = smriti::db::geonames::geonames_db_path();
     if !path.exists() {
         return Ok(None);
@@ -80,6 +97,29 @@ fn build_message(considered: u64, updated: u64, cleared: u64, db_present: bool) 
     format!("Resolved {} of {} GPS-tagged photos.", updated, considered)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::validate_lat_lng;
+    use crate::CommandError;
+
+    #[test]
+    fn validate_lat_lng_rejects_non_finite_and_out_of_range() {
+        assert!(validate_lat_lng(17.4, 78.5).is_ok());
+        assert!(matches!(
+            validate_lat_lng(f64::NAN, 78.5),
+            Err(CommandError::Validation { .. })
+        ));
+        assert!(matches!(
+            validate_lat_lng(91.0, 78.5),
+            Err(CommandError::Validation { .. })
+        ));
+        assert!(matches!(
+            validate_lat_lng(17.4, 181.0),
+            Err(CommandError::Validation { .. })
+        ));
+    }
+}
+
 /// Re-geocode photos. With `force_refresh = false` (default) only
 /// fills in NULL `location_city` rows. With `force_refresh = true`
 /// re-resolves every GPS-tagged photo, overwriting prior values —
@@ -126,22 +166,25 @@ pub async fn geocoding_backfill(
             started,
             &cancel,
         );
-        let dto = match result {
-            Ok(dto) => dto,
+        match result {
+            Ok(dto) => emit(&app_clone, EV_GEOCODING_COMPLETE, dto),
             Err(e) => {
                 tracing::error!("geocoding backfill failed: {}", e);
-                GeocodingCompleteDto {
-                    job_id: job_id_clone.clone(),
-                    considered: 0,
-                    updated: 0,
-                    cleared: 0,
-                    geonames_db_present: false,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    message: format!("Geocoding failed: {}", e),
-                }
+                emit(
+                    &app_clone,
+                    EV_GEOCODING_PROGRESS,
+                    JobProgress {
+                        job_id: job_id_clone.clone(),
+                        stage: "error".into(),
+                        processed: 0,
+                        total: Some(1),
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        eta_ms: None,
+                        message: Some(format!("Geocoding failed: {}", e)),
+                    },
+                );
             }
         };
-        emit(&app_clone, EV_GEOCODING_COMPLETE, dto);
 
         finish_handle.spawn(async move {
             let st: tauri::State<AppState> = app_for_finish.state();

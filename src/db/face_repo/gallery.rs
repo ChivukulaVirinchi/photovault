@@ -1,6 +1,8 @@
 //! Gallery and stats management for FaceRepo.
 
-use rusqlite::{params, Result as SqliteResult};
+use std::collections::{HashMap, HashSet};
+
+use rusqlite::{params, params_from_iter, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
@@ -205,6 +207,93 @@ impl<'a> FaceRepo<'a> {
         Ok(())
     }
 
+    /// Return fallback face thumbnail candidates for the supplied clusters.
+    ///
+    /// The rows are ordered by cluster, then by face confidence descending.
+    /// Callers can check the corresponding crop files outside the shared DB
+    /// mutex and then persist any representative replacement in one batch.
+    pub fn face_thumbnail_candidates(
+        &self,
+        cluster_ids: &[i64],
+        max_per_cluster: usize,
+    ) -> SqliteResult<HashMap<i64, Vec<i64>>> {
+        if cluster_ids.is_empty() || max_per_cluster == 0 {
+            return Ok(HashMap::new());
+        }
+
+        let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut unique_ids = Vec::new();
+        for id in cluster_ids {
+            if seen.insert(*id) {
+                unique_ids.push(*id);
+            }
+        }
+
+        for chunk in unique_ids.chunks(400) {
+            let placeholders = (1..=chunk.len())
+                .map(|idx| format!("?{}", idx))
+                .collect::<Vec<_>>()
+                .join(",");
+            let limit_param = chunk.len() + 1;
+            let sql = format!(
+                r#"
+                SELECT cluster_id, id
+                FROM (
+                    SELECT
+                        faces.cluster_id,
+                        faces.id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY faces.cluster_id
+                            ORDER BY faces.confidence DESC, faces.id ASC
+                        ) AS rn
+                    FROM faces
+                    JOIN photos p ON p.id = faces.photo_id
+                    WHERE faces.cluster_id IN ({})
+                      AND p.is_trashed = FALSE
+                )
+                WHERE rn <= ?{}
+                ORDER BY cluster_id ASC, rn ASC
+                "#,
+                placeholders, limit_param
+            );
+
+            let mut values: Vec<rusqlite::types::Value> = chunk
+                .iter()
+                .map(|id| rusqlite::types::Value::from(*id))
+                .collect();
+            values.push(rusqlite::types::Value::from(max_per_cluster as i64));
+
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(values.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (cluster_id, face_id) = row?;
+                out.entry(cluster_id).or_default().push(face_id);
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub fn update_representative_faces(&self, updates: &[(i64, i64)]) -> SqliteResult<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE face_clusters SET representative_face_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            )?;
+            for (cluster_id, face_id) in updates {
+                stmt.execute(params![face_id, cluster_id])?;
+            }
+        }
+        tx.commit()
+    }
+
     /// Recompute all cluster stats and prune empty clusters.
     pub fn normalize_cluster_stats(&self) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -257,10 +346,12 @@ impl<'a> FaceRepo<'a> {
             let mut replacement_face_id: Option<i64> = None;
             let mut stmt = self.conn.prepare(
                 r#"
-                SELECT id
-                FROM faces
-                WHERE cluster_id = ?1
-                ORDER BY confidence DESC
+                SELECT f.id
+                FROM faces f
+                JOIN photos p ON p.id = f.photo_id
+                WHERE f.cluster_id = ?1
+                  AND p.is_trashed = FALSE
+                ORDER BY f.confidence DESC
                 "#,
             )?;
 
@@ -289,5 +380,90 @@ impl<'a> FaceRepo<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::{params, Connection};
+
+    use super::*;
+    use crate::db::create_schema;
+
+    fn seeded_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        for id in 1..=3 {
+            conn.execute(
+                "INSERT INTO photos (id, file_path, file_name, file_hash, file_size)
+                 VALUES (?1, ?2, ?3, ?4, 100)",
+                params![
+                    id,
+                    format!("photos/{id}.jpg"),
+                    format!("{id}.jpg"),
+                    format!("hash-{id}")
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, face_count, photo_count)
+             VALUES (10, 'A', 2, 2), (20, 'B', 1, 1)",
+            [],
+        )
+        .unwrap();
+        for (id, cluster_id, confidence) in [(1, 10, 0.5), (2, 10, 0.9), (3, 20, 0.7)] {
+            conn.execute(
+                "INSERT INTO faces (
+                    id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                    embedding, cluster_id, confidence, user_confirmed
+                 )
+                 VALUES (?1, ?1, 0.1, 0.1, 0.2, 0.2, ?2, ?3, ?4, 0)",
+                params![id, vec![id as u8; 16], cluster_id, confidence],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn face_thumbnail_candidates_are_batched_and_confidence_ordered() {
+        let conn = seeded_conn();
+        let repo = FaceRepo::new(&conn);
+
+        let candidates = repo.face_thumbnail_candidates(&[10, 20, 10], 2).unwrap();
+
+        assert_eq!(candidates.get(&10).unwrap(), &vec![2, 1]);
+        assert_eq!(candidates.get(&20).unwrap(), &vec![3]);
+    }
+
+    #[test]
+    fn face_thumbnail_candidates_ignore_trashed_photos() {
+        let conn = seeded_conn();
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 2", [])
+            .unwrap();
+        let repo = FaceRepo::new(&conn);
+
+        let candidates = repo.face_thumbnail_candidates(&[10], 2).unwrap();
+
+        assert_eq!(candidates.get(&10).unwrap(), &vec![1]);
+    }
+
+    #[test]
+    fn update_representative_faces_updates_all_rows_in_one_call() {
+        let conn = seeded_conn();
+        let repo = FaceRepo::new(&conn);
+
+        repo.update_representative_faces(&[(10, 2), (20, 3)])
+            .unwrap();
+
+        let reps: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, representative_face_id FROM face_clusters ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(reps, vec![(10, 2), (20, 3)]);
     }
 }

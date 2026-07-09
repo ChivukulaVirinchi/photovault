@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::{params, Connection};
@@ -57,11 +58,15 @@ pub struct SuggestionDiagnostics {
 pub fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let r = 6371.0; // Earth radius km
     let dlat = (lat2 - lat1).to_radians();
-    let dlng = (lng2 - lng1).to_radians();
+    let dlng = ((lng2 - lng1 + 540.0).rem_euclid(360.0) - 180.0).to_radians();
     let a = (dlat / 2.0).sin().powi(2)
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlng / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
     r * c
+}
+
+fn parse_date_prefix(date_str: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date_str.get(..10)?, "%Y-%m-%d").ok()
 }
 
 /// Compute a stable fingerprint from a sorted set of photo IDs.
@@ -134,7 +139,8 @@ pub fn detect_home_city(
                        WHERE location_city = ?1
                          AND gps_latitude IS NOT NULL
                          AND is_trashed = FALSE
-                       GROUP BY location_city
+                       GROUP BY location_city, COALESCE(location_country,'')
+                       ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
                        LIMIT 1"#,
                     params![city_name.trim()],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -154,7 +160,7 @@ pub fn detect_home_city(
            WHERE location_city IS NOT NULL
              AND gps_latitude IS NOT NULL
              AND is_trashed = FALSE
-           GROUP BY location_city
+           GROUP BY location_city, COALESCE(location_country,'')
            ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
            LIMIT 1"#,
         [],
@@ -192,7 +198,7 @@ pub fn detect_trips(
                WHERE p.location_city IS NOT NULL
                  AND p.date_taken IS NOT NULL
                  AND p.is_trashed = FALSE
-               ORDER BY p.location_city, p.date_taken"#,
+               ORDER BY p.location_city, COALESCE(p.location_country,''), p.date_taken"#,
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -200,8 +206,11 @@ pub fn detect_trips(
         stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        .and_then(|iter| iter.collect::<rusqlite::Result<Vec<_>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!("album trip detection skipped: failed reading city rows: {e}");
+            Vec::new()
+        })
     };
 
     if rows.is_empty() {
@@ -219,53 +228,70 @@ pub fn detect_trips(
         .max(1);
 
     // Count of distinct weeks per city
-    let city_weeks: HashMap<String, i64> = {
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT location_city, COUNT(DISTINCT strftime('%Y-%W', date_taken))
+    let city_weeks: HashMap<(String, String), i64> = {
+        let mut stmt = match conn.prepare(
+            r#"SELECT location_city, COALESCE(location_country,''), COUNT(DISTINCT strftime('%Y-%W', date_taken))
                    FROM photos
                    WHERE location_city IS NOT NULL AND date_taken IS NOT NULL AND is_trashed = FALSE
-                   GROUP BY location_city"#,
-            )
-            .unwrap();
+                   GROUP BY location_city, COALESCE(location_country,'')"#,
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
         stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, i64>(2)?,
+            ))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!("album trip detection skipped: failed reading city week rows: {e}");
+            HashMap::new()
+        })
     };
 
     // City GPS centroids (for distance check)
-    let city_centroids: HashMap<String, (f64, f64)> = {
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT location_city, AVG(gps_latitude), AVG(gps_longitude)
+    let city_centroids: HashMap<(String, String), (f64, f64)> = {
+        let mut stmt = match conn.prepare(
+            r#"SELECT location_city, COALESCE(location_country,''), AVG(gps_latitude), AVG(gps_longitude)
                    FROM photos
                    WHERE location_city IS NOT NULL AND gps_latitude IS NOT NULL AND is_trashed = FALSE
-                   GROUP BY location_city"#,
-            )
-            .unwrap();
+                   GROUP BY location_city, COALESCE(location_country,'')"#,
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
         stmt.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                (row.get::<_, f64>(1)?, row.get::<_, f64>(2)?),
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                (row.get::<_, f64>(2)?, row.get::<_, f64>(3)?),
             ))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!("album trip detection skipped: failed reading city centroid rows: {e}");
+            HashMap::new()
+        })
     };
 
     // How many photos are already in user albums, keyed by photo_id
     let album_photo_set: HashSet<i64> = {
-        let mut stmt = conn
-            .prepare("SELECT DISTINCT photo_id FROM album_photos")
-            .unwrap();
-        stmt.query_map([], |row| row.get::<_, i64>(0))
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
+        match conn.prepare("SELECT DISTINCT photo_id FROM album_photos") {
+            Ok(mut stmt) => stmt
+                .query_map([], |row| row.get::<_, i64>(0))
+                .and_then(|iter| iter.collect::<rusqlite::Result<HashSet<_>>>())
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "album trip detection continuing without album membership filter: {e}"
+                    );
+                    HashSet::new()
+                }),
+            Err(_) => HashSet::new(),
+        }
     };
 
-    let home_city = home.as_ref().map(|h| h.0.as_str());
+    let home_place = home.as_ref().map(|h| (h.0.as_str(), h.1.as_str()));
     let home_coords = home.as_ref().map(|h| (h.2, h.3));
 
     // Group rows by city and split into contiguous date spans
@@ -308,12 +334,11 @@ pub fn detect_trips(
         };
 
     for (id, city, country, date_str) in &rows {
-        let date = match NaiveDate::parse_from_str(&date_str[..10], "%Y-%m-%d") {
-            Ok(d) => d,
-            Err(_) => continue,
+        let Some(date) = parse_date_prefix(date_str) else {
+            continue;
         };
 
-        if city != &current_city {
+        if city != &current_city || country != &current_country {
             flush_city(&current_city, &current_country, &current_dates, &mut spans);
             current_city = city.clone();
             current_country = country.clone();
@@ -340,16 +365,17 @@ pub fn detect_trips(
             continue;
         }
         // Gate 3: city in < 10% of weeks (rarity)
-        let cw = city_weeks.get(&span.city).copied().unwrap_or(0);
+        let place = (span.city.clone(), span.country.clone());
+        let cw = city_weeks.get(&place).copied().unwrap_or(0);
         if cw as f64 / total_weeks as f64 >= 0.10 {
             continue;
         }
         // Gate 4: not the home city and >= 50 km from home
-        if home_city == Some(span.city.as_str()) {
+        if home_place == Some((span.city.as_str(), span.country.as_str())) {
             continue;
         }
         if let Some((hlat, hlng)) = home_coords {
-            if let Some(&(clat, clng)) = city_centroids.get(&span.city) {
+            if let Some(&(clat, clng)) = city_centroids.get(&place) {
                 if haversine_km(hlat, hlng, clat, clng) < 50.0 {
                     continue;
                 }
@@ -435,8 +461,11 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
         stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        .and_then(|iter| iter.collect::<rusqlite::Result<Vec<_>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!("album event detection skipped: failed reading event rows: {e}");
+            Vec::new()
+        })
     };
 
     if rows.is_empty() {
@@ -445,12 +474,18 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
 
     // Photo IDs already in user albums
     let album_photo_set: HashSet<i64> = {
-        let mut stmt = conn
-            .prepare("SELECT DISTINCT photo_id FROM album_photos")
-            .unwrap();
-        stmt.query_map([], |row| row.get::<_, i64>(0))
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
+        match conn.prepare("SELECT DISTINCT photo_id FROM album_photos") {
+            Ok(mut stmt) => stmt
+                .query_map([], |row| row.get::<_, i64>(0))
+                .and_then(|iter| iter.collect::<rusqlite::Result<HashSet<_>>>())
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "album event detection continuing without album membership filter: {e}"
+                    );
+                    HashSet::new()
+                }),
+            Err(_) => HashSet::new(),
+        }
     };
 
     // Parse timestamps
@@ -476,8 +511,7 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
             .ok()
             .map(|ndt| ndt.and_utc().timestamp())
             .or_else(|| {
-                NaiveDate::parse_from_str(&normalized[..10], "%Y-%m-%d")
-                    .ok()
+                parse_date_prefix(&normalized)
                     .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
             })?;
             Some(EventPhoto {
@@ -624,8 +658,11 @@ pub fn detect_gatherings(
                 row.get::<_, i64>(2)?,
             ))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default();
+        .and_then(|iter| iter.collect::<rusqlite::Result<Vec<_>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!("album people-gathering detection skipped: failed reading rows: {e}");
+            Vec::new()
+        });
 
     if rows.is_empty() {
         return Vec::new();
@@ -640,8 +677,13 @@ pub fn detect_gatherings(
         s.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "album people-gathering detection continuing without cluster names: {e}"
+            );
+            HashMap::new()
+        })
     };
 
     // Sliding-window grouping by day bucket. Two consecutive days (or
@@ -688,7 +730,9 @@ pub fn detect_gatherings(
                 cluster_ids: HashSet::new(),
             });
         }
-        let w = cur.as_mut().unwrap();
+        let Some(w) = cur.as_mut() else {
+            continue;
+        };
         w.cluster_ids.insert(cid);
         w.end_ts = w.end_ts.max(ts);
         // Avoid double-pushing the same photo (it appears once per
@@ -783,6 +827,14 @@ pub fn detect_suggestions_with_diagnostics(
     conn: &Connection,
     home_city_override: Option<&str>,
 ) -> (Vec<DetectedSuggestion>, SuggestionDiagnostics) {
+    detect_suggestions_with_diagnostics_cancel(conn, home_city_override, None)
+}
+
+pub fn detect_suggestions_with_diagnostics_cancel(
+    conn: &Connection,
+    home_city_override: Option<&str>,
+    cancel: Option<&AtomicBool>,
+) -> (Vec<DetectedSuggestion>, SuggestionDiagnostics) {
     let mut diag = SuggestionDiagnostics {
         total_photos_with_date: conn
             .query_row(
@@ -808,6 +860,10 @@ pub fn detect_suggestions_with_diagnostics(
         ..SuggestionDiagnostics::default()
     };
 
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return (Vec::new(), diag);
+    }
+
     let repo = AlbumSuggestionRepo::new(conn);
     let existing_fps: HashSet<String> = repo
         .get_all_fingerprints()
@@ -828,22 +884,28 @@ pub fn detect_suggestions_with_diagnostics(
     let trips = detect_trips(conn, home.as_ref());
     diag.trip_candidates_passed = trips.len();
 
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return (Vec::new(), diag);
+    }
+
     // Coarse gate diagnostics for trips.
     {
         let mut stmt = conn
             .prepare(
-                r#"SELECT p.id, p.location_city, p.date_taken
+                r#"SELECT p.id, p.location_city, COALESCE(p.location_country,''), p.date_taken
                    FROM photos p
                    WHERE p.location_city IS NOT NULL
                      AND p.date_taken IS NOT NULL
                      AND p.is_trashed = FALSE
-                   ORDER BY p.location_city, p.date_taken"#,
+                   ORDER BY p.location_city, COALESCE(p.location_country,''), p.date_taken"#,
             )
             .ok();
         if let Some(ref mut stmt) = stmt {
-            let rows: Vec<(i64, String, String)> = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            let rows: Vec<(i64, String, String, String)> = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .and_then(|iter| iter.collect::<rusqlite::Result<Vec<_>>>())
                 .unwrap_or_default();
             diag.trip_rows = rows.len();
 
@@ -855,26 +917,31 @@ pub fn detect_suggestions_with_diagnostics(
                 )
                 .unwrap_or(1)
                 .max(1);
-            let city_weeks: HashMap<String, i64> = {
-                let mut stmt = conn
-                    .prepare(
-                        r#"SELECT location_city, COUNT(DISTINCT strftime('%Y-%W', date_taken))
+            let city_weeks: HashMap<(String, String), i64> = {
+                match conn.prepare(
+                    r#"SELECT location_city, COALESCE(location_country,''), COUNT(DISTINCT strftime('%Y-%W', date_taken))
                            FROM photos
                            WHERE location_city IS NOT NULL AND date_taken IS NOT NULL AND is_trashed = FALSE
-                           GROUP BY location_city"#,
-                    )
-                    .unwrap();
-                stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                })
-                .map(|iter| iter.filter_map(|r| r.ok()).collect())
-                .unwrap_or_default()
+                           GROUP BY location_city, COALESCE(location_country,'')"#,
+                ) {
+                    Ok(mut stmt) => stmt
+                        .query_map([], |row| {
+                            Ok((
+                                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                                row.get::<_, i64>(2)?,
+                            ))
+                        })
+                        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
+                        .unwrap_or_default(),
+                    Err(_) => HashMap::new(),
+                }
             };
 
-            let mut spans: Vec<(String, NaiveDate, NaiveDate, usize)> = Vec::new();
+            let mut spans: Vec<(String, String, NaiveDate, NaiveDate, usize)> = Vec::new();
             let mut city = String::new();
+            let mut country = String::new();
             let mut dates: Vec<NaiveDate> = Vec::new();
-            let mut flush = |city: &str, dates: &mut Vec<NaiveDate>| {
+            let mut flush = |city: &str, country: &str, dates: &mut Vec<NaiveDate>| {
                 if city.is_empty() || dates.is_empty() {
                     dates.clear();
                     return;
@@ -885,29 +952,30 @@ pub fn detect_suggestions_with_diagnostics(
                 let mut count = 1usize;
                 for d in dates.iter().skip(1).copied() {
                     if (d - end).num_days() > 3 {
-                        spans.push((city.to_string(), start, end, count));
+                        spans.push((city.to_string(), country.to_string(), start, end, count));
                         start = d;
                         count = 0;
                     }
                     end = d;
                     count += 1;
                 }
-                spans.push((city.to_string(), start, end, count));
+                spans.push((city.to_string(), country.to_string(), start, end, count));
                 dates.clear();
             };
-            for (_, c, ds) in rows {
-                let Ok(d) = NaiveDate::parse_from_str(&ds[..10], "%Y-%m-%d") else {
+            for (_, c, co, ds) in rows {
+                let Some(d) = parse_date_prefix(&ds) else {
                     continue;
                 };
-                if c != city {
-                    flush(&city, &mut dates);
+                if c != city || co != country {
+                    flush(&city, &country, &mut dates);
                     city = c;
+                    country = co;
                 }
                 dates.push(d);
             }
-            flush(&city, &mut dates);
+            flush(&city, &country, &mut dates);
 
-            for (city, start, end, count) in spans {
+            for (city, country, start, end, count) in spans {
                 let duration_days = (end - start).num_days() + 1;
                 if duration_days < 3 {
                     diag.trip_gate_duration_rejected += 1;
@@ -917,7 +985,7 @@ pub fn detect_suggestions_with_diagnostics(
                     diag.trip_gate_photo_count_rejected += 1;
                     continue;
                 }
-                let cw = city_weeks.get(&city).copied().unwrap_or(0);
+                let cw = city_weeks.get(&(city, country)).copied().unwrap_or(0);
                 if cw as f64 / total_weeks as f64 >= 0.10 {
                     diag.trip_gate_rarity_rejected += 1;
                     continue;
@@ -934,6 +1002,10 @@ pub fn detect_suggestions_with_diagnostics(
 
     let events = detect_events(conn, &trip_photo_ids);
     diag.event_candidates_passed = events.len();
+
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return (Vec::new(), diag);
+    }
 
     // Gatherings: face-driven, no GPS needed. Catches "weekend with
     // people" scenarios that trips and events miss on libraries
@@ -953,6 +1025,9 @@ pub fn detect_suggestions_with_diagnostics(
     // Persist only new suggestions (no matching fingerprint)
     let mut persisted = Vec::new();
     for s in all {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break;
+        }
         if existing_fps.contains(&s.fingerprint) {
             diag.skipped_existing_fingerprint += 1;
             continue;
@@ -990,4 +1065,182 @@ pub fn detect_suggestions_with_diagnostics(
     );
 
     (persisted, diag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::sync::atomic::AtomicBool;
+
+    fn create_trip_test_schema(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                location_city TEXT,
+                location_country TEXT,
+                date_taken TEXT,
+                gps_latitude REAL,
+                gps_longitude REAL,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn detect_trips_tolerates_missing_album_photos_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_trip_test_schema(&conn);
+        conn.execute_batch(
+            r#"
+            INSERT INTO photos
+                (id, location_city, location_country, date_taken, gps_latitude, gps_longitude, is_trashed)
+            VALUES
+                (1, 'Goa', 'India', '2024-01-01T10:00:00Z', 15.2993, 74.1240, FALSE),
+                (2, 'Goa', 'India', '2024-01-02T10:00:00Z', 15.2993, 74.1240, FALSE),
+                (3, 'Goa', 'India', '2024-01-03T10:00:00Z', 15.2993, 74.1240, FALSE);
+            "#,
+        )
+        .unwrap();
+
+        let suggestions = detect_trips(&conn, None);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn detect_trips_does_not_merge_same_city_name_across_countries() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_trip_test_schema(&conn);
+        let mut id = 1;
+        for country in ["Canada", "United Kingdom"] {
+            for day in 1..=4 {
+                for shot in 0..2 {
+                    conn.execute(
+                        r#"INSERT INTO photos
+                           (id, location_city, location_country, date_taken, gps_latitude, gps_longitude, is_trashed)
+                           VALUES (?1, 'London', ?2, ?3, 51.5, -0.1, FALSE)"#,
+                        params![
+                            id,
+                            country,
+                            format!("2024-01-{day:02}T10:00:{shot:02}Z")
+                        ],
+                    )
+                    .unwrap();
+                    id += 1;
+                }
+            }
+        }
+        for week in 1..=20 {
+            let date = NaiveDate::from_ymd_opt(2023, 1, 1)
+                .unwrap()
+                .checked_add_days(chrono::Days::new((week - 1) * 7))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO photos (id, date_taken, is_trashed) VALUES (?1, ?2, FALSE)",
+                params![id, format!("{date}T00:00:00Z")],
+            )
+            .unwrap();
+            id += 1;
+        }
+
+        let suggestions = detect_trips(&conn, None);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn suggestion_detection_skips_short_malformed_dates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                location_city TEXT,
+                location_country TEXT,
+                date_taken TEXT,
+                gps_latitude REAL,
+                gps_longitude REAL,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            CREATE TABLE album_suggestions (
+                id INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                photo_ids_json TEXT NOT NULL,
+                cover_photo_id INTEGER,
+                fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                seen_count INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )
+        .unwrap();
+        for id in 1..=22 {
+            conn.execute(
+                r#"INSERT INTO photos
+                   (id, location_city, location_country, date_taken, gps_latitude, gps_longitude, is_trashed)
+                   VALUES (?1, 'Goa', 'India', 'bad', 15.2993, 74.1240, FALSE)"#,
+                params![id],
+            )
+            .unwrap();
+        }
+
+        let (suggestions, _diag) = detect_suggestions_with_diagnostics_cancel(&conn, None, None);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn haversine_uses_shortest_path_across_date_line() {
+        assert!(haversine_km(0.0, 179.9, 0.0, -179.9) < 25.0);
+    }
+
+    #[test]
+    fn cancelled_detection_persists_no_suggestions() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                location_city TEXT,
+                location_country TEXT,
+                date_taken TEXT,
+                gps_latitude REAL,
+                gps_longitude REAL,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            CREATE TABLE album_suggestions (
+                id INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                photo_ids_json TEXT NOT NULL,
+                cover_photo_id INTEGER,
+                fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                seen_count INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO photos
+                (id, location_city, location_country, date_taken, gps_latitude, gps_longitude, is_trashed)
+            VALUES
+                (1, 'Goa', 'India', '2024-01-01T10:00:00Z', 15.2993, 74.1240, FALSE),
+                (2, 'Goa', 'India', '2024-01-02T10:00:00Z', 15.2993, 74.1240, FALSE);
+            "#,
+        )
+        .unwrap();
+
+        let cancel = AtomicBool::new(true);
+        let (suggestions, _diag) =
+            detect_suggestions_with_diagnostics_cancel(&conn, None, Some(&cancel));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM album_suggestions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert!(suggestions.is_empty());
+        assert_eq!(count, 0);
+    }
 }

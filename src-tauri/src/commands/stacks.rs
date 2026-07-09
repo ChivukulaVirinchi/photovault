@@ -82,7 +82,13 @@ pub async fn stacks_set_cover(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = PhotoStackRepo::new(&db.conn);
-    repo.set_cover(args.stack_id, args.photo_id)?;
+    match repo.set_cover(args.stack_id, args.photo_id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("photo_stack_member", args.photo_id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     let stack = repo
         .get_stack(args.stack_id)?
         .ok_or_else(|| CommandError::not_found("photo_stack", args.stack_id))?;
@@ -99,7 +105,13 @@ pub async fn stacks_remove_member(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = PhotoStackRepo::new(&db.conn);
-    repo.remove_member(args.stack_id, args.photo_id)?;
+    match repo.remove_member(args.stack_id, args.photo_id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("photo_stack_member", args.photo_id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     let Some(stack) = repo.get_stack(args.stack_id)? else {
         return Ok(None);
     };
@@ -112,7 +124,13 @@ pub async fn stacks_unstack(state: State<'_, AppState>, args: StackIdArgs) -> Co
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
-    PhotoStackRepo::new(&db.conn).unstack(args.id)?;
+    match PhotoStackRepo::new(&db.conn).unstack(args.id) {
+        Ok(()) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(CommandError::not_found("photo_stack", args.id));
+        }
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
@@ -125,7 +143,15 @@ pub async fn stacks_trash_others(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let repo = PhotoStackRepo::new(&db.conn);
+    if repo.get_stack(args.id)?.is_none() {
+        return Err(CommandError::not_found("photo_stack", args.id));
+    }
     let to_trash = repo.photos_to_trash_except_cover(args.id)?;
+    if to_trash.is_empty() {
+        return Err(CommandError::Conflict {
+            reason: "stack has no non-cover photos to trash".into(),
+        });
+    }
     let count = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
     repo.delete_stack(args.id)?;
     Ok(StackCountResultDto { count })
@@ -133,11 +159,23 @@ pub async fn stacks_trash_others(
 
 #[tauri::command]
 pub async fn stacks_refresh(state: State<'_, AppState>) -> CommandResult<StackRefreshDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let drive_root = lib.drive_root.clone();
-    let db = lib.db.lock().await;
-    let result = smriti::services::PhotoStackService::refresh(&db.conn, &drive_root)?;
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(smriti::services::PhotoStackService::refresh(
+            &conn,
+            &drive_root,
+        )?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("stack refresh worker failed: {e}"),
+    })??;
     Ok(StackRefreshDto {
         stacks_found: result.stacks_found as u64,
     })

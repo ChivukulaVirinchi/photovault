@@ -1,0 +1,510 @@
+# Smriti Conference Audit TODO
+
+Status key:
+- [x] Audited and any confirmed issue fixed
+- [ ] Pending audit or pending decision
+- [~] Audited; no edit made, but keep an eye on it
+
+## Explicit User Concerns
+
+- [x] Visible viewport thumbnails must be fast-tracked.
+  - Fixed urgent thumbnail queue overflow lane.
+  - Fixed foreground photo thumbnail requests to avoid background priority.
+  - Reduced prefetch thumbnail batch size so a visible cell cannot wait behind a long prefetch batch.
+  - Fixed burst overview missing-cover thumbnails.
+  - Fixed map marker thumbnails created outside Svelte.
+- [~] Thumbnail quality must not degrade.
+  - Current fixes keep Medium generation paths and existing quality settings.
+  - Album/memory cover eager Medium upgrade is intentionally preserved for quality, though it can delay list response.
+- [~] Older build opening newer DB must not be a dead end.
+  - Settings route is accessible without an open library.
+  - Welcome shows schema-too-new and links Settings.
+  - Schema-too-new libraries now enter a separate unsupported-library state instead of returning a hard open error.
+  - The UI keeps the selected drive visible and leaves Settings/update reachable without entering the normal app shell.
+  - Added an allow-listed read-only photo preview that reads only stable `photos` columns over a read-only SQLite connection and uses existing thumbnail paths only.
+  - Compatibility decision: do not reuse the normal `OpenLibrary` state for this. It contains a writable `Database` plus thumbnail/semantic services and would let write commands/background jobs run against an unsupported schema.
+  - Full normal-shell browsing on unknown future schemas is classified as a future compatibility expansion, not a conference blocker, because it requires command-by-command schema compatibility proof.
+- [x] Precommit/security issue from `cargo audit`.
+  - `quinn-proto` vulnerability addressed earlier.
+  - `cargo audit` rerun exits 0.
+  - 19 unmaintained/unsound warnings remain allowed warnings unless policy changes.
+
+## Frontend Routes
+
+- [x] `Timeline.svelte`
+  - Audited thumbnail visible path, paging, browse context, selection/trash undo, and large-scroll behavior.
+- [x] `PhotoDetail.svelte`
+  - Audited detail loading, slideshow/nav context, member thumbnails, video probe, and stale sequence guards.
+- [x] `Albums.svelte`
+  - Audited suggestions, cover thumbnail requests, preview modal, job completion handling.
+- [x] `AlbumDetail.svelte`
+  - Audited paged loading, all-id cap for navigation, selection, remove/trash undo, export events, slideshow.
+- [x] `Duplicates.svelte`
+  - Fixed duplicate list/wasted-space load parallelism.
+  - Thumbnail visible path already present.
+- [x] `DuplicateDetail.svelte`
+  - Audited stale mutation guards, thumbnail visible path, trash/dismiss flows.
+- [x] `Bursts.svelte`
+  - Fixed missing-cover thumbnail generation for visible burst cards.
+  - Audited pagination/job completion.
+- [x] `BurstDetail.svelte`
+  - Audited stale mutation guards and thumbnail visible path.
+- [x] `People.svelte`
+  - Audited face processing job state, live updates, pending/review counts, model-upgrade flow.
+- [x] `PersonDetail.svelte`
+  - Audited paged photos, verify strip, reassign/merge/similar dialogs, selection/trash.
+- [x] `FaceReview.svelte`
+  - Audited batch review flow and skipped-face handling.
+- [x] `PersonReview.svelte`
+  - Audited queue review refill and keyboard actions.
+- [x] `Search.svelte`
+  - Audited bounded rendering, selection/trash undo, thumbnail path for photo/album hits.
+- [x] `Map.svelte`
+  - Fixed missing thumbnail requests for MapLibre marker DOM.
+  - Audited all-pins fallback to viewport mode and drawer thumbnail requests.
+- [x] `Memories.svelte`
+  - Audited disabled-setting guard and hero thumbnail visible path.
+- [x] `MemoryDetail.svelte`
+  - Audited photo grid thumbnail path and memory album save flow.
+- [x] `Insights.svelte`
+  - Audited backend offload and representative image paths.
+- [x] `Trash.svelte`
+  - Audited cursor paging, restore/delete behavior, thumbnail visible path.
+- [x] `Settings.svelte`
+  - Audited no-library access, update controls, rebuild thumbnail action, asset/setup actions.
+- [x] `Welcome.svelte`
+  - Audited schema-too-new handling and Settings access without library.
+- [x] `Shortcuts.svelte`
+  - Quick audit only; no dynamic risk found.
+- [x] Removed/deferred routes
+  - `Cull.svelte`, `Documents.svelte`, `Health.svelte` are currently deleted/deferred in this worktree.
+
+## Shared Frontend Libraries / Components
+
+- [x] `thumbnailQueue.ts`
+  - Fixed visible-request urgent overflow.
+  - Increased urgent viewport bypass capacity so a large scroll jump is not stuck behind stale prefetch batches.
+  - Added/ran queue tests.
+- [x] `thumbnailRequest.ts`
+  - Audited two-observer visible/prefetch behavior and batching.
+  - Reduced batch size from 6 to 2 to lower worst-case visible wait when a cell was already in a prefetch batch.
+- [x] `videoProbe.ts`
+  - Audited video poster save path.
+- [x] `stores/library.svelte.ts`
+  - Audited schema-too-new preservation and remembered drive persistence.
+- [x] `stores/jobs.svelte.ts`
+  - Audited placeholder dismissal and global job state.
+- [x] `stores/selection.svelte.ts`
+  - Audited scoped selection behavior.
+- [x] `stores/photoVisibility.svelte.ts`
+  - Audited trash/restore invalidation.
+- [x] `stores/slideshow.svelte.ts`
+  - Audited paged load-more slideshow flow.
+- [x] `AddToAlbumDialog.svelte`
+  - Audited bulk add bounds via backend.
+- [x] `MergePersonDialog.svelte`
+  - Audited cannot-merge handling and target search.
+- [x] `ReassignFaceDialog.svelte`
+  - Audited suggestions and all-people search.
+- [x] `KSimilarDialog.svelte`
+  - Audited confirm/reject flow.
+- [x] `JobsIndicator.svelte`
+  - Audited cancel IPC shape.
+- [x] `AssistantDrawer.svelte`
+  - Audited heavy assistant operations moved off shared DB earlier.
+- [x] Remaining low-risk UI utilities/components
+  - `ZoomImage.svelte`, `ToastHost.svelte`, `Sidebar.svelte`, `dominantColor.ts`, and small CSS-only surfaces got a final quick pass; no concrete runtime issue found.
+
+## Tauri Commands / Backend Surfaces
+
+- [x] `photos.rs`
+  - Fixed timeline/list paging off shared DB.
+  - Fixed album/person/date/place paged helper off shared DB.
+  - Fixed batch thumbnail generation to background priority.
+- [x] `albums.rs`
+  - Audited bulk bounds, smart album rejection, export, suggestions jobs.
+  - Preserve eager Medium cover upgrade for quality; performance tradeoff noted.
+  - Dedicated command pass rerun; no additional concrete edit found.
+- [x] `duplicates.rs`
+  - Fixed list and wasted-space reads to secondary DB.
+  - Audited stale resolved-group mutations.
+  - Dedicated command pass checked live-persist cancellation semantics; duplicates intentionally preserve already-found groups on cancel.
+- [x] `bursts.rs`
+  - Fixed list reads to secondary DB.
+  - Audited stale resolved-group mutations.
+  - Fixed cancelled burst detection to remove only live groups inserted by that cancelled run, preventing partial results from sticking around.
+- [x] `people.rs`
+  - Fixed heavy face-suggestion/similar-face reads to secondary DB.
+  - Audited face job completion, reset, stats write library guard.
+- [x] `search.rs`
+  - Audited main query off shared DB and result bounds.
+- [x] `map.rs`
+  - Audited all-pins cap, viewport fallback, antimeridian bounds, filmstrip bounds, tile-cache commands.
+- [x] `memories.rs`
+  - Fixed disabled-setting guard earlier.
+  - Fixed save-as-album to reject blank explicit names and trim accepted names, matching normal album creation.
+- [x] `insights.rs`
+  - Audited off-thread compute, secondary DB use, hero thumbnail resolution, and face crop paths.
+- [x] `geocoding.rs`
+  - Audited background backfill, GeoNames setup, cancellation behavior, and lat/lng validation.
+- [x] `semantic.rs`
+  - Audited indexing/query background behavior and bounds.
+- [x] `assistant.rs`
+  - Audited off-thread heavy search, bounds, library-root guard.
+- [x] `documents.rs`
+  - Audited secondary DB list/search, cursor paging, FTS literal query handling, and category mutation.
+- [x] `trash.rs`
+  - Fixed permanent-delete statement lifetime earlier.
+  - Audited cursor paging and restore/delete operations.
+- [x] `stacks.rs`
+  - Audited stale dismissed-stack mutations.
+- [x] `settings.rs`
+  - Audited no-library access.
+- [x] `system.rs`
+  - Audited update check and asset health no-library access.
+- [x] `library.rs`
+  - Audited library root validation, schema-too-new mapping, background-library guards.
+- [x] Final command registration/API parity check
+  - Rerun found no frontend command strings missing Tauri handlers.
+  - Some registered commands are currently unused by the active UI; they are deferred/admin surfaces, not broken invokes.
+
+## Rust Engine / DB / Services
+
+- [x] `db/duplicate_repo.rs`
+  - Fixed stale dismissed/resolved mutation protections.
+- [x] `db/burst_repo.rs`
+  - Fixed stale dismissed/resolved mutation protections.
+  - Added exact-member-set cleanup support for cancelled live burst persistence.
+- [x] `db/stack_repo.rs`
+  - Fixed dismissed-stack mutation protections.
+- [x] `db/album_repo.rs`
+  - Fixed album navigation order to match visible grid.
+  - Audited bulk add/remove live rows and cover refresh.
+- [x] `db/trash_repo.rs` / `services/trash.rs`
+  - Audited cursor/restore/delete paths.
+- [x] `db/face_repo/*`
+  - Audited gallery/face read/write flows used by people UI.
+- [x] `services/thumbnail.rs`
+  - Audited foreground/background priority behavior, quality guard, and cache validation.
+  - Fixed valid low-byte thumbnails from simple images being rejected and regenerated repeatedly.
+- [x] `services/tile_cache.rs`
+  - Fixed fetched map tiles not enforcing the configured disk-cache limit.
+- [x] `services/face_processor.rs`
+  - Audited current-library guard, thumbnail-assisted face processing, and cancellation tail behavior.
+  - Fixed cancelled face runs to stop before contextual propagation/clustering after already-processed chunks are flushed.
+- [x] `services/album_suggestions.rs`
+  - Audited cancellation, diagnostics, city/country grouping, and malformed date handling.
+  - Fixed trip suggestions merging same city names across different countries.
+  - Fixed malformed short `date_taken` strings panicking trip/event/diagnostic parsing.
+  - Fixed trip home-distance checks across the international date line.
+- [x] `services/duplicate_detector.rs`
+  - Audited background detection and wasted-space calculation.
+- [x] `services/burst_detector.rs`
+  - Audited streaming persistence, thumbnail-assisted signatures, and timestamp ordering.
+  - Fixed burst grouping to sort by parsed UTC time rather than raw timestamp text, avoiding false groups across mixed offsets/formats.
+- [x] `services/semantic.rs`
+  - Audited bounded indexing/query behavior and active-library status counts.
+  - Fixed semantic index stats to ignore trashed photos when reporting indexed/failed counts.
+- [x] `services/geocoding.rs`
+  - Audited background setup/backfill.
+  - Fixed reverse-geocoding lookup near the international date line by splitting wrapped longitude ranges.
+- [x] `services/map_math.rs`
+  - Audited projection/tile math; current tests pass and active MapLibre route does not depend on it for rendering.
+- [x] `services/insights.rs`
+  - Audited top-location grouping fix.
+  - Fixed dashboard city count to match city/country top-location grouping.
+- [x] `services/reindexer.rs`
+  - Audited wrong-library/background write guards.
+  - Fixed move detection to normalize discovered candidate paths with DB storage separators on Windows.
+- [x] `services/raw_preview.rs`, `image_io.rs`, `metadata_processor.rs`
+  - Audited decode/metadata paths at high level.
+  - Fixed RAF decode routing to return an explicit unsupported-container error instead of treating it as TIFF RAW.
+  - Ran RAW preview corruption-guard tests and metadata chunk/video-date tests.
+- [~] `db/migrations.rs`
+  - Schema-too-new guard works and is tested.
+  - Safe unsupported-library shell is implemented.
+  - Minimal read-only preview is implemented.
+  - Full read-only app browsing remains future work until each command is proven compatible with newer schema versions.
+  - Safe design documented above; do not bypass `SchemaTooNewError` into the normal writable library state.
+- [x] Final panic/TODO/unwrap scan
+  - Rerun found no TODO/FIXME/HACK markers in main source trees.
+  - Panic hits are test assertions.
+  - Runtime unwrap/expect hits are invariant/startup cases; no targeted low-noise edit made.
+
+## Verification Completed
+
+- [x] `cargo fmt --check`
+- [x] `cargo test -p smriti services::album_suggestions::tests`
+- [x] `cargo test -p smriti services::burst_detector::tests`
+- [x] `cargo check -p smriti`
+- [x] `cargo test -p smriti services::semantic::tests`
+- [x] `cargo test -p smriti services::thumbnail::tests`
+- [x] `cargo test -p smriti db::burst_repo::tests`
+- [x] `cargo check -p smriti-tauri`
+- [x] `cargo test -p smriti-tauri commands::albums::tests --no-fail-fast`
+- [x] `cargo test -p smriti db::duplicate_repo::tests`
+- [x] `cargo test -p smriti db::document_repo::tests`
+- [x] `cargo test -p smriti-tauri commands::geocoding::tests`
+- [x] `cargo test -p smriti-tauri commands::memories::tests`
+- [x] `cargo test -p smriti-tauri commands::map::tests`
+- [x] `cargo test -p smriti services::insights::tests`
+- [x] `npm run check --prefix src-ui`
+- [x] Manual local CI gate equivalent after `scripts/ci_local.sh ci` hit CRLF/bash wrapper issue on Windows:
+  - `cargo fmt --all --check`
+  - `npm ci --prefix src-ui`
+  - `npm run check --prefix src-ui`
+  - `npm run test --prefix src-ui` (10 files, 79 tests)
+  - `npm run build --prefix src-ui`
+  - `cargo clippy --all-targets -p smriti -p smriti-tauri -- -D warnings`
+  - `cargo test -p smriti -p smriti-tauri`
+- [x] Post-compat broad verification:
+  - `cargo fmt --all --check`
+  - `npm run build --prefix src-ui`
+  - `cargo clippy --all-targets -p smriti -p smriti-tauri -- -D warnings`
+  - `cargo test -p smriti -p smriti-tauri`
+  - `cargo audit`
+  - `git diff --check`
+  - command registration parity scan
+- [x] `cargo test -p smriti-tauri --lib photos`
+- [x] `cargo test -p smriti-tauri --lib people`
+- [x] `cargo test -p smriti-tauri --lib bursts`
+- [x] `cargo test -p smriti-tauri --lib duplicates`
+- [x] `cargo test -p smriti-tauri --lib commands --no-fail-fast`
+- [x] `cargo test -p smriti-tauri --lib memories`
+- [x] `cargo test -p smriti-tauri --lib library`
+- [x] `cargo test -p smriti-tauri --test dto_snapshots`
+- [x] `cargo clippy --all-targets -p smriti-tauri -- -D warnings`
+- [x] `npm run test --prefix src-ui`
+- [x] Command registration parity for `library_compat_photos_list`
+- [x] `cargo test -p smriti --lib db::duplicate_repo`
+- [x] `cargo test -p smriti --lib db::burst_repo`
+- [x] `cargo test -p smriti --lib db::stack_repo`
+- [x] `cargo test -p smriti --lib services::trash`
+- [x] `npm run test --prefix src-ui -- thumbnailQueue`
+- [x] `npm run test -- --run src/lib/thumbnailQueue.test.ts` from `src-ui`
+- [x] `npm run check` from `src-ui`
+- [x] `git diff --check` on touched files after focused edits
+- [x] Build cleanup run after Cargo threshold
+
+## Pending Final Gates
+
+- [x] Re-run command/API parity check.
+- [x] Re-run runtime panic/TODO/unwrap scan.
+- [x] Run broader local CI gate when the audit settles.
+- [x] Re-run `cargo audit` if dependencies changed after the previous fix.
+- [x] Do a final diff review for accidental broad/sloppy changes.
+  - `git diff --check` passes.
+  - No focused frontend tests (`test.only`, `describe.only`, etc.) found.
+  - Suspicious-token scan found only legitimate AI/settings strings, thumbnail constants, and tracker text.
+  - Diff remains broad because the audit covered many surfaces; review evidence does not make it a small patch.
+- [x] Decide and document true backward-compatible read-only library-open strategy.
+  - Safe unsupported-library shell implemented; settings/update path is the conference fallback.
+
+## Known Remaining Work
+
+- [x] Implement schema-too-new compatibility shell.
+  - Uses a separate non-writable library state.
+  - Do not route unsupported schemas through normal `OpenLibrary`.
+- [x] Allow-listed read-only photo preview for newer schemas.
+  - Uses `library_compat_photos_list`.
+  - Reads only stable `photos` columns from a read-only SQLite connection.
+  - Shows existing thumbnails only; it does not generate thumbnails or mutate the library.
+
+## Future Expansion
+
+- [~] Full read-only normal-shell browsing for newer schemas.
+  - Not a conference blocker after the compatibility shell and preview.
+  - Requires schema-by-schema compatibility proof for each command before exposing it.
+
+## File Inventory Audit
+
+Status here is stricter than the module audit above:
+- [x] File-level audited in this ledger; any confirmed issue fixed or documented.
+- [~] Covered by broad module/route audit; still needs a dedicated file-level pass.
+- [ ] Pending dedicated file-level audit.
+
+Current inventory: 183 source files (`src`, `src-tauri/src`, `src-ui/src`).
+
+- [x] `src\bin\build_geonames.rs`
+- [x] `src\bootstrap.rs`
+- [x] `src\config\mod.rs`
+- [x] `src\db\album_repo.rs`
+- [x] `src\db\album_suggestion_repo.rs`
+- [x] `src\db\burst_repo.rs`
+- [x] `src\db\connection.rs`
+- [x] `src\db\document_repo.rs`
+- [x] `src\db\duplicate_repo.rs`
+- [x] `src\db\excluded_folder_repo.rs`
+- [x] `src\db\face_repo\gallery.rs`
+- [x] `src\db\face_repo\mod.rs`
+- [x] `src\db\face_repo\read.rs`
+- [x] `src\db\face_repo\write.rs`
+- [x] `src\db\geonames.rs`
+- [x] `src\db\inferred_identity_repo.rs`
+- [x] `src\db\migrations.rs`
+- [x] `src\db\mod.rs`
+- [x] `src\db\photo_repo.rs`
+- [x] `src\db\recent_search_repo.rs`
+- [x] `src\db\schema.rs`
+- [x] `src\db\stack_repo.rs`
+- [x] `src\db\trash_repo.rs`
+- [x] `src\error.rs`
+- [x] `src\lib.rs`
+- [x] `src\ml\alignment.rs`
+- [x] `src\ml\clustering.rs`
+- [x] `src\ml\face_detector.rs`
+- [x] `src\ml\face_embedder.rs`
+- [x] `src\ml\mod.rs`
+- [x] `src\ml\remote_embedder.rs`
+- [x] `src\ml\resolver.rs`
+- [x] `src\ml\retrieval.rs`
+- [x] `src\ml\runtime.rs`
+- [x] `src\models\mod.rs`
+- [x] `src\models\photo.rs`
+- [x] `src\models\timeline_group.rs`
+- [x] `src\search\date_parser.rs`
+- [x] `src\search\mod.rs`
+- [x] `src\search\query_parser.rs`
+- [x] `src\services\album_suggestions.rs`
+- [x] `src\services\assistant.rs`
+- [x] `src\services\burst_detector.rs`
+- [x] `src\services\camera_names.rs`
+- [x] `src\services\document_detector.rs`
+- [x] `src\services\drive_detector.rs`
+- [x] `src\services\duplicate_detector.rs`
+- [x] `src\services\exclusions.rs`
+- [x] `src\services\exif_extractor.rs`
+- [x] `src\services\face_processor.rs`
+- [x] `src\services\face_processor\clustering.rs`
+- [x] `src\services\geocoding.rs`
+- [x] `src\services\image_io.rs`
+- [x] `src\services\image_utils.rs`
+- [x] `src\services\insights.rs`
+- [x] `src\services\install_method.rs`
+- [x] `src\services\library_health.rs`
+- [x] `src\services\map_math.rs`
+- [x] `src\services\memories.rs`
+- [x] `src\services\metadata_processor.rs`
+- [x] `src\services\mod.rs`
+- [x] `src\services\ocr_processor.rs`
+- [x] `src\services\path_util.rs`
+- [x] `src\services\photo_stacks.rs`
+- [x] `src\services\raw_preview.rs`
+- [x] `src\services\reindexer.rs`
+- [x] `src\services\scanner.rs`
+- [x] `src\services\search.rs`
+- [x] `src\services\self_replace.rs`
+- [x] `src\services\semantic.rs`
+- [x] `src\services\thumbnail.rs`
+- [x] `src\services\tile_cache.rs`
+- [x] `src\services\trash.rs`
+- [x] `src\services\update_checker.rs`
+- [x] `src\utils.rs`
+- [x] `src-tauri/src\commands\albums.rs`
+- [x] `src-tauri/src\commands\assistant.rs`
+- [x] `src-tauri/src\commands\bursts.rs`
+- [x] `src-tauri/src\commands\documents.rs`
+- [x] `src-tauri/src\commands\duplicates.rs`
+- [x] `src-tauri/src\commands\geocoding.rs`
+- [x] `src-tauri/src\commands\health.rs`
+- [x] `src-tauri/src\commands\insights.rs`
+- [x] `src-tauri/src\commands\library.rs`
+- [x] `src-tauri/src\commands\map.rs`
+- [x] `src-tauri/src\commands\memories.rs`
+- [x] `src-tauri/src\commands\mod.rs`
+- [x] `src-tauri/src\commands\people.rs`
+- [x] `src-tauri/src\commands\photos.rs`
+- [x] `src-tauri/src\commands\search.rs`
+- [x] `src-tauri/src\commands\semantic.rs`
+- [x] `src-tauri/src\commands\settings.rs`
+- [x] `src-tauri/src\commands\stacks.rs`
+- [x] `src-tauri/src\commands\system.rs`
+- [x] `src-tauri/src\commands\trash.rs`
+- [x] `src-tauri/src\dto.rs`
+- [x] `src-tauri/src\error.rs`
+- [x] `src-tauri/src\events.rs`
+- [x] `src-tauri/src\jobs.rs`
+- [x] `src-tauri/src\lib.rs`
+- [x] `src-tauri/src\main.rs`
+- [x] `src-tauri/src\pagination.rs`
+- [x] `src-tauri/src\state.rs`
+- [x] `src-tauri/src\thumbnail_upgrade.rs`
+- [x] `src-ui/src\app.css`
+- [x] `src-ui/src\App.svelte`
+- [x] `src-ui/src\assets\smriti-logo.svg`
+- [x] `src-ui/src\assets\smriti-logomark.svg`
+- [x] `src-ui/src\lib\actions\marqueeSelect.ts`
+- [x] `src-ui/src\lib\api\all.ts`
+- [x] `src-ui/src\lib\api\events.ts`
+- [x] `src-ui/src\lib\api\index.test.ts`
+- [x] `src-ui/src\lib\api\index.ts`
+- [x] `src-ui/src\lib\api\library.ts`
+- [x] `src-ui/src\lib\api\photos.ts`
+- [x] `src-ui/src\lib\api\system.ts`
+- [x] `src-ui/src\lib\api\types.ts`
+- [x] `src-ui/src\lib\components\AddToAlbumDialog.svelte`
+- [x] `src-ui/src\lib\components\AssistantDrawer.svelte`
+- [x] `src-ui/src\lib\components\DetailHeader.svelte`
+- [x] `src-ui/src\lib\components\FaceCell.svelte`
+- [x] `src-ui/src\lib\components\JobsIndicator.svelte`
+- [x] `src-ui/src\lib\components\KSimilarDialog.svelte`
+- [x] `src-ui/src\lib\components\MergePersonDialog.svelte`
+- [x] `src-ui/src\lib\components\PageHeader.svelte`
+- [x] `src-ui/src\lib\components\ReassignFaceDialog.svelte`
+- [x] `src-ui/src\lib\components\SelectionBar.svelte`
+- [x] `src-ui/src\lib\components\Sidebar.svelte`
+- [x] `src-ui/src\lib\components\Slideshow.svelte`
+- [x] `src-ui/src\lib\components\ToastHost.svelte`
+- [x] `src-ui/src\lib\components\ZoomImage.svelte`
+- [x] `src-ui/src\lib\decodeOffscreen.test.ts`
+- [x] `src-ui/src\lib\decodeOffscreen.ts`
+- [x] `src-ui/src\lib\dominantColor.ts`
+- [x] `src-ui/src\lib\slideshowQueue.test.ts`
+- [x] `src-ui/src\lib\slideshowQueue.ts`
+- [x] `src-ui/src\lib\stores\assistant.svelte.ts`
+- [x] `src-ui/src\lib\stores\browseContext.svelte.ts`
+- [x] `src-ui/src\lib\stores\browseContext.test.ts`
+- [x] `src-ui/src\lib\stores\devMode.svelte.ts`
+- [x] `src-ui/src\lib\stores\devMode.test.ts`
+- [x] `src-ui/src\lib\stores\jobs.svelte.ts`
+- [x] `src-ui/src\lib\stores\jobs.test.ts`
+- [x] `src-ui/src\lib\stores\library.svelte.ts`
+- [x] `src-ui/src\lib\stores\photoVisibility.svelte.ts`
+- [x] `src-ui/src\lib\stores\selection.svelte.ts`
+- [x] `src-ui/src\lib\stores\selection.test.ts`
+- [x] `src-ui/src\lib\stores\settings.svelte.ts`
+- [x] `src-ui/src\lib\stores\slideshow.svelte.ts`
+- [x] `src-ui/src\lib\stores\slideshow.test.ts`
+- [x] `src-ui/src\lib\stores\toast.svelte.ts`
+- [x] `src-ui/src\lib\thumbnail.test.ts`
+- [x] `src-ui/src\lib\thumbnail.ts`
+- [x] `src-ui/src\lib\thumbnailQueue.test.ts`
+- [x] `src-ui/src\lib\thumbnailQueue.ts`
+- [x] `src-ui/src\lib\thumbnailRequest.ts`
+- [x] `src-ui/src\lib\tile-cache.ts`
+- [x] `src-ui/src\lib\videoProbe.ts`
+- [x] `src-ui/src\lib\virtualizer.svelte.ts`
+- [x] `src-ui/src\lib\zoomApi.ts`
+- [x] `src-ui/src\main.ts`
+- [x] `src-ui/src\routes\AlbumDetail.svelte`
+- [x] `src-ui/src\routes\Albums.svelte`
+- [x] `src-ui/src\routes\BurstDetail.svelte`
+- [x] `src-ui/src\routes\Bursts.svelte`
+- [x] `src-ui/src\routes\DuplicateDetail.svelte`
+- [x] `src-ui/src\routes\Duplicates.svelte`
+- [x] `src-ui/src\routes\FaceReview.svelte`
+- [x] `src-ui/src\routes\Insights.svelte`
+- [x] `src-ui/src\routes\Map.svelte`
+- [x] `src-ui/src\routes\Memories.svelte`
+- [x] `src-ui/src\routes\MemoryDetail.svelte`
+- [x] `src-ui/src\routes\People.svelte`
+- [x] `src-ui/src\routes\PersonDetail.svelte`
+- [x] `src-ui/src\routes\PersonReview.svelte`
+- [x] `src-ui/src\routes\PhotoDetail.svelte`
+- [x] `src-ui/src\routes\Search.svelte`
+- [x] `src-ui/src\routes\Settings.svelte`
+- [x] `src-ui/src\routes\Shortcuts.svelte`
+- [x] `src-ui/src\routes\Timeline.svelte`
+- [x] `src-ui/src\routes\Trash.svelte`
+- [x] `src-ui/src\routes\Welcome.svelte`
+- [x] `src-ui/src\vite-env.d.ts`

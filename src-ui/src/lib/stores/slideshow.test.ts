@@ -111,6 +111,12 @@ describe("slideshow store — interval clamping", () => {
     slideshow.setInterval(5_000);
     expect(slideshow.intervalMs).toBe(5_000);
   });
+
+  it("ignores non-finite interval input", () => {
+    slideshow.setInterval(4_000);
+    slideshow.setInterval(Number.NaN);
+    expect(slideshow.intervalMs).toBe(4_000);
+  });
 });
 
 describe("slideshow store — paginated loadMore", () => {
@@ -156,10 +162,66 @@ describe("slideshow store — paginated loadMore", () => {
     expect(slideshow.ids).toEqual([1, 2, 3, 4]);
   });
 
+  it("does not wrap from the loaded end when pagination returns no fresh ids", async () => {
+    const loadMore = vi.fn().mockResolvedValueOnce({
+      items: [{ id: 2 } as never],
+      next_cursor: "still-more",
+      has_more: true,
+      total: 3,
+    });
+    slideshow.start({
+      kind: "timeline",
+      label: "Timeline",
+      ids: [1, 2],
+      startId: 2,
+      hasMore: true,
+      nextCursor: "c1",
+      loadMore,
+    });
+
+    await slideshow.next();
+
+    expect(loadMore).toHaveBeenCalledOnce();
+    expect(slideshow.currentId()).toBe(2);
+    expect(slideshow.playing).toBe(false);
+    expect(slideshow.hasMore).toBe(true);
+  });
+
   it("skips loadMore when there's no loader configured", async () => {
     slideshow.start({ kind: "timeline", label: "Timeline", ids: [1, 2, 3] });
     await slideshow.ensureMoreAhead();
     // No throw, no append.
     expect(slideshow.ids).toEqual([1, 2, 3]);
+  });
+
+  it("ignores loadMore results after the slideshow is closed", async () => {
+    type PageShape = {
+      items: Array<{ id: number }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      total: number;
+    };
+    let resolve!: (value: PageShape) => void;
+    const loadMore = vi.fn(
+      () =>
+        new Promise<PageShape>((r) => {
+          resolve = r;
+        }),
+    );
+    slideshow.start({
+      kind: "timeline",
+      label: "Timeline",
+      ids: [1, 2, 3],
+      hasMore: true,
+      loadMore: loadMore as never,
+    });
+
+    const pending = slideshow.ensureMoreAhead();
+    slideshow.close();
+    resolve({ items: [{ id: 4 }], next_cursor: null, has_more: false, total: 4 });
+    await pending;
+
+    expect(slideshow.active).toBe(false);
+    expect(slideshow.ids).toEqual([]);
   });
 });

@@ -1,17 +1,32 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { commandErrorMessage } from "../lib/api";
   import { memories } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
+  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { MemoryCard } from "../lib/api/all";
 
   let cards = $state<MemoryCard[]>([]);
   let error = $state<string | null>(null);
+  let loading = $state(true);
+  let mounted = true;
+  let loadSeq = 0;
 
   async function load() {
-    try { cards = await memories.today(); }
-    catch (e) { error = JSON.stringify(e); }
+    const seq = ++loadSeq;
+    loading = true;
+    error = null;
+    try {
+      const nextCards = await memories.today();
+      if (!mounted || seq !== loadSeq) return;
+      cards = nextCards;
+    } catch (e) {
+      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq) loading = false;
+    }
   }
 
   function todayLabel(): string {
@@ -20,7 +35,19 @@
     });
   }
 
-  onMount(load);
+  function patchHeroThumbnail(photoId: number, thumbnailPath: string) {
+    cards = cards.map((c) => (
+      c.hero_photo_id === photoId ? { ...c, hero_thumbnail_path: thumbnailPath } : c
+    ));
+  }
+
+  onMount(() => {
+    void load();
+    return () => {
+      mounted = false;
+      loadSeq += 1;
+    };
+  });
 </script>
 
 <PageHeader title="Memories">
@@ -30,7 +57,11 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page">
-  {#if cards.length === 0}
+  {#if loading}
+    <div class="empty">
+      <p>Loading memories...</p>
+    </div>
+  {:else if cards.length === 0}
     <div class="empty">
       <p>
         Nothing today. Memories surface once your library has roughly three months of photos to look back on.
@@ -39,7 +70,15 @@
   {:else}
     <div class="cards">
       {#each cards as c (c.id)}
-        <a class="card" href="#/memory?id={c.id}">
+        <a
+          class="card"
+          href="#/memory?id={c.id}"
+          use:thumbnailOnVisible={{
+            id: c.hero_photo_id,
+            thumbnailPath: c.hero_thumbnail_path,
+            onReady: (path) => patchHeroThumbnail(c.hero_photo_id, path),
+          }}
+        >
           {#if c.hero_thumbnail_path}
             <img src={thumbUrl(libraryStore.driveRoot, c.hero_thumbnail_path) ?? ""} alt="" />
           {/if}

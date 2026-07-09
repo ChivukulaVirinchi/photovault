@@ -4,6 +4,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use smriti::db::document_repo::DocumentRepo;
+use smriti::db::{db_path_for, open_secondary};
 
 use crate::dto::{ContentCategoryDto, Page, PhotoSummaryDto};
 use crate::pagination;
@@ -22,10 +23,11 @@ pub async fn documents_list(
     state: State<'_, AppState>,
     args: DocumentsListArgs,
 ) -> CommandResult<Page<PhotoSummaryDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = DocumentRepo::new(&db.conn);
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
 
     let limit = pagination::clamp_limit(args.limit) as i64;
     // Translate cursor.id (which we treat as offset for these legacy
@@ -34,28 +36,29 @@ pub async fn documents_list(
         .map(|c| c.id)
         .unwrap_or(0);
 
-    let photos = match args.categories {
-        Some(cats) if !cats.is_empty() => {
-            // Repo supports a single category at a time; concatenate
-            // results from each requested category. Capped by `limit`
-            // overall — first-come ordering, since the per-call SQL
-            // already orders by date_taken DESC.
-            let mut all: Vec<smriti::models::Photo> = Vec::new();
-            for c in cats {
-                let name = smriti::models::ContentCategory::from(c)
-                    .as_str()
-                    .to_string();
-                let rows = repo.get_documents_by_category(&name, limit, offset)?;
-                all.extend(rows);
-                if all.len() as i64 >= limit {
-                    all.truncate(limit as usize);
-                    break;
-                }
+    let photos = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let repo = DocumentRepo::new(&conn);
+        let photos = match args.categories {
+            Some(cats) if !cats.is_empty() => {
+                let names = cats
+                    .into_iter()
+                    .map(|c| {
+                        smriti::models::ContentCategory::from(c)
+                            .as_str()
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>();
+                repo.get_documents_by_categories(&names, limit, offset)?
             }
-            all
-        }
-        _ => repo.get_non_photo_documents(limit, offset)?,
-    };
+            _ => repo.get_non_photo_documents(limit, offset)?,
+        };
+        Ok::<_, CommandError>(photos)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("document list worker failed: {e}"),
+    })??;
     let has_more = photos.len() as i64 == limit;
     let next_cursor = if has_more {
         Some(pagination::encode(crate::pagination::Cursor {
@@ -85,15 +88,25 @@ pub async fn documents_search(
     state: State<'_, AppState>,
     args: DocumentsSearchArgs,
 ) -> CommandResult<Page<PhotoSummaryDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = DocumentRepo::new(&db.conn);
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
     let limit = pagination::clamp_limit(args.limit) as i64;
     let offset = pagination::decode(args.cursor.as_deref())?
         .map(|c| c.id)
         .unwrap_or(0);
-    let photos = repo.search_documents_fts(&args.q, limit, offset)?;
+    let photos = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        Ok::<_, CommandError>(
+            DocumentRepo::new(&conn).search_documents_fts(&args.q, limit, offset)?,
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("document search worker failed: {e}"),
+    })??;
     let has_more = photos.len() as i64 == limit;
     let next_cursor = if has_more {
         Some(pagination::encode(crate::pagination::Cursor {
@@ -128,6 +141,10 @@ pub async fn documents_set_category(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let cat = smriti::models::ContentCategory::from(args.category);
-    DocumentRepo::new(&db.conn).update_content_category(args.photo_id, cat.as_str())?;
+    let changed =
+        DocumentRepo::new(&db.conn).update_content_category(args.photo_id, cat.as_str())?;
+    if changed == 0 {
+        return Err(CommandError::not_found("photo", args.photo_id));
+    }
     Ok(())
 }

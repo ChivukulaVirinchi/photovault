@@ -42,6 +42,7 @@ pub struct AlbumHit {
     pub album_id: i64,
     pub name: String,
     pub photo_count: i64,
+    pub cover_photo_id: Option<i64>,
     /// Resolved at load time (absolute path to cover thumbnail).
     pub cover_thumbnail_path: Option<String>,
 }
@@ -274,8 +275,7 @@ impl SearchService {
 
         let ids: HashSet<i64> = stmt
             .query_map(params![format!("%{}%", person_name)], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<SqliteResult<HashSet<_>>>()?;
 
         Ok(results
             .into_iter()
@@ -696,12 +696,25 @@ impl SearchService {
                     LOWER(p.location_country) LIKE LOWER(?) OR
                     LOWER(p.camera_make) LIKE LOWER(?) OR
                     LOWER(p.camera_model) LIKE LOWER(?) OR
-                    LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?)
+                    LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?) OR
+                    LOWER(COALESCE(p.ocr_text, '')) LIKE LOWER(?) OR
+                    EXISTS (
+                        SELECT 1
+                        FROM faces f
+                        JOIN face_clusters fc ON fc.id = f.cluster_id
+                        WHERE f.photo_id = p.id AND LOWER(fc.name) LIKE LOWER(?)
+                    ) OR
+                    EXISTS (
+                        SELECT 1
+                        FROM photo_inferred_identities pii
+                        JOIN face_clusters fc ON fc.id = pii.cluster_id
+                        WHERE pii.photo_id = p.id AND LOWER(fc.name) LIKE LOWER(?)
+                    )
                     {semantic_clause}
                 )",
             ));
             let like = Value::Text(format!("%{}%", t));
-            for _ in 0..6 {
+            for _ in 0..9 {
                 bind.push(like.clone());
             }
             for id in &intent.semantic_photo_ids {
@@ -929,7 +942,7 @@ impl SearchService {
         // frontend can render the album hit with its cover image.
         let mut stmt = conn.prepare(
             r#"
-            SELECT a.id, a.name, a.photo_count, pcov.thumbnail_path
+            SELECT a.id, a.name, a.photo_count, a.cover_photo_id, pcov.thumbnail_path
             FROM albums a
             LEFT JOIN photos pcov ON pcov.id = a.cover_photo_id
             WHERE LOWER(a.name) LIKE LOWER(?1)
@@ -942,7 +955,8 @@ impl SearchService {
                 album_id: row.get(0)?,
                 name: row.get(1)?,
                 photo_count: row.get(2)?,
-                cover_thumbnail_path: row.get(3)?,
+                cover_photo_id: row.get(3)?,
+                cover_thumbnail_path: row.get(4)?,
             })
         })?;
         rows.collect()
@@ -993,6 +1007,7 @@ mod tests {
                 location_country TEXT,
                 camera_make TEXT,
                 camera_model TEXT,
+                ocr_text TEXT,
                 thumbnail_path TEXT,
                 faces_processed BOOLEAN DEFAULT FALSE,
                 media_type TEXT NOT NULL DEFAULT 'photo',
@@ -1069,6 +1084,23 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn unified_search_matches_ocr_text() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "scan-001", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "scan-002", "2024-01-02T10:00:00Z");
+        conn.execute(
+            "UPDATE photos SET ocr_text = 'Boarding pass Bengaluru to Delhi' WHERE id = 2",
+            [],
+        )
+        .unwrap();
+
+        let results =
+            SearchService::search_unified_with_semantic(&conn, "boarding", vec![]).unwrap();
+
+        assert_eq!(results.photo_ids, vec![2]);
     }
 
     #[test]

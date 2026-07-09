@@ -12,6 +12,7 @@
         hasMore: boolean;
         total: number | null;
         zoom: ZoomLevel;
+        windowStartIndex: number;
         scrollTop: number;
         memoryCards: CachedMemoryCard[];
       }
@@ -21,6 +22,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { commandErrorMessage } from "../lib/api";
   import { photos } from "../lib/api/photos";
   import { memories, trash, type MemoryCard } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -36,7 +38,7 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Layers, Play } from "lucide-svelte";
+  import { Check, Layers, Play, X } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
 
@@ -47,6 +49,8 @@
   const currentTimelineCache =
     cachedTimeline?.driveRoot === currentDriveRoot ? cachedTimeline : null;
   const scrollStorageKey = `scroll:/timeline:${currentDriveRoot ?? "closed"}`;
+  const returnAnchorKey = `return-anchor:/timeline:${currentDriveRoot ?? "closed"}`;
+  const thumbnailPromptDismissKey = `dismiss:/timeline-thumbnails:${currentDriveRoot ?? "closed"}`;
 
   /// Zoom levels — Apple-Photos-style. `day` is default; `all` is the
   /// densest packed view with no headers.
@@ -73,8 +77,15 @@
   let nextCursor = $state<string | null>(currentTimelineCache?.nextCursor ?? null);
   let hasMore = $state(currentTimelineCache?.hasMore ?? true);
   let total = $state<number | null>(currentTimelineCache?.total ?? null);
+  let windowStartIndex = $state(currentTimelineCache?.windowStartIndex ?? 0);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let mounted = true;
+  let pageSeq = 0;
+  let jumpLoading = false;
+  let lastJumpOffset = -1;
+  const selectedLoadedIds = $derived(selection.listIn(items.map((p) => p.id)));
 
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   let containerW = $state(0);
@@ -92,15 +103,26 @@
   // scan / metadata / thumbnail job completes; computed once on mount
   // too so users who land on Timeline mid-pipeline see the right CTA.
   let pendingMetadata = $state<number>(0);
+  let pendingThumbnails = $state<number>(0);
+  let thumbnailPromptDismissed = $state(false);
   const metadataRunning = $derived(jobs.isRunning("metadata"));
+  const thumbnailRunning = $derived(jobs.isRunning("thumbnails"));
   const showResumeMetadata = $derived(
     !metadataRunning && !scanRunning && pendingMetadata > 0,
+  );
+  const showResumeThumbnails = $derived(
+    !thumbnailPromptDismissed && !thumbnailRunning && !scanRunning && pendingThumbnails > 0,
   );
 
   async function refreshPendingCounts() {
     try {
-      const m = await library.pendingMetadataCount();
+      const [m, t] = await Promise.all([
+        library.pendingMetadataCount(),
+        library.pendingThumbnailCount(),
+      ]);
+      if (!mounted) return;
       pendingMetadata = m.pending_photos;
+      pendingThumbnails = t.pending_photos;
     } catch {
       // library not open yet, ignore
     }
@@ -109,10 +131,24 @@
   async function resumeMetadata() {
     try {
       const r = await library.startMetadataExtraction();
+      if (!mounted) return;
       jobs.register(r.job_id, "metadata");
     } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       toasts.error(`Couldn't resume metadata: ${msg}`);
+    }
+  }
+
+  async function resumeThumbnails() {
+    try {
+      const r = await library.startThumbnailPass();
+      if (!mounted) return;
+      jobs.register(r.job_id, "thumbnails");
+    } catch (e) {
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
+      toasts.error(`Couldn't resume thumbnails: ${msg}`);
     }
   }
   // Today's memories — surfaced as a horizontal strip above the
@@ -141,6 +177,7 @@
       hasMore,
       total,
       zoom,
+      windowStartIndex,
       scrollTop,
       memoryCards,
     };
@@ -164,6 +201,54 @@
     if (changed) saveTimelineCache();
   }
 
+  type TimelineReturnAnchor = {
+    photoId: number;
+    windowStartIndex: number;
+    scrollTop: number;
+  };
+
+  function readTimelineReturnAnchor(): TimelineReturnAnchor | null {
+    try {
+      const raw = sessionStorage.getItem(returnAnchorKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Partial<TimelineReturnAnchor>;
+      if (
+        !Number.isFinite(parsed.photoId) ||
+        !Number.isFinite(parsed.windowStartIndex) ||
+        !Number.isFinite(parsed.scrollTop)
+      ) {
+        sessionStorage.removeItem(returnAnchorKey);
+        return null;
+      }
+      return {
+        photoId: Number(parsed.photoId),
+        windowStartIndex: Math.max(0, Number(parsed.windowStartIndex)),
+        scrollTop: Math.max(0, Number(parsed.scrollTop)),
+      };
+    } catch {
+      try { sessionStorage.removeItem(returnAnchorKey); } catch {}
+      return null;
+    }
+  }
+
+  function rememberTimelineReturnAnchor(photoId: number) {
+    try {
+      sessionStorage.setItem(
+        returnAnchorKey,
+        JSON.stringify({ photoId, windowStartIndex, scrollTop }),
+      );
+    } catch {}
+  }
+
+  function clearTimelineReturnAnchor() {
+    try { sessionStorage.removeItem(returnAnchorKey); } catch {}
+  }
+
+  function dismissThumbnailPrompt() {
+    thumbnailPromptDismissed = true;
+    try { localStorage.setItem(thumbnailPromptDismissKey, "1"); } catch {}
+  }
+
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     pendingThumbnailPatches.set(photoId, thumbnailPath);
     if (thumbnailPatchRaf === 0) {
@@ -179,6 +264,9 @@
     const removed = before - items.length;
     browseContext.remove(ids);
     if (total !== null && removed > 0) total = Math.max(0, total - removed);
+    if (removed > 0 && windowStartIndex > 0) {
+      windowStartIndex = Math.max(0, windowStartIndex - removed);
+    }
     saveTimelineCache();
   }
 
@@ -252,34 +340,39 @@
   });
 
   async function loadMore(): Promise<boolean> {
-    if (loading || !hasMore) return false;
+    if (!mounted || loading || !hasMore) return false;
+    const seq = pageSeq;
     loading = true;
     error = null;
     try {
       const page = await photos.list({ cursor: nextCursor, limit: PAGE_LIMIT });
+      if (!mounted || seq !== pageSeq) return false;
       const fresh = page.items.map((p) => p.id);
       items = items.concat(page.items);
-      if (nextCursor === null) browseContext.set("timeline", fresh);
-      else                     browseContext.extend(fresh);
+      if (nextCursor === null && windowStartIndex === 0) browseContext.set("timeline", fresh);
+      else                                               browseContext.extend(fresh);
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
       saveTimelineCache();
       return page.items.length > 0;
     } catch (e: unknown) {
-      error = JSON.stringify(e);
+      if (mounted && seq === pageSeq) error = commandErrorMessage(e);
       return false;
     } finally {
-      loading = false;
+      if (mounted && seq === pageSeq) loading = false;
     }
   }
 
   async function refreshFirstPage() {
-    if (loading) return;
+    if (!mounted || loading) return;
+    const seq = ++pageSeq;
     loading = true;
     error = null;
     try {
       const page = await photos.list({ cursor: null, limit: PAGE_LIMIT });
+      if (!mounted || seq !== pageSeq) return;
+      windowStartIndex = 0;
       items = page.items;
       browseContext.set("timeline", page.items.map((p) => p.id));
       nextCursor = page.next_cursor;
@@ -287,9 +380,9 @@
       if (page.total !== null) total = page.total;
       saveTimelineCache();
     } catch (e: unknown) {
-      error = JSON.stringify(e);
+      if (mounted && seq === pageSeq) error = commandErrorMessage(e);
     } finally {
-      loading = false;
+      if (mounted && seq === pageSeq) loading = false;
     }
   }
 
@@ -301,10 +394,12 @@
     try {
       const r = await library.startScan(false);
       jobs.dismiss(placeholderId);
+      if (!mounted) return;
       jobs.register(r.job_id, "scan");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      if (!mounted) return;
+      const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start scan: ${msg}`);
     }
@@ -316,6 +411,9 @@
   $effect(() => {
     if (scanJob && scanJob.status === "complete" && scanJob.id !== lastScanCompleteId) {
       lastScanCompleteId = scanJob.id;
+      pageSeq += 1;
+      loading = false;
+      windowStartIndex = 0;
       items = [];
       nextCursor = null;
       hasMore = true;
@@ -354,13 +452,25 @@
   const MEMORIES_STRIP_HEIGHT = 340;
 
   type Row =
+    | { kind: "spacer"; height: number }
     | { kind: "memories"; height: number; cards: MemoryCard[] }
     | { kind: "label"; height: number; label: string; firstIso: string | null }
     | { kind: "photos"; height: number; photos: PhotoSummaryDto[]; firstIso: string | null };
 
+  function estimatedHeightForPhotoCount(count: number): number {
+    if (count <= 0 || cols <= 0) return 0;
+    const photoRows = Math.ceil(count / cols);
+    const labelRows = Math.ceil(photoRows / 4);
+    return photoRows * Math.max(1, rowH + GAP_PX[zoom]) + labelRows * LABEL_PX[zoom];
+  }
+
+  const topSpacerHeight = $derived(estimatedHeightForPhotoCount(windowStartIndex));
+
   const rows = $derived.by((): Row[] => {
     const out: Row[] = [];
-    if (memoryCards.length > 0) {
+    if (windowStartIndex > 0) {
+      out.push({ kind: "spacer", height: topSpacerHeight });
+    } else if (memoryCards.length > 0) {
       out.push({ kind: "memories", height: MEMORIES_STRIP_HEIGHT, cards: memoryCards });
     }
     const C = cols;
@@ -409,23 +519,60 @@
 
   const estimatedTotalHeight = $derived.by(() => {
     if (total == null || total <= items.length || cols <= 0) return v.totalHeight;
-    const totalPhotoRows = Math.ceil(total / cols);
-    const loadedPhotoRows = Math.ceil(items.length / cols);
-    const extraPhotoRows = Math.max(0, totalPhotoRows - loadedPhotoRows);
-    // Each photo bucket gets a label row. Empirically there's roughly
-    // one label per ~3-5 photo rows in day-zoom; over-estimating here
-    // means the scrubber drags further than necessary on the first
-    // load but it's harmless once the real rows materialise (the
-    // virtualizer's actual offsets take over). Under-estimating used
-    // to make the scrollbar visibly snap upward each time a page came
-    // in. We add one label-row's height per ~4 photo rows estimated.
-    const extraLabelRows = Math.ceil(extraPhotoRows / 4);
-    const photoRowH = Math.max(1, rowH + GAP_PX[zoom]);
-    const labelH = LABEL_PX[zoom];
-    return (
-      v.totalHeight + extraPhotoRows * photoRowH + extraLabelRows * labelH
-    );
+    const afterCount = Math.max(0, total - windowStartIndex - items.length);
+    return v.totalHeight + estimatedHeightForPhotoCount(afterCount);
   });
+
+  async function loadAroundOffset(
+    rawOffset: number,
+    opts: { scrollToTopSpacer?: boolean } = {},
+  ): Promise<boolean> {
+    if (!mounted || jumpLoading) return false;
+    const knownTotal = total ?? Math.max(PAGE_LIMIT, rawOffset + PAGE_LIMIT);
+    if (knownTotal <= 0) return false;
+    const bounded = Math.max(0, Math.min(knownTotal - 1, Math.floor(rawOffset)));
+    const offset = Math.max(0, Math.floor(bounded / PAGE_LIMIT) * PAGE_LIMIT);
+    if (offset === windowStartIndex && offset === lastJumpOffset && items.length > 0) return true;
+    const seq = ++pageSeq;
+    jumpLoading = true;
+    loading = true;
+    error = null;
+    lastJumpOffset = offset;
+    try {
+      const page = await photos.listAt({ offset, limit: PAGE_LIMIT });
+      if (!mounted || seq !== pageSeq) return false;
+      windowStartIndex = offset;
+      items = page.items;
+      browseContext.set("timeline", page.items.map((p) => p.id));
+      nextCursor = page.next_cursor;
+      hasMore = page.has_more;
+      if (page.total !== null) total = page.total;
+      saveTimelineCache();
+      if (opts.scrollToTopSpacer !== false) {
+        requestAnimationFrame(() => {
+          if (!mounted || !scrollEl || seq !== pageSeq) return;
+          scrollEl.scrollTop = topSpacerHeight;
+        });
+      }
+      return true;
+    } catch (e) {
+      if (mounted && seq === pageSeq) error = commandErrorMessage(e);
+      return false;
+    } finally {
+      if (mounted && seq === pageSeq) loading = false;
+      if (mounted && seq === pageSeq) jumpLoading = false;
+    }
+  }
+
+  function hydrateScrolledWindow() {
+    if (!scrollEl || total == null || total <= PAGE_LIMIT || loading || jumpLoading) return;
+    const targetIndex = Math.floor((scrollTop / Math.max(1, estimatedTotalHeight)) * total);
+    const windowEnd = windowStartIndex + items.length;
+    const lead = Math.floor(PAGE_LIMIT * 0.65);
+    if (targetIndex < Math.max(0, windowStartIndex - lead) || targetIndex > windowEnd + lead) {
+      void loadAroundOffset(targetIndex);
+    }
+  }
 
   $effect(() => {
     photoVisibility.version;
@@ -470,6 +617,7 @@
         // Persist so that returning from PhotoDetail lands the user back
         // at the same row instead of the top of the timeline.
         try { sessionStorage.setItem(scrollStorageKey, String(scrollTop)); } catch {}
+        hydrateScrolledWindow();
       });
     };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
@@ -495,9 +643,17 @@
     if (estimatedTotalHeight >= target + 16) {
       scrollEl.scrollTop = target;
       scrollRestored = true;
+      if (total != null && total > PAGE_LIMIT) {
+        const offset = Math.floor((target / Math.max(1, estimatedTotalHeight)) * total);
+        void loadAroundOffset(offset);
+      } else {
+        hydrateScrolledWindow();
+      }
+    } else if (total != null && total > PAGE_LIMIT) {
+      scrollRestored = true;
+      const offset = Math.floor((target / Math.max(1, estimatedTotalHeight)) * total);
+      void loadAroundOffset(offset);
     } else if (hasMore && !loading) {
-      // Pre-load more pages so the virtualizer can paint the saved
-      // position without flashing the top of the list.
       loadMore();
     } else if (!hasMore) {
       // Library is shorter than where we left off (photos trashed, etc.)
@@ -508,13 +664,23 @@
   });
 
   onMount(() => {
-    if (items.length === 0) loadMore();
-    if (currentTimelineCache?.scrollTop && scrollEl) {
+    mounted = true;
+    try { thumbnailPromptDismissed = localStorage.getItem(thumbnailPromptDismissKey) === "1"; } catch {}
+    const hasReturnAnchor = readTimelineReturnAnchor() != null;
+    if (hasReturnAnchor) scrollRestored = true;
+    const restored = hasReturnAnchor ? restoreTimelineReturnAnchor() : Promise.resolve(false);
+    if (items.length === 0) {
+      restored.then((ok) => {
+        if (mounted && !ok && items.length === 0) loadMore();
+      });
+    }
+    if (!hasReturnAnchor && currentTimelineCache?.scrollTop && scrollEl) {
       scrollEl.scrollTop = currentTimelineCache.scrollTop;
       scrollRestored = true;
     }
     if (memoryCards.length === 0) {
       memories.today().then((c) => {
+        if (!mounted) return;
         memoryCards = c;
         saveTimelineCache();
       }).catch(() => {});
@@ -535,6 +701,7 @@
     const unlistens: Promise<UnlistenFn>[] = [];
     unlistens.push(
       listen<{ photo_ids: number[] }>("thumbnail:ready", async (e) => {
+        if (!mounted) return;
         const ids = e.payload?.photo_ids ?? [];
         if (ids.length === 0) return;
         // Only refetch rows the timeline currently has loaded; the rest
@@ -544,6 +711,7 @@
         if (wanted.length === 0) return;
         try {
           const fresh = await photos.getMany(wanted);
+          if (!mounted) return;
           for (const p of fresh) {
             if (p.thumbnail_path) patchThumbnail(p.id, p.thumbnail_path);
           }
@@ -560,18 +728,19 @@
         if (throttle != null) return;
         throttle = setTimeout(() => {
           throttle = null;
-          refreshPendingCounts();
+          if (mounted) refreshPendingCounts();
         }, 1000);
       }),
     );
     unlistens.push(listen("metadata:complete", () => refreshPendingCounts()));
+    unlistens.push(listen("thumbnails:complete", () => refreshPendingCounts()));
     let scanRefresh: ReturnType<typeof setTimeout> | null = null;
     unlistens.push(
       listen<{ files_processed?: number }>("scan:progress", () => {
         if (scanRefresh != null) return;
         scanRefresh = setTimeout(() => {
           scanRefresh = null;
-          refreshFirstPage();
+          if (mounted) refreshFirstPage();
         }, 1200);
       }),
     );
@@ -581,11 +750,18 @@
     }));
 
     return () => {
+      mounted = false;
+      pageSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
       if (thumbnailPatchRaf !== 0) cancelAnimationFrame(thumbnailPatchRaf);
       if (throttle != null) clearTimeout(throttle);
       if (scanRefresh != null) clearTimeout(scanRefresh);
-      Promise.all(unlistens).then((fns) => fns.forEach((f) => f()));
+      if (zoomTimer != null) clearTimeout(zoomTimer);
+      Promise.allSettled(unlistens).then((results) => {
+        for (const result of results) {
+          if (result.status === "fulfilled") result.value();
+        }
+      });
     };
   });
 
@@ -612,7 +788,10 @@
     focusedIdx = items.findIndex((p) => p.id === photo.id);
     const ids = items.map((p) => p.id);
     const handled = handleCellClick(e, photo.id, ids);
-    if (!handled) browseContext.set("timeline", ids);
+    if (!handled) {
+      rememberTimelineReturnAnchor(photo.id);
+      browseContext.set("timeline", ids);
+    }
   }
 
   // ----------- drag-marquee selection -----------
@@ -738,7 +917,7 @@
     // re-rendering every visible cell when the marquee crawls inside an
     // empty gap between rows.
     if (setsEqual(selection.ids, next)) return;
-    selection.ids = next;
+    selection.replace(next);
   }
   function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
     if (a.size !== b.size) return false;
@@ -747,7 +926,8 @@
   }
 
   async function bulkTrash() {
-    const ids = selection.list();
+    if (actionBusy) return;
+    const ids = selection.listIn(items.map((p) => p.id));
     if (ids.length === 0) return;
     // Snapshot the rows we're about to drop so undo can splice them
     // back in their original positions.
@@ -756,21 +936,29 @@
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
     try {
-      await trash.trashPhotos(ids);
+      actionBusy = true;
+      const result = await trash.trashPhotos(ids);
+      if (!mounted) return;
+      if (result.count === 0) {
+        toasts.info("No selected photos needed trashing");
+        return;
+      }
       const trashedIds = ids;
       photoVisibility.markTrashed(trashedIds);
       removeFromTimeline(trashedIds);
       selection.clear();
       toasts.undoable(
-        `${trashedIds.length} ${trashedIds.length === 1 ? "photo" : "photos"} moved to trash`,
+        `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
           await trash.restore(trashedIds);
           photoVisibility.markRestored(trashedIds);
-          restoreIntoTimeline(snapshot);
+          if (mounted) restoreIntoTimeline(snapshot);
         },
       );
     } catch (e) {
-      toasts.error(`Couldn't move to trash: ${e}`);
+      if (mounted) toasts.error(`Couldn't move to trash: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
     }
   }
 
@@ -801,7 +989,9 @@
       case "End":        next = N - 1; break;
       case "Enter": {
         if (focusedIdx >= 0 && focusedIdx < N) {
-          window.location.hash = `/photo?id=${items[focusedIdx].id}`;
+          const targetId = items[focusedIdx].id;
+          rememberTimelineReturnAnchor(targetId);
+          window.location.hash = `/photo?id=${targetId}`;
           e.preventDefault();
         }
         return;
@@ -835,8 +1025,13 @@
     if (!scrollEl || focusedIdx < 0) return;
     const id = items[focusedIdx]?.id;
     if (id == null) return;
+    scrollPhotoIdIntoView(id, opts);
+  }
+
+  function scrollPhotoIdIntoView(photoId: number, opts: { smooth?: boolean } = {}) {
+    if (!scrollEl) return;
     const behavior: ScrollBehavior = opts.smooth ? "smooth" : "auto";
-    const rowIdx = rowIndexForPhoto(id);
+    const rowIdx = rowIndexForPhoto(photoId);
     if (rowIdx >= 0) {
       // Authoritative path: use the virtualizer's offset table for the
       // exact y of the row, then center it in the viewport.
@@ -849,8 +1044,8 @@
     // Row not in `rows` yet (still paginating). Wait one frame and try
     // again — by then loadMore should have grown `rows`.
     requestAnimationFrame(() => {
-      if (!scrollEl) return;
-      const retryIdx = rowIndexForPhoto(id);
+      if (!mounted || !scrollEl) return;
+      const retryIdx = rowIndexForPhoto(photoId);
       if (retryIdx < 0) return;
       const rowOffset = v.offsets[retryIdx] ?? 0;
       const rowHeight = rows[retryIdx]?.height ?? rowH;
@@ -859,14 +1054,37 @@
     });
   }
 
+  async function restoreTimelineReturnAnchor() {
+    const anchor = readTimelineReturnAnchor();
+    if (!anchor) return false;
+    const loadedIdx = items.findIndex((p) => p.id === anchor.photoId);
+    if (loadedIdx < 0) {
+      const loaded = await loadAroundOffset(anchor.windowStartIndex, { scrollToTopSpacer: false });
+      if (!loaded || !mounted) return false;
+    }
+    const idx = items.findIndex((p) => p.id === anchor.photoId);
+    if (idx < 0) {
+      if (scrollEl) scrollEl.scrollTop = anchor.scrollTop;
+      clearTimelineReturnAnchor();
+      return false;
+    }
+    focusedIdx = idx;
+    requestAnimationFrame(() => {
+      if (!mounted) return;
+      scrollPhotoIdIntoView(anchor.photoId);
+      clearTimelineReturnAnchor();
+    });
+    return true;
+  }
+
   let revealingId = $state<number | null>(null);
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function revealPhotoInTimeline(photoId: number) {
-    if (!Number.isFinite(photoId) || photoId <= 0 || revealingId === photoId) return;
+    if (!mounted || !Number.isFinite(photoId) || photoId <= 0 || revealingId === photoId) return;
     revealingId = photoId;
     try {
-      while (items.findIndex((p) => p.id === photoId) < 0 && hasMore) {
+      while (mounted && items.findIndex((p) => p.id === photoId) < 0 && hasMore) {
         if (loading) {
           await sleep(80);
           continue;
@@ -874,6 +1092,7 @@
         const advanced = await loadMore();
         if (!advanced) break;
       }
+      if (!mounted) return;
 
       const idx = items.findIndex((p) => p.id === photoId);
       if (idx < 0) {
@@ -890,7 +1109,7 @@
         window.dispatchEvent(new HashChangeEvent("hashchange"));
       } catch {}
     } finally {
-      revealingId = null;
+      if (mounted) revealingId = null;
     }
   }
 
@@ -923,66 +1142,6 @@
     });
   }
 
-  // ----------- on-demand thumbnail generation -----------
-  // A cell that scrolls into view without a thumbnail_path triggers a
-  // generation request. We cap parallelism implicitly via the server's
-  // 8-permit ThumbnailService limiter.
-  const inflight = new Set<number>();
-  async function requestIfMissing(photo: PhotoSummaryDto, idx: number) {
-    if (photo.thumbnail_path) return;
-    if (inflight.has(photo.id)) return;
-    inflight.add(photo.id);
-    try {
-      const r = await photos.requestThumbnail(photo.id);
-      if (r.thumbnail_path && items[idx]?.id === photo.id) {
-        // Reactivity: assign the index, not just mutate a field — Svelte
-        // 5 proxies most mutations but a fresh shallow copy is the
-        // surest way to trigger the re-render.
-        items[idx] = { ...items[idx], thumbnail_path: r.thumbnail_path };
-      }
-    } catch {
-      // swallow — frontend retries on the next intersection
-    } finally {
-      inflight.delete(photo.id);
-    }
-  }
-
-  function cellAttach(node: HTMLAnchorElement, photo: PhotoSummaryDto) {
-    if (photo.thumbnail_path) return;
-    const idx = items.findIndex((p) => p.id === photo.id);
-    if (idx < 0) return;
-    // Debounced viewport-driven generation. The IO fires on intersect
-    // AND de-intersect; we only fire the IPC after the cell has been
-    // continuously visible for 250 ms. This prevents fast scrolls from
-    // queuing a thumb request for every cell that flashed past — the
-    // backend used to chew through the full scrolled-past range first
-    // while the cells the user was actually looking at sat empty.
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (e.isIntersecting) {
-          if (timer == null) {
-            timer = setTimeout(() => {
-              timer = null;
-              requestIfMissing(photo, idx);
-              io.disconnect();
-            }, 250);
-          }
-        } else if (timer != null) {
-          clearTimeout(timer);
-          timer = null;
-        }
-      }
-    }, { root: scrollEl, rootMargin: "100px" });
-    io.observe(node);
-    return {
-      destroy() {
-        if (timer != null) clearTimeout(timer);
-        io.disconnect();
-      },
-    };
-  }
-
   // ----------- scrubber -----------
   const trackHeight = $derived(Math.max(containerH - 24, 80));
   const scrollableMax = $derived(Math.max(0, estimatedTotalHeight - containerH));
@@ -1011,6 +1170,7 @@
     }
     const head = rows[0];
     if (!head) return "";
+    if (head.kind === "spacer") return "";
     if (head.kind === "memories") return "";
     return bucketLabel(head.firstIso, zoom);
   }
@@ -1066,7 +1226,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-{#if showResumeMetadata}
+{#if showResumeMetadata || showResumeThumbnails}
   <div class="resume-banners">
     {#if showResumeMetadata}
       <div class="resume-banner">
@@ -1074,6 +1234,17 @@
           {pendingMetadata.toLocaleString()} photos still need EXIF + place data.
         </span>
         <button class="primary" onclick={resumeMetadata}>Resume reading metadata</button>
+      </div>
+    {/if}
+    {#if showResumeThumbnails}
+      <div class="resume-banner">
+        <span class="msg">
+          {pendingThumbnails.toLocaleString()} photos still need cached thumbnails.
+        </span>
+        <button class="primary" onclick={resumeThumbnails}>Resume thumbnails</button>
+        <button class="dismiss-banner" onclick={dismissThumbnailPrompt} aria-label="Dismiss thumbnail prompt" title="Dismiss">
+          <X size={14} strokeWidth={2} />
+        </button>
       </div>
     {/if}
   </div>
@@ -1120,7 +1291,7 @@
                 {/each}
               </div>
             </section>
-          {:else}
+          {:else if row.kind === "photos"}
             <div
               class="photos"
               style="grid-template-columns: repeat({cols}, 1fr); gap: {GAP_PX[zoom]}px;"
@@ -1212,9 +1383,9 @@
   </div>
 </div>
 
-{#if selection.active()}
+{#if selectedLoadedIds.length > 0}
   <SelectionBar
-    count={selection.size()}
+    count={selectedLoadedIds.length}
     onAddToAlbum={() => (showAddDialog = true)}
     onTrash={bulkTrash}
     onCancel={() => selection.clear()}
@@ -1223,7 +1394,7 @@
 
 {#if showAddDialog}
   <AddToAlbumDialog
-    photoIds={selection.list()}
+    photoIds={selectedLoadedIds}
     onclose={() => (showAddDialog = false)}
     onsuccess={() => selection.clear()}
   />
@@ -1552,6 +1723,24 @@
     cursor: pointer;
   }
   .resume-banner .primary:hover { filter: brightness(1.05); }
+  .dismiss-banner {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    color: var(--ink-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .dismiss-banner:hover {
+    background: var(--bg-elev);
+    color: var(--ink);
+  }
 
   .zoom-pill {
     display: inline-flex;

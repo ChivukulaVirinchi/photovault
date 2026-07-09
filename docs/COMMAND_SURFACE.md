@@ -73,7 +73,7 @@ The migration is complete: `src/` is library-only (no `main.rs`, no UI), and the
 1. **Domains, not types.** Group commands by what the user does (`photos.list`, `people.merge`), not by struct (`PhotoRepo::*`). The command surface is a UX-level API.
 2. **Narrow boundary.** A view does ≤3 commands per render. If a view needs 8 commands, it's the wrong granularity — collapse them server-side.
 3. **Stable shapes.** DTOs are serde-only structs in `src-tauri/src/dto.rs`. They are *never* the same as DB rows or service-internal types — those are free to change without breaking the wire.
-4. **Cursor pagination for unbounded lists** (timeline, search results, trash). Offset/limit only for inherently small lists (albums, clusters when count < 1k). The cursor is an opaque base64-encoded `(date_taken, id)` tuple.
+4. **Cursor pagination for unbounded lists** (timeline, search results, trash). Offset/limit only for inherently small lists (albums, clusters when count < 1k), except `photos.list_at`, which is a timeline-only random-access window for deep scroll jumps. The cursor is an opaque base64-encoded `(date_taken, id)` tuple.
 5. **Long-running ops use Tauri events, not blocking commands.** `library.start_scan` returns a `job_id` immediately; `scan:progress` events stream until completion. The frontend never awaits a multi-minute promise.
 6. **Errors are a tagged enum.** Every command returns `Result<T, CommandError>`. The enum is exhaustive — `Internal` exists but is reserved for genuine bugs. UI code matches on the tag.
 7. **No raw blobs over IPC.** Embeddings (2048-byte BLOBs) never cross the boundary. Thumbnails are file paths the frontend reads via Tauri's `convertFileSrc` (custom protocol). File hashes go as hex strings.
@@ -460,9 +460,11 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
 | `photos.list` | `{ cursor: Option<String>, limit: Option<u32>, include_trashed: bool }` | `Page<PhotoSummaryDto>` | timeline scroll; `total` populated only on first page; hides non-cover stack members when timeline stacks are enabled |
+| `photos.list_at` | `{ offset: u32, limit: Option<u32>, include_trashed: bool }` | `Page<PhotoSummaryDto>` | timeline random-access window for deep scroll jumps; returns `total` and a normal `next_cursor` for paging forward |
 | `photos.get` | `{ id: i64 }` | `PhotoDto` | full detail (lightbox open) |
 | `photos.get_many` | `{ ids: Vec<i64> }` | `Vec<PhotoDto>` | up to 500; preserves input order; missing ids dropped silently |
 | `photos.timeline_neighbors` | `{ id: i64 }` | `{ prev_id: Option<i64>, next_id: Option<i64> }` | authoritative timeline prev/next for detail navigation at paged-list edges |
+| `photos.request_thumbnails` | `{ ids: Vec<i64> }` | `{ items: Vec<{ id: i64, thumbnail_path: Option<String> }> }` | up to 200; demand-generation for visible/near-visible photo cells; failures omitted so callers can retry |
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_person` | `{ person_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_date` | `{ start: String, end: String, cursor, limit }` | `Page<PhotoSummaryDto>` | inclusive range |
@@ -483,6 +485,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `people.cancel_processing` | `{ job_id: String }` | `()` | |
 | `people.rebuild_clusters` | `{}` | `{ job_id: String }` | re-clusters from existing embeddings; no re-detect |
 | `people.review.queue` | `{ limit: Option<u32> }` | `Vec<ReviewItemDto>` | default 20 |
+| `people.next_unconfirmed_faces` | `{ limit: Option<u32> }` | `Page<FaceDetailDto>` | one batch from the cluster with the most unconfirmed faces; default/max 200 |
 | `people.review.same` | `{ queue_id: i64 }` | `()` | assigns face to candidate cluster |
 | `people.review.different` | `{ queue_id: i64 }` | `()` | records cannot-merge constraint |
 | `people.review.skip` | `{ queue_id: i64 }` | `()` | |
@@ -502,7 +505,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `albums.auto_pick_cover` | `{ id: i64 }` | `AlbumDto` |
 | `albums.export` | `{ album_id: i64, destination_dir: Option<String>, folder_name: Option<String> }` | `{ job_id: String }` |
 | `albums.suggestions.list` | `{ status: Option<SuggestionStatus> }` | `Vec<AlbumSuggestionDto>` |
-| `albums.suggestions.run_detection` | `{}` | `SuggestionDiagnosticsDto` | sync (current backend is sync; ~1-10s); if it grows, promote to job |
+| `albums.suggestions.run_detection` | `{ home_city_override: Option<String> }` | `{ job_id: String }` | background job; emits `album_suggestions:progress` and `album_suggestions:complete` |
 | `albums.suggestions.preview` | `{ id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` |
 | `albums.suggestions.accept` | `{ id: i64, name: Option<String> }` | `AlbumDto` | creates real album; `name` overrides title |
 | `albums.suggestions.dismiss` | `{ id: i64 }` | `()` |
@@ -747,7 +750,7 @@ for the day this returns.
 
 | Command | Args | Returns |
 |---|---|---|
-| `map.pins` | `{ bounds: { north, south, east, west }, max_pins: Option<u32> }` | `Vec<MapPinDto>` | server-side aggregation if too many |
+| `map.pins` | `{ bounds: { north, south, east, west }, zoom: u8, max_pins: Option<u32> }` | `Vec<MapPinDto>` | server-side aggregation if too many; cluster `photo_ids` capped at 500 |
 | `map.cluster_filmstrip` | `{ photo_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` | for clicked-pin overlay |
 | `map.tile_cache.stats` | `{}` | `{ size_bytes: u64, file_count: u32, limit_bytes: u64 }` |
 | `map.tile_cache.set_limit` | `{ limit_mb: u32 }` | `()` |

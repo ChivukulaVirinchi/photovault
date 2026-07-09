@@ -3,12 +3,13 @@
 //! M1 ships read-only commands only. `library.open`, `library.close`,
 //! `library.start_scan`, `library.apply_changes` etc. land in M2.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use rusqlite::OpenFlags;
 use smriti::db::Database;
 use smriti::services::drive_detector::DriveDetector;
 use smriti::services::semantic::{
@@ -17,14 +18,14 @@ use smriti::services::semantic::{
 
 use crate::dto::{
     DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
-    LibraryHandleDto, MetadataProgressDto,
+    LibraryHandleDto, MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, SchemaTooNewDto,
 };
 use crate::events::{
     EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
     EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
 };
 use crate::jobs::{self, emit};
-use crate::state::{AppState, JobKind, OpenLibrary};
+use crate::state::{AppState, JobKind, OpenLibrary, UnsupportedLibrary};
 use crate::{CommandError, CommandResult};
 
 #[tauri::command]
@@ -39,17 +40,43 @@ pub async fn library_list_drives() -> CommandResult<Vec<DriveDto>> {
 pub async fn library_current(
     state: State<'_, AppState>,
 ) -> CommandResult<Option<LibraryHandleDto>> {
-    let lib_guard = state.library.read().await;
-    let Some(lib) = lib_guard.as_ref() else {
-        return Ok(None);
+    let (drive_root, db_path) = {
+        let lib_guard = state.library.read().await;
+        let Some(lib) = lib_guard.as_ref() else {
+            let unsupported_guard = state.unsupported_library.read().await;
+            return Ok(unsupported_guard.as_ref().map(unsupported_library_dto));
+        };
+        (
+            lib.drive_root.display().to_string(),
+            smriti::db::db_path_for(&lib.drive_root),
+        )
     };
-    let db = lib.db.lock().await;
-    let repo = smriti::db::PhotoRepo::new(&db.conn);
-    let photo_count = repo.count()?;
+    let photo_count = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(smriti::db::PhotoRepo::new(&conn).count()?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("library current worker failed: {e}"),
+    })??;
     Ok(Some(LibraryHandleDto {
-        drive_root: lib.drive_root.display().to_string(),
+        drive_root,
         photo_count,
+        read_only: false,
+        schema_too_new: None,
     }))
+}
+
+fn unsupported_library_dto(lib: &UnsupportedLibrary) -> LibraryHandleDto {
+    LibraryHandleDto {
+        drive_root: lib.drive_root.display().to_string(),
+        photo_count: 0,
+        read_only: true,
+        schema_too_new: Some(SchemaTooNewDto {
+            db_version: lib.db_version,
+            max_supported: lib.max_supported,
+        }),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,11 +113,21 @@ pub async fn library_resolve_path(
 
 #[tauri::command]
 pub async fn library_detect_changes(state: State<'_, AppState>) -> CommandResult<IndexChangesDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let reindexer = smriti::services::reindexer::Reindexer::new();
-    let changes = reindexer.detect_changes(&db.conn, &lib.drive_root)?;
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+    let changes = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        let reindexer = smriti::services::reindexer::Reindexer::new();
+        Ok::<_, CommandError>(reindexer.detect_changes(&conn, &drive_root)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("change detection worker failed: {e}"),
+    })??;
     Ok(IndexChangesDto {
         added: changes.added.len() as u64,
         removed: changes.removed.len() as u64,
@@ -113,14 +150,20 @@ pub struct LibraryExclusionRemoveArgs {
 pub async fn library_exclusions_list(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ExcludedFolderDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    Ok(smriti::db::ExcludedFolderRepo::new(&db.conn)
-        .list()?
-        .into_iter()
-        .map(Into::into)
-        .collect())
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    let exclusions = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(smriti::db::ExcludedFolderRepo::new(&conn).list()?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("library exclusions worker failed: {e}"),
+    })??;
+    Ok(exclusions.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]
@@ -128,12 +171,25 @@ pub async fn library_exclusions_preview(
     state: State<'_, AppState>,
     args: LibraryExclusionPathArgs,
 ) -> CommandResult<ExcludedFolderPreviewDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let relative_path = validate_exclusion_path(&lib.drive_root, &args.path)?;
-    let db = lib.db.lock().await;
-    let indexed_count =
-        smriti::db::ExcludedFolderRepo::new(&db.conn).count_indexed_under(&relative_path)?;
+    let (relative_path, db_path) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            validate_exclusion_path(&lib.drive_root, &args.path)?,
+            smriti::db::db_path_for(&lib.drive_root),
+        )
+    };
+    let relative_for_count = relative_path.clone();
+    let indexed_count = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(
+            smriti::db::ExcludedFolderRepo::new(&conn).count_indexed_under(&relative_for_count)?,
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("library exclusion preview worker failed: {e}"),
+    })??;
     Ok(ExcludedFolderPreviewDto {
         relative_path,
         indexed_count,
@@ -183,11 +239,19 @@ pub struct LibraryOpenArgs {
     pub drive_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CompatPhotosListArgs {
+    pub offset: u32,
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LibraryOpenResult {
     pub drive_root: String,
     pub photo_count: i64,
     pub first_run: bool,
+    pub read_only: bool,
+    pub schema_too_new: Option<SchemaTooNewDto>,
 }
 
 #[tauri::command]
@@ -196,25 +260,43 @@ pub async fn library_open(
     args: LibraryOpenArgs,
 ) -> CommandResult<LibraryOpenResult> {
     let drive_root = PathBuf::from(&args.drive_path);
-    if !drive_root.exists() {
-        return Err(CommandError::DriveNotMounted {
-            path: args.drive_path,
-        });
-    }
+    validate_library_root(&drive_root, &args.drive_path)?;
 
-    let database = Database::open_for_drive(&drive_root)?;
-    let needs_schema = database.needs_schema()?;
-    if needs_schema {
-        smriti::db::create_schema(&database.conn)?;
-    }
-    smriti::db::migrations::run_migrations(&database.conn).map_err(|e| CommandError::Database {
-        message: e.to_string(),
+    let drive_root_for_prepare = drive_root.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        prepare_library_database(drive_root_for_prepare)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("library open worker failed: {e}"),
     })?;
-    repair_thumbnail_paths(&database, &drive_root)?;
 
-    let photo_count = {
-        let repo = smriti::db::PhotoRepo::new(&database.conn);
-        repo.count()?
+    let (database, needs_schema, photo_count) = match prepared {
+        Ok(prepared) => prepared,
+        Err(CommandError::SchemaTooNew {
+            db_version,
+            max_supported,
+        }) => {
+            state.jobs.lock().await.cancel_library_scoped();
+            *state.library.write().await = None;
+            *state.unsupported_library.write().await = Some(UnsupportedLibrary {
+                drive_root: drive_root.clone(),
+                db_version,
+                max_supported,
+            });
+            state.assistant.lock().await.sessions.clear();
+            return Ok(LibraryOpenResult {
+                drive_root: drive_root.display().to_string(),
+                photo_count: 0,
+                first_run: false,
+                read_only: true,
+                schema_too_new: Some(SchemaTooNewDto {
+                    db_version,
+                    max_supported,
+                }),
+            });
+        }
+        Err(err) => return Err(err),
     };
 
     let open_library =
@@ -227,6 +309,8 @@ pub async fn library_open(
         open_library.semantic_runner.clone(),
     );
 
+    state.jobs.lock().await.cancel_library_scoped();
+    *state.unsupported_library.write().await = None;
     let mut guard = state.library.write().await;
     *guard = Some(open_library);
     state.assistant.lock().await.sessions.clear();
@@ -235,7 +319,149 @@ pub async fn library_open(
         drive_root: drive_root.display().to_string(),
         photo_count,
         first_run: needs_schema,
+        read_only: false,
+        schema_too_new: None,
     })
+}
+
+#[tauri::command]
+pub async fn library_compat_photos_list(
+    state: State<'_, AppState>,
+    args: CompatPhotosListArgs,
+) -> CommandResult<Page<PhotoSummaryDto>> {
+    let drive_root = {
+        let unsupported_guard = state.unsupported_library.read().await;
+        let lib = unsupported_guard
+            .as_ref()
+            .ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+    let offset = i64::from(args.offset);
+    let limit = i64::from(args.limit.unwrap_or(100).clamp(1, 200));
+    let (items, total) = tauri::async_runtime::spawn_blocking(move || {
+        compat_photos_list_from_db(&db_path, offset, limit)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("compat photo list worker failed: {e}"),
+    })??;
+    Ok(Page {
+        has_more: items.len() as i64 == limit,
+        next_cursor: None,
+        items,
+        total: Some(total),
+    })
+}
+
+fn compat_photos_list_from_db(
+    db_path: &Path,
+    offset: i64,
+    limit: i64,
+) -> CommandResult<(Vec<PhotoSummaryDto>, u64)> {
+    let conn = rusqlite::Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    ensure_compat_photo_columns(&conn)?;
+    let total: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as u64;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, thumbnail_path, date_taken, width, height, orientation,
+               media_type, duration_ms, is_favorite, is_trashed
+          FROM photos
+         WHERE is_trashed = FALSE
+      ORDER BY date_taken IS NULL, date_taken DESC, id DESC
+         LIMIT ?1 OFFSET ?2
+        "#,
+    )?;
+    let rows = stmt.query_map([limit, offset], |row| {
+        let media_type: String = row.get(6)?;
+        Ok(PhotoSummaryDto {
+            id: row.get(0)?,
+            thumbnail_path: row.get(1)?,
+            date_taken: row.get(2)?,
+            width: row.get(3)?,
+            height: row.get(4)?,
+            orientation: row.get(5)?,
+            media_type: if media_type == "video" {
+                MediaTypeDto::Video
+            } else {
+                MediaTypeDto::Photo
+            },
+            duration_ms: row.get(7)?,
+            is_favorite: row.get(8)?,
+            is_trashed: row.get(9)?,
+            stack: None,
+        })
+    })?;
+    let items = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok((items, total))
+}
+
+fn ensure_compat_photo_columns(conn: &rusqlite::Connection) -> CommandResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(photos)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let columns = rows.collect::<Result<std::collections::HashSet<_>, _>>()?;
+    for name in [
+        "id",
+        "thumbnail_path",
+        "date_taken",
+        "width",
+        "height",
+        "orientation",
+        "media_type",
+        "duration_ms",
+        "is_favorite",
+        "is_trashed",
+    ] {
+        if !columns.contains(name) {
+            return Err(CommandError::Database {
+                message: format!("unsupported library is missing photos.{name}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_library_root(drive_root: &Path, original_path: &str) -> CommandResult<()> {
+    if !drive_root.exists() {
+        return Err(CommandError::DriveNotMounted {
+            path: original_path.into(),
+        });
+    }
+    if !drive_root.is_dir() {
+        return Err(CommandError::Validation {
+            field: "drive_path".into(),
+            reason: "path must be an existing folder".into(),
+        });
+    }
+    Ok(())
+}
+
+fn prepare_library_database(drive_root: PathBuf) -> CommandResult<(Database, bool, i64)> {
+    let database = Database::open_for_drive(&drive_root)?;
+    let needs_schema = database.needs_schema()?;
+    if needs_schema {
+        smriti::db::create_schema(&database.conn)?;
+    }
+    smriti::db::migrations::run_migrations(&database.conn).map_err(|e| {
+        if let Some(schema) = e.downcast_ref::<smriti::db::migrations::SchemaTooNewError>() {
+            CommandError::SchemaTooNew {
+                db_version: schema.db_version,
+                max_supported: schema.max_supported,
+            }
+        } else {
+            CommandError::Database {
+                message: e.to_string(),
+            }
+        }
+    })?;
+    repair_thumbnail_paths(&database, &drive_root)?;
+
+    let photo_count = smriti::db::PhotoRepo::new(&database.conn).count()?;
+    Ok((database, needs_schema, photo_count))
 }
 
 fn spawn_semantic_warmup(
@@ -305,6 +531,8 @@ fn spawn_semantic_warmup(
 
 #[tauri::command]
 pub async fn library_close(state: State<'_, AppState>) -> CommandResult<()> {
+    state.jobs.lock().await.cancel_library_scoped();
+    *state.unsupported_library.write().await = None;
     let mut guard = state.library.write().await;
     if let Some(lib) = guard.take() {
         // Drop the Arc<Mutex<Database>>; once the last reference goes
@@ -343,11 +571,21 @@ pub async fn library_apply_changes(
     state: State<'_, AppState>,
     args: LibraryApplyChangesArgs,
 ) -> CommandResult<ApplyResultDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let reindexer = smriti::services::reindexer::Reindexer::new();
-    let mut changes = reindexer.detect_changes(&db.conn, &lib.drive_root)?;
+    let (drive_root, db) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (lib.drive_root.clone(), lib.db.clone())
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+    let mut changes = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        let reindexer = smriti::services::reindexer::Reindexer::new();
+        Ok::<_, CommandError>(reindexer.detect_changes(&conn, &drive_root)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("change detection worker failed: {e}"),
+    })??;
     if !args.added {
         changes.added.clear();
     }
@@ -360,6 +598,8 @@ pub async fn library_apply_changes(
     if !args.modified {
         changes.modified.clear();
     }
+    let db = db.lock().await;
+    let reindexer = smriti::services::reindexer::Reindexer::new();
     let r = reindexer.apply_changes(&db.conn, &changes)?;
     Ok(ApplyResultDto {
         new_files: r.new_files,
@@ -410,21 +650,26 @@ pub async fn library_start_scan(
         });
     }
 
-    let job = jobs::start_job(&state, JobKind::Scan).await?;
-    let job_id = job.id.clone();
-
     // Read the drive_root + clone the db Arc. No more take()/try_unwrap dance.
-    let (drive_root, db) = {
+    let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
+        (
+            lib.drive_root.clone(),
+            lib.db.clone(),
+            lib.thumbnails.clone(),
+        )
     };
+
+    let job = jobs::start_job(&state, JobKind::Scan).await?;
+    let job_id = job.id.clone();
 
     let cancel = job.cancel.clone();
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
 
     tokio::spawn(async move {
+        let cancel_after_scan = cancel.clone();
         let (rx, handle) = smriti::services::scanner::start_scan(
             drive_root.clone(),
             db.clone(),
@@ -459,14 +704,24 @@ pub async fn library_start_scan(
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
 
-        // Kick off the downstream pipeline (metadata + lightweight detections).
-        // in the background. Each stage is its own job with its own
-        // progress chip.
+        if cancel_after_scan.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+
+        // Kick off the downstream pipeline in the background. Each
+        // visible stage is its own job with its own progress chip.
         let app_for_post = app_clone.clone();
         let drive_for_post = drive_root.clone();
         let db_for_post = db.clone();
+        let thumbnails_for_post = thumbnails.clone();
         tokio::spawn(async move {
-            run_post_scan_pipeline(app_for_post, drive_for_post, db_for_post).await;
+            run_post_scan_pipeline(
+                app_for_post,
+                drive_for_post,
+                db_for_post,
+                thumbnails_for_post,
+            )
+            .await;
         });
     });
 
@@ -516,9 +771,6 @@ pub async fn library_regenerate_thumbnails(
             reason: "thumbnail generation is already in progress".into(),
         });
     }
-    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
     let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -539,13 +791,15 @@ pub async fn library_regenerate_thumbnails(
     // generator, so no separate cleanup is needed.
     {
         let guard = db.lock().await;
-        if let Err(e) = guard.conn.execute(
+        guard.conn.execute(
             "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE is_trashed = FALSE",
             [],
-        ) {
-            tracing::error!("regen wipe failed: {e}");
-        }
+        )?;
     }
+
+    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -573,15 +827,15 @@ pub async fn library_start_metadata_extraction(
             reason: "metadata extraction is already in progress".into(),
         });
     }
-    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
-
     let (drive_root, db) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         (lib.drive_root.clone(), lib.db.clone())
     };
+
+    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -611,10 +865,6 @@ pub async fn library_refresh_photo_dates(
         });
     }
 
-    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
-
     let (drive_root, db) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -632,6 +882,10 @@ pub async fn library_refresh_photo_dates(
             [],
         )?;
     }
+
+    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -654,10 +908,6 @@ pub async fn library_start_thumbnail_pass(
             reason: "thumbnail generation is already in progress".into(),
         });
     }
-    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
-
     let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -667,6 +917,10 @@ pub async fn library_start_thumbnail_pass(
             lib.thumbnails.clone(),
         )
     };
+
+    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -725,8 +979,12 @@ async fn run_metadata_stage(
             done: p.done,
             elapsed_ms: (p.elapsed_seconds * 1000.0) as u64,
             is_complete: p.is_complete,
+            stage: p.stage,
+            message: p.message,
         };
-        if p.is_complete {
+        if dto.stage.as_deref() == Some("error") {
+            emit(&app, EV_METADATA_PROGRESS, dto);
+        } else if dto.is_complete {
             emit(&app, EV_METADATA_COMPLETE, dto);
         } else {
             emit(&app, EV_METADATA_PROGRESS, dto);
@@ -758,6 +1016,7 @@ async fn run_thumbnail_pass(
     let started = std::time::Instant::now();
     let mut total_done: u64 = 0;
     let mut failed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut hard_error: Option<String> = None;
     loop {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -765,41 +1024,41 @@ async fn run_thumbnail_pass(
 
         let chunk: Vec<(i64, String, String, i32)> = {
             let guard = db.lock().await;
-            let mut stmt = match guard.conn.prepare(
-                "SELECT id, file_path, file_hash, orientation FROM photos \
-                 WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo' \
-                 LIMIT ?",
-            ) {
-                Ok(s) => s,
-                Err(_) => break,
-            };
-            stmt.query_map([(chunk_size * 4) as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })
-            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(id, _, _, _)| !failed_ids.contains(id))
-            .take(chunk_size)
-            .collect()
+            match load_thumbnail_chunk(&guard.conn, &failed_ids, chunk_size) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!("thumbnail query failed: {e}");
+                    hard_error = Some(format!("Thumbnail query failed: {e}"));
+                    Vec::new()
+                }
+            }
         };
 
-        if chunk.is_empty() {
+        if hard_error.is_some() || chunk.is_empty() {
             break;
         }
 
         let svc_for_chunk = svc.clone();
         let drive = drive_root.clone();
         let cancel_for_chunk = cancel.clone();
-        let updates: Vec<(i64, Option<String>)> =
+        let updates: Vec<(i64, String, Option<String>)> =
             match tauri::async_runtime::spawn_blocking(move || {
                 let mut updates = Vec::with_capacity(chunk.len());
                 for (id, path, hash, orient) in chunk {
                     if cancel_for_chunk.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }
-                    let abs = drive.join(path);
-                    let rel = match svc_for_chunk.generate_thumbnail(
+                    let abs = match smriti::services::path_util::safe_join_relative(&drive, &path) {
+                        Ok(abs) => abs,
+                        Err(e) => {
+                            tracing::debug!(
+                                "thumbnail pass skipped unsafe path for photo_id={id}: {e}"
+                            );
+                            updates.push((id, hash, None));
+                            continue;
+                        }
+                    };
+                    let rel = match svc_for_chunk.generate_thumbnail_background(
                         &abs,
                         &hash,
                         orient,
@@ -811,7 +1070,7 @@ async fn run_thumbnail_pass(
                             None
                         }
                     };
-                    updates.push((id, rel));
+                    updates.push((id, hash, rel));
                 }
                 updates
             })
@@ -820,14 +1079,12 @@ async fn run_thumbnail_pass(
                 Ok(updates) => updates,
                 Err(e) => {
                     tracing::error!("thumbnail worker panicked: {e}");
+                    hard_error = Some(format!("Thumbnail worker failed: {e}"));
                     break;
                 }
             };
 
-        let photo_ids: Vec<i64> = updates
-            .iter()
-            .filter_map(|(id, rel)| if rel.is_some() { Some(*id) } else { None })
-            .collect();
+        let mut ready_photo_ids = Vec::with_capacity(updates.len());
 
         {
             let mut guard = db.lock().await;
@@ -835,34 +1092,43 @@ async fn run_thumbnail_pass(
                 Ok(t) => t,
                 Err(e) => {
                     tracing::error!("thumbnail tx: {e}");
-                    continue;
+                    hard_error = Some(format!("Thumbnail database transaction failed: {e}"));
+                    break;
                 }
             };
-            for (id, rel) in &updates {
+            for (id, hash, rel) in &updates {
                 if let Some(rel) = rel {
-                    let _ = tx.execute(
-                        "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2",
-                        rusqlite::params![rel, id],
-                    );
+                    match tx.execute(
+                        "UPDATE photos SET thumbnail_path = ?1, thumbnailed = TRUE WHERE id = ?2 AND file_hash = ?3",
+                        rusqlite::params![rel, id, hash],
+                    ) {
+                        Ok(affected) => {
+                            if affected > 0 {
+                                ready_photo_ids.push(*id);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("thumbnail update failed for photo_id={id}: {e}");
+                        }
+                    }
                 } else {
                     failed_ids.insert(*id);
-                    let _ = tx.execute(
-                        "UPDATE photos SET thumbnailed = TRUE WHERE id = ?1",
-                        rusqlite::params![id],
-                    );
                 }
             }
             if let Err(e) = tx.commit() {
                 tracing::error!("thumbnail tx commit: {e}");
-                continue;
+                hard_error = Some(format!("Thumbnail database commit failed: {e}"));
+                break;
             }
         }
 
-        if !photo_ids.is_empty() {
+        if !ready_photo_ids.is_empty() {
             emit(
                 &app,
                 EV_THUMBNAIL_READY,
-                crate::dto::ThumbnailReadyDto { photo_ids },
+                crate::dto::ThumbnailReadyDto {
+                    photo_ids: ready_photo_ids,
+                },
             );
         }
 
@@ -882,23 +1148,39 @@ async fn run_thumbnail_pass(
         );
     }
 
-    // Emit a completion event so the JobsIndicator clears the chip
-    // (the store dismisses ~2.5s after `:complete`). Without this the
-    // thumbnail row lingers as "running" forever even after the worker
-    // exits.
-    emit(
-        &app,
-        EV_THUMBNAILS_COMPLETE,
-        crate::events::JobProgress {
-            job_id: job_id.clone(),
-            stage: "generate".into(),
-            processed: total_done,
-            total: total_pending,
-            elapsed_ms: started.elapsed().as_millis() as u64,
-            eta_ms: None,
-            message: None,
-        },
-    );
+    if let Some(message) = hard_error {
+        emit(
+            &app,
+            EV_THUMBNAILS_PROGRESS,
+            crate::events::JobProgress {
+                job_id: job_id.clone(),
+                stage: "error".into(),
+                processed: total_done,
+                total: total_pending,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: Some(message),
+            },
+        );
+    } else {
+        // Emit a completion event so the JobsIndicator clears the chip
+        // (the store dismisses ~2.5s after `:complete`). Without this the
+        // thumbnail row lingers as "running" forever even after the worker
+        // exits.
+        emit(
+            &app,
+            EV_THUMBNAILS_COMPLETE,
+            crate::events::JobProgress {
+                job_id: job_id.clone(),
+                stage: "generate".into(),
+                processed: total_done,
+                total: total_pending,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                eta_ms: None,
+                message: None,
+            },
+        );
+    }
 
     let st: tauri::State<AppState> = app.state();
     jobs::finish_job(&st, &job_id).await;
@@ -910,6 +1192,37 @@ fn relative_thumbnail_path(file_hash: &str) -> String {
         ".photovault/thumbnails/medium/v2/{}/{}.jpg",
         subdir, file_hash
     )
+}
+
+fn load_thumbnail_chunk(
+    conn: &rusqlite::Connection,
+    failed_ids: &std::collections::HashSet<i64>,
+    limit: usize,
+) -> rusqlite::Result<Vec<(i64, String, String, i32)>> {
+    let mut sql = String::from(
+        "SELECT id, file_path, file_hash, orientation FROM photos \
+         WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo'",
+    );
+    let mut params: Vec<i64> = Vec::with_capacity(failed_ids.len() + 1);
+    if !failed_ids.is_empty() {
+        sql.push_str(" AND id NOT IN (");
+        for idx in 0..failed_ids.len() {
+            if idx > 0 {
+                sql.push_str(", ");
+            }
+            sql.push('?');
+        }
+        sql.push(')');
+        params.extend(failed_ids.iter().copied());
+    }
+    sql.push_str(" ORDER BY id ASC LIMIT ?");
+    params.push(limit as i64);
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+    rows.collect()
 }
 
 fn legacy_thumbnail_path(file_hash: &str) -> String {
@@ -1023,15 +1336,15 @@ fn validate_exclusion_path(drive_root: &std::path::Path, input: &str) -> Command
     Ok(relative_path)
 }
 
-/// Auto-chain after a Scan completes: metadata → existing
-/// duplicates/bursts detection. Face detection is deliberately NOT
-/// auto-chained — it's heavy enough that users should opt in via the
-/// People page. Thumbnails are viewport-driven from the UI, so we do
-/// not run a full-library thumbnail pass here.
+/// Auto-chain after a Scan completes: metadata, full-library thumbnail
+/// prewarm, then existing duplicates/bursts detection. Face detection
+/// is deliberately NOT auto-chained — it's heavy enough that users
+/// should opt in via the People page.
 async fn run_post_scan_pipeline(
     app: AppHandle,
     drive_root: PathBuf,
     db: Arc<tokio::sync::Mutex<Database>>,
+    thumbnails: Arc<smriti::services::thumbnail::ThumbnailService>,
 ) {
     // Stage 2: metadata extraction.
     {
@@ -1058,6 +1371,47 @@ async fn run_post_scan_pipeline(
     // explicitly via the People page so the heavy ML pass isn't running
     // in the background by surprise.
 
+    // Stage 3: prewarm durable thumbnails for the whole library. This
+    // uses the background-priority generator, so visible viewport
+    // requests still take permits first. Without this pass, jumping deep
+    // into a large cold library can require scroll-time generation for
+    // every visible cell.
+    {
+        let state: tauri::State<AppState> = app.state();
+        if !state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
+            let pending = {
+                let guard = db.lock().await;
+                smriti::db::photo_repo::PhotoRepo::new(&guard.conn)
+                    .count_pending_thumbnails()
+                    .unwrap_or(0)
+            };
+            if pending > 0 {
+                match jobs::start_job(&state, JobKind::Thumbnails).await {
+                    Ok(job) => {
+                        let cancel = job.cancel.clone();
+                        let job_id = job.id.clone();
+                        let app_for_thumbs = app.clone();
+                        let drive_for_thumbs = drive_root.clone();
+                        let db_for_thumbs = db.clone();
+                        let thumbnails_for_job = thumbnails.clone();
+                        tokio::spawn(async move {
+                            run_thumbnail_pass(
+                                drive_for_thumbs,
+                                db_for_thumbs,
+                                thumbnails_for_job,
+                                cancel,
+                                app_for_thumbs,
+                                job_id,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(e) => tracing::warn!("post-scan thumbnail prewarm skipped: {e}"),
+                }
+            }
+        }
+    }
+
     // Existing post-scan detections (duplicates, bursts) — already idempotent.
     run_post_scan_detection(app, drive_root).await;
 }
@@ -1066,7 +1420,12 @@ async fn run_post_scan_pipeline(
 /// passes are idempotent and persist their groups, so the Bursts and
 /// Duplicates tabs reflect the fresh library state without the user
 /// having to manually click "Scan" inside each tab.
-async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
+async fn run_post_scan_detection(app: AppHandle, drive_root: PathBuf) {
+    if !library_is_still_open(&app, &drive_root).await {
+        tracing::info!("post-scan: skipped detection because library changed");
+        return;
+    }
+
     // Open a secondary connection so we don't compete with foreground
     // photos_list / albums queries for the shared Arc<Mutex<Database>>.
     // SQLite WAL handles the concurrent reader/writer.
@@ -1082,19 +1441,32 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
                 return 0u64;
             }
         };
-        let exact = smriti::services::duplicate_detector::DuplicateDetector::find_duplicates(&conn)
-            .unwrap_or_default();
+        let exact = match smriti::services::duplicate_detector::DuplicateDetector::find_duplicates(
+            &conn,
+            &drive_for_dups,
+        ) {
+            Ok(groups) => groups,
+            Err(e) => {
+                tracing::error!("post-scan dups: exact pass failed: {}", e);
+                return 0u64;
+            }
+        };
         let exclude_ids: std::collections::HashSet<i64> = exact
             .iter()
             .flat_map(|g| g.photo_ids.iter().copied())
             .collect();
         let perc =
-            smriti::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
-                &conn,
-                &drive_for_dups,
-                &exclude_ids,
-            )
-            .unwrap_or_default();
+            match smriti::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates(
+                    &conn,
+                    &drive_for_dups,
+                    &exclude_ids,
+                ) {
+                Ok(groups) => groups,
+                Err(e) => {
+                    tracing::error!("post-scan dups: perceptual pass failed: {}", e);
+                    return 0u64;
+                }
+            };
         let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
             Vec::with_capacity(exact.len() + perc.len());
         for g in exact.iter().chain(perc.iter()) {
@@ -1106,12 +1478,20 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
             ));
         }
         let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
-        let _ = repo.sync_duplicate_groups(&to_persist);
+        if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
+            tracing::error!("post-scan dups: persist failed: {}", e);
+            return 0u64;
+        }
         (exact.len() + perc.len()) as u64
     })
     .await
     .unwrap_or(0);
     tracing::info!("post-scan: {} duplicate groups", dups);
+
+    if !library_is_still_open(&app, &drive_root).await {
+        tracing::info!("post-scan: skipped bursts because library changed");
+        return;
+    }
 
     let drive_for_bursts = drive_root.clone();
     let db_path_for_bursts = db_path.clone();
@@ -1130,9 +1510,14 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
         };
         let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
         let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
-        let groups = detector
-            .find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root))
-            .unwrap_or_default();
+        let groups = match detector.find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root))
+        {
+            Ok(groups) => groups,
+            Err(e) => {
+                tracing::error!("post-scan bursts: scan failed: {}", e);
+                return 0u64;
+            }
+        };
         let triples: Vec<(String, String, Vec<i64>)> = groups
             .iter()
             .map(|g| {
@@ -1144,10 +1529,106 @@ async fn run_post_scan_detection(_app: AppHandle, drive_root: PathBuf) {
             })
             .collect();
         let repo = smriti::db::burst_repo::BurstRepo::new(&conn);
-        let _ = repo.sync_burst_groups(&triples);
+        if let Err(e) = repo.sync_burst_groups(&triples) {
+            tracing::error!("post-scan bursts: persist failed: {}", e);
+            return 0u64;
+        }
         groups.len() as u64
     })
     .await
     .unwrap_or(0);
     tracing::info!("post-scan: {} burst groups", bursts);
+}
+
+async fn library_is_still_open(app: &AppHandle, drive_root: &Path) -> bool {
+    let state: tauri::State<AppState> = app.state();
+    let guard = state.library.read().await;
+    guard
+        .as_ref()
+        .is_some_and(|lib| lib.drive_root.as_path() == drive_root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn thumbnail_test_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                orientation INTEGER NOT NULL DEFAULT 1,
+                thumbnailed BOOLEAN NOT NULL DEFAULT FALSE,
+                is_trashed BOOLEAN NOT NULL DEFAULT FALSE,
+                media_type TEXT NOT NULL DEFAULT 'photo'
+            );
+            INSERT INTO photos (id, file_path, file_hash, orientation, thumbnailed, is_trashed, media_type)
+            VALUES
+                (1, 'one.jpg', 'aa111', 1, FALSE, FALSE, 'photo'),
+                (2, 'two.jpg', 'bb222', 1, FALSE, FALSE, 'photo'),
+                (3, 'done.jpg', 'cc333', 1, TRUE, FALSE, 'photo'),
+                (4, 'trashed.jpg', 'dd444', 1, FALSE, TRUE, 'photo'),
+                (5, 'video.mp4', 'ee555', 1, FALSE, FALSE, 'video');
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn thumbnail_chunk_skips_current_run_failures_without_hiding_later_pending_rows() {
+        let conn = thumbnail_test_conn();
+        let mut failed = HashSet::new();
+        failed.insert(1);
+
+        let rows = load_thumbnail_chunk(&conn, &failed, 20).unwrap();
+
+        assert_eq!(rows, vec![(2, "two.jpg".into(), "bb222".into(), 1)]);
+    }
+
+    #[test]
+    fn validate_library_root_rejects_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("not-a-library-root");
+        std::fs::write(&file, b"not a folder").unwrap();
+
+        let err = validate_library_root(&file, file.to_str().unwrap()).unwrap_err();
+
+        assert!(matches!(err, CommandError::Validation { field, .. } if field == "drive_path"));
+    }
+
+    #[test]
+    fn compat_photos_list_reads_stable_columns_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("photovault.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            smriti::db::create_schema(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO photos
+                    (id, file_path, file_name, file_hash, file_size, date_taken,
+                     thumbnail_path, width, height, media_type, is_trashed)
+                 VALUES
+                    (1, 'old.jpg', 'old.jpg', 'h1', 10, '2026-01-01T00:00:00',
+                     '.photovault/thumbs/old.jpg', 400, 300, 'photo', FALSE),
+                    (2, 'new.mp4', 'new.mp4', 'h2', 20, '2026-01-02T00:00:00',
+                     '.photovault/thumbs/new.jpg', 800, 600, 'video', FALSE),
+                    (3, 'trash.jpg', 'trash.jpg', 'h3', 30, '2026-01-03T00:00:00',
+                     '.photovault/thumbs/trash.jpg', 100, 100, 'photo', TRUE)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let (items, total) = compat_photos_list_from_db(&db_path, 0, 10).unwrap();
+
+        assert_eq!(total, 2);
+        assert_eq!(items.iter().map(|p| p.id).collect::<Vec<_>>(), vec![2, 1]);
+        assert!(items.iter().all(|p| p.stack.is_none()));
+        assert!(matches!(items[0].media_type, MediaTypeDto::Video));
+    }
 }

@@ -555,6 +555,9 @@ impl SemanticSearchService {
         let Some((offset, dim)) = row else {
             return Ok(None);
         };
+        if dim != SEMANTIC_DIM as i64 || offset < 0 {
+            return Ok(None);
+        }
         let store = VectorStore::new(&self.drive_root).map_err(|e| e.to_string())?;
         store
             .read(offset as u64, dim as usize)
@@ -894,8 +897,12 @@ impl VectorStore {
 
 fn count_state(conn: &Connection, status: &str) -> rusqlite::Result<u64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM semantic_index_state
-         WHERE model_key = ?1 AND status = ?2",
+        "SELECT COUNT(*)
+         FROM semantic_index_state s
+         JOIN photos p ON p.id = s.photo_id
+         WHERE s.model_key = ?1
+           AND s.status = ?2
+           AND p.is_trashed = FALSE",
         params![SEMANTIC_MODEL_KEY, status],
         |r| r.get::<_, i64>(0),
     )
@@ -1088,6 +1095,27 @@ mod tests {
     }
 
     #[test]
+    fn vector_for_photo_ignores_corrupt_vector_dimension() {
+        let conn = setup_semantic_test_conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, media_type, is_trashed) VALUES
+                (1, 'a.jpg', 'photo', FALSE)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO semantic_index_state
+                (photo_id, model_key, status, vector_offset, vector_dim)
+             VALUES (?1, ?2, 'indexed', 0, 999999999)",
+            rusqlite::params![1_i64, SEMANTIC_MODEL_KEY],
+        )
+        .unwrap();
+        let svc = SemanticSearchService::new(tempdir().unwrap().path());
+
+        assert!(svc.vector_for_photo(&conn, 1).unwrap().is_none());
+    }
+
+    #[test]
     fn pending_batch_does_not_retry_failed_rows() {
         let conn = setup_semantic_test_conn();
         conn.execute(
@@ -1106,6 +1134,36 @@ mod tests {
             batch.iter().map(|p| p.photo_id).collect::<Vec<_>>(),
             vec![2]
         );
+    }
+
+    #[test]
+    fn index_stats_ignore_trashed_index_state_rows() {
+        let conn = setup_semantic_test_conn();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, media_type, is_trashed) VALUES
+                (1, 'a.jpg', 'photo', FALSE),
+                (2, 'b.jpg', 'photo', TRUE),
+                (3, 'c.jpg', 'photo', FALSE)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO semantic_index_state
+                (photo_id, model_key, status, vector_offset, vector_dim)
+             VALUES
+                (1, ?1, 'indexed', 0, ?2),
+                (2, ?1, 'indexed', 0, ?2),
+                (3, ?1, 'failed', NULL, NULL)",
+            params![SEMANTIC_MODEL_KEY, SEMANTIC_DIM as i64],
+        )
+        .unwrap();
+
+        let svc = SemanticSearchService::new(tempdir().unwrap().path());
+        let stats = svc.index_stats(&conn).unwrap();
+
+        assert_eq!(stats.indexed, 1);
+        assert_eq!(stats.failed, 1);
+        assert_eq!(stats.pending, 0);
     }
 
     #[test]

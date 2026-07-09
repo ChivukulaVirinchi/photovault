@@ -3,6 +3,7 @@
 //! The model orchestrates typed tools. The app validates and executes those
 //! tools, and only creates albums after an explicit approval token.
 
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -10,12 +11,14 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use smriti::db::album_repo::AlbumRepo;
+use smriti::db::connection::{db_path_for, open_secondary};
 use smriti::services::assistant::{
     AssistantActivity, AssistantIntent, AssistantRun, AssistantRunStatus, AssistantSearchArgs,
     AssistantService,
 };
 use smriti::services::semantic::{
-    relevant_text_search_candidates, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
+    relevant_text_search_candidates, SemanticIndexCache, SemanticModelRunner,
+    SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
 };
 
 use crate::events::{AssistantActivityEvent, EV_ASSISTANT_ACTIVITY};
@@ -26,6 +29,8 @@ use crate::{CommandError, CommandResult};
 const MAX_AGENT_STEPS: usize = 8;
 const PROVIDER_TIMEOUT_SECS: u64 = 12;
 const MAX_RECENT_SESSION_MESSAGES: usize = 10;
+const MAX_ASSISTANT_SESSIONS: usize = 20;
+const MAX_ASSISTANT_MESSAGE_CHARS: usize = 4_000;
 
 #[derive(Debug, Deserialize)]
 pub struct AssistantStartArgs {
@@ -77,19 +82,26 @@ pub async fn assistant_start(
         preview: None,
         album_id: None,
     };
-    state.assistant.lock().await.sessions.insert(
-        run_id.clone(),
-        AssistantSession {
-            run: seed_run,
-            draft: None,
-            library_root,
-            messages: vec![AssistantMessage {
-                role: "user".into(),
-                content: message,
-            }],
-            current_result_ids: Vec::new(),
-        },
-    );
+    {
+        let mut assistant = state.assistant.lock().await;
+        prune_sessions(
+            &mut assistant.sessions,
+            MAX_ASSISTANT_SESSIONS.saturating_sub(1),
+        );
+        assistant.sessions.insert(
+            run_id.clone(),
+            AssistantSession {
+                run: seed_run,
+                draft: None,
+                library_root,
+                messages: vec![AssistantMessage {
+                    role: "user".into(),
+                    content: message,
+                }],
+                current_result_ids: Vec::new(),
+            },
+        );
+    }
 
     run_turn(app, &state, &run_id, &cfg).await
 }
@@ -211,8 +223,8 @@ pub async fn assistant_approve(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let library_root = lib.drive_root.display().to_string();
     ensure_session_library(&state, &args.run_id, &library_root).await?;
-    let db = lib.db.lock().await;
     emit_activity(&app, &state, &args.run_id, &library_root, "Creating album").await;
+    let db = lib.db.lock().await;
     let album_id = AssistantService::create_album(&db.conn, &draft)?;
     drop(db);
     drop(lib_guard);
@@ -378,6 +390,7 @@ async fn execute_tool(
             let queries = string_vec_arg(&args, "queries");
             let lib_guard = state.library.read().await;
             let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+            ensure_current_library(&lib.drive_root, library_root)?;
             let db = lib.db.lock().await;
             let resolved = AssistantService::resolve_people_queries(&db.conn, &queries)?;
             Ok(json!(resolved))
@@ -387,6 +400,7 @@ async fn execute_tool(
             let queries = string_vec_arg(&args, "queries");
             let lib_guard = state.library.read().await;
             let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+            ensure_current_library(&lib.drive_root, library_root)?;
             let db = lib.db.lock().await;
             let resolved = AssistantService::resolve_place_queries(&db.conn, &queries)?;
             Ok(json!(resolved))
@@ -422,18 +436,38 @@ async fn execute_tool(
                         .unwrap_or_default()
                 };
             }
-            let lib_guard = state.library.read().await;
-            let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-            let db = lib.db.lock().await;
-            let semantic_ids = if let Some(text) = search_args.semantic_text.as_deref() {
-                semantic_photo_ids(lib, &db.conn, text)?
-            } else {
-                Vec::new()
+            let (drive_root, db_path, semantic_index, semantic_runner) = {
+                let lib_guard = state.library.read().await;
+                let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+                ensure_current_library(&lib.drive_root, library_root)?;
+                (
+                    lib.drive_root.clone(),
+                    db_path_for(&lib.drive_root),
+                    lib.semantic_index.clone(),
+                    lib.semantic_runner.clone(),
+                )
             };
-            let draft = AssistantService::search_with_args(&db.conn, &search_args, &semantic_ids)?;
-            drop(db);
-            drop(lib_guard);
+            let draft = tauri::async_runtime::spawn_blocking(move || {
+                let conn = open_secondary(&db_path)?;
+                let semantic_ids = if let Some(text) = search_args.semantic_text.as_deref() {
+                    semantic_photo_ids(&drive_root, &semantic_index, &semantic_runner, &conn, text)?
+                } else {
+                    Vec::new()
+                };
+                Ok::<_, CommandError>(AssistantService::search_with_args(
+                    &conn,
+                    &search_args,
+                    &semantic_ids,
+                )?)
+            })
+            .await
+            .map_err(|e| CommandError::Internal {
+                message: format!("assistant search worker failed: {e}"),
+            })??;
 
+            if stopped(state, run_id).await? {
+                return Ok(json!({ "stopped": true }));
+            }
             let mut assistant = state.assistant.lock().await;
             let session = assistant
                 .sessions
@@ -461,6 +495,7 @@ async fn execute_tool(
                 .to_lowercase();
             let lib_guard = state.library.read().await;
             let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+            ensure_current_library(&lib.drive_root, library_root)?;
             let db = lib.db.lock().await;
             let repo = AlbumRepo::new(&db.conn);
             let mut albums = repo.get_all()?;
@@ -505,6 +540,7 @@ async fn execute_tool(
             }
             let lib_guard = state.library.read().await;
             let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+            ensure_current_library(&lib.drive_root, library_root)?;
             let db = lib.db.lock().await;
             let (album_name, added) = {
                 let repo = AlbumRepo::new(&db.conn);
@@ -519,6 +555,9 @@ async fn execute_tool(
             };
             drop(db);
             drop(lib_guard);
+            if stopped(state, run_id).await? {
+                return Ok(json!({ "stopped": true }));
+            }
             let mut assistant = state.assistant.lock().await;
             let session = assistant
                 .sessions
@@ -560,6 +599,7 @@ async fn execute_tool(
             }
             let lib_guard = state.library.read().await;
             let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+            ensure_current_library(&lib.drive_root, library_root)?;
             let db = lib.db.lock().await;
             let draft = AssistantService::preview_from_photo_ids(
                 &db.conn,
@@ -570,6 +610,9 @@ async fn execute_tool(
             )?;
             drop(db);
             drop(lib_guard);
+            if stopped(state, run_id).await? {
+                return Ok(json!({ "stopped": true }));
+            }
             let mut assistant = state.assistant.lock().await;
             let session = assistant
                 .sessions
@@ -642,23 +685,37 @@ async fn run_plain_search_fast_path(
         return Ok(None);
     }
     emit_activity(app, state, run_id, library_root, "Searching photos").await;
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    if lib.drive_root.display().to_string() != library_root {
-        return Err(CommandError::Conflict {
-            reason: "Assistant run belongs to a different library".into(),
-        });
-    }
-    let db = lib.db.lock().await;
-    let semantic_ids = args
-        .semantic_text
-        .as_deref()
-        .map(|text| semantic_photo_ids(lib, &db.conn, text))
-        .transpose()?
-        .unwrap_or_default();
-    let draft = AssistantService::search_with_args(&db.conn, &args, &semantic_ids)?;
-    drop(db);
-    drop(lib_guard);
+    let (drive_root, db_path, semantic_index, semantic_runner) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        ensure_current_library(&lib.drive_root, library_root)?;
+        (
+            lib.drive_root.clone(),
+            db_path_for(&lib.drive_root),
+            lib.semantic_index.clone(),
+            lib.semantic_runner.clone(),
+        )
+    };
+    let draft = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let semantic_ids = args
+            .semantic_text
+            .as_deref()
+            .map(|text| {
+                semantic_photo_ids(&drive_root, &semantic_index, &semantic_runner, &conn, text)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok::<_, CommandError>(AssistantService::search_with_args(
+            &conn,
+            &args,
+            &semantic_ids,
+        )?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("assistant search worker failed: {e}"),
+    })??;
 
     let mut assistant = state.assistant.lock().await;
     let session = assistant
@@ -792,11 +849,7 @@ async fn assistant_prompt_state(
 ) -> CommandResult<String> {
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    if lib.drive_root.display().to_string() != library_root {
-        return Err(CommandError::Conflict {
-            reason: "Assistant run belongs to a different library".into(),
-        });
-    }
+    ensure_current_library(&lib.drive_root, library_root)?;
     let db = lib.db.lock().await;
     let total_photos: i64 = db.conn.query_row(
         "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
@@ -1134,6 +1187,18 @@ async fn ensure_session_library(
     Ok(())
 }
 
+fn ensure_current_library(
+    drive_root: &std::path::Path,
+    expected_library_root: &str,
+) -> CommandResult<()> {
+    if drive_root.display().to_string() != expected_library_root {
+        return Err(CommandError::Conflict {
+            reason: "Assistant run belongs to a different library".into(),
+        });
+    }
+    Ok(())
+}
+
 fn ensure_enabled(cfg: &smriti::config::AppConfig) -> CommandResult<()> {
     if !cfg.ai_features_enabled || !cfg.assistant_enabled {
         return Err(CommandError::Validation {
@@ -1152,27 +1217,45 @@ fn clean_message(message: String) -> CommandResult<String> {
             reason: "message is required".into(),
         });
     }
+    if message.chars().count() > MAX_ASSISTANT_MESSAGE_CHARS {
+        return Err(CommandError::Validation {
+            field: "message".into(),
+            reason: format!("message must be at most {MAX_ASSISTANT_MESSAGE_CHARS} characters"),
+        });
+    }
     Ok(message)
 }
 
+fn prune_sessions(sessions: &mut HashMap<String, AssistantSession>, max_sessions: usize) {
+    if sessions.len() <= max_sessions {
+        return;
+    }
+    let mut keys = sessions.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    let remove_count = sessions.len().saturating_sub(max_sessions);
+    for key in keys.into_iter().take(remove_count) {
+        sessions.remove(&key);
+    }
+}
+
 fn semantic_photo_ids(
-    lib: &crate::state::OpenLibrary,
+    drive_root: &std::path::Path,
+    semantic_index: &std::sync::Arc<std::sync::Mutex<SemanticIndexCache>>,
+    semantic_runner: &std::sync::Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
     conn: &rusqlite::Connection,
     text: &str,
 ) -> CommandResult<Vec<i64>> {
-    let svc = SemanticSearchService::new(&lib.drive_root);
+    let svc = SemanticSearchService::new(drive_root);
     match svc.status(conn) {
         Ok(status)
             if status.assets_installed
                 && status.onnx_runtime_installed
                 && status.indexed_photos > 0 =>
         {
-            let mut cache = lib
-                .semantic_index
+            let mut cache = semantic_index
                 .lock()
                 .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
-            let mut runner_guard = lib
-                .semantic_runner
+            let mut runner_guard = semantic_runner
                 .lock()
                 .map_err(|_| CommandError::internal("semantic model cache poisoned"))?;
             if runner_guard.is_none() {
@@ -1184,9 +1267,10 @@ fn semantic_photo_ids(
                     }
                 }
             }
-            let runner = runner_guard
-                .as_mut()
-                .expect("semantic runner initialized above");
+            let Some(runner) = runner_guard.as_mut() else {
+                tracing::debug!("assistant semantic runner missing after initialization");
+                return Ok(Vec::new());
+            };
             let candidates = svc
                 .search_text_cached(conn, &mut cache, runner, text, SEMANTIC_TEXT_SEARCH_LIMIT)
                 .unwrap_or_else(|err| {
@@ -1306,6 +1390,21 @@ mod tests {
     #[test]
     fn recent_message_window_is_small() {
         assert_eq!(MAX_RECENT_SESSION_MESSAGES, 10);
+    }
+
+    #[test]
+    fn assistant_message_length_is_bounded() {
+        assert!(clean_message("show beach photos".into()).is_ok());
+        let too_long = "x".repeat(MAX_ASSISTANT_MESSAGE_CHARS + 1);
+        assert!(matches!(
+            clean_message(too_long),
+            Err(CommandError::Validation { .. })
+        ));
+    }
+
+    #[test]
+    fn assistant_session_count_is_bounded() {
+        assert_eq!(MAX_ASSISTANT_SESSIONS, 20);
     }
 
     #[test]

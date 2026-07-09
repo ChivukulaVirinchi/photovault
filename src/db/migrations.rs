@@ -960,6 +960,28 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
+    fn run_migrations_reports_newer_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (999);
+            "#,
+        )
+        .unwrap();
+
+        let err = run_migrations(&conn).unwrap_err();
+        let schema = err
+            .downcast_ref::<SchemaTooNewError>()
+            .expect("newer schema should produce SchemaTooNewError");
+        assert_eq!(schema.db_version, 999);
+        assert_eq!(schema.max_supported, MAX_KNOWN_SCHEMA_VERSION);
+    }
+
+    #[test]
     fn test_migrate_v18_to_v19() -> rusqlite::Result<()> {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -1032,8 +1054,7 @@ mod tests {
         let columns: Vec<String> = conn
             .prepare("PRAGMA table_info(photos)")?
             .query_map([], |row| row.get::<_, String>(1))?
-            .filter_map(|c| c.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         assert!(columns.iter().any(|c| c == "metadata_extracted"));
         assert!(columns.iter().any(|c| c == "thumbnailed"));
 
