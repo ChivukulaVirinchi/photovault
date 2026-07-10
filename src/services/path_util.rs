@@ -48,6 +48,25 @@ pub fn safe_join_relative(root: &Path, stored_relative: &str) -> Result<PathBuf,
     Ok(root.join(clean))
 }
 
+/// Resolve an existing DB-stored path and prove it still lives under
+/// the trusted root after following symlinks.
+pub fn safe_existing_path_under_root(
+    root: &Path,
+    stored_relative: &str,
+) -> Result<PathBuf, String> {
+    let joined = safe_join_relative(root, stored_relative)?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize root: {e}"))?;
+    let resolved = joined
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize path: {e}"))?;
+    if !resolved.starts_with(&root) {
+        return Err("path resolves outside library root".to_string());
+    }
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +103,26 @@ mod tests {
         assert!(safe_join_relative(Path::new("/photos"), "../secret").is_err());
         assert!(safe_join_relative(Path::new("/photos"), "/etc/passwd").is_err());
         assert!(safe_join_relative(Path::new("/photos"), r"..\secret").is_err());
+    }
+
+    #[test]
+    fn safe_existing_path_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("secret.jpg");
+        std::fs::write(&outside_file, b"secret").unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+            assert!(safe_existing_path_under_root(root.path(), "link/secret.jpg").is_err());
+        }
+
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(outside.path(), root.path().join("link")).is_ok() {
+                assert!(safe_existing_path_under_root(root.path(), "link/secret.jpg").is_err());
+            }
+        }
     }
 }

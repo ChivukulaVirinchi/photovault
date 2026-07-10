@@ -248,7 +248,7 @@ data/                  GeoNames database (gitignored)
 - **image 0.25** / **imageproc 0.26** — image processing
 - **rayon 1.10** — parallel processing
 - **tauri 2** — desktop shell (IPC, asset protocol, native windowing)
-- **svelte 5** + **vite 5** — frontend
+- **svelte 5** + **vite 8** — frontend
 - **maplibre-gl 4** — map view + photo-detail minimap
 - **@tanstack/svelte-virtual** — kept as dep but unused; custom virtualizer in `src-ui/src/lib/virtualizer.svelte.ts`
 

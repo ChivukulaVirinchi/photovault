@@ -326,6 +326,7 @@ export interface SemanticStatus {
 
 export const semantic = {
   status: () => call<SemanticStatus>("semantic_status"),
+  warmRuntime: () => call<null>("semantic_warm_runtime"),
   installModel: () => call<JobIdDto>("semantic_install_model"),
   startIndexing: () => call<JobIdDto>("semantic_start_indexing"),
   similarPhotos: (photoId: number, limit = 24) =>

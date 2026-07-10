@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
   import { albums, trash } from "../lib/api/all";
@@ -40,6 +40,7 @@
   let actionBusy = $state(false);
   let loadSeq = 0;
   let mounted = true;
+  let scrollRestored = false;
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
   const scrollStorageKey = $derived(`smriti:album-scroll:${id}`);
   const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
@@ -56,7 +57,9 @@
   }
 
   function onCellClick(e: MouseEvent, photoId: number) {
-    handleCellClick(e, photoId, photos.map((p) => p.id));
+    const ids = albumPhotoIds.length > 0 ? albumPhotoIds : photos.map((p) => p.id);
+    const handled = handleCellClick(e, photoId, ids);
+    if (!handled) browseContext.set(`album:${id}`, ids);
   }
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     photos = photos.map((p) => (
@@ -185,6 +188,35 @@
       }
     }
   }
+
+  function readSavedScroll() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const y = raw ? Number(raw) : 0;
+    return Number.isFinite(y) && y > 0 ? y : 0;
+  }
+
+  function saveScroll() {
+    if (!scrollEl) return;
+    try { sessionStorage.setItem(scrollStorageKey, String(scrollEl.scrollTop)); } catch {}
+  }
+
+  async function restoreSavedScroll() {
+    if (scrollRestored || !scrollEl) return;
+    const target = readSavedScroll();
+    scrollRestored = true;
+    if (target <= 0) return;
+    await tick();
+    for (let i = 0; mounted && scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight < target && hasMore && nextCursor && i < 30; i++) {
+      const before = photos.length;
+      await loadMorePhotos();
+      await tick();
+      if (photos.length === before) break;
+    }
+    requestAnimationFrame(() => {
+      if (mounted && scrollEl) scrollEl.scrollTop = target;
+    });
+  }
+
   onMount(() => {
     mounted = true;
     window.addEventListener("keydown", onGlobalKey);
@@ -199,6 +231,7 @@
       else unlisten = fn;
     }).catch(() => {});
     return () => {
+      saveScroll();
       mounted = false;
       loadSeq += 1;
       disposed = true;
@@ -208,26 +241,23 @@
   });
 
   $effect(() => {
-    if (!scrollEl) return;
-    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
-    if (raw) {
-      const y = Number(raw);
-      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (mounted && scrollEl) scrollEl.scrollTop = y; });
-    }
+    const el = scrollEl;
+    if (!el) return;
     const onScroll = () => {
-      try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
-      if (!scrollEl || !hasMore || loadingMore) return;
-      const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+      saveScroll();
+      if (!hasMore || loadingMore) return;
+      const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
       if (remaining < 900) void loadMorePhotos();
     };
-    scrollEl.addEventListener("scroll", onScroll, { passive: true });
-    return () => scrollEl?.removeEventListener("scroll", onScroll);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
   });
 
   async function load() {
     const seq = ++loadSeq;
     const albumId = id;
     error = null;
+    scrollRestored = false;
     loadingMore = false;
     album = null;
     photos = [];
@@ -254,6 +284,7 @@
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       browseContext.set(`album:${albumId}`, allIds);
+      void restoreSavedScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }

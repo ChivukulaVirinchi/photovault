@@ -309,12 +309,14 @@ pub async fn system_open_in_explorer(
         let photo = repo
             .get_by_id(args.photo_id)?
             .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-        smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path).map_err(
-            |e| CommandError::Validation {
-                field: "photo.file_path".into(),
-                reason: e,
-            },
-        )?
+        smriti::services::path_util::safe_existing_path_under_root(
+            &lib.drive_root,
+            &photo.file_path,
+        )
+        .map_err(|e| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason: e,
+        })?
     };
     select_in_file_manager(&abs).map_err(|e| CommandError::Io {
         message: e.to_string(),
@@ -480,11 +482,38 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     // shell PIDL (item identifier list), which the shell parses with
     // full UNC / extended-length / long-path support and selects the
     // item atomically — no string-parsing quirks, no fallback paths.
+    use std::process::Command;
     use windows::core::PCWSTR;
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
 
-    let normalized = path.display().to_string().replace('/', "\\");
+    fn shell_path(path: &std::path::Path) -> String {
+        let raw = path.display().to_string().replace('/', "\\");
+        if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+            rest.to_string()
+        } else {
+            raw
+        }
+    }
+
+    fn select_with_explorer(normalized: &str) -> std::io::Result<()> {
+        use std::os::windows::process::CommandExt;
+
+        Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{normalized}\""))
+            .spawn()?;
+        Ok(())
+    }
+
+    fn open_parent(path: &std::path::Path) -> std::io::Result<()> {
+        let parent = path.parent().unwrap_or(path);
+        Command::new("explorer.exe").arg(parent).spawn()?;
+        Ok(())
+    }
+
+    let normalized = shell_path(path);
     let mut wide: Vec<u16> = normalized.encode_utf16().collect();
     wide.push(0);
 
@@ -499,14 +528,15 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
         let pidl = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
         if pidl.is_null() {
             CoUninitialize();
-            return Err(std::io::Error::other(
-                "ILCreateFromPathW returned NULL — path may not exist or be accessible",
-            ));
+            return select_with_explorer(&normalized).or_else(|_| open_parent(path));
         }
         let result = SHOpenFolderAndSelectItems(pidl, None, 0);
         ILFree(Some(pidl));
         CoUninitialize();
-        result.map_err(|e| std::io::Error::other(format!("SHOpenFolderAndSelectItems: {}", e)))
+        if result.is_err() {
+            return select_with_explorer(&normalized).or_else(|_| open_parent(path));
+        }
+        Ok(())
     }
 }
 
@@ -549,11 +579,14 @@ pub async fn system_copy_path_to_clipboard(
     let photo = repo
         .get_by_id(args.photo_id)?
         .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = smriti::services::path_util::safe_join_relative(&lib.drive_root, &photo.file_path)
-        .map_err(|e| CommandError::Validation {
-            field: "photo.file_path".into(),
-            reason: e,
-        })?;
+    let abs = smriti::services::path_util::safe_existing_path_under_root(
+        &lib.drive_root,
+        &photo.file_path,
+    )
+    .map_err(|e| CommandError::Validation {
+        field: "photo.file_path".into(),
+        reason: e,
+    })?;
     Ok(CopiedPathDto {
         path: abs.display().to_string(),
     })

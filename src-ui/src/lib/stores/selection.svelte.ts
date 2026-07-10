@@ -104,11 +104,17 @@ export function handleCellClick(
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
     selection.toggle(photoId);
+    if (!selection.active() && typeof HTMLElement !== "undefined" && e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.blur();
+    }
     return true;
   }
   if (selection.active()) {
     e.preventDefault();
     selection.toggle(photoId);
+    if (!selection.active() && typeof HTMLElement !== "undefined" && e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.blur();
+    }
     return true;
   }
   return false;

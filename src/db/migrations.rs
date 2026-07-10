@@ -139,9 +139,28 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 27 {
         migrate_v26_to_v27(conn)?;
     }
+    ensure_performance_indexes(conn)?;
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
     Ok(())
+}
+
+fn ensure_performance_indexes(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_photos_timeline_order
+            ON photos(is_trashed, (date_taken IS NULL), date_taken DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_photos_favorite_order
+            ON photos(is_favorite, is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)
+            WHERE is_favorite = TRUE;
+        CREATE INDEX IF NOT EXISTS idx_photos_gps_bounds
+            ON photos(is_trashed, gps_latitude, gps_longitude)
+            WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_faces_review_pending
+            ON faces(user_confirmed, cluster_id, id)
+            WHERE user_confirmed = 0 AND cluster_id IS NOT NULL;
+        "#,
+    )
 }
 
 fn migrate_v26_to_v27(conn: &Connection) -> SqliteResult<()> {
@@ -979,6 +998,106 @@ mod tests {
             .expect("newer schema should produce SchemaTooNewError");
         assert_eq!(schema.db_version, 999);
         assert_eq!(schema.max_supported, MAX_KNOWN_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn run_migrations_adds_timeline_order_index_without_version_bump() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (27);
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                date_taken DATETIME,
+                gps_latitude REAL,
+                gps_longitude REAL,
+                is_favorite BOOLEAN DEFAULT FALSE,
+                is_trashed BOOLEAN DEFAULT FALSE
+            );
+            CREATE TABLE faces (
+                id INTEGER PRIMARY KEY,
+                photo_id INTEGER NOT NULL,
+                cluster_id INTEGER,
+                user_confirmed INTEGER DEFAULT 0
+            );
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let version = get_schema_version(&conn).unwrap();
+        assert_eq!(version, 27);
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_trashed = 0
+                 ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_timeline_order"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM faces
+                 WHERE cluster_id = 10 AND user_confirmed = 0
+                 ORDER BY id ASC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_faces_review_pending"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_favorite = TRUE AND is_trashed = 0
+                 ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_favorite_order"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_trashed = 0
+                   AND gps_latitude IS NOT NULL
+                   AND gps_longitude IS NOT NULL
+                   AND gps_latitude >= 10.0 AND gps_latitude <= 20.0
+                   AND gps_longitude >= 70.0 AND gps_longitude <= 80.0
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_gps_bounds"), "{plan}");
     }
 
     #[test]

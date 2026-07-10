@@ -1,3 +1,10 @@
+<script module lang="ts">
+  const RESOLVED_IMAGE_CACHE_CAP = 300;
+  const resolvedImageCache = new Map<number, string>();
+  const preloadedMediaCache = new Set<number>();
+  const preloadInFlight = new Set<number>();
+</script>
+
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import {
@@ -54,8 +61,6 @@
   let actionBusy = $state(false);
   let loadSeq = 0;
   let mounted = true;
-  const RESOLVED_IMAGE_CACHE_CAP = 200;
-  const resolvedImageCache = new Map<number, string>();
 
   // Mouse-activity fade for viewer chrome (toolbar, chevrons, position,
   // filename, cursor). Resets on every mousemove inside the viewer; if
@@ -223,6 +228,7 @@
       const oldest = resolvedImageCache.keys().next().value;
       if (oldest == null) break;
       resolvedImageCache.delete(oldest);
+      preloadedMediaCache.delete(oldest);
     }
   }
 
@@ -240,12 +246,15 @@
   }
 
   async function preloadPhoto(photoId: number | null) {
-    if (photoId == null || resolvedImageCache.has(photoId)) return;
+    if (photoId == null || preloadedMediaCache.has(photoId) || preloadInFlight.has(photoId)) return;
+    preloadInFlight.add(photoId);
     try {
-      const url = await imageUrlFor(photoId);
-      const p = await photos.get(photoId);
+      const [url, p] = await Promise.all([imageUrlFor(photoId), photos.get(photoId)]);
       if (p.media_type !== "video") await decodeImage(url);
-    } catch {}
+      preloadedMediaCache.add(photoId);
+    } catch {} finally {
+      preloadInFlight.delete(photoId);
+    }
   }
 
   async function load() {
@@ -273,10 +282,17 @@
       // background fallback covers the visible transition. Awaiting
       // decode used to gate the entire UI update on a 100-500ms
       // image read which made arrow-key nav feel sticky on big RAWs.
-      const [p, url] = await Promise.all([photos.get(photoId), imageUrlFor(photoId)]);
+      const urlPromise = imageUrlFor(photoId);
+      const p = await photos.get(photoId);
       if (!mounted || seq !== loadSeq) return;
       photo = p;
-      imageUrl = url;
+      urlPromise
+        .then((url) => {
+          if (mounted && seq === loadSeq && photo?.id === photoId) imageUrl = url;
+        })
+        .catch((e) => {
+          if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+        });
       void call<PersonDto[]>("photos_people_in_photo", { photo_id: photoId })
         .then((nextPeople) => {
           if (mounted && seq === loadSeq) people = nextPeople;
@@ -686,6 +702,9 @@
       onmouseenter={onViewerEnter}
       onmouseleave={onViewerLeave}
     >
+      {#if photo && posterUrl && !isVideo}
+        <img class="viewer-preview" src={posterUrl} alt="" aria-hidden="true" />
+      {/if}
       {#if error}
         <p class="error">{error}</p>
       {:else if photo && imageUrl}
@@ -714,6 +733,8 @@
             alt={photo.file_name}
             rotate={totalRotation}
             preferredMode={atActual ? "actual" : "fit"}
+            intrinsicWidth={photo.width}
+            intrinsicHeight={photo.height}
             bind:api={zoomApi}
           />
         {/if}
@@ -1038,6 +1059,18 @@
     cursor: none;
   }
   .viewer.active { cursor: default; }
+
+  .viewer-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: blur(18px);
+    transform: scale(1.035);
+    opacity: 0.48;
+    pointer-events: none;
+  }
 
   .loading {
     position: absolute;

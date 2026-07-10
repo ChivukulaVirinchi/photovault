@@ -11,6 +11,7 @@ use smriti::db::connection::{db_path_for, open_secondary};
 use smriti::db::photo_repo::PhotoRepo;
 use smriti::services::semantic::SemanticSearchService;
 
+use super::library::spawn_semantic_warmup;
 use crate::dto::{JobIdDto, PhotoSummaryDto, SemanticStatusDto};
 use crate::events::{JobProgress, EV_SEMANTIC_COMPLETE, EV_SEMANTIC_PROGRESS};
 use crate::jobs::{self, emit};
@@ -33,6 +34,21 @@ pub async fn semantic_status(state: State<'_, AppState>) -> CommandResult<Semant
         message: format!("semantic status worker failed: {e}"),
     })??;
     Ok(status.into())
+}
+
+#[tauri::command]
+pub async fn semantic_warm_runtime(state: State<'_, AppState>) -> CommandResult<()> {
+    let (drive_root, semantic_index, semantic_runner) = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        (
+            lib.drive_root.clone(),
+            lib.semantic_index.clone(),
+            lib.semantic_runner.clone(),
+        )
+    };
+    spawn_semantic_warmup(drive_root, semantic_index, semantic_runner);
+    Ok(())
 }
 
 #[tauri::command]

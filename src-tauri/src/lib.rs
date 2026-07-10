@@ -125,6 +125,7 @@ pub fn run() {
             commands::search::search_recent_clear,
             // semantic search
             commands::semantic::semantic_status,
+            commands::semantic::semantic_warm_runtime,
             commands::semantic::semantic_install_model,
             commands::semantic::semantic_start_indexing,
             commands::semantic::semantic_similar_photos,

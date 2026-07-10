@@ -1,3 +1,17 @@
+<script module lang="ts">
+  import type { SearchResults as CachedSearchResults } from "../lib/api/all";
+
+  let cachedSearch:
+    | {
+        driveRoot: string | null;
+        q: string;
+        results: CachedSearchResults | null;
+        visiblePhotoLimit: number;
+        scrollTop: number;
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
@@ -13,7 +27,7 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check } from "lucide-svelte";
+  import { Check, X } from "lucide-svelte";
   import type { SearchResults } from "../lib/api/all";
 
   interface Props {
@@ -23,22 +37,38 @@
   }
   let { initialQuery = "" }: Props = $props();
 
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentSearchCache = cachedSearch?.driveRoot === currentDriveRoot ? cachedSearch : null;
   // svelte-ignore state_referenced_locally
-  let q = $state(initialQuery);
-  let results = $state<SearchResults | null>(null);
+  const useSearchCache = currentSearchCache != null && (!initialQuery || currentSearchCache.q === initialQuery);
+
+  // svelte-ignore state_referenced_locally
+  let q = $state(initialQuery || currentSearchCache?.q || "");
+  let results = $state<SearchResults | null>(useSearchCache ? currentSearchCache?.results ?? null : null);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
   let debounceId: number | undefined;
   let inputEl: HTMLInputElement | undefined;
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let actionBusy = $state(false);
   let runSeq = 0;
   let mounted = true;
   let lastInitialQuery = $state<string | null>(null);
-  let visiblePhotoLimit = $state(200);
+  let visiblePhotoLimit = $state(useSearchCache ? currentSearchCache?.visiblePhotoLimit ?? 200 : 200);
   const visiblePhotos = $derived(results?.photos.slice(0, visiblePhotoLimit) ?? []);
   const visiblePhotoIds = $derived(visiblePhotos.map((p) => p.photo_id));
   const selectedResultIds = $derived(selection.listIn(results?.photo_ids ?? []));
+
+  function saveSearchCache() {
+    cachedSearch = {
+      driveRoot: currentDriveRoot,
+      q,
+      results,
+      visiblePhotoLimit,
+      scrollTop: pageEl?.scrollTop ?? cachedSearch?.scrollTop ?? 0,
+    };
+  }
 
   async function run() {
     const seq = ++runSeq;
@@ -50,6 +80,7 @@
       results = null;
       loading = false;
       selection.clear();
+      saveSearchCache();
       return;
     }
     loading = true;
@@ -60,6 +91,7 @@
       visiblePhotoLimit = 200;
       if (results) browseContext.set(`search:${query}`, results.photo_ids);
       selection.clear();
+      saveSearchCache();
     } catch (e) {
       if (mounted && seq === runSeq) {
         results = null;
@@ -67,6 +99,7 @@
         selection.clear();
         if (browseContext.source?.startsWith("search:")) browseContext.clear();
         error = commandErrorMessage(e);
+        saveSearchCache();
       }
     }
     finally {
@@ -79,6 +112,26 @@
     debounceId = window.setTimeout(run, 250);
   }
 
+  function clearSearch() {
+    if (debounceId) window.clearTimeout(debounceId);
+    debounceId = undefined;
+    q = "";
+    results = null;
+    visiblePhotoLimit = 200;
+    error = null;
+    loading = false;
+    selection.clear();
+    if (browseContext.source?.startsWith("search:")) browseContext.clear();
+    saveSearchCache();
+    try {
+      if (window.location.hash !== "#/search") {
+        history.replaceState(history.state ?? {}, "", "#/search");
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      }
+    } catch {}
+    inputEl?.focus();
+  }
+
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     if (!results) return;
     results = {
@@ -87,6 +140,7 @@
         p.photo_id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
       )),
     };
+    saveSearchCache();
   }
 
   function patchAlbumCover(photoId: number, thumbnailPath: string) {
@@ -97,10 +151,21 @@
         a.cover_photo_id === photoId ? { ...a, cover_thumbnail_path: thumbnailPath } : a
       )),
     };
+    saveSearchCache();
   }
 
   function onCellClick(e: MouseEvent, photoId: number) {
-    handleCellClick(e, photoId, visiblePhotoIds);
+    const ids = results?.photo_ids ?? visiblePhotoIds;
+    const handled = handleCellClick(e, photoId, ids);
+    if (!handled) {
+      browseContext.set(`search:${q.trim()}`, ids);
+      saveSearchCache();
+    }
+  }
+
+  function showMorePhotos() {
+    visiblePhotoLimit += 200;
+    saveSearchCache();
   }
 
   async function bulkTrash() {
@@ -130,6 +195,7 @@
         photo_ids: results.photo_ids.filter((id) => !drop.has(id)),
         photos: results.photos.filter((p) => !drop.has(p.photo_id)),
       };
+      saveSearchCache();
       browseContext.remove(ids);
       selection.clear();
       toasts.undoable(
@@ -151,6 +217,7 @@
             photo_ids: nextPhotoIds,
             photos: nextPhotos,
           };
+          saveSearchCache();
           browseContext.set(`search:${query}`, results.photo_ids);
         },
       );
@@ -175,13 +242,25 @@
 
   onMount(() => {
     mounted = true;
-    inputEl?.focus();
-    if (q.trim()) run();
+    if (results) {
+      browseContext.set(`search:${q.trim()}`, results.photo_ids);
+      requestAnimationFrame(() => {
+        if (mounted && pageEl && currentSearchCache) pageEl.scrollTop = currentSearchCache.scrollTop;
+      });
+    } else {
+      inputEl?.focus();
+      if (q.trim()) run();
+    }
+    const el = pageEl;
+    const onScroll = () => saveSearchCache();
+    el?.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("keydown", onGlobalKey);
     return () => {
+      saveSearchCache();
       mounted = false;
       runSeq += 1;
       if (debounceId) window.clearTimeout(debounceId);
+      el?.removeEventListener("scroll", onScroll);
       window.removeEventListener("keydown", onGlobalKey);
     };
   });
@@ -194,6 +273,9 @@
     if (initialQuery === lastInitialQuery) return;
     lastInitialQuery = initialQuery;
     q = initialQuery;
+    results = null;
+    visiblePhotoLimit = 200;
+    saveSearchCache();
     if (debounceId) window.clearTimeout(debounceId);
     void run();
   });
@@ -214,12 +296,17 @@
       placeholder='Try a name, place, "Goa 2023", or "beach sunset"'
     />
     {#if loading}<span class="loading mono">…</span>{/if}
+    {#if q}
+      <button class="clear-search" type="button" onclick={clearSearch} aria-label="Clear search" title="Clear search">
+        <X size={14} strokeWidth={2} />
+      </button>
+    {/if}
   </div>
 </div>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page" use:marqueeSelect={{ getAllIds: () => visiblePhotoIds }}>
+<div class="page" bind:this={pageEl} use:marqueeSelect={{ getAllIds: () => visiblePhotoIds }}>
   {#if results}
     {#if results.interpreted.length > 0}
       <div class="chips interpreted" aria-label="Interpreted filters">
@@ -298,7 +385,7 @@
             Photos · {Math.min(visiblePhotoLimit, results.photos.length)} / {results.photos.length}
           </h3>
           {#if visiblePhotoLimit < results.photos.length}
-            <button class="ghost small-action" onclick={() => (visiblePhotoLimit += 200)}>
+            <button class="ghost small-action" onclick={showMorePhotos}>
               Show more
             </button>
           {/if}
@@ -395,6 +482,23 @@
     color: var(--ink-faint);
   }
   .loading { color: var(--ink-muted); }
+  .clear-search {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .clear-search:hover {
+    background: var(--bg-elev);
+    color: var(--ink);
+  }
 
   .page { padding: var(--s-5) var(--s-7); flex: 1; overflow-y: auto; }
   .pv-photo-cell .check {

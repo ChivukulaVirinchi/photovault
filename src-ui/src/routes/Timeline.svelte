@@ -17,6 +17,8 @@
         memoryCards: CachedMemoryCard[];
       }
     | null = null;
+  const cachedTimelineScrollTops = new Map<string, number>();
+  const cachedTimelineThumbImages = new Map<string, HTMLImageElement>();
 </script>
 
 <script lang="ts">
@@ -51,6 +53,11 @@
   const scrollStorageKey = `scroll:/timeline:${currentDriveRoot ?? "closed"}`;
   const returnAnchorKey = `return-anchor:/timeline:${currentDriveRoot ?? "closed"}`;
   const thumbnailPromptDismissKey = `dismiss:/timeline-thumbnails:${currentDriveRoot ?? "closed"}`;
+  const initialScrollTop = readSavedTimelineScrollTop();
+  const hasInitialReturnAnchor = (() => {
+    try { return sessionStorage.getItem(returnAnchorKey) != null; }
+    catch { return false; }
+  })();
 
   /// Zoom levels — Apple-Photos-style. `day` is default; `all` is the
   /// densest packed view with no headers.
@@ -114,6 +121,10 @@
     !thumbnailPromptDismissed && !thumbnailRunning && !scanRunning && pendingThumbnails > 0,
   );
 
+  function sameLibrary(root: string | null): boolean {
+    return libraryStore.isOpen && libraryStore.driveRoot === root;
+  }
+
   async function refreshPendingCounts() {
     try {
       const [m, t] = await Promise.all([
@@ -129,24 +140,26 @@
   }
 
   async function resumeMetadata() {
+    const root = currentDriveRoot;
     try {
       const r = await library.startMetadataExtraction();
-      if (!mounted) return;
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "metadata");
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || !sameLibrary(root)) return;
       const msg = commandErrorMessage(e);
       toasts.error(`Couldn't resume metadata: ${msg}`);
     }
   }
 
   async function resumeThumbnails() {
+    const root = currentDriveRoot;
     try {
       const r = await library.startThumbnailPass();
-      if (!mounted) return;
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "thumbnails");
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || !sameLibrary(root)) return;
       const msg = commandErrorMessage(e);
       toasts.error(`Couldn't resume thumbnails: ${msg}`);
     }
@@ -159,7 +172,7 @@
   let scrubHover = $state(false);
   let scrubDragging = $state(false);
   let scrubY = $state(0);                // mouse Y while hovering the track
-  let scrollTop = $state(currentTimelineCache?.scrollTop ?? 0);
+  let scrollTop = $state(initialScrollTop);
 
   // Multi-select dialog
   let showAddDialog = $state(false);
@@ -181,6 +194,64 @@
       scrollTop,
       memoryCards,
     };
+  }
+
+  function readSavedTimelineScrollTop() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    const cached = cachedTimelineScrollTops.get(scrollStorageKey);
+    if (cached != null && cached > 0) return cached;
+    return currentTimelineCache?.scrollTop ?? 0;
+  }
+
+  function rememberTimelineScrollTop(top: number) {
+    const next = Math.max(0, top);
+    cachedTimelineScrollTops.set(scrollStorageKey, next);
+    try { sessionStorage.setItem(scrollStorageKey, String(next)); } catch {}
+  }
+
+  function currentElementScrollTop(el = scrollEl) {
+    const domTop = el?.scrollTop ?? scrollTop;
+    return domTop <= 0 && scrollTop > 0 ? scrollTop : domTop;
+  }
+
+  function keepVisibleTimelineThumbsWarm() {
+    if (typeof Image === "undefined") return;
+    const visibleRows = rows.slice(v.first, v.last);
+    for (const row of visibleRows) {
+      if (row.kind !== "photos") continue;
+      for (const photo of row.photos) {
+        const url = thumbUrl(libraryStore.driveRoot, photo.thumbnail_path);
+        if (!url || cachedTimelineThumbImages.has(url)) continue;
+        const img = new Image();
+        img.decoding = "async";
+        img.src = url;
+        cachedTimelineThumbImages.set(url, img);
+      }
+    }
+    while (cachedTimelineThumbImages.size > 500) {
+      const oldest = cachedTimelineThumbImages.keys().next().value;
+      if (oldest == null) break;
+      cachedTimelineThumbImages.delete(oldest);
+    }
+  }
+
+  function snapshotTimelineScroll(el = scrollEl) {
+    scrollTop = currentElementScrollTop(el);
+    v.setScrollTop(scrollTop);
+    keepVisibleTimelineThumbsWarm();
+    saveTimelineCache();
+    rememberTimelineScrollTop(scrollTop);
+  }
+
+  function setTimelineScrollTop(top: number) {
+    const next = Math.max(0, top);
+    if (scrollEl) scrollEl.scrollTop = next;
+    scrollTop = next;
+    v.setScrollTop(next);
+    saveTimelineCache();
+    rememberTimelineScrollTop(next);
   }
 
   const pendingThumbnailPatches = new Map<number, string>();
@@ -205,6 +276,7 @@
     photoId: number;
     windowStartIndex: number;
     scrollTop: number;
+    viewportOffset?: number;
   };
 
   function readTimelineReturnAnchor(): TimelineReturnAnchor | null {
@@ -224,6 +296,9 @@
         photoId: Number(parsed.photoId),
         windowStartIndex: Math.max(0, Number(parsed.windowStartIndex)),
         scrollTop: Math.max(0, Number(parsed.scrollTop)),
+        viewportOffset: Number.isFinite(parsed.viewportOffset)
+          ? Number(parsed.viewportOffset)
+          : undefined,
       };
     } catch {
       try { sessionStorage.removeItem(returnAnchorKey); } catch {}
@@ -232,10 +307,14 @@
   }
 
   function rememberTimelineReturnAnchor(photoId: number) {
+    const rowIdx = rowIndexForPhoto(photoId);
+    const rowOffset = rowIdx >= 0 ? v.offsets[rowIdx] : undefined;
+    const viewportOffset =
+      scrollEl && rowOffset != null ? rowOffset - scrollEl.scrollTop : undefined;
     try {
       sessionStorage.setItem(
         returnAnchorKey,
-        JSON.stringify({ photoId, windowStartIndex, scrollTop }),
+        JSON.stringify({ photoId, windowStartIndex, scrollTop, viewportOffset }),
       );
     } catch {}
   }
@@ -388,17 +467,18 @@
 
   async function startScan() {
     if (scanRunning) return;
+    const root = currentDriveRoot;
     const placeholderId = `pending-scan-${Date.now()}`;
     jobs.register(placeholderId, "scan");
     toasts.success("Scanning library — feel free to navigate away.");
     try {
       const r = await library.startScan(false);
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "scan");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (!mounted || !sameLibrary(root)) return;
       const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start scan: ${msg}`);
@@ -539,9 +619,19 @@
     error = null;
     lastJumpOffset = offset;
     try {
-      const page = await photos.listAt({ offset, limit: PAGE_LIMIT });
+      let pageOffset = offset;
+      let page = await photos.listAt({ offset: pageOffset, limit: PAGE_LIMIT });
       if (!mounted || seq !== pageSeq) return false;
-      windowStartIndex = offset;
+      if (page.items.length === 0 && offset > 0 && page.total != null && page.total > 0) {
+        const fallbackOffset = Math.floor((page.total - 1) / PAGE_LIMIT) * PAGE_LIMIT;
+        if (fallbackOffset !== pageOffset) {
+          pageOffset = fallbackOffset;
+          page = await photos.listAt({ offset: pageOffset, limit: PAGE_LIMIT });
+          if (!mounted || seq !== pageSeq) return false;
+        }
+      }
+      lastJumpOffset = pageOffset;
+      windowStartIndex = pageOffset;
       items = page.items;
       browseContext.set("timeline", page.items.map((p) => p.id));
       nextCursor = page.next_cursor;
@@ -551,7 +641,7 @@
       if (opts.scrollToTopSpacer !== false) {
         requestAnimationFrame(() => {
           if (!mounted || !scrollEl || seq !== pageSeq) return;
-          scrollEl.scrollTop = topSpacerHeight;
+          setTimelineScrollTop(topSpacerHeight);
         });
       }
       return true;
@@ -570,9 +660,16 @@
     const windowEnd = windowStartIndex + items.length;
     const lead = Math.floor(PAGE_LIMIT * 0.65);
     if (targetIndex < Math.max(0, windowStartIndex - lead) || targetIndex > windowEnd + lead) {
-      void loadAroundOffset(targetIndex);
+      const keepTop = scrollTop;
+      void loadAroundOffset(targetIndex, { scrollToTopSpacer: false }).then((ok) => {
+        if (ok && mounted) requestAnimationFrame(() => setTimelineScrollTop(keepTop));
+      });
     }
   }
+
+  $effect(() => {
+    if (!selection.active()) focusedIdx = -1;
+  });
 
   $effect(() => {
     photoVisibility.version;
@@ -593,14 +690,22 @@
   });
 
   $effect(() => {
-    if (!scrollEl) return;
+    const el = scrollEl;
+    if (!el) return;
+    if (!hasInitialReturnAnchor && initialScrollTop > 0 && el.scrollTop === 0) {
+      scrollTop = initialScrollTop;
+      el.scrollTop = initialScrollTop;
+      v.setScrollTop(initialScrollTop);
+      saveTimelineCache();
+      rememberTimelineScrollTop(initialScrollTop);
+    }
     const ro = new ResizeObserver(() => {
-      const r = scrollEl!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
       containerW = r.width - 14; // leave room for the scrubber gutter
       containerH = r.height;
     });
-    ro.observe(scrollEl);
-    const r = scrollEl.getBoundingClientRect();
+    ro.observe(el);
+    const r = el.getBoundingClientRect();
     containerW = r.width - 14;
     containerH = r.height;
     let scrollRaf = 0;
@@ -608,7 +713,7 @@
       if (scrollRaf !== 0) return;
       scrollRaf = requestAnimationFrame(() => {
         scrollRaf = 0;
-        scrollTop = scrollEl!.scrollTop;
+        scrollTop = el.scrollTop;
         if (marqueeStart && marqueePointer) {
           marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
           queueMarqueeUpdate();
@@ -616,43 +721,53 @@
         saveTimelineCache();
         // Persist so that returning from PhotoDetail lands the user back
         // at the same row instead of the top of the timeline.
-        try { sessionStorage.setItem(scrollStorageKey, String(scrollTop)); } catch {}
+        rememberTimelineScrollTop(scrollTop);
         hydrateScrolledWindow();
       });
     };
-    scrollEl.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      snapshotTimelineScroll(el);
       if (scrollRaf !== 0) cancelAnimationFrame(scrollRaf);
       ro.disconnect();
-      scrollEl?.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scroll", onScroll);
     };
   });
 
   // Restore scroll position once the virtualizer has built enough content
   // to reach the saved offset. Runs as a $effect so it re-checks every
   // time totalHeight grows (loadMore appends pages).
-  let scrollRestored = $state(false);
+  let scrollRestored = $state(hasInitialReturnAnchor);
   $effect(() => {
     if (scrollRestored || !scrollEl) return;
-    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
-    const target = raw ? parseInt(raw, 10) : 0;
+    const target = readSavedTimelineScrollTop();
     if (!Number.isFinite(target) || target <= 0) {
       scrollRestored = true;
       return;
     }
     if (estimatedTotalHeight >= target + 16) {
-      scrollEl.scrollTop = target;
       scrollRestored = true;
       if (total != null && total > PAGE_LIMIT) {
-        const offset = Math.floor((target / Math.max(1, estimatedTotalHeight)) * total);
-        void loadAroundOffset(offset);
-      } else {
-        hydrateScrolledWindow();
+        const targetIndex = Math.floor((target / Math.max(1, estimatedTotalHeight)) * total);
+        const windowEnd = windowStartIndex + items.length;
+        const lead = Math.floor(PAGE_LIMIT * 0.65);
+        if (
+          targetIndex < Math.max(0, windowStartIndex - lead) ||
+          targetIndex > windowEnd + lead
+        ) {
+          void loadAroundOffset(targetIndex, { scrollToTopSpacer: false }).then((ok) => {
+            if (ok && mounted) requestAnimationFrame(() => setTimelineScrollTop(target));
+          });
+          return;
+        }
       }
+      setTimelineScrollTop(target);
     } else if (total != null && total > PAGE_LIMIT) {
       scrollRestored = true;
       const offset = Math.floor((target / Math.max(1, estimatedTotalHeight)) * total);
-      void loadAroundOffset(offset);
+      void loadAroundOffset(offset, { scrollToTopSpacer: false }).then((ok) => {
+        if (ok && mounted) requestAnimationFrame(() => setTimelineScrollTop(target));
+      });
     } else if (hasMore && !loading) {
       loadMore();
     } else if (!hasMore) {
@@ -673,10 +788,6 @@
       restored.then((ok) => {
         if (mounted && !ok && items.length === 0) loadMore();
       });
-    }
-    if (!hasReturnAnchor && currentTimelineCache?.scrollTop && scrollEl) {
-      scrollEl.scrollTop = currentTimelineCache.scrollTop;
-      scrollRestored = true;
     }
     if (memoryCards.length === 0) {
       memories.today().then((c) => {
@@ -750,6 +861,7 @@
     }));
 
     return () => {
+      snapshotTimelineScroll();
       mounted = false;
       pageSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
@@ -757,6 +869,7 @@
       if (throttle != null) clearTimeout(throttle);
       if (scanRefresh != null) clearTimeout(scanRefresh);
       if (zoomTimer != null) clearTimeout(zoomTimer);
+      cancelMarqueeDrag();
       Promise.allSettled(unlistens).then((results) => {
         for (const result of results) {
           if (result.status === "fulfilled") result.value();
@@ -803,6 +916,7 @@
   let marqueeRaf = 0;
   let marqueeAutoScrollRaf = 0;
   let marqueeScrollVelocity = 0;
+  let marqueePointerId: number | null = null;
 
   function marqueePointFromClient(clientX: number, clientY: number): { x: number; y: number } {
     if (!scrollEl) return { x: clientX, y: clientY };
@@ -868,6 +982,7 @@
     marqueePointer = { x: e.clientX, y: e.clientY };
     marqueeStart = marqueePointFromClient(e.clientX, e.clientY);
     marqueeCurrent = marqueeStart;
+    marqueePointerId = e.pointerId;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
@@ -878,9 +993,8 @@
     updateMarqueeAutoScroll();
     queueMarqueeUpdate();
   }
-  function onScrollPointerUp(e: PointerEvent) {
+  function cancelMarqueeDrag() {
     if (!marqueeStart) return;
-    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
     if (marqueeRaf !== 0) {
       cancelAnimationFrame(marqueeRaf);
       marqueeRaf = 0;
@@ -890,9 +1004,18 @@
       marqueeAutoScrollRaf = 0;
     }
     marqueeScrollVelocity = 0;
+    if (marqueePointerId != null && scrollEl) {
+      try { scrollEl.releasePointerCapture(marqueePointerId); } catch {}
+    }
+    marqueePointerId = null;
     marqueeStart = null;
     marqueeCurrent = null;
     marqueePointer = null;
+  }
+  function onScrollPointerUp(e: PointerEvent) {
+    if (!marqueeStart) return;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+    cancelMarqueeDrag();
   }
   function updateMarqueeSelection() {
     if (!scrollEl || !marqueeRect) return;
@@ -1038,7 +1161,8 @@
       const rowOffset = v.offsets[rowIdx] ?? 0;
       const rowHeight = rows[rowIdx]?.height ?? rowH;
       const target = Math.max(0, rowOffset - (containerH - rowHeight) / 2);
-      scrollEl.scrollTo({ top: target, behavior });
+      if (opts.smooth) scrollEl.scrollTo({ top: target, behavior });
+      else setTimelineScrollTop(target);
       return;
     }
     // Row not in `rows` yet (still paginating). Wait one frame and try
@@ -1050,8 +1174,25 @@
       const rowOffset = v.offsets[retryIdx] ?? 0;
       const rowHeight = rows[retryIdx]?.height ?? rowH;
       const target = Math.max(0, rowOffset - (containerH - rowHeight) / 2);
-      scrollEl.scrollTo({ top: target, behavior });
+      if (opts.smooth) scrollEl.scrollTo({ top: target, behavior });
+      else setTimelineScrollTop(target);
     });
+  }
+
+  function restorePhotoIdViewportOffset(
+    photoId: number,
+    viewportOffset: number | undefined,
+  ) {
+    if (!scrollEl) return false;
+    const rowIdx = rowIndexForPhoto(photoId);
+    if (rowIdx < 0) return false;
+    const rowOffset = v.offsets[rowIdx] ?? 0;
+    if (Number.isFinite(viewportOffset)) {
+      setTimelineScrollTop(rowOffset - Number(viewportOffset));
+      return true;
+    }
+    scrollPhotoIdIntoView(photoId);
+    return true;
   }
 
   async function restoreTimelineReturnAnchor() {
@@ -1060,18 +1201,21 @@
     const loadedIdx = items.findIndex((p) => p.id === anchor.photoId);
     if (loadedIdx < 0) {
       const loaded = await loadAroundOffset(anchor.windowStartIndex, { scrollToTopSpacer: false });
-      if (!loaded || !mounted) return false;
+      if (!loaded || !mounted) {
+        clearTimelineReturnAnchor();
+        return false;
+      }
     }
     const idx = items.findIndex((p) => p.id === anchor.photoId);
     if (idx < 0) {
-      if (scrollEl) scrollEl.scrollTop = anchor.scrollTop;
+      setTimelineScrollTop(anchor.scrollTop);
       clearTimelineReturnAnchor();
       return false;
     }
     focusedIdx = idx;
     requestAnimationFrame(() => {
       if (!mounted) return;
-      scrollPhotoIdIntoView(anchor.photoId);
+      restorePhotoIdViewportOffset(anchor.photoId, anchor.viewportOffset);
       clearTimelineReturnAnchor();
     });
     return true;
@@ -1150,7 +1294,7 @@
     const ratio = Math.min(1, Math.max(0, scrollTop / scrollableMax));
     return ratio * (trackHeight - 28);
   });
-  const scrubVisible = $derived(scrubHover || scrubDragging || (v.totalHeight > containerH));
+  const scrubVisible = $derived(scrubHover || scrubDragging || (estimatedTotalHeight > containerH));
 
   /// What bucket are we currently scrolled into? Looks up the row that
   /// covers `scrollTop`, walks back to the nearest label.
@@ -1316,7 +1460,7 @@
                     <img
                       src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""}
                       alt=""
-                      loading="lazy"
+                      loading="eager"
                       decoding="async"
                     />
                   {/if}

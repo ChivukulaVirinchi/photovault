@@ -62,12 +62,34 @@
   const assetsJob = $derived(jobs.byKind("assets"));
   const semanticRunning = $derived(jobs.isRunning("semantic"));
   const semanticJob = $derived(jobs.byKind("semantic"));
-  const visualSearchReady = $derived(Boolean(semanticStatus?.assets_installed && semanticStatus?.onnx_runtime_installed));
-  const visualSearchMissingRuntime = $derived(Boolean(semanticStatus?.assets_installed && !semanticStatus?.onnx_runtime_installed));
+  function assetReady(id: string): boolean {
+    return Boolean(assets?.assets.some(
+      (item) => item.id === id && (item.status === "active" || item.status === "extra"),
+    ));
+  }
+
+  const semanticModelInstalled = $derived(
+    semanticStatus?.assets_installed ??
+      (assetReady("vision.semantic.visual") && assetReady("vision.semantic.text")),
+  );
+  const onnxRuntimeInstalled = $derived(
+    semanticStatus?.onnx_runtime_installed ??
+      Boolean(assets?.assets.some((item) => item.id === "runtime.onnx" && item.status === "active")),
+  );
+  const visualSearchReady = $derived(Boolean(semanticModelInstalled && onnxRuntimeInstalled));
+  const visualSearchMissingRuntime = $derived(Boolean(semanticModelInstalled && !onnxRuntimeInstalled));
   const visualSearchStatus = $derived(
     visualSearchReady ? "ready" : visualSearchMissingRuntime ? "runtime missing" : "missing",
   );
   const hasLibrary = $derived(libraryStore.isOpen);
+
+  function sameLibrary(root: string | null): boolean {
+    return hasLibrary && libraryStore.driveRoot === root;
+  }
+
+  function sameVisibleLibrary(root: string | null): boolean {
+    return mounted && sameLibrary(root);
+  }
 
   // React to backfill completion via the global store. Same reasoning
   // as Albums.svelte: a per-page Tauri `listen()` races with fast
@@ -176,15 +198,18 @@
 
   async function backfillGeocoding(force = false) {
     if (backfilling || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     const placeholderId = `pending-geocoding-${Date.now()}`;
     jobs.register(placeholderId, "geocoding");
     toasts.success(force ? "Refreshing all place names…" : "Filling in place names…");
     try {
       const r = await geocoding.backfill(force);
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "geocoding");
     } catch (e) {
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
@@ -223,6 +248,7 @@
 
   async function refreshPhotoDates() {
     if (refreshingDates || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     if (
       !confirm(
         "Refresh capture dates for every photo and video?\n\nSmriti will re-read embedded metadata and strict filename dates, then use file modified time only as a fallback. You can keep using the app while it runs.",
@@ -235,15 +261,18 @@
     try {
       const r = await library.refreshPhotoDates();
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "metadata");
     } catch (e) {
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
 
   async function regenerateThumbs() {
     if (regeneratingThumbs || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     if (
       !confirm(
         "Re-generate every thumbnail at the current quality?\n\nThis overwrites the cached JPEGs on disk and takes a while on big libraries (each photo is decoded + resampled once). You can keep using the app while it runs.",
@@ -256,9 +285,11 @@
     try {
       const r = await library.regenerateThumbnails();
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "thumbnails");
     } catch (e) {
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
     }
   }
@@ -310,6 +341,11 @@
     }
   }
 
+  async function recheckVisualSearch() {
+    if (hasLibrary) await loadSemanticStatus();
+    else await loadAssets();
+  }
+
   async function loadHealth() {
     const seq = ++healthSeq;
     try {
@@ -353,15 +389,18 @@
 
   async function startSemanticIndexing() {
     if (semanticRunning || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     const placeholderId = `pending-semantic-index-${Date.now()}`;
     jobs.register(placeholderId, "semantic");
     toasts.success("Indexing visual search...");
     try {
       const r = await semantic.startIndexing();
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "semantic");
     } catch (e) {
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       toasts.error(`Couldn't start visual search indexing: ${commandErrorMessage(e)}`);
     }
   }
@@ -386,6 +425,7 @@
 
   async function addExclusion() {
     if (exclusionsActing || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     let selected: string | string[] | null;
     try {
       selected = await openDialog({
@@ -399,10 +439,12 @@
     }
     const path = Array.isArray(selected) ? selected[0] : selected;
     if (!path) return;
+    if (!sameLibrary(root)) return;
 
     exclusionsActing = true;
     try {
       const preview = await library.exclusions.preview(path);
+      if (!sameLibrary(root)) return;
       const count = preview.indexed_count;
       const itemText = count === 1 ? "1 indexed item" : `${count.toLocaleString()} indexed items`;
       if (
@@ -411,27 +453,32 @@
         )
       )
         return;
+      if (!sameLibrary(root)) return;
       await library.exclusions.add(path);
+      if (!sameLibrary(root)) return;
       await loadExclusions();
       toasts.success(`Excluded ${preview.relative_path}`);
     } catch (e) {
-      toasts.error(`Couldn't exclude folder: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Couldn't exclude folder: ${commandErrorMessage(e)}`);
     } finally {
-      exclusionsActing = false;
+      if (sameVisibleLibrary(root)) exclusionsActing = false;
     }
   }
 
   async function removeExclusion(relativePath: string) {
     if (exclusionsActing || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     exclusionsActing = true;
     try {
       await library.exclusions.remove(relativePath);
+      if (!sameLibrary(root)) return;
       await loadExclusions();
+      if (!sameLibrary(root)) return;
       toasts.success("Exclusion removed. Run scan to index this folder again.");
     } catch (e) {
-      toasts.error(`Couldn't remove exclusion: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Couldn't remove exclusion: ${commandErrorMessage(e)}`);
     } finally {
-      exclusionsActing = false;
+      if (sameVisibleLibrary(root)) exclusionsActing = false;
     }
   }
 
@@ -464,14 +511,16 @@
 
   async function refreshStacks() {
     if (refreshingStacks || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     refreshingStacks = true;
     try {
       const result = await stacks.refresh();
+      if (!sameLibrary(root)) return;
       toasts.success(`${result.stacks_found} ${result.stacks_found === 1 ? "stack" : "stacks"} ready`);
     } catch (e) {
-      toasts.error(`Couldn't refresh stacks: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Couldn't refresh stacks: ${commandErrorMessage(e)}`);
     } finally {
-      refreshingStacks = false;
+      if (sameVisibleLibrary(root)) refreshingStacks = false;
     }
   }
 
@@ -481,6 +530,7 @@
 
   async function runFacesFromScratch() {
     if (acting || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     if (
       !confirm(
         "Wipe every detected face, every cluster, and every face crop on disk, then re-run face detection?\n\nThis is irreversible. Names you've assigned to clusters will be lost.",
@@ -490,6 +540,7 @@
     acting = true;
     try {
       const r = await people.resetAll();
+      if (!sameLibrary(root)) return;
       toasts.success(
         `Reset ${r.faces_dropped.toLocaleString()} faces and ${r.clusters_dropped.toLocaleString()} clusters. Starting fresh detection…`,
       );
@@ -500,20 +551,23 @@
       try {
         const j = await people.startProcessing();
         jobs.dismiss(placeholderId);
+        if (!sameLibrary(root)) return;
         jobs.register(j.job_id, "faces");
       } catch (e) {
         jobs.dismiss(placeholderId);
+        if (!sameVisibleLibrary(root)) return;
         toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
       }
     } catch (e) {
-      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
-      acting = false;
+      if (sameVisibleLibrary(root)) acting = false;
     }
   }
 
   async function resetFaceClusters() {
     if (acting || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     if (
       !confirm(
         "Drop every cluster and re-cluster from existing face embeddings?\n\nThis keeps the detected faces themselves but throws away grouping decisions and any names you've assigned. Useful when you've changed the clustering threshold.",
@@ -523,6 +577,7 @@
     acting = true;
     try {
       const r = await people.resetClusters();
+      if (!sameLibrary(root)) return;
       toasts.success(
         `Cleared ${r.clusters_dropped.toLocaleString()} cluster${r.clusters_dropped === 1 ? "" : "s"}. Re-clustering…`,
       );
@@ -531,20 +586,23 @@
       try {
         const j = await people.startProcessing();
         jobs.dismiss(placeholderId);
+        if (!sameLibrary(root)) return;
         jobs.register(j.job_id, "faces");
       } catch (e) {
         jobs.dismiss(placeholderId);
+        if (!sameVisibleLibrary(root)) return;
         toasts.error(`Couldn't start: ${commandErrorMessage(e)}`);
       }
     } catch (e) {
-      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
-      acting = false;
+      if (sameVisibleLibrary(root)) acting = false;
     }
   }
 
   async function resetSuggestions() {
     if (acting || !hasLibrary) return;
+    const root = libraryStore.driveRoot;
     if (
       !confirm(
         "Wipe every album suggestion, including ones you've already dismissed?\n\nUseful if you reflexively dismissed everything early on.",
@@ -554,13 +612,14 @@
     acting = true;
     try {
       const r = await albums.suggestions.resetAll();
+      if (!sameLibrary(root)) return;
       toasts.success(
         `Cleared ${r.dropped.toLocaleString()} suggestion${r.dropped === 1 ? "" : "s"}. Run Detect in Albums to repopulate.`,
       );
     } catch (e) {
-      toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
+      if (sameVisibleLibrary(root)) toasts.error(`Reset failed: ${commandErrorMessage(e)}`);
     } finally {
-      acting = false;
+      if (sameVisibleLibrary(root)) acting = false;
     }
   }
 </script>
@@ -831,13 +890,13 @@
           <p class="hint blurb">Open a library to see visual search status.</p>
         {/if}
         <div class="asset-actions">
-          <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticStatus?.assets_installed}>
+          <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticModelInstalled}>
             {semanticRunning ? "Working..." : "Download visual model"}
           </button>
           <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
             {semanticRunning ? "Indexing..." : "Index visual search"}
           </button>
-          <button class="ghost" onclick={loadSemanticStatus} disabled={semanticRunning}>
+          <button class="ghost" onclick={recheckVisualSearch} disabled={semanticRunning || assetsBusy}>
             Recheck visual search
           </button>
         </div>

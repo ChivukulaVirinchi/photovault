@@ -21,10 +21,20 @@
     rotate?: number;
     /// Preferred mode applied when a new image finishes decoding.
     preferredMode?: "fit" | "actual";
+    intrinsicWidth?: number | null;
+    intrinsicHeight?: number | null;
     /// External handle so parent toolbars can drive zoom from buttons.
     api?: ZoomApi;
   }
-  let { src, alt = "", rotate = 0, preferredMode = "fit", api = $bindable() }: Props = $props();
+  let {
+    src,
+    alt = "",
+    rotate = 0,
+    preferredMode = "fit",
+    intrinsicWidth = null,
+    intrinsicHeight = null,
+    api = $bindable(),
+  }: Props = $props();
 
   // Transform state — internal, driven by gestures + keyboard + toolbar API.
   let scale = $state(1);
@@ -53,8 +63,8 @@
   /// value in a $state initializer only captures the initial value.
   let displayedSrc = $state("");
   let displayedAlt = $state("");
-  /// Bumped each time `src` changes. The off-screen-decode effect
-  /// stamps the current value before yielding to await, then ignores
+  /// Bumped each time `src` changes. The off-screen load effect
+  /// stamps the current value before waiting for load, then ignores
   /// the result if the stamp doesn't match — that's how rapid nav
   /// avoids late-arriving decodes clobbering a newer current src.
   let loadSeq = 0;
@@ -98,6 +108,14 @@
   function applyPreferredMode() {
     if (preferredMode === "actual") actual();
     else reset();
+  }
+
+  function hintedWidth() {
+    return intrinsicWidth != null && intrinsicWidth > 0 ? intrinsicWidth : 0;
+  }
+
+  function hintedHeight() {
+    return intrinsicHeight != null && intrinsicHeight > 0 ? intrinsicHeight : 0;
   }
 
   /// Zoom around a viewport point (cx, cy) — keeps the image pixel under
@@ -176,7 +194,7 @@
     containerH = r.height;
   }
 
-  /// Pre-decode the new src off-screen, then swap the visible img.
+  /// Load the new src off-screen, then swap the visible img.
   /// Three things have to happen in the SAME tick on swap to avoid the
   /// jitter the old `dimsKnown` gate produced:
   ///   1. naturalW/H updated to the new image's dimensions (so
@@ -192,36 +210,48 @@
     if (target === displayedSrc) return;
     const seq = ++loadSeq;
     const probe = new Image();
-    probe.src = target;
-    const swap = () => {
-      if (!mounted || seq !== loadSeq) return;
+    probe.decoding = "async";
+    let swapped = false;
+    const swap = (force = false) => {
+      if (swapped || !mounted || seq !== loadSeq) return;
+      const w = probe.naturalWidth || hintedWidth();
+      const h = probe.naturalHeight || hintedHeight();
+      if (!force && (w <= 0 || h <= 0)) return;
+      swapped = true;
       // Mutating these state vars in a single synchronous block lets
       // Svelte batch them — the DOM updates once, with all four
       // changes applied together.
-      naturalW = probe.naturalWidth;
-      naturalH = probe.naturalHeight;
+      naturalW = w || naturalW || 1;
+      naturalH = h || naturalH || 1;
       tx = 0;
       ty = 0;
       applyPreferredMode();
       displayedSrc = target;
       displayedAlt = alt;
     };
-    if (probe.decode) {
-      probe.decode().then(swap).catch(() => {
-        // Some webview codecs reject decode() even when paint succeeds —
-        // fall back to onload, which fires once the bitmap is ready.
-        if (probe.complete && probe.naturalWidth > 0) {
-          swap();
-          return;
-        }
-        probe.onload = swap;
-        probe.onerror = () => {
-          /* leave the old image visible; nothing we can do */
-        };
-      });
-    } else {
-      probe.onload = swap;
+    if (!displayedSrc && hintedWidth() > 0 && hintedHeight() > 0) swap(true);
+    const timer = setTimeout(
+      () => swap(true),
+      hintedWidth() > 0 && hintedHeight() > 0 ? 450 : 1200,
+    );
+    probe.onload = () => {
+      clearTimeout(timer);
+      swap();
+    };
+    probe.onerror = () => {
+      clearTimeout(timer);
+      /* leave the old image visible; nothing we can do */
+    };
+    probe.src = target;
+    if (probe.complete) {
+      clearTimeout(timer);
+      swap();
     }
+    return () => {
+      clearTimeout(timer);
+      probe.onload = null;
+      probe.onerror = null;
+    };
   });
 
   // preferredMode is read at swap time and on toolbar calls. We don't

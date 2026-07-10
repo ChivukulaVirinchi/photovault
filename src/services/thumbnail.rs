@@ -380,13 +380,13 @@ impl ThumbnailService {
             return Ok(thumb_path);
         }
 
-        let _permit = self.generation_limiter.acquire(priority);
         let key = format!("{}:{file_hash}", size.dir_name());
         let _generation = self.generating.enter(key);
         if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
             return Ok(thumb_path);
         }
 
+        let _permit = self.generation_limiter.acquire(priority);
         let start = Instant::now();
         self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start)
     }

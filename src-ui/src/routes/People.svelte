@@ -24,15 +24,32 @@
   const mainClusters = $derived(clusters.filter((c) => c.photo_count >= 2 || isNamed(c)));
   const singletons   = $derived(clusters.filter((c) => c.photo_count === 1 && !isNamed(c)));
   let error = $state<string | null>(null);
+  let loading = $state(true);
   let pendingPhotos = $state(0);
   let unconfirmedTotal = $state(0);
   let clustersWithUnconfirmed = $state(0);
   let showModelUpgradeBanner = $state(false);
   let faceActionBusy = $state(false);
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let mounted = true;
   let loadSeq = 0;
   let liveSeq = 0;
   let pendingSeq = 0;
+  const scrollStorageKey = $derived(`smriti:people-scroll:${libraryStore.driveRoot ?? "closed"}`);
+
+  function saveScroll() {
+    if (!pageEl) return;
+    try { sessionStorage.setItem(scrollStorageKey, String(pageEl.scrollTop)); } catch {}
+  }
+
+  function restoreScroll() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const y = raw ? Number(raw) : 0;
+    if (!Number.isFinite(y) || y <= 0) return;
+    requestAnimationFrame(() => {
+      if (mounted && pageEl) pageEl.scrollTop = y;
+    });
+  }
   async function checkModelUpgrade() {
     try {
       const s = await settings.get();
@@ -95,13 +112,17 @@
   async function load() {
     const seq = ++loadSeq;
     error = null;
+    loading = true;
     try {
       const next = await people.list({});
       if (!mounted || seq !== loadSeq) return;
       clusters = next;
+      restoreScroll();
     } catch (e) {
       if (!mounted || seq !== loadSeq) return;
       error = commandErrorMessage(e);
+    } finally {
+      if (mounted && seq === loadSeq) loading = false;
     }
   }
 
@@ -134,6 +155,7 @@
 
   async function startFaceProcessing() {
     if (running || faceActionBusy) return;
+    const root = libraryStore.driveRoot;
     faceActionBusy = true;
     // Optimistic placeholder so the user sees the click registered
     // even on a cold-started ONNX worker (which can take 2-3 s before
@@ -145,11 +167,11 @@
     try {
       const r = await people.startProcessing();
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (libraryStore.driveRoot !== root) return;
       jobs.register(r.job_id, "faces");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (!mounted || libraryStore.driveRoot !== root) return;
       const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't start face detection: ${msg}`);
@@ -206,6 +228,7 @@
     loadPending();
     checkModelUpgrade();
     return () => {
+      saveScroll();
       mounted = false;
       loadSeq += 1;
       liveSeq += 1;
@@ -283,8 +306,12 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
-  {#if clusters.length === 0 && !running}
+<div class="page" bind:this={pageEl} onscroll={saveScroll}>
+  {#if loading}
+    <div class="empty">
+      <p class="working">Loading people...</p>
+    </div>
+  {:else if clusters.length === 0 && !running}
     <div class="empty">
       <p>No faces yet. Run face detection to start finding the people in your library.</p>
       <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Find faces</button>

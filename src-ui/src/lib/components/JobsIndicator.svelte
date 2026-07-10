@@ -26,7 +26,7 @@
     return `~${h}h ${mr}m left`;
   }
   function canCancel(j: Job): boolean {
-    return !["assets", "albumSuggestions"].includes(j.kind);
+    return j.kind !== "assets";
   }
   async function cancelJob(j: Job) {
     if (cancelling.has(j.id)) return;

@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager, State};
 use smriti::db::album_repo::AlbumRepo;
 use smriti::db::album_suggestion_repo::AlbumSuggestionRepo;
 use smriti::db::PhotoRepo;
+use smriti::services::path_util::{safe_existing_path_under_root, safe_join_relative};
 
 use crate::dto::{AlbumDto, AlbumSuggestionDto, JobIdDto, PhotoSummaryDto};
 use crate::events::{
@@ -171,6 +172,7 @@ pub struct AlbumsExportArgs {
 #[derive(Debug, Clone)]
 struct AlbumExportItem {
     photo_id: i64,
+    relative_path: String,
     source_path: PathBuf,
     file_name: String,
 }
@@ -365,19 +367,30 @@ fn collect_export_items(
 
     rows.into_iter()
         .map(|(photo_id, relative_path, file_name)| {
-            let source_path =
-                smriti::services::path_util::safe_join_relative(drive_root, &relative_path)
-                    .map_err(|reason| CommandError::Validation {
-                        field: "photo.file_path".into(),
-                        reason,
-                    })?;
+            let source_path = safe_join_relative(drive_root, &relative_path).map_err(|reason| {
+                CommandError::Validation {
+                    field: "photo.file_path".into(),
+                    reason,
+                }
+            })?;
             Ok(AlbumExportItem {
                 photo_id,
+                relative_path,
                 source_path,
                 file_name,
             })
         })
         .collect()
+}
+
+fn resolve_export_source(
+    drive_root: &Path,
+    item: &AlbumExportItem,
+) -> Result<Option<PathBuf>, String> {
+    if !item.source_path.exists() {
+        return Ok(None);
+    }
+    safe_existing_path_under_root(drive_root, &item.relative_path).map(Some)
 }
 
 #[tauri::command]
@@ -458,7 +471,7 @@ pub async fn albums_export(
         });
     }
 
-    let (album_name, items, export_root) = {
+    let (album_name, items, export_root, drive_root) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
@@ -479,7 +492,7 @@ pub async fn albums_export(
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| default_export_root(&lib.drive_root));
-        (album_name, items, export_root)
+        (album_name, items, export_root, lib.drive_root.clone())
     };
 
     if items.is_empty() {
@@ -510,6 +523,7 @@ pub async fn albums_export(
     let app_for_finish = app.clone();
     let job_id_clone = job_id.clone();
     let export_folder_clone = export_folder.clone();
+    let drive_root_clone = drive_root.clone();
     let album_id = args.album_id;
     let finish_handle = tokio::runtime::Handle::current();
 
@@ -552,19 +566,32 @@ pub async fn albums_export(
                 },
             );
 
-            if !item.source_path.exists() {
-                skipped_missing += 1;
-                continue;
-            }
+            let source_path = match resolve_export_source(&drive_root_clone, item) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    skipped_missing += 1;
+                    continue;
+                }
+                Err(err) => {
+                    failed += 1;
+                    tracing::warn!(
+                        "album export: refused photo {} path {}: {}",
+                        item.photo_id,
+                        item.relative_path,
+                        err
+                    );
+                    continue;
+                }
+            };
             let dest = unique_file_path(&export_folder_clone, &item.file_name, &mut reserved);
-            match std::fs::copy(&item.source_path, &dest) {
+            match std::fs::copy(&source_path, &dest) {
                 Ok(_) => exported += 1,
                 Err(err) => {
                     failed += 1;
                     tracing::warn!(
                         "album export: failed to copy photo {} from {}: {}",
                         item.photo_id,
-                        item.source_path.display(),
+                        source_path.display(),
                         err
                     );
                 }
@@ -908,6 +935,7 @@ pub async fn albums_suggestions_run_detection(
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     let home_override = args.home_city_override.clone();
+    let finish_handle = tokio::runtime::Handle::current();
 
     tokio::task::spawn_blocking(move || {
         // Up-front "starting" tick so the UI's progress chip shows a
@@ -944,14 +972,12 @@ pub async fn albums_suggestions_run_detection(
                         message: Some(format!("Couldn't open library: {}", e)),
                     },
                 );
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let app_for_finish = app_clone.clone();
-                    let job_id = job_id_clone.clone();
-                    handle.spawn(async move {
-                        let st: tauri::State<AppState> = app_for_finish.state();
-                        jobs::finish_job(&st, &job_id).await;
-                    });
-                }
+                let app_for_finish = app_clone.clone();
+                let job_id = job_id_clone.clone();
+                finish_handle.spawn(async move {
+                    let st: tauri::State<AppState> = app_for_finish.state();
+                    jobs::finish_job(&st, &job_id).await;
+                });
                 return;
             }
         };
@@ -1024,14 +1050,12 @@ pub async fn albums_suggestions_run_detection(
         );
 
         // Bridge back to the async runtime to release the registry slot.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let app_for_finish = app_clone.clone();
-            let job_id = job_id_clone.clone();
-            handle.spawn(async move {
-                let st: tauri::State<AppState> = app_for_finish.state();
-                jobs::finish_job(&st, &job_id).await;
-            });
-        }
+        let app_for_finish = app_clone.clone();
+        let job_id = job_id_clone.clone();
+        finish_handle.spawn(async move {
+            let st: tauri::State<AppState> = app_for_finish.state();
+            jobs::finish_job(&st, &job_id).await;
+        });
     });
 
     Ok(JobIdDto { job_id })
@@ -1172,5 +1196,58 @@ mod tests {
         let second = unique_file_path(tmp.path(), "IMG_0001.JPG", &mut reserved);
         assert_eq!(first, tmp.path().join("IMG_0001-2.JPG"));
         assert_eq!(second, tmp.path().join("IMG_0001-3.JPG"));
+    }
+
+    #[test]
+    fn export_source_resolution_refuses_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("inside.jpg"), b"inside").unwrap();
+        std::fs::write(outside.path().join("secret.jpg"), b"secret").unwrap();
+
+        let inside = AlbumExportItem {
+            photo_id: 1,
+            relative_path: "inside.jpg".into(),
+            source_path: root.path().join("inside.jpg"),
+            file_name: "inside.jpg".into(),
+        };
+        assert!(resolve_export_source(root.path(), &inside)
+            .unwrap()
+            .is_some());
+
+        let missing = AlbumExportItem {
+            photo_id: 2,
+            relative_path: "missing.jpg".into(),
+            source_path: root.path().join("missing.jpg"),
+            file_name: "missing.jpg".into(),
+        };
+        assert!(resolve_export_source(root.path(), &missing)
+            .unwrap()
+            .is_none());
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+            let escaped = AlbumExportItem {
+                photo_id: 3,
+                relative_path: "link/secret.jpg".into(),
+                source_path: root.path().join("link").join("secret.jpg"),
+                file_name: "secret.jpg".into(),
+            };
+            assert!(resolve_export_source(root.path(), &escaped).is_err());
+        }
+
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(outside.path(), root.path().join("link")).is_ok() {
+                let escaped = AlbumExportItem {
+                    photo_id: 3,
+                    relative_path: "link/secret.jpg".into(),
+                    source_path: root.path().join("link").join("secret.jpg"),
+                    file_name: "secret.jpg".into(),
+                };
+                assert!(resolve_export_source(root.path(), &escaped).is_err());
+            }
+        }
     }
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, Result as SqliteResult};
 
 use crate::db::{album_repo::AlbumRepo, FaceRepo, PhotoStackRepo};
-use crate::services::path_util::safe_join_relative;
+use crate::services::path_util::{safe_existing_path_under_root, safe_join_relative};
 
 /// Result of a permanent delete operation.
 #[derive(Debug, Default, Clone)]
@@ -110,7 +110,14 @@ impl TrashService {
                 }
             };
             if full_path.exists() {
-                if let Err(e) = fs::remove_file(&full_path) {
+                let delete_path = match safe_existing_path_under_root(drive_root, &relative_path) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        result.errors.push(format!("{}: {}", relative_path, e));
+                        continue;
+                    }
+                };
+                if let Err(e) = fs::remove_file(&delete_path) {
                     result.errors.push(format!("{}: {}", relative_path, e));
                     continue;
                 }
@@ -300,6 +307,49 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn permanent_delete_refuses_symlink_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("secret.jpg");
+        std::fs::write(&outside_file, b"secret").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("link")).unwrap();
+
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(outside.path(), temp.path().join("link")).is_err() {
+            return;
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, is_trashed)
+             VALUES (1, 'link/secret.jpg', 'secret.jpg', 'hash', 6, TRUE)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO trash (photo_id, original_path) VALUES (1, 'link/secret.jpg')",
+            [],
+        )
+        .unwrap();
+
+        let result = TrashService::permanent_delete(&conn, &[1], temp.path()).unwrap();
+
+        assert_eq!(result.files_deleted, 0);
+        assert_eq!(result.db_records_deleted, 0);
+        assert!(!result.errors.is_empty());
+        assert!(outside_file.exists());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM photos WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

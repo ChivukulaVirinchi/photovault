@@ -70,7 +70,7 @@ jobs:
       # build aborts if the path is missing.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19'
           cache: 'npm'
           cache-dependency-path: src-ui/package-lock.json
       - name: Install frontend deps
@@ -107,7 +107,7 @@ jobs:
             pkg-config
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19'
           cache: 'npm'
           cache-dependency-path: src-ui/package-lock.json
       - run: npm ci --prefix src-ui

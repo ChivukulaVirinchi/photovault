@@ -1,3 +1,20 @@
+<script module lang="ts">
+  import type {
+    AlbumSuggestionDto as CachedAlbumSuggestionDto,
+    PhotoSummaryDto as CachedPhotoSummaryDto,
+  } from "../lib/api/types";
+
+  let cachedAlbumsRoute:
+    | {
+        driveRoot: string | null;
+        filter: string;
+        previewSugg: CachedAlbumSuggestionDto | null;
+        previewPhotos: CachedPhotoSummaryDto[];
+        scrollTop: number;
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
@@ -12,6 +29,9 @@
   import type { AlbumDto, AlbumSuggestionDto } from "../lib/api/types";
   import type { PhotoSummaryDto } from "../lib/api/types";
 
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentAlbumsCache = cachedAlbumsRoute?.driveRoot === currentDriveRoot ? cachedAlbumsRoute : null;
+
   let list = $state<AlbumDto[]>([]);
   let suggestions = $state<AlbumSuggestionDto[]>([]);
   let creating = $state(false);
@@ -19,6 +39,7 @@
   let detectBusy = $state(false);
   let newName = $state("");
   let error = $state<string | null>(null);
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let mounted = true;
   let loadSeq = 0;
   // Detection state derived from the global jobs store so it survives
@@ -27,9 +48,13 @@
   const detecting = $derived(jobs.isRunning("albumSuggestions"));
   const detectJob = $derived(jobs.byKind("albumSuggestions"));
 
+  function sameLibrary(root: string | null): boolean {
+    return libraryStore.isOpen && libraryStore.driveRoot === root;
+  }
+
   // Live filter — the text field appears once the user has enough
   // albums to actually need scanning (8+).
-  let filter = $state("");
+  let filter = $state(currentAlbumsCache?.filter ?? "");
   const visibleList = $derived.by(() => {
     if (!filter.trim()) return list;
     const q = filter.trim().toLowerCase();
@@ -38,11 +63,29 @@
 
   // Preview modal — opened by clicking a suggestion card. Holds the
   // currently-previewed suggestion + its first ~12 photos.
-  let previewSugg = $state<AlbumSuggestionDto | null>(null);
-  let previewPhotos = $state<PhotoSummaryDto[]>([]);
+  let previewSugg = $state<AlbumSuggestionDto | null>(currentAlbumsCache?.previewSugg ?? null);
+  let previewPhotos = $state<PhotoSummaryDto[]>(currentAlbumsCache?.previewPhotos ?? []);
   let previewLoading = $state(false);
   let previewActing = $state(false);
   let previewSeq = 0;
+
+  function saveAlbumsRouteCache() {
+    cachedAlbumsRoute = {
+      driveRoot: currentDriveRoot,
+      filter,
+      previewSugg,
+      previewPhotos,
+      scrollTop: pageEl?.scrollTop ?? cachedAlbumsRoute?.scrollTop ?? 0,
+    };
+  }
+
+  function restoreAlbumsScroll() {
+    const target = currentAlbumsCache?.scrollTop ?? 0;
+    if (target <= 0) return;
+    requestAnimationFrame(() => {
+      if (mounted && pageEl) pageEl.scrollTop = target;
+    });
+  }
 
   async function load() {
     const seq = ++loadSeq;
@@ -55,6 +98,8 @@
       if (!mounted || seq !== loadSeq) return;
       list = nextList;
       suggestions = nextSuggestions;
+      saveAlbumsRouteCache();
+      restoreAlbumsScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }
@@ -87,6 +132,7 @@
 
   async function runDetection() {
     if (detecting || detectBusy) return;
+    const root = libraryStore.driveRoot;
     // Optimistic placeholder so the indicator pops on the click
     // frame, before the IPC even returns.
     const placeholderId = `pending-album-${Date.now()}`;
@@ -96,10 +142,11 @@
       detectBusy = true;
       const r = await albums.suggestions.runDetection();
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "albumSuggestions");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (!mounted || !sameLibrary(root)) return;
       const msg = commandErrorMessage(e);
       error = msg;
       toasts.error(`Couldn't detect: ${msg}`);
@@ -114,29 +161,38 @@
     previewPhotos = [];
     previewLoading = true;
     error = null;
+    saveAlbumsRouteCache();
     try {
       // Load every photo in the suggestion — the modal scrolls so the
       // user can scan the whole set before accepting. Cap matches the
       // backend preview limit; suggestions almost never exceed 200.
       const photos = await albums.suggestions.preview(s.id, Math.max(s.photo_ids.length, 12));
-      if (mounted && seq === previewSeq) previewPhotos = photos;
+      if (mounted && seq === previewSeq) {
+        previewPhotos = photos;
+        saveAlbumsRouteCache();
+      }
     } catch (e) {
       if (mounted && seq === previewSeq) error = commandErrorMessage(e);
     }
     finally {
-      if (mounted && seq === previewSeq) previewLoading = false;
+      if (mounted && seq === previewSeq) {
+        previewLoading = false;
+        saveAlbumsRouteCache();
+      }
     }
   }
   function closePreview() {
     previewSeq++;
     previewSugg = null;
     previewPhotos = [];
+    saveAlbumsRouteCache();
   }
 
   function patchPreviewThumbnail(photoId: number, thumbnailPath: string) {
     previewPhotos = previewPhotos.map((p) => (
       p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
     ));
+    saveAlbumsRouteCache();
   }
 
   function patchAlbumCover(photoId: number, thumbnailPath: string) {
@@ -204,13 +260,24 @@
   onMount(() => {
     mounted = true;
     load();
+    restoreAlbumsScroll();
+    const el = pageEl;
+    const onScroll = () => saveAlbumsRouteCache();
+    el?.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("keydown", onPreviewKey);
     return () => {
+      saveAlbumsRouteCache();
       mounted = false;
       loadSeq += 1;
       previewSeq += 1;
+      el?.removeEventListener("scroll", onScroll);
       window.removeEventListener("keydown", onPreviewKey);
     };
+  });
+
+  $effect(() => {
+    filter;
+    saveAlbumsRouteCache();
   });
 </script>
 
@@ -231,7 +298,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" bind:this={pageEl}>
   {#if suggestions.length > 0}
     <section class="suggestions">
       <div class="section-head">
@@ -302,11 +369,13 @@
                   thumbnailPath: p.thumbnail_path,
                   onReady: (path) => patchPreviewThumbnail(p.id, path),
                 }}
-                onclick={() =>
+                onclick={() => {
+                  saveAlbumsRouteCache();
                   browseContext.set(
                     `suggestion:${s.id}`,
                     previewPhotos.map((q) => q.id),
-                  )}
+                  );
+                }}
               >
                 {#if p.thumbnail_path}
                   <img src={thumbUrl(libraryStore.driveRoot, p.thumbnail_path) ?? ""} alt="" loading="lazy" />

@@ -1,3 +1,19 @@
+<script module lang="ts">
+  import type { InsightsData as CachedInsightsData } from "../lib/api/all";
+
+  let cachedInsights:
+    | {
+        driveRoot: string | null;
+        data: CachedInsightsData | null;
+        year: number | null;
+        showAllPeople: boolean;
+        showAllCountries: boolean;
+        showAllCities: boolean;
+        scrollTop: number;
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
@@ -10,20 +26,37 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { InsightsData } from "../lib/api/all";
 
-  let data = $state<InsightsData | null>(null);
-  let year = $state<number | null>(null);
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentInsightsCache = cachedInsights?.driveRoot === currentDriveRoot ? cachedInsights : null;
+
+  let data = $state<InsightsData | null>(currentInsightsCache?.data ?? null);
+  let year = $state<number | null>(currentInsightsCache?.year ?? null);
+  let loadedYear = $state<number | null | undefined>(currentInsightsCache?.data ? currentInsightsCache.year : undefined);
   let error = $state<string | null>(null);
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let loadSeq = 0;
   let mounted = true;
 
   /// Show the first N entries of long lists; "Show all" reveals the rest.
   const PEEK = 10;
-  let showAllPeople    = $state(false);
-  let showAllCountries = $state(false);
-  let showAllCities    = $state(false);
+  let showAllPeople    = $state(currentInsightsCache?.showAllPeople ?? false);
+  let showAllCountries = $state(currentInsightsCache?.showAllCountries ?? false);
+  let showAllCities    = $state(currentInsightsCache?.showAllCities ?? false);
 
   /// Tooltip state for the monthly bars.
   let tip = $state<{ x: number; y: number; label: string } | null>(null);
+
+  function saveInsightsCache() {
+    cachedInsights = {
+      driveRoot: currentDriveRoot,
+      data,
+      year,
+      showAllPeople,
+      showAllCountries,
+      showAllCities,
+      scrollTop: pageEl?.scrollTop ?? cachedInsights?.scrollTop ?? 0,
+    };
+  }
 
   async function load() {
     const seq = ++loadSeq;
@@ -31,7 +64,11 @@
     error = null;
     try {
       const nextData = await insights.compute(selectedYear);
-      if (mounted && seq === loadSeq) data = nextData;
+      if (mounted && seq === loadSeq) {
+        data = nextData;
+        loadedYear = selectedYear;
+        saveInsightsCache();
+      }
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }
@@ -39,13 +76,35 @@
 
   onMount(() => {
     mounted = true;
+    requestAnimationFrame(() => {
+      if (mounted && pageEl && currentInsightsCache) pageEl.scrollTop = currentInsightsCache.scrollTop;
+    });
+    const el = pageEl;
+    const onScroll = () => saveInsightsCache();
+    el?.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      saveInsightsCache();
       mounted = false;
       loadSeq += 1;
+      el?.removeEventListener("scroll", onScroll);
     };
   });
 
-  $effect(() => { void year; load(); });
+  $effect(() => {
+    void year;
+    if (data && loadedYear === year) {
+      saveInsightsCache();
+      return;
+    }
+    load();
+  });
+
+  $effect(() => {
+    showAllPeople;
+    showAllCountries;
+    showAllCities;
+    saveInsightsCache();
+  });
 
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -169,7 +228,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" bind:this={pageEl}>
   {#if data}
     {@const d = data}
     <section class="stats">

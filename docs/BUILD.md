@@ -7,7 +7,7 @@ Smriti builds natively on Linux, Windows, and macOS.
 ### Linux
 
 - Rust toolchain (stable, MSRV 1.88+) via `rustup`
-- Node 20+ and npm (the frontend is Vite + Svelte 5)
+- Node 20.19+ and npm (the frontend is Vite 8 + Svelte 5)
 - Tauri build deps. On Ubuntu/Debian:
 
 ```bash
@@ -26,7 +26,7 @@ sudo apt-get install -y \
 ### Windows
 
 - Rust toolchain via `rustup`
-- Node 20+ via the official installer or `winget install OpenJS.NodeJS`
+- Node 20.19+ via the official installer or `winget install OpenJS.NodeJS`
 - Visual Studio Build Tools (Desktop development with C++) — provides
   the MSVC linker that `cargo build` and Tauri's bundler both need.
 - WebView2 Runtime — preinstalled on Windows 11; auto-downloaded by
@@ -36,7 +36,7 @@ sudo apt-get install -y \
 
 - Xcode command line tools (`xcode-select --install`)
 - Rust toolchain via `rustup`
-- Node 20+ via Homebrew (`brew install node`) or the official installer
+- Node 20.19+ via Homebrew (`brew install node`) or the official installer
 
 ### One-time tooling
 

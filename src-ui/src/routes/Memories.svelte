@@ -1,3 +1,15 @@
+<script module lang="ts">
+  import type { MemoryCard as CachedMemoryCard } from "../lib/api/all";
+
+  let cachedMemoriesRoute:
+    | {
+        driveRoot: string | null;
+        cards: CachedMemoryCard[];
+        scrollTop: number;
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
@@ -8,11 +20,32 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { MemoryCard } from "../lib/api/all";
 
-  let cards = $state<MemoryCard[]>([]);
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentMemoriesCache =
+    cachedMemoriesRoute?.driveRoot === currentDriveRoot ? cachedMemoriesRoute : null;
+
+  let cards = $state<MemoryCard[]>(currentMemoriesCache?.cards ?? []);
   let error = $state<string | null>(null);
-  let loading = $state(true);
+  let loading = $state((currentMemoriesCache?.cards.length ?? 0) === 0);
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let mounted = true;
   let loadSeq = 0;
+
+  function saveMemoriesCache() {
+    cachedMemoriesRoute = {
+      driveRoot: currentDriveRoot,
+      cards,
+      scrollTop: pageEl?.scrollTop ?? cachedMemoriesRoute?.scrollTop ?? 0,
+    };
+  }
+
+  function restoreMemoriesScroll() {
+    const target = currentMemoriesCache?.scrollTop ?? 0;
+    if (target <= 0) return;
+    requestAnimationFrame(() => {
+      if (mounted && pageEl) pageEl.scrollTop = target;
+    });
+  }
 
   async function load() {
     const seq = ++loadSeq;
@@ -22,6 +55,8 @@
       const nextCards = await memories.today();
       if (!mounted || seq !== loadSeq) return;
       cards = nextCards;
+      saveMemoriesCache();
+      restoreMemoriesScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     } finally {
@@ -35,6 +70,13 @@
     });
   }
 
+  function memoryKindLabel(kind: string): string {
+    if (kind === "fallback_window") return "From your library";
+    return kind
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  }
+
   function patchHeroThumbnail(photoId: number, thumbnailPath: string) {
     cards = cards.map((c) => (
       c.hero_photo_id === photoId ? { ...c, hero_thumbnail_path: thumbnailPath } : c
@@ -43,9 +85,15 @@
 
   onMount(() => {
     void load();
+    restoreMemoriesScroll();
+    const el = pageEl;
+    const onScroll = () => saveMemoriesCache();
+    el?.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      saveMemoriesCache();
       mounted = false;
       loadSeq += 1;
+      el?.removeEventListener("scroll", onScroll);
     };
   });
 </script>
@@ -56,7 +104,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" bind:this={pageEl}>
   {#if loading}
     <div class="empty">
       <p>Loading memories...</p>
@@ -84,7 +132,7 @@
           {/if}
           <div class="overlay">
             <div class="caption">
-              <span class="kind mono">{c.kind.replaceAll("_", " ")}</span>
+              <span class="kind mono">{memoryKindLabel(c.kind)}</span>
               <h3>{c.title}</h3>
               <span class="count mono">{c.photo_count} photos</span>
             </div>

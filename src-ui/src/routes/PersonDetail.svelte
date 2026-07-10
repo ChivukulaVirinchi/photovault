@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { people, trash, type FaceDetailDto } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -42,6 +42,8 @@
   let actionBusy = $state(false);
   let loadSeq = 0;
   let mounted = true;
+  let scrollRestored = false;
+  const scrollStorageKey = $derived(`smriti:person-scroll:${id}`);
   const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
   const ALL_IDS_NAV_LIMIT = 5000;
 
@@ -61,7 +63,9 @@
   }
 
   function onCellClick(e: MouseEvent, photoId: number) {
-    handleCellClick(e, photoId, photos.map((p) => p.id));
+    const ids = personPhotoIds.length > 0 ? personPhotoIds : photos.map((p) => p.id);
+    const handled = handleCellClick(e, photoId, ids);
+    if (!handled) browseContext.set(`person:${id}`, ids);
   }
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     photos = photos.map((p) => (
@@ -133,10 +137,40 @@
       }
     }
   }
+
+  function readSavedScroll() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const y = raw ? Number(raw) : 0;
+    return Number.isFinite(y) && y > 0 ? y : 0;
+  }
+
+  function saveScroll() {
+    if (!scrollEl) return;
+    try { sessionStorage.setItem(scrollStorageKey, String(scrollEl.scrollTop)); } catch {}
+  }
+
+  async function restoreSavedScroll() {
+    if (scrollRestored || !scrollEl) return;
+    const target = readSavedScroll();
+    scrollRestored = true;
+    if (target <= 0) return;
+    await tick();
+    for (let i = 0; mounted && scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight < target && hasMore && nextCursor && i < 30; i++) {
+      const before = photos.length;
+      await loadMorePhotos();
+      await tick();
+      if (photos.length === before) break;
+    }
+    requestAnimationFrame(() => {
+      if (mounted && scrollEl) scrollEl.scrollTop = target;
+    });
+  }
+
   onMount(() => {
     mounted = true;
     window.addEventListener("keydown", onGlobalKey);
     return () => {
+      saveScroll();
       mounted = false;
       loadSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
@@ -147,6 +181,7 @@
     const seq = ++loadSeq;
     const personId = id;
     error = null;
+    scrollRestored = false;
     loadingMore = false;
     verifyBusy = false;
     actionBusy = false;
@@ -181,6 +216,7 @@
       hasMore = photoPage.has_more;
       unconfirmedFaces = facePage.items;
       browseContext.set(`person:${personId}`, allIds);
+      void restoreSavedScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }
@@ -209,6 +245,7 @@
   }
 
   function onPhotoScroll() {
+    saveScroll();
     if (!scrollEl || !hasMore || loadingMore) return;
     const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
     if (remaining < 900) void loadMorePhotos();
@@ -290,9 +327,6 @@
         {/snippet}
         {#snippet subtitle()}
           <span class="mono">{p.photo_count} photos</span>
-          {#if p.face_count != null}
-            <span class="mono dim">{p.face_count} faces</span>
-          {/if}
         {/snippet}
         {#snippet actions()}
           {#if editing}
@@ -463,7 +497,6 @@
     color: var(--ink-muted);
     font-size: var(--t-xs);
   }
-  .dim { color: var(--ink-faint); }
 
   .verify-strip {
     padding: var(--s-3) var(--s-7);

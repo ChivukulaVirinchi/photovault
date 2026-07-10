@@ -346,12 +346,17 @@ pub async fn library_compat_photos_list(
     .map_err(|e| CommandError::Internal {
         message: format!("compat photo list worker failed: {e}"),
     })??;
+    let row_count = items.len();
     Ok(Page {
-        has_more: items.len() as i64 == limit,
+        has_more: compat_offset_has_more(offset, row_count, total),
         next_cursor: None,
         items,
         total: Some(total),
     })
+}
+
+fn compat_offset_has_more(offset: i64, row_count: usize, total: u64) -> bool {
+    (offset.max(0) as u64).saturating_add(row_count as u64) < total
 }
 
 fn compat_photos_list_from_db(
@@ -441,6 +446,13 @@ fn validate_library_root(drive_root: &Path, original_path: &str) -> CommandResul
 }
 
 fn prepare_library_database(drive_root: PathBuf) -> CommandResult<(Database, bool, i64)> {
+    if let Some((db_version, max_supported)) = preflight_schema_too_new(&drive_root)? {
+        return Err(CommandError::SchemaTooNew {
+            db_version,
+            max_supported,
+        });
+    }
+
     let database = Database::open_for_drive(&drive_root)?;
     let needs_schema = database.needs_schema()?;
     if needs_schema {
@@ -464,7 +476,31 @@ fn prepare_library_database(drive_root: PathBuf) -> CommandResult<(Database, boo
     Ok((database, needs_schema, photo_count))
 }
 
-fn spawn_semantic_warmup(
+fn preflight_schema_too_new(drive_root: &Path) -> CommandResult<Option<(i32, i32)>> {
+    let db_path = smriti::db::db_path_for(drive_root);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+
+    let conn = rusqlite::Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let version = match smriti::db::migrations::get_schema_version(&conn) {
+        Ok(version) => version,
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("no such table") =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let max_supported = smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION;
+    if version > max_supported {
+        Ok(Some((version, max_supported)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn spawn_semantic_warmup(
     drive_root: PathBuf,
     semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
     semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
@@ -491,13 +527,6 @@ fn spawn_semantic_warmup(
             return;
         }
 
-        let mut cache = match semantic_index.lock() {
-            Ok(cache) => cache,
-            Err(_) => {
-                tracing::debug!("semantic warmup skipped: index cache poisoned");
-                return;
-            }
-        };
         let mut runner_guard = match semantic_runner.lock() {
             Ok(runner) => runner,
             Err(_) => {
@@ -514,6 +543,13 @@ fn spawn_semantic_warmup(
                 }
             }
         }
+        let mut cache = match semantic_index.lock() {
+            Ok(cache) => cache,
+            Err(_) => {
+                tracing::debug!("semantic warmup skipped: index cache poisoned");
+                return;
+            }
+        };
 
         if let Some(runner) = runner_guard.as_mut() {
             if let Err(err) = svc.search_text_cached(
@@ -766,11 +802,6 @@ pub async fn library_regenerate_thumbnails(
     state: State<'_, AppState>,
     _args: LibraryRegenerateThumbnailsArgs,
 ) -> CommandResult<JobIdDto> {
-    if state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
-        return Err(CommandError::Conflict {
-            reason: "thumbnail generation is already in progress".into(),
-        });
-    }
     let (drive_root, db, thumbnails) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -780,6 +811,9 @@ pub async fn library_regenerate_thumbnails(
             lib.thumbnails.clone(),
         )
     };
+    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     // Full regenerate semantics: wipe every photo's thumbnail_path +
     // thumbnailed flag so `run_thumbnail_pass` (which selects rows
@@ -791,15 +825,14 @@ pub async fn library_regenerate_thumbnails(
     // generator, so no separate cleanup is needed.
     {
         let guard = db.lock().await;
-        guard.conn.execute(
+        if let Err(e) = guard.conn.execute(
             "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE is_trashed = FALSE",
             [],
-        )?;
+        ) {
+            jobs::finish_job(&state, &job_id).await;
+            return Err(e.into());
+        }
     }
-
-    let job = jobs::start_job(&state, JobKind::Thumbnails).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -854,38 +887,29 @@ pub async fn library_refresh_photo_dates(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobIdDto> {
-    if state
-        .jobs
-        .lock()
-        .await
-        .has_any_of_kind(JobKind::MetadataExtraction)
-    {
-        return Err(CommandError::Conflict {
-            reason: "metadata extraction is already in progress".into(),
-        });
-    }
-
     let (drive_root, db) = {
         let guard = state.library.read().await;
         let lib = guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         (lib.drive_root.clone(), lib.db.clone())
     };
+    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
+    let job_id = job.id.clone();
+    let cancel = job.cancel.clone();
 
     {
         let guard = db.lock().await;
-        guard.conn.execute(
+        if let Err(e) = guard.conn.execute(
             "UPDATE photos
              SET date_taken = NULL,
                  date_taken_source = NULL,
                  metadata_extracted = FALSE
              WHERE is_trashed = FALSE",
             [],
-        )?;
+        ) {
+            jobs::finish_job(&state, &job_id).await;
+            return Err(e.into());
+        }
     }
-
-    let job = jobs::start_job(&state, JobKind::MetadataExtraction).await?;
-    let job_id = job.id.clone();
-    let cancel = job.cancel.clone();
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
@@ -1348,6 +1372,10 @@ async fn run_post_scan_pipeline(
 ) {
     // Stage 2: metadata extraction.
     {
+        if !library_is_still_open(&app, &drive_root).await {
+            tracing::info!("post-scan: skipped metadata because library changed");
+            return;
+        }
         let state: tauri::State<AppState> = app.state();
         // Skip if a user-initiated metadata job is already running. The
         // single `WHERE metadata_extracted = FALSE` worker would otherwise
@@ -1377,6 +1405,10 @@ async fn run_post_scan_pipeline(
     // into a large cold library can require scroll-time generation for
     // every visible cell.
     {
+        if !library_is_still_open(&app, &drive_root).await {
+            tracing::info!("post-scan: skipped thumbnail prewarm because library changed");
+            return;
+        }
         let state: tauri::State<AppState> = app.state();
         if !state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
             let pending = {
@@ -1630,5 +1662,38 @@ mod tests {
         assert_eq!(items.iter().map(|p| p.id).collect::<Vec<_>>(), vec![2, 1]);
         assert!(items.iter().all(|p| p.stack.is_none()));
         assert!(matches!(items[0].media_type, MediaTypeDto::Video));
+    }
+
+    #[test]
+    fn compat_offset_has_more_uses_total_count() {
+        assert!(compat_offset_has_more(0, 100, 101));
+        assert!(!compat_offset_has_more(100, 100, 200));
+        assert!(!compat_offset_has_more(200, 0, 200));
+    }
+
+    #[test]
+    fn preflight_schema_too_new_reads_existing_db_without_normal_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = smriti::db::db_path_for(temp.path());
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (999);
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let detected = preflight_schema_too_new(temp.path()).unwrap();
+
+        assert_eq!(
+            detected,
+            Some((999, smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION)),
+        );
     }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import {
     ChevronLeft,
     ChevronRight,
@@ -37,6 +37,7 @@
   let frontIdx = $state(0);
   let loadError = $state<string | null>(null);
   let chromeActive = $state(true);
+  let stageEl = $state<HTMLElement | undefined>(undefined);
   /// True once at least one image has been shown — gates auto-advance
   /// and lets the cold-start "loading..." disappear permanently.
   let booted = $state(false);
@@ -45,6 +46,8 @@
   let loadSeq = 0;
   const URL_CACHE_CAP = 200;
   const urlCache = new Map<number, string>();
+  const preloadedMedia = new Set<number>();
+  const preloadInFlight = new Set<number>();
 
   const currentId = $derived(slideshow.currentId());
   const position = $derived(slideshow.position());
@@ -84,11 +87,13 @@
 
   async function goNext() {
     clearAdvanceTimer();
+    pauseVideos();
     await slideshow.next();
   }
 
   function goPrev() {
     clearAdvanceTimer();
+    pauseVideos();
     slideshow.prev();
   }
 
@@ -146,6 +151,7 @@
       const oldest = urlCache.keys().next().value;
       if (oldest == null) break;
       urlCache.delete(oldest);
+      preloadedMedia.delete(oldest);
     }
     return url;
   }
@@ -156,10 +162,11 @@
     try {
       const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
       if (seq !== loadSeq) return;
-      if (p.media_type !== "video") {
+      if (p.media_type !== "video" && !preloadedMedia.has(id)) {
         await decodeOffscreen(url);
         if (seq !== loadSeq) return;
       }
+      preloadedMedia.add(id);
       // Promote: assign the NEW slide to the back slot, then flip the
       // front pointer. Svelte's reactivity drives the crossfade via
       // class:ready bound to whether this slot is currently in front.
@@ -167,6 +174,7 @@
       slots[backSlot] = { photo: p, url };
       frontIdx = backSlot;
       booted = true;
+      void syncVideos();
       void preloadNeighbors();
       void slideshow.ensureMoreAhead();
     } catch (e) {
@@ -176,7 +184,31 @@
     }
   }
 
+  function pauseVideos() {
+    stageEl?.querySelectorAll("video").forEach((video) => {
+      video.pause();
+      video.currentTime = 0;
+    });
+  }
+
+  async function syncVideos() {
+    await tick();
+    if (!slideshow.active || !stageEl) return;
+    stageEl.querySelectorAll("video").forEach((video) => {
+      const visible = video.classList.contains("visible");
+      if (!visible) {
+        video.pause();
+        video.currentTime = 0;
+      } else if (slideshow.playing) {
+        void video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    });
+  }
+
   async function preloadNeighbors() {
+    const seq = loadSeq;
     const ids = slideshow.ids;
     const i = slideshow.index;
     const candidates = [ids[i + 1], ids[i - 1], ids[i + 2]].filter(
@@ -184,10 +216,17 @@
     );
     await Promise.all(
       candidates.map(async (id) => {
+        if (preloadedMedia.has(id) || preloadInFlight.has(id)) return;
+        preloadInFlight.add(id);
         try {
           const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
           if (p.media_type !== "video") await decodeOffscreen(url);
+          if (seq !== loadSeq || !slideshow.active) return;
+          preloadedMedia.add(id);
         } catch {}
+        finally {
+          preloadInFlight.delete(id);
+        }
       }),
     );
   }
@@ -204,11 +243,14 @@
       loadSeq++;
       booted = false;
       loadError = null;
+      pauseVideos();
       slots = [
         { photo: null, url: null },
         { photo: null, url: null },
       ];
       urlCache.clear();
+      preloadedMedia.clear();
+      preloadInFlight.clear();
     }
   });
 
@@ -220,8 +262,18 @@
     void currentId;
     clearAdvanceTimer();
     if (!slideshow.active || !slideshow.playing || !booted) return;
+    if (frontPhoto?.media_type === "video") {
+      void syncVideos();
+      return clearAdvanceTimer;
+    }
     advanceTimer = setTimeout(() => void goNext(), slideshow.intervalMs);
     return clearAdvanceTimer;
+  });
+
+  $effect(() => {
+    void frontIdx;
+    void slideshow.playing;
+    void syncVideos();
   });
 
   $effect(() => {
@@ -236,6 +288,7 @@
     loadSeq++;
     if (idleTimer) clearTimeout(idleTimer);
     clearAdvanceTimer();
+    pauseVideos();
   });
 </script>
 
@@ -248,7 +301,7 @@
     onpointerdown={bumpChrome}
     aria-label="Slideshow"
   >
-    <div class="stage">
+    <div class="stage" bind:this={stageEl}>
       {#if thumb}
         <img class="backdrop" src={thumb} alt="" aria-hidden="true" />
       {/if}
@@ -276,6 +329,7 @@
               autoplay={idx === frontIdx && slideshow.playing}
               playsinline
               preload="metadata"
+              onended={() => { if (idx === frontIdx && slideshow.playing) void goNext(); }}
             ></video>
           {:else}
             <img

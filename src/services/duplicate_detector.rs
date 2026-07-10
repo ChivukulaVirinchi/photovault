@@ -35,6 +35,8 @@ pub struct DuplicateProgress {
     pub message: String,
 }
 
+type ExactCandidate = (i64, String, Option<String>, i64);
+
 /// Hamming-distance threshold (out of 64 bits) below which two photos
 /// are considered the same image. 4 bits ≈ 94% bit agreement — the
 /// floor for "really actually the same shot, different file":
@@ -103,7 +105,7 @@ impl DuplicateDetector {
                 "#,
             )?;
 
-            let photos: Vec<(i64, String, Option<String>, i64)> = photo_stmt
+            let photos: Vec<ExactCandidate> = photo_stmt
                 .query_map([size], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                 })?
@@ -113,10 +115,8 @@ impl DuplicateDetector {
                 continue;
             }
 
-            let mut by_full_hash: std::collections::HashMap<
-                String,
-                Vec<(i64, String, Option<String>, i64)>,
-            > = std::collections::HashMap::new();
+            let mut by_full_hash: std::collections::HashMap<String, Vec<ExactCandidate>> =
+                std::collections::HashMap::new();
             for photo in photos {
                 let Ok(path) = safe_join_relative(drive_root, &photo.1) else {
                     continue;
@@ -143,7 +143,7 @@ impl DuplicateDetector {
             }
         }
 
-        groups.sort_by(|a, b| b.photo_ids.len().cmp(&a.photo_ids.len()));
+        groups.sort_by_key(|g| std::cmp::Reverse(g.photo_ids.len()));
         Ok(groups)
     }
 

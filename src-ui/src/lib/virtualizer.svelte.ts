@@ -21,6 +21,7 @@ export interface VirtualScroll<R extends VRow> {
   readonly last: number;
   readonly offsets: ReadonlyArray<number>;
   readonly totalHeight: number;
+  setScrollTop: (top: number) => void;
   attach: () => () => void;
 }
 
@@ -34,7 +35,7 @@ export function createVirtualScroll<R extends VRow>(opts: {
   let scrollTop = $state(0);
   let viewportH = $state(0);
 
-  const layout = $derived.by(() => {
+  const metrics = $derived.by(() => {
     const rows = opts.rows();
     const offsets = new Array<number>(rows.length);
     let total = 0;
@@ -42,7 +43,11 @@ export function createVirtualScroll<R extends VRow>(opts: {
       offsets[i] = total;
       total += rows[i].height;
     }
+    return { rows, offsets, total };
+  });
 
+  const window = $derived.by(() => {
+    const { rows, offsets, total } = metrics;
     if (rows.length === 0) {
       return { first: 0, last: 0, offsets, total: 0 };
     }
@@ -101,16 +106,19 @@ export function createVirtualScroll<R extends VRow>(opts: {
 
   return {
     get first() {
-      return layout.first;
+      return window.first;
     },
     get last() {
-      return layout.last;
+      return window.last;
     },
     get offsets() {
-      return layout.offsets;
+      return window.offsets;
     },
     get totalHeight() {
-      return layout.total;
+      return window.total;
+    },
+    setScrollTop(top: number) {
+      scrollTop = Math.max(0, top);
     },
     attach,
   };

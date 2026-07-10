@@ -465,12 +465,18 @@ CREATE TABLE IF NOT EXISTS semantic_index_state (
 CREATE INDEX IF NOT EXISTS idx_photos_date ON photos(date_taken);
 CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
 CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, location_city);
+CREATE INDEX IF NOT EXISTS idx_photos_gps_bounds
+    ON photos(is_trashed, gps_latitude, gps_longitude)
+    WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
 CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
 CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
 CREATE INDEX IF NOT EXISTS idx_photos_media_type ON photos(media_type);
 CREATE INDEX IF NOT EXISTS idx_photos_favorite
     ON photos(is_favorite, date_taken DESC) WHERE is_favorite = TRUE;
+CREATE INDEX IF NOT EXISTS idx_photos_favorite_order
+    ON photos(is_favorite, is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)
+    WHERE is_favorite = TRUE;
 CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
 CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
     ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;
@@ -478,6 +484,8 @@ CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed
     ON photos(thumbnailed) WHERE thumbnailed = FALSE;
 CREATE INDEX IF NOT EXISTS idx_photos_trashed_date
     ON photos(is_trashed, date_taken DESC);
+CREATE INDEX IF NOT EXISTS idx_photos_timeline_order
+    ON photos(is_trashed, (date_taken IS NULL), date_taken DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_faces_processed_trashed
     ON photos(faces_processed, is_trashed, date_taken DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_phash ON photos(phash) WHERE phash IS NOT NULL;
@@ -489,6 +497,9 @@ CREATE INDEX IF NOT EXISTS idx_faces_cluster_confidence
     ON faces(cluster_id, confidence DESC, id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo_cluster
     ON faces(photo_id, cluster_id);
+CREATE INDEX IF NOT EXISTS idx_faces_review_pending
+    ON faces(user_confirmed, cluster_id, id)
+    WHERE user_confirmed = 0 AND cluster_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_face_clusters_name ON face_clusters(name);
 CREATE INDEX IF NOT EXISTS idx_inferred_photo ON photo_inferred_identities(photo_id);
 CREATE INDEX IF NOT EXISTS idx_inferred_cluster ON photo_inferred_identities(cluster_id);
@@ -564,5 +575,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 1);
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_trashed = 0
+                 ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_timeline_order"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM faces
+                 WHERE cluster_id = 10 AND user_confirmed = 0
+                 ORDER BY id ASC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_faces_review_pending"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_favorite = TRUE AND is_trashed = 0
+                 ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_favorite_order"), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM photos
+                 WHERE is_trashed = 0
+                   AND gps_latitude IS NOT NULL
+                   AND gps_longitude IS NOT NULL
+                   AND gps_latitude >= 10.0 AND gps_latitude <= 20.0
+                   AND gps_longitude >= 70.0 AND gps_longitude <= 80.0
+                 LIMIT 50",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_photos_gps_bounds"), "{plan}");
     }
 }

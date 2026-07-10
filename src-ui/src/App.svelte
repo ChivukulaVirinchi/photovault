@@ -2,9 +2,9 @@
   import { onMount } from "svelte";
   import { libraryStore } from "./lib/stores/library.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
+  import { semantic } from "./lib/api/all";
   import Welcome from "./routes/Welcome.svelte";
   import Timeline from "./routes/Timeline.svelte";
-  import PhotoDetail from "./routes/PhotoDetail.svelte";
   import People from "./routes/People.svelte";
   import PersonDetail from "./routes/PersonDetail.svelte";
   import PersonReview from "./routes/PersonReview.svelte";
@@ -14,14 +14,15 @@
   import Search from "./routes/Search.svelte";
   import Memories from "./routes/Memories.svelte";
   import MemoryDetail from "./routes/MemoryDetail.svelte";
+  import PhotoDetail from "./routes/PhotoDetail.svelte";
   import Duplicates from "./routes/Duplicates.svelte";
   import DuplicateDetail from "./routes/DuplicateDetail.svelte";
   import Bursts from "./routes/Bursts.svelte";
   import BurstDetail from "./routes/BurstDetail.svelte";
+  import MapView from "./routes/Map.svelte";
   import Trash from "./routes/Trash.svelte";
   import Insights from "./routes/Insights.svelte";
   import Settings from "./routes/Settings.svelte";
-  import MapView from "./routes/Map.svelte";
   import Shortcuts from "./routes/Shortcuts.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
@@ -42,6 +43,7 @@
 
   let showShortcuts = $state(false);
   let lastDriveRoot = $state<string | null | undefined>(undefined);
+  let warmedSemanticRoot = $state<string | null>(null);
   let lastRouteKey: string | null = null;
 
   function safeDecode(value: string): string {
@@ -74,6 +76,13 @@
     if (!raw || !/^\d+$/.test(raw)) return null;
     const value = Number(raw);
     return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+
+  function intParam(name: string): number | null {
+    const raw = route.params[name];
+    if (!raw || !/^-?\d+$/.test(raw)) return null;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) ? value : null;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -122,11 +131,24 @@
       photoVisibility.clear();
       slideshow.close();
       assistantStore.resetForLibrary();
+      jobs.clearLibraryScoped();
+      warmedSemanticRoot = null;
       if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
         window.location.hash = "/timeline";
       }
     }
     lastDriveRoot = root;
+  });
+
+  $effect(() => {
+    const root = libraryStore.driveRoot;
+    if (!libraryStore.isOpen || !root || warmedSemanticRoot === root) return;
+    const warmRoot = root;
+    warmedSemanticRoot = warmRoot;
+    semantic.warmRuntime().catch((e) => {
+      if (warmedSemanticRoot === warmRoot) warmedSemanticRoot = null;
+      console.debug("semantic runtime warm-up skipped", e);
+    });
   });
 </script>
 
@@ -155,8 +177,8 @@
           <PersonDetail id={positiveIntParam("id")!} />
         {:else if route.path === "/albums"}
           <Albums />
-        {:else if route.path === "/album" && positiveIntParam("id") != null}
-          <AlbumDetail id={positiveIntParam("id")!} />
+        {:else if route.path === "/album" && intParam("id") != null}
+          <AlbumDetail id={intParam("id")!} />
         {:else if route.path === "/search"}
           <Search initialQuery={route.params.q ?? ""} />
         {:else if route.path === "/memories"}

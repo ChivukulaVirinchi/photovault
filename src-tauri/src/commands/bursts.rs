@@ -193,6 +193,7 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     let started = job.started_at;
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
+    let finish_handle = tokio::runtime::Handle::current();
 
     // Burst detection opens its OWN sqlite connection to the same DB.
     // SQLite WAL mode allows the foreground photos_list query to keep
@@ -241,10 +242,9 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
                         message: Some(format!("Opening the library database failed: {e}")),
                     },
                 );
-                let rt = tokio::runtime::Handle::current();
                 let app_for_finish = app_clone.clone();
                 let finish_job_id = job_id_clone.clone();
-                rt.spawn(async move {
+                finish_handle.spawn(async move {
                     let st: tauri::State<AppState> = app_for_finish.state();
                     jobs::finish_job(&st, &finish_job_id).await;
                 });
@@ -329,10 +329,9 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
                         message: Some(format!("Burst detection failed: {e}")),
                     },
                 );
-                let rt = tokio::runtime::Handle::current();
                 let app_for_finish = app_clone.clone();
                 let finish_job_id = job_id_clone.clone();
-                rt.spawn(async move {
+                finish_handle.spawn(async move {
                     let st: tauri::State<AppState> = app_for_finish.state();
                     jobs::finish_job(&st, &finish_job_id).await;
                 });
@@ -425,9 +424,8 @@ pub async fn bursts_run(app: AppHandle, state: State<'_, AppState>) -> CommandRe
                 },
             );
         }
-        let rt = tokio::runtime::Handle::current();
         let app_for_finish = app_clone.clone();
-        rt.spawn(async move {
+        finish_handle.spawn(async move {
             let st: tauri::State<AppState> = app_for_finish.state();
             jobs::finish_job(&st, &job_id_clone).await;
         });

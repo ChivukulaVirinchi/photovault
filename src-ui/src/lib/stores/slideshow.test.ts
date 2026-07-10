@@ -217,11 +217,51 @@ describe("slideshow store — paginated loadMore", () => {
     });
 
     const pending = slideshow.ensureMoreAhead();
+    expect(slideshow.loadingMore).toBe(true);
     slideshow.close();
+    expect(slideshow.loadingMore).toBe(false);
     resolve({ items: [{ id: 4 }], next_cursor: null, has_more: false, total: 4 });
     await pending;
 
     expect(slideshow.active).toBe(false);
     expect(slideshow.ids).toEqual([]);
+    expect(slideshow.loadingMore).toBe(false);
+  });
+
+  it("resets loadingMore when a new slideshow starts after an in-flight load", async () => {
+    type PageShape = {
+      items: Array<{ id: number }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      total: number;
+    };
+    let resolve!: (value: PageShape) => void;
+    const loadMore = vi.fn(
+      () =>
+        new Promise<PageShape>((r) => {
+          resolve = r;
+        }),
+    );
+    slideshow.start({
+      kind: "timeline",
+      label: "Timeline",
+      ids: [1, 2, 3],
+      hasMore: true,
+      loadMore: loadMore as never,
+    });
+
+    const pending = slideshow.ensureMoreAhead();
+    expect(slideshow.loadingMore).toBe(true);
+
+    slideshow.start({ kind: "photo", label: "Single", ids: [9] });
+    expect(slideshow.currentId()).toBe(9);
+    expect(slideshow.loadingMore).toBe(false);
+
+    resolve({ items: [{ id: 4 }], next_cursor: null, has_more: false, total: 4 });
+    await pending;
+
+    expect(slideshow.currentId()).toBe(9);
+    expect(slideshow.ids).toEqual([9]);
+    expect(slideshow.loadingMore).toBe(false);
   });
 });

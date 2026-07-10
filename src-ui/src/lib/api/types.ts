@@ -118,7 +118,7 @@ export interface PersonDto {
   id: number;
   name: string | null;
   photo_count: number;
-  face_count: number | null;
+  representative_face_id: number | null;
   representative_thumbnail_path: string | null;
 }
 

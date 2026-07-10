@@ -129,7 +129,7 @@ ISO-8601 strings (`"2024-03-15T14:23:00Z"`). The frontend parses with `new Date(
 
 ### Thumbnails & file paths
 
-- `thumbnail_path: Option<String>` — absolute path on disk, e.g. `/.photovault/thumbs/ab/abc123_small.jpg`. Frontend converts via `convertFileSrc(path)` from `@tauri-apps/api/core` to render in `<img>`.
+- `thumbnail_path: Option<String>` — relative to drive root and forward-slash normalized, e.g. `.photovault/thumbnails/medium/v2/ab/abc123.jpg`. Frontend joins it to the current library root and rejects absolute or traversal paths before calling `convertFileSrc`.
 - `file_path: String` — relative to drive root, forward-slash normalized. Resolves to absolute via `library.resolve_path` if the frontend ever needs it (rare; thumbnails are usually enough).
 
 ---
@@ -215,13 +215,7 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 | `duplicates:complete` | server → client | `DuplicatesResult` | on completion |
 | `bursts:progress` | server → client | `JobProgress` | during run |
 | `bursts:complete` | server → client | `BurstsResult` | on completion |
-| `documents:progress` | server → client | `JobProgress` | during analysis |
-| `documents:complete` | server → client | `DocumentsResult` | on completion |
 | `thumbnails:progress` | server → client | `JobProgress` | during prewarm/regen |
-| `update:download-progress` | server → client | `DownloadProgress` | during update download |
-| `update:installed` | server → client | `UpdateInstalled` | after install completes |
-| `drives:changed` | server → client | `Vec<DriveDto>` | when USB mount/unmount detected |
-| `library:scan-recommended` | server → client | `()` | when reindex detects significant drift |
 
 `JobProgress` is the generic shape:
 
@@ -434,12 +428,18 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
-| `library.list_drives` | `{}` | `Vec<DriveDto>` | sync; cheap; subscribe to `drives:changed` for updates |
-| `library.open` | `{ drive_path: String }` | `LibraryOpenResult` | initializes DB, opens services; emits `library:scan-recommended` if drift detected |
+| `library.list_drives` | `{}` | `Vec<DriveDto>` | sync; cheap; call again to refresh detected drives |
+| `library.open` | `{ drive_path: String }` | `LibraryOpenResult` | initializes DB and opens services; if the schema is newer than this build supports, returns a read-only unsupported-library handle instead of opening normal services |
+| `library.compat_photos_list` | `{ offset: u32, limit: Option<u32> }` | `Page<PhotoSummaryDto>` | read-only preview for schema-too-new libraries; reads only stable `photos` columns, never generates thumbnails or mutates the DB |
 | `library.close` | `{}` | `()` | for "switch library" flow; flushes pending writes |
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
 | `library.start_scan` | `{ scan_hidden_folders: bool }` | `{ job_id: String }` | emits `scan:progress`, `scan:complete` |
 | `library.cancel_scan` | `{ job_id: String }` | `()` | flips cancel flag; scan finishes mid-batch |
+| `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
+| `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |
+| `library.pending_metadata_count` | `{}` | `PendingCountDto` | count used for resume prompt |
+| `library.pending_thumbnail_count` | `{}` | `PendingCountDto` | count used for resume prompt |
+| `jobs.cancel` | `{ job_id: String }` | `()` | cancels any registered background job whose backend honors the cancel flag |
 | `library.detect_changes` | `{}` | `IndexChangesDto` | reindexer; preview before applying |
 | `library.apply_changes` | `{ added: bool, removed: bool, moved: bool, modified: bool }` | `ApplyResultDto` | flags choose which categories to apply |
 | `library.exclusions.list` | `{}` | `Vec<ExcludedFolderDto>` | per-library folders skipped by scan/reindex |
@@ -447,11 +447,11 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.exclusions.add` | `{ path: String }` | `ExcludedFolderDto` | recursively excludes the folder and removes matching indexed rows; files stay on disk |
 | `library.exclusions.remove` | `{ relative_path: String }` | `()` | future scans can index the folder again |
 | `library.regenerate_thumbnails` | `{ photo_ids: Option<Vec<i64>> }` | `{ job_id: String }` | None = all; emits `thumbnails:progress` |
-| `library.regenerate_rotated_data` | `{}` | `{ job_id: String }` | recomputes blur/sharpness/aspect after orientation fix |
 | `library.refresh_photo_dates` | `{}` | `{ job_id: String }` | clears stored capture dates for non-trashed photos/videos and emits metadata progress while re-reading embedded metadata, strict filename dates, and mtime fallback |
 | `library.resolve_path` | `{ photo_id: i64 }` | `{ absolute_path: String }` | resolves relative path to absolute, errors if drive not mounted |
 
-**`LibraryOpenResult`** = `{ drive_path, photo_count, first_run: bool, last_scan_at: Option<String> }`
+**`LibraryOpenResult`** = `{ drive_root, photo_count, first_run: bool, read_only: bool, schema_too_new: Option<SchemaTooNewDto> }`
+**`SchemaTooNewDto`** = `{ db_version: i32, max_supported: i32 }`
 **`IndexChangesDto`** = `{ added: u64, removed: u64, moved: u64, modified: u64, sample: ChangeSampleDto }`
 **`ApplyResultDto`** = `{ added: u64, removed: u64, moved: u64, modified: u64, marked_for_face_reprocess: u64 }`
 
@@ -464,7 +464,11 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `photos.get` | `{ id: i64 }` | `PhotoDto` | full detail (lightbox open) |
 | `photos.get_many` | `{ ids: Vec<i64> }` | `Vec<PhotoDto>` | up to 500; preserves input order; missing ids dropped silently |
 | `photos.timeline_neighbors` | `{ id: i64 }` | `{ prev_id: Option<i64>, next_id: Option<i64> }` | authoritative timeline prev/next for detail navigation at paged-list edges |
+| `photos.set_favorite` | `{ photo_id: i64, favorite: bool }` | `PhotoDto` | toggles favorite state |
+| `photos.request_thumbnail` | `{ id: i64 }` | `{ thumbnail_path: Option<String> }` | demand-generation for one visible photo cell |
 | `photos.request_thumbnails` | `{ ids: Vec<i64> }` | `{ items: Vec<{ id: i64, thumbnail_path: Option<String> }> }` | up to 200; demand-generation for visible/near-visible photo cells; failures omitted so callers can retry |
+| `photos.exif_extras` | `{ photo_id: i64 }` | `ExifExtrasDto` | lazy tier-2 EXIF details for photo detail |
+| `photos.save_video_probe` | `{ photo_id: i64, ... }` | `()` | stores probed video metadata/poster information |
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_person` | `{ person_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_date` | `{ start: String, end: String, cursor, limit }` | `Page<PhotoSummaryDto>` | inclusive range |
@@ -478,18 +482,31 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 |---|---|---|---|
 | `people.list` | `{ named_only: bool, min_photos: Option<u32> }` | `Vec<PersonDto>` | sorted by photo_count DESC; small enough to be unpaged for now |
 | `people.get` | `{ id: i64 }` | `PersonDto` | |
+| `people.photo_ids` | `{ id: i64 }` | `Vec<i64>` | bounded navigation set for person detail |
 | `people.rename` | `{ id: i64, name: Option<String> }` | `PersonDto` | None = clear name |
 | `people.merge` | `{ source_id: i64, target_id: i64 }` | `PersonDto` | returns merged cluster; `Conflict` if same id |
-| `people.set_representative_face` | `{ person_id: i64, face_id: i64 }` | `PersonDto` | |
+| `people.delete` | `{ id: i64 }` | `()` | hides/removes a person cluster from user-facing lists |
 | `people.start_processing` | `{}` | `{ job_id: String }` | emits `faces:progress`, `faces:complete` |
 | `people.cancel_processing` | `{ job_id: String }` | `()` | |
-| `people.rebuild_clusters` | `{}` | `{ job_id: String }` | re-clusters from existing embeddings; no re-detect |
+| `people.reset_all` | `{}` | `ResetFacesDto` | destructive reset of faces/clusters before a fresh processing run |
+| `people.reset_clusters` | `{}` | `ResetClustersDto` | drops clusters but keeps detected faces/embeddings |
+| `people.pending_face_count` | `{}` | `PendingFaceCountDto` | count used by Settings/People prompts |
+| `people.clustering_diagnostics` | `{}` | `ClusteringDiagnosticsDto` | support/debug summary for clustering health |
+| `people.face_list` | `{ cursor: Option<String>, limit: Option<u32> }` | `Page<FaceDetailDto>` | paged face list for review/admin surfaces |
+| `people.unclustered_faces` | `{ cursor: Option<String>, limit: Option<u32> }` | `Page<FaceDetailDto>` | unclustered faces for People review prompt |
 | `people.review.queue` | `{ limit: Option<u32> }` | `Vec<ReviewItemDto>` | default 20 |
 | `people.next_unconfirmed_faces` | `{ limit: Option<u32> }` | `Page<FaceDetailDto>` | one batch from the cluster with the most unconfirmed faces; default/max 200 |
 | `people.review.same` | `{ queue_id: i64 }` | `()` | assigns face to candidate cluster |
 | `people.review.different` | `{ queue_id: i64 }` | `()` | records cannot-merge constraint |
 | `people.review.skip` | `{ queue_id: i64 }` | `()` | |
-| `people.review.undo` | `{ queue_id: i64 }` | `()` | reverses last decision; UI tracks the id |
+| `people.review_face_count` | `{}` | `ReviewFaceCountDto` | count for manual face review |
+| `people.face_confirm` | `{ face_id: i64 }` | `()` | confirms current cluster assignment |
+| `people.face_confirm_to_cluster` | `{ face_id: i64, cluster_id: i64 }` | `()` | confirms a face into a specific cluster |
+| `people.face_reject` | `{ face_id: i64, cluster_id: i64 }` | `()` | records that this face does not belong in a cluster |
+| `people.face_hide` | `{ face_id: i64 }` | `()` | hides a face from review/UI |
+| `people.face_reassign` | `{ face_id: i64, cluster_id: i64 }` | `()` | moves a face to another cluster |
+| `people.face_suggest_clusters` | `{ face_id: i64, limit: Option<u32> }` | `Vec<ClusterSuggestionDto>` | suggestions for reassign dialog |
+| `people.k_similar_to_cluster` | `{ cluster_id: i64, k: u32 }` | `Vec<FaceDetailDto>` | nearest face candidates for review |
 
 ### 4. `albums` — manual albums + AI suggestions
 
@@ -497,6 +514,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 |---|---|---|
 | `albums.list` | `{}` | `Vec<AlbumDto>` |
 | `albums.get` | `{ id: i64 }` | `AlbumDto` |
+| `albums.photo_ids` | `{ id: i64 }` | `Vec<i64>` |
 | `albums.create` | `{ name: String, photo_ids: Vec<i64> }` | `AlbumDto` |
 | `albums.rename` | `{ id: i64, name: String }` | `AlbumDto` |
 | `albums.delete` | `{ id: i64 }` | `()` |
@@ -509,6 +527,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `albums.suggestions.preview` | `{ id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` |
 | `albums.suggestions.accept` | `{ id: i64, name: Option<String> }` | `AlbumDto` | creates real album; `name` overrides title |
 | `albums.suggestions.dismiss` | `{ id: i64 }` | `()` |
+| `albums.suggestions.reset_all` | `{}` | `{ dropped: u64 }` |
 
 `albums.export` copies original photo/video files into a new folder without
 modifying the library. If `destination_dir` is omitted, the backend uses the
@@ -741,7 +760,6 @@ for the day this returns.
 |---|---|---|
 | `documents.list` | `{ categories: Option<Vec<ContentCategoryDto>>, cursor, limit }` | `Page<PhotoSummaryDto>` | `categories` None = "all non-Photo" |
 | `documents.search` | `{ q: String, cursor, limit }` | `Page<PhotoSummaryDto>` | FTS5 over ocr_text |
-| `documents.run_analysis` | `{}` | `{ job_id: String }` | emits `documents:progress`, `documents:complete` |
 | `documents.set_category` | `{ photo_id: i64, category: ContentCategoryDto }` | `()` | manual override |
 -->
 
@@ -751,6 +769,7 @@ for the day this returns.
 | Command | Args | Returns |
 |---|---|---|
 | `map.pins` | `{ bounds: { north, south, east, west }, zoom: u8, max_pins: Option<u32> }` | `Vec<MapPinDto>` | server-side aggregation if too many; cluster `photo_ids` capped at 500 |
+| `map.pins_all` | `{ max_pins: Option<u32> }` | `Vec<MapPinDto>` | fallback/full-library map mode |
 | `map.cluster_filmstrip` | `{ photo_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` | for clicked-pin overlay |
 | `map.tile_cache.stats` | `{}` | `{ size_bytes: u64, file_count: u32, limit_bytes: u64 }` |
 | `map.tile_cache.set_limit` | `{ limit_mb: u32 }` | `()` |
@@ -775,7 +794,7 @@ for the day this returns.
 
 | Command | Args | Returns |
 |---|---|---|
-| `geocoding.run` | `{}` | `{ job_id: String }` | resolves all unresolved GPS-bearing photos; emits a generic `JobProgress` on `geocoding:progress` |
+| `geocoding.backfill` | `{ force: bool }` | `{ job_id: String }` | resolves GPS-bearing photos; emits a generic `JobProgress` on `geocoding:progress` |
 | `geocoding.resolve_one` | `{ lat: f64, lng: f64 }` | `Option<LocationDto>` | sync, ~1-3ms — used by photo_detail when a specific photo opens |
 
 ### 16. `settings`
@@ -815,9 +834,10 @@ struct SettingsDto {
 |---|---|---|
 | `system.asset_health` | `{}` | `AssetHealthDto` |
 | `system.assets_inventory` | `{}` | `AssetInventoryDto` |
+| `system.install_assets` | `{}` | `{ job_id: String }` | installs runtime/model/geodata assets; emits `assets:progress`, `assets:complete` |
+| `system.inference_provider` | `{}` | `String` | active inference provider label |
+| `system.test_gpu_bridge` | `{ url: String }` | `BridgeTestResult` | tests the optional user-owned GPU bridge |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |
-| `system.updates.download` | `{}` | `{ job_id: String }` | emits `update:download-progress` |
-| `system.updates.install` | `{}` | `()` | applies a downloaded update; replaces binary or launches installer |
 | `system.open_in_explorer` | `{ photo_id: i64 }` | `()` | reveals file in OS file manager |
 | `system.open_path` | `{ path: String }` | `()` | opens an existing folder in the OS file manager |
 | `system.copy_path_to_clipboard` | `{ photo_id: i64 }` | `()` |

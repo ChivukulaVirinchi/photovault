@@ -10,8 +10,8 @@
 #   .\scripts\release.ps1 v0.2.0-rc.3 -AllowDirty
 #   .\scripts\release.ps1 v0.2.0    (stable)
 #
-# See docs/RELEASE_CHECKLIST.md for the broader release workflow,
-# pre-release flag handling, and the release-plz interaction.
+# See docs/RELEASE_CHECKLIST.md for the broader release workflow and
+# pre-release flag handling.
 
 [CmdletBinding()]
 param(

@@ -18,8 +18,6 @@ pub const EV_DUPLICATES_PROGRESS: &str = "duplicates:progress";
 pub const EV_DUPLICATES_COMPLETE: &str = "duplicates:complete";
 pub const EV_BURSTS_PROGRESS: &str = "bursts:progress";
 pub const EV_BURSTS_COMPLETE: &str = "bursts:complete";
-pub const EV_DOCUMENTS_PROGRESS: &str = "documents:progress";
-pub const EV_DOCUMENTS_COMPLETE: &str = "documents:complete";
 pub const EV_THUMBNAILS_PROGRESS: &str = "thumbnails:progress";
 pub const EV_THUMBNAILS_COMPLETE: &str = "thumbnails:complete";
 pub const EV_GEOCODING_PROGRESS: &str = "geocoding:progress";
@@ -32,10 +30,6 @@ pub const EV_SEMANTIC_PROGRESS: &str = "semantic:progress";
 pub const EV_SEMANTIC_COMPLETE: &str = "semantic:complete";
 pub const EV_ASSETS_PROGRESS: &str = "assets:progress";
 pub const EV_ASSETS_COMPLETE: &str = "assets:complete";
-pub const EV_UPDATE_DOWNLOAD_PROGRESS: &str = "update:download-progress";
-pub const EV_UPDATE_INSTALLED: &str = "update:installed";
-pub const EV_DRIVES_CHANGED: &str = "drives:changed";
-pub const EV_LIBRARY_SCAN_RECOMMENDED: &str = "library:scan-recommended";
 pub const EV_ASSISTANT_ACTIVITY: &str = "assistant:activity";
 
 /// Generic progress payload used by most jobs that don't need

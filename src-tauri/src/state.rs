@@ -133,13 +133,15 @@ impl JobRegistry {
     }
 
     pub fn cancel_library_scoped(&mut self) {
-        for handle in self.inner.values() {
-            if handle.kind.is_library_scoped() {
-                handle
-                    .cancel_flag
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.inner.retain(|_, handle| {
+            if !handle.kind.is_library_scoped() {
+                return true;
             }
-        }
+            handle
+                .cancel_flag
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            false
+        });
     }
 }
 
@@ -211,5 +213,8 @@ mod tests {
         assert!(scan_flag.load(Ordering::Relaxed));
         assert!(!assets_flag.load(Ordering::Relaxed));
         assert!(!semantic_assets_flag.load(Ordering::Relaxed));
+        assert!(!registry.has_any_of_kind(JobKind::Scan));
+        assert!(registry.has_any_of_kind(JobKind::AssetInstall));
+        assert!(registry.has_any_of_kind(JobKind::SemanticAssets));
     }
 }

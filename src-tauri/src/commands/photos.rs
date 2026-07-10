@@ -31,11 +31,15 @@ fn clamp_timeline_limit(requested: Option<u32>) -> u32 {
 }
 
 fn page_from_lite_rows(
-    rows: Vec<PhotoLite>,
+    mut rows: Vec<PhotoLite>,
     limit: i64,
     total: Option<u64>,
 ) -> Page<PhotoSummaryDto> {
-    let has_more = rows.len() as i64 == limit;
+    let limit = limit.max(0) as usize;
+    let has_more = rows.len() > limit;
+    if has_more {
+        rows.truncate(limit);
+    }
     let next_cursor = rows.last().map(|p| pagination::encode(cursor_for_lite(p)));
     let items = rows
         .into_iter()
@@ -68,6 +72,11 @@ fn page_from_lite_rows(
     }
 }
 
+fn offset_page_has_more(offset: i64, row_count: usize, total: u64) -> bool {
+    let start = offset.max(0) as u64;
+    start.saturating_add(row_count as u64) < total
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PhotosListArgs {
     pub cursor: Option<String>,
@@ -96,6 +105,7 @@ pub async fn photos_list(
     };
     let cursor_in = pagination::decode(args.cursor.as_deref())?;
     let limit = clamp_timeline_limit(args.limit) as i64;
+    let probe_limit = limit + 1;
     let cfg = smriti::config::AppConfig::load();
     let show_stacks = cfg.show_timeline_stacks && !args.include_trashed;
 
@@ -105,7 +115,7 @@ pub async fn photos_list(
     let (rows, total) = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
         let repo = PhotoRepo::new(&conn);
-        let rows = repo.list_after(cursor_key, limit, include_trashed, show_stacks)?;
+        let rows = repo.list_after(cursor_key, probe_limit, include_trashed, show_stacks)?;
         let total = if first_page {
             Some(repo.count_timeline_visible(show_stacks)? as u64)
         } else {
@@ -139,14 +149,17 @@ pub async fn photos_list_at(
         let conn = open_secondary(&db_path)?;
         let repo = PhotoRepo::new(&conn);
         let rows = repo.list_at_offset(offset, limit, include_trashed, show_stacks)?;
-        let total = Some(repo.count_timeline_visible(show_stacks)? as u64);
+        let total = repo.count_timeline_visible(show_stacks)? as u64;
         Ok::<_, CommandError>((rows, total))
     })
     .await
     .map_err(|e| CommandError::Internal {
         message: format!("photo offset list worker failed: {e}"),
     })??;
-    Ok(page_from_lite_rows(rows, limit, total))
+    let row_count = rows.len();
+    let mut page = page_from_lite_rows(rows, limit, Some(total));
+    page.has_more = offset_page_has_more(offset, row_count, total);
+    Ok(page)
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,17 +413,23 @@ where
     };
     let cursor_in = pagination::decode(cursor.as_deref())?;
     let limit_n = pagination::clamp_limit(limit) as i64;
+    let probe_limit = limit_n + 1;
     let cursor_key = cursor_in.map(|c| (c.date_taken, c.id));
     let rows = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
-        f(&conn, cursor_key, limit_n)
+        f(&conn, cursor_key, probe_limit)
     })
     .await
     .map_err(|e| CommandError::Internal {
         message: format!("photo page worker failed: {e}"),
     })??;
 
-    let has_more = rows.len() as i64 == limit_n;
+    let mut rows = rows;
+    let limit_len = limit_n.max(0) as usize;
+    let has_more = rows.len() > limit_len;
+    if has_more {
+        rows.truncate(limit_len);
+    }
     let next_cursor: Option<String> = rows.last().map(|p| {
         pagination::encode(Cursor {
             date_taken: p.date_taken,
@@ -965,5 +984,12 @@ mod tests {
         assert_eq!(clamp_timeline_limit(None), 200);
         assert_eq!(clamp_timeline_limit(Some(2_000)), 2_000);
         assert_eq!(clamp_timeline_limit(Some(10_000)), 2_000);
+    }
+
+    #[test]
+    fn offset_page_has_more_uses_total_count() {
+        assert!(offset_page_has_more(0, 200, 201));
+        assert!(!offset_page_has_more(200, 200, 400));
+        assert!(!offset_page_has_more(400, 0, 400));
     }
 }

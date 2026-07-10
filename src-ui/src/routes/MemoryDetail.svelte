@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { memories, trash } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -30,11 +30,14 @@
   let actionBusy = $state(false);
   let loadSeq = 0;
   let mounted = true;
+  let scrollRestored = false;
   const scrollStorageKey = $derived(`smriti:memory-scroll:${id}`);
   const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
 
   function onCellClick(e: MouseEvent, photoId: number) {
-    handleCellClick(e, photoId, photos.map((p) => p.id));
+    const ids = photos.map((p) => p.id);
+    const handled = handleCellClick(e, photoId, ids);
+    if (!handled) browseContext.set(`memory:${id}`, ids);
   }
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     photos = photos.map((p) => (
@@ -84,6 +87,13 @@
       if (mounted && seq === loadSeq && memoryId === id) actionBusy = false;
     }
   }
+
+  function memoryKindLabel(kind: string): string {
+    if (kind === "fallback_window") return "From your library";
+    return kind
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  }
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (selection.active()) {
@@ -94,10 +104,34 @@
       }
     }
   }
+
+  function readSavedScroll() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const y = raw ? Number(raw) : 0;
+    return Number.isFinite(y) && y > 0 ? y : 0;
+  }
+
+  function saveScroll() {
+    if (!scrollEl) return;
+    try { sessionStorage.setItem(scrollStorageKey, String(scrollEl.scrollTop)); } catch {}
+  }
+
+  async function restoreSavedScroll() {
+    if (scrollRestored || !scrollEl) return;
+    const target = readSavedScroll();
+    scrollRestored = true;
+    if (target <= 0) return;
+    await tick();
+    requestAnimationFrame(() => {
+      if (mounted && scrollEl) scrollEl.scrollTop = target;
+    });
+  }
+
   onMount(() => {
     mounted = true;
     window.addEventListener("keydown", onGlobalKey);
     return () => {
+      saveScroll();
       mounted = false;
       loadSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
@@ -105,23 +139,18 @@
   });
 
   $effect(() => {
-    if (!scrollEl) return;
-    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
-    if (raw) {
-      const y = Number(raw);
-      if (Number.isFinite(y) && y > 0) requestAnimationFrame(() => { if (mounted && scrollEl) scrollEl.scrollTop = y; });
-    }
-    const onScroll = () => {
-      try { sessionStorage.setItem(scrollStorageKey, String(scrollEl?.scrollTop ?? 0)); } catch {}
-    };
-    scrollEl.addEventListener("scroll", onScroll, { passive: true });
-    return () => scrollEl?.removeEventListener("scroll", onScroll);
+    const el = scrollEl;
+    if (!el) return;
+    const onScroll = () => saveScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
   });
 
   async function load() {
     const seq = ++loadSeq;
     const memoryId = id;
     error = null;
+    scrollRestored = false;
     card = null;
     photos = [];
     savedAlbumId = null;
@@ -134,6 +163,7 @@
       card = r.card;
       photos = r.photos;
       browseContext.set(`memory:${memoryId}`, photos.map((p) => p.id));
+      void restoreSavedScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     }
@@ -174,7 +204,7 @@
     {/snippet}
     {#snippet subtitle()}
       <span class="mono">{c.photo_count} photos</span>
-      <span class="kind">{c.kind}</span>
+      <span class="kind">{memoryKindLabel(c.kind)}</span>
     {/snippet}
     {#snippet actions()}
       <button class="ghost icon-action" onclick={startMemorySlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start memory slideshow">
@@ -198,6 +228,7 @@
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
         data-photo-id={p.id}
+        data-no-marquee
         href="#/photo?id={p.id}"
         use:thumbnailOnVisible={{
           id: p.id,

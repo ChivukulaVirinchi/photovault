@@ -21,6 +21,14 @@ use crate::{CommandError, CommandResult};
 
 const FACE_THUMBNAIL_FALLBACK_CANDIDATES: usize = 50;
 
+fn take_page_probe<T>(mut rows: Vec<T>, limit: usize) -> (Vec<T>, bool) {
+    let has_more = rows.len() > limit;
+    if has_more {
+        rows.truncate(limit);
+    }
+    (rows, has_more)
+}
+
 fn current_face_cluster_id(conn: &rusqlite::Connection, face_id: i64) -> CommandResult<i64> {
     let cluster_id: Option<Option<i64>> = conn
         .query_row(
@@ -276,7 +284,7 @@ pub async fn people_face_list(
     };
 
     let limit = args.limit.unwrap_or(50).clamp(1, 200) as usize;
-    let faces = repo.get_faces_by_cluster(args.person_id, status, args.cursor, limit)?;
+    let faces = repo.get_faces_by_cluster(args.person_id, status, args.cursor, limit + 1)?;
 
     // Populate cluster names.
     let mut cluster_name: Option<String> = None;
@@ -287,9 +295,8 @@ pub async fn people_face_list(
             .and_then(|c| c.name.clone());
     }
 
-    let has_more = faces.len() == limit;
+    let (faces, has_more) = take_page_probe(faces, limit);
     let next_cursor = faces.last().map(|f| f.face_id);
-    let total = Some(faces.len() as u64);
 
     let items: Vec<FaceDetailDto> = faces
         .into_iter()
@@ -305,7 +312,7 @@ pub async fn people_face_list(
         items,
         next_cursor: next_cursor.map(|c| c.to_string()),
         has_more,
-        total,
+        total: None,
     })
 }
 
@@ -325,17 +332,16 @@ pub async fn people_unclustered_faces(
     let db = lib.db.lock().await;
     let repo = FaceRepo::new(&db.conn);
     let limit = args.limit.unwrap_or(24).clamp(1, 100) as usize;
-    let faces = repo.get_unclustered_faces(args.cursor, limit)?;
-    let has_more = faces.len() == limit;
+    let faces = repo.get_unclustered_faces(args.cursor, limit + 1)?;
+    let (faces, has_more) = take_page_probe(faces, limit);
     let next_cursor = faces.last().map(|f| f.face_id);
     let items: Vec<FaceDetailDto> = faces.into_iter().map(FaceDetailDto::from).collect();
-    let total = Some(items.len() as u64);
 
     Ok(Page {
         items,
         next_cursor: next_cursor.map(|c| c.to_string()),
         has_more,
-        total,
+        total: None,
     })
 }
 
@@ -627,7 +633,8 @@ pub async fn people_next_unconfirmed_faces(
         .filter(|id| *id > 0)
         .take(5_000)
         .collect();
-    let faces = repo.next_unconfirmed_face_batch_excluding(limit, &excluded_face_ids)?;
+    let faces = repo.next_unconfirmed_face_batch_excluding(limit + 1, &excluded_face_ids)?;
+    let (faces, has_more) = take_page_probe(faces, limit);
     let cluster_id = faces.first().and_then(|f| f.cluster_id);
     let cluster_name: Option<String> = match cluster_id {
         Some(id) => db
@@ -640,7 +647,6 @@ pub async fn people_next_unconfirmed_faces(
             .optional()?,
         None => None,
     };
-    let has_more = faces.len() == limit;
     let next_cursor = faces.last().map(|f| f.face_id);
     let items = faces
         .into_iter()

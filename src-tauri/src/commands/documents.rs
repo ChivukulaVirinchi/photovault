@@ -11,6 +11,14 @@ use crate::pagination;
 use crate::state::AppState;
 use crate::{CommandError, CommandResult};
 
+fn take_page_probe<T>(mut rows: Vec<T>, limit: usize) -> (Vec<T>, bool) {
+    let has_more = rows.len() > limit;
+    if has_more {
+        rows.truncate(limit);
+    }
+    (rows, has_more)
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct DocumentsListArgs {
     pub categories: Option<Vec<ContentCategoryDto>>,
@@ -30,6 +38,7 @@ pub async fn documents_list(
     };
 
     let limit = pagination::clamp_limit(args.limit) as i64;
+    let probe_limit = limit + 1;
     // Translate cursor.id (which we treat as offset for these legacy
     // offset-based repo methods) into an offset.
     let offset = pagination::decode(args.cursor.as_deref())?
@@ -49,9 +58,9 @@ pub async fn documents_list(
                             .to_string()
                     })
                     .collect::<Vec<_>>();
-                repo.get_documents_by_categories(&names, limit, offset)?
+                repo.get_documents_by_categories(&names, probe_limit, offset)?
             }
-            _ => repo.get_non_photo_documents(limit, offset)?,
+            _ => repo.get_non_photo_documents(probe_limit, offset)?,
         };
         Ok::<_, CommandError>(photos)
     })
@@ -59,7 +68,7 @@ pub async fn documents_list(
     .map_err(|e| CommandError::Internal {
         message: format!("document list worker failed: {e}"),
     })??;
-    let has_more = photos.len() as i64 == limit;
+    let (photos, has_more) = take_page_probe(photos, limit as usize);
     let next_cursor = if has_more {
         Some(pagination::encode(crate::pagination::Cursor {
             date_taken: None,
@@ -94,20 +103,23 @@ pub async fn documents_search(
         db_path_for(&lib.drive_root)
     };
     let limit = pagination::clamp_limit(args.limit) as i64;
+    let probe_limit = limit + 1;
     let offset = pagination::decode(args.cursor.as_deref())?
         .map(|c| c.id)
         .unwrap_or(0);
     let photos = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
-        Ok::<_, CommandError>(
-            DocumentRepo::new(&conn).search_documents_fts(&args.q, limit, offset)?,
-        )
+        Ok::<_, CommandError>(DocumentRepo::new(&conn).search_documents_fts(
+            &args.q,
+            probe_limit,
+            offset,
+        )?)
     })
     .await
     .map_err(|e| CommandError::Internal {
         message: format!("document search worker failed: {e}"),
     })??;
-    let has_more = photos.len() as i64 == limit;
+    let (photos, has_more) = take_page_probe(photos, limit as usize);
     let next_cursor = if has_more {
         Some(pagination::encode(crate::pagination::Cursor {
             date_taken: None,

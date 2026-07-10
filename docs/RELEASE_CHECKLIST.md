@@ -182,26 +182,16 @@ While the workflow runs (~15–30 minutes):
 
 ---
 
-## Interaction with release-plz
+## Release automation
 
-`release-plz` (configured in `.release-plz.toml`) watches master for
-conventional-commit-prefixed commits (`feat:`, `fix:`, `perf:`,
-`refactor:`, `chore:`) and opens a "Release PR" that bumps the
-version + rewrites `CHANGELOG.md`.
+Releases are tag-driven. Commit the version bump directly on `master`,
+then push the matching `vX.Y.Z` tag. The tag triggers
+`.github/workflows/release.yml`, which builds and uploads the official
+artifacts.
 
-That's the **stable** workflow. It cannot natively cut rc releases.
-
-When you push an rc commit + tag manually:
-
-- release-plz will open a Release PR proposing the *next stable*
-  bump (because it ignores pre-release suffixes for semver math).
-- **Close that PR.** Don't merge it; the manual rc has already
-  shipped. When you're ready to cut the next stable, let release-plz
-  open a fresh PR then.
-
-To avoid the noise entirely on an rc, prefix the bump commit with
-`chore(release):` — release-plz's `chore` group is grouped lowest
-priority and won't trigger an automated semver bump on its own.
+Do not use a GitHub Actions job to open a release PR for version bumps.
+This repository keeps release ownership on `master` + tags so manual
+patch releases and rc releases follow the same path.
 
 ---
 

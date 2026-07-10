@@ -38,21 +38,22 @@ describe("thumbUrl", () => {
     );
   });
 
-  it("passes through absolute Windows drive-letter paths", () => {
-    expect(thumbUrl("/anywhere", "D:\\photos\\img.jpg")).toBe(
-      "mock://D:\\photos\\img.jpg",
-    );
+  it("rejects absolute Windows drive-letter paths", () => {
+    expect(thumbUrl("/anywhere", "D:\\photos\\img.jpg")).toBeNull();
   });
 
-  it("passes through forward-slash absolute paths", () => {
-    expect(thumbUrl("/anywhere", "/abs/path/img.jpg")).toBe(
-      "mock:///abs/path/img.jpg",
-    );
+  it("rejects forward-slash absolute paths", () => {
+    expect(thumbUrl("/anywhere", "/abs/path/img.jpg")).toBeNull();
   });
 
-  it("passes through UNC paths", () => {
-    expect(thumbUrl("/anywhere", "\\\\server\\share\\img.jpg")).toBe(
-      "mock://\\\\server\\share\\img.jpg",
-    );
+  it("rejects UNC paths", () => {
+    expect(thumbUrl("/anywhere", "\\\\server\\share\\img.jpg")).toBeNull();
+  });
+
+  it("rejects relative traversal and malformed relative paths", () => {
+    expect(thumbUrl("/drive", "../secret.jpg")).toBeNull();
+    expect(thumbUrl("/drive", ".photovault/../secret.jpg")).toBeNull();
+    expect(thumbUrl("/drive", ".photovault//thumb.jpg")).toBeNull();
+    expect(thumbUrl("/drive", ".photovault\\thumb.jpg")).toBeNull();
   });
 });

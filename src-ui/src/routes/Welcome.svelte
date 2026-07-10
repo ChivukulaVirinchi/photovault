@@ -15,6 +15,7 @@
   let compatTotal = $state<number | null>(null);
   let compatLoading = $state(false);
   let compatError = $state<string | null>(null);
+  let compatLoaded = $state(false);
   let compatSeq = 0;
   let mounted = true;
 
@@ -65,7 +66,7 @@
       (libraryStore.lastError?.kind === "schema_too_new" ? libraryStore.lastError : null),
   );
   const canLoadMoreCompat = $derived(
-    compatTotal == null || compatPhotos.length < compatTotal,
+    !compatError && (compatTotal == null || compatPhotos.length < compatTotal),
   );
 
   async function loadCompatPhotos(reset = false) {
@@ -75,15 +76,18 @@
     if (reset) {
       compatPhotos = [];
       compatTotal = null;
+      compatLoaded = false;
     }
     try {
       const page = await library.compatPhotos(reset ? 0 : compatPhotos.length, 100);
       if (!mounted || seq !== compatSeq) return;
       compatPhotos = reset ? page.items : [...compatPhotos, ...page.items];
       compatTotal = page.total;
+      compatLoaded = true;
     } catch (e) {
       if (!mounted || seq !== compatSeq) return;
       compatError = commandErrorMessage(e);
+      compatLoaded = true;
     } finally {
       if (mounted && seq === compatSeq) compatLoading = false;
     }
@@ -117,14 +121,15 @@
   });
 
   $effect(() => {
-    if (libraryStore.unsupportedSchema && compatPhotos.length === 0 && !compatLoading) {
+    if (libraryStore.unsupportedSchema && !compatLoaded && !compatLoading) {
       void loadCompatPhotos(true);
     }
-    if (!libraryStore.unsupportedSchema && compatPhotos.length > 0) {
+    if (!libraryStore.unsupportedSchema && (compatLoaded || compatPhotos.length > 0 || compatTotal != null || compatError)) {
       compatSeq += 1;
       compatPhotos = [];
       compatTotal = null;
       compatError = null;
+      compatLoaded = false;
     }
   });
 </script>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
   import { bursts } from "../lib/api/all";
@@ -19,6 +19,9 @@
   const PAGE_SIZE = 200;
   let hasMore = $state(false);
   let loadingMore = $state(false);
+  let pageEl = $state<HTMLDivElement | undefined>(undefined);
+  let scrollRestored = false;
+  const scrollStorageKey = $derived(`smriti:bursts-scroll:${libraryStore.driveRoot ?? "closed"}`);
 
   // Detection runs in tokio::spawn on the backend. Local "running"
   // booleans were resetting on remount, so the UI lied about what
@@ -27,16 +30,51 @@
   const burstsJob = $derived(jobs.byKind("bursts"));
   const running = $derived(jobs.isRunning("bursts"));
 
+  function sameLibrary(root: string | null): boolean {
+    return libraryStore.isOpen && libraryStore.driveRoot === root;
+  }
+
   async function load() {
     const seq = ++loadSeq;
     error = null;
+    scrollRestored = false;
+    loadingMore = false;
     try {
       const nextGroups = await bursts.list(PAGE_SIZE, 0);
       if (!mounted || seq !== loadSeq) return;
       groups = nextGroups;
       hasMore = nextGroups.length === PAGE_SIZE;
+      void restoreSavedScroll();
     }
     catch (e) { if (mounted && seq === loadSeq) error = commandErrorMessage(e); }
+  }
+
+  function readSavedScroll() {
+    const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
+    const y = raw ? Number(raw) : 0;
+    return Number.isFinite(y) && y > 0 ? y : 0;
+  }
+
+  function saveScroll() {
+    if (!pageEl) return;
+    try { sessionStorage.setItem(scrollStorageKey, String(pageEl.scrollTop)); } catch {}
+  }
+
+  async function restoreSavedScroll() {
+    if (scrollRestored || !pageEl) return;
+    const target = readSavedScroll();
+    scrollRestored = true;
+    if (target <= 0) return;
+    await tick();
+    for (let i = 0; mounted && pageEl && pageEl.scrollHeight - pageEl.clientHeight < target && hasMore && i < 30; i++) {
+      const before = groups.length;
+      await loadMore();
+      await tick();
+      if (groups.length === before) break;
+    }
+    requestAnimationFrame(() => {
+      if (mounted && pageEl) pageEl.scrollTop = target;
+    });
   }
 
   async function loadMore() {
@@ -85,18 +123,20 @@
 
   async function run() {
     if (running) return;
+    const root = libraryStore.driveRoot;
     const placeholderId = `pending-bursts-${Date.now()}`;
     jobs.register(placeholderId, "bursts");
     toasts.success("Detecting bursts — feel free to navigate away.");
     try {
       const r = await bursts.run();
       jobs.dismiss(placeholderId);
+      if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "bursts");
     } catch (e) {
       jobs.dismiss(placeholderId);
-      if (!mounted) return;
+      if (!sameLibrary(root)) return;
       const msg = commandErrorMessage(e);
-      error = msg;
+      if (mounted) error = msg;
       toasts.error(`Couldn't start: ${msg}`);
     }
   }
@@ -123,6 +163,7 @@
       }
     });
     return () => {
+      saveScroll();
       mounted = false;
       loadSeq += 1;
       void unlisten.then((u) => u());
@@ -152,7 +193,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page">
+<div class="page" bind:this={pageEl} onscroll={saveScroll}>
   {#if groups.length === 0}
     <div class="empty">
       <p>No burst groups yet. Run detection — it'll look for shots taken in quick succession.</p>

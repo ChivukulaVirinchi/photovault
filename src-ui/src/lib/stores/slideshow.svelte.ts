@@ -42,6 +42,7 @@ class SlideshowStore {
     this.label = opts.label;
     this.nextCursor = opts.nextCursor ?? null;
     this.hasMore = Boolean(opts.hasMore && opts.loadMore);
+    this.loadingMore = false;
     this.loader = opts.loadMore ?? null;
     this.playing = ids.length > 1 || this.hasMore;
     this.active = ids.length > 0;
@@ -55,6 +56,7 @@ class SlideshowStore {
     this.index = -1;
     this.nextCursor = null;
     this.hasMore = false;
+    this.loadingMore = false;
     this.loader = null;
   }
 

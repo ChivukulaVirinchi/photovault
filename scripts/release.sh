@@ -12,8 +12,8 @@
 #   ./scripts/release.sh v0.2.0-rc.3 --allow-dirty
 #   ./scripts/release.sh v0.2.0
 #
-# See docs/RELEASE_CHECKLIST.md for the broader release workflow,
-# pre-release flag handling, and the release-plz interaction.
+# See docs/RELEASE_CHECKLIST.md for the broader release workflow and
+# pre-release flag handling.
 
 set -euo pipefail
 

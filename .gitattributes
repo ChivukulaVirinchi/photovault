@@ -1,0 +1,2 @@
+*.sh text eol=lf
+scripts/pre-push text eol=lf

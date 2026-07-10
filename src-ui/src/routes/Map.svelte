@@ -1,3 +1,23 @@
+<script module lang="ts">
+  import type { PhotoSummaryDto as CachedPhotoSummaryDto } from "../lib/api/types";
+
+  type CachedClusterRef = {
+    lat: number;
+    lng: number;
+    count: number;
+    photo_ids: number[];
+  };
+
+  let cachedMapRoute:
+    | {
+        driveRoot: string | null;
+        drawerOpen: boolean;
+        drawerRef: CachedClusterRef | null;
+        drawerPhotos: CachedPhotoSummaryDto[];
+      }
+    | null = null;
+</script>
+
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import maplibregl, { type Map as MapInstance, type Marker } from "maplibre-gl";
@@ -17,6 +37,9 @@
 
   installTileCache();
 
+  const currentDriveRoot = libraryStore.driveRoot;
+  const currentMapCache = cachedMapRoute?.driveRoot === currentDriveRoot ? cachedMapRoute : null;
+
   /// Each geotagged photo, stored once and clustered client-side. The
   /// previous design did the clustering on the backend and re-fetched
   /// on every zoom change — markers stayed at their old positions
@@ -32,6 +55,7 @@
   let containerEl: HTMLDivElement | undefined = $state();
   let map: MapInstance | null = null;
   let markers: Marker[] = [];
+  let markerThumbnailCancels: Array<() => void> = [];
   let pinCount = $state(0);
   let totalGeotagged = $state<number | null>(null);
   let loading = $state(false);
@@ -53,9 +77,9 @@
     count: number;
     photo_ids: number[];
   };
-  let drawerOpen = $state(false);
-  let drawerRef = $state<ClusterRef | null>(null);
-  let drawerPhotos = $state<PhotoSummaryDto[]>([]);
+  let drawerOpen = $state(currentMapCache?.drawerOpen ?? false);
+  let drawerRef = $state<ClusterRef | null>(currentMapCache?.drawerRef ?? null);
+  let drawerPhotos = $state<PhotoSummaryDto[]>(currentMapCache?.drawerPhotos ?? []);
   let drawerLoading = $state(false);
   const DRAWER_LIMIT = 500;
   type MapReturnState = {
@@ -92,11 +116,27 @@
     history.replaceState({ ...(history.state ?? {}), smritiMapReturnState: state }, "", location.href);
   }
 
+  function saveMapRouteCache() {
+    cachedMapRoute = {
+      driveRoot: currentDriveRoot,
+      drawerOpen,
+      drawerRef,
+      drawerPhotos,
+    };
+  }
+
   /// Cluster appearance:
   ///   far zoom (≤6): big count-only bubble
   ///   mid zoom (7+): representative thumbnail + +N badge
   function clusterShowsThumb(zoom: number): boolean {
     return zoom >= 6.5;
+  }
+
+  function clearMarkers() {
+    for (const cancel of markerThumbnailCancels) cancel();
+    markerThumbnailCancels = [];
+    for (const m of markers) m.remove();
+    markers = [];
   }
 
   function buildClusterElement(
@@ -119,11 +159,13 @@
       if (url) wrap.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
     } else if (clusterShowsThumb(zoom) && photoId > 0) {
       wrap.classList.add("with-thumb");
-      enqueueThumbnail(photoId, (path) => {
-        if (!wrap.isConnected) return;
-        const url = thumbUrl(libraryStore.driveRoot, path);
-        if (url) wrap.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
-      }, Date.now() + 1_000_000_000);
+      markerThumbnailCancels.push(
+        enqueueThumbnail(photoId, (path) => {
+          if (!wrap.isConnected) return;
+          const url = thumbUrl(libraryStore.driveRoot, path);
+          if (url) wrap.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
+        }, Date.now() + 1_000_000_000),
+      );
     }
 
     if (clusterShowsThumb(zoom)) {
@@ -159,16 +201,21 @@
     el.className = "pv-pin pv-pin-single";
     el.href = `#/photo?id=${photoId}`;
     el.setAttribute("aria-label", `Photo #${photoId}`);
-    el.addEventListener("click", rememberReturnState);
+    el.addEventListener("click", () => {
+      rememberReturnState();
+      browseContext.set(`map:${photoId}`, [photoId]);
+    });
     if (thumb) {
       const url = thumbUrl(libraryStore.driveRoot, thumb);
       if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
     } else {
-      enqueueThumbnail(photoId, (path) => {
-        if (!el.isConnected) return;
-        const url = thumbUrl(libraryStore.driveRoot, path);
-        if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
-      }, Date.now() + 1_000_000_000);
+      markerThumbnailCancels.push(
+        enqueueThumbnail(photoId, (path) => {
+          if (!el.isConnected) return;
+          const url = thumbUrl(libraryStore.driveRoot, path);
+          if (url) el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
+        }, Date.now() + 1_000_000_000),
+      );
     }
     anchor.appendChild(el);
     return anchor;
@@ -192,8 +239,7 @@
     ];
     const features = cluster.getClusters(bbox, z);
 
-    for (const m of markers) m.remove();
-    markers = [];
+    clearMarkers();
 
     let visible = 0;
     for (const f of features) {
@@ -234,8 +280,7 @@
 
   function renderViewportMarkers() {
     if (!map) return;
-    for (const m of markers) m.remove();
-    markers = [];
+    clearMarkers();
 
     let visible = 0;
     for (const pin of viewportPins) {
@@ -280,6 +325,7 @@
         cluster = null;
         totalGeotagged = null;
         await loadViewportPins();
+        if (disposed) return;
         error = null;
         return;
       }
@@ -330,6 +376,7 @@
   }
 
   function openDrawerPhoto(photoId: number) {
+    saveMapRouteCache();
     rememberReturnState();
     if (drawerRef) {
       browseContext.set(`map:${drawerRef.lat.toFixed(5)},${drawerRef.lng.toFixed(5)}`, drawerRef.photo_ids);
@@ -352,13 +399,20 @@
     drawerOpen = true;
     drawerLoading = true;
     drawerPhotos = [];
+    saveMapRouteCache();
     try {
       const photos = await mapApi.clusterFilmstrip(filmstripIds);
-      if (seq === drawerSeq && !disposed) drawerPhotos = photos;
+      if (seq === drawerSeq && !disposed) {
+        drawerPhotos = photos;
+        saveMapRouteCache();
+      }
     } catch (e) {
       if (seq === drawerSeq && !disposed) error = commandErrorMessage(e);
     } finally {
-      if (seq === drawerSeq && !disposed) drawerLoading = false;
+      if (seq === drawerSeq && !disposed) {
+        drawerLoading = false;
+        saveMapRouteCache();
+      }
     }
   }
 
@@ -379,13 +433,20 @@
     drawerOpen = true;
     drawerLoading = true;
     drawerPhotos = [];
+    saveMapRouteCache();
     try {
       const photos = await mapApi.clusterFilmstrip(photoIds);
-      if (seq === drawerSeq && !disposed) drawerPhotos = photos;
+      if (seq === drawerSeq && !disposed) {
+        drawerPhotos = photos;
+        saveMapRouteCache();
+      }
     } catch (e) {
       if (seq === drawerSeq && !disposed) error = commandErrorMessage(e);
     } finally {
-      if (seq === drawerSeq && !disposed) drawerLoading = false;
+      if (seq === drawerSeq && !disposed) {
+        drawerLoading = false;
+        saveMapRouteCache();
+      }
     }
   }
 
@@ -394,12 +455,14 @@
     drawerOpen = false;
     drawerRef = null;
     drawerPhotos = [];
+    saveMapRouteCache();
   }
 
   function patchDrawerThumbnail(photoId: number, thumbnailPath: string) {
     drawerPhotos = drawerPhotos.map((p) => (
       p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
     ));
+    saveMapRouteCache();
   }
 
   function zoomIntoCluster() {
@@ -462,10 +525,12 @@
   });
 
   onDestroy(() => {
+    saveMapRouteCache();
     disposed = true;
     drawerSeq++;
     if (renderTimer) clearTimeout(renderTimer);
-    for (const m of markers) m.remove();
+    window.removeEventListener("keydown", onKey);
+    clearMarkers();
     map?.remove();
     map = null;
     cluster = null;
