@@ -13,13 +13,16 @@ models.
 
 **Causes & fixes:**
 
-1. **Asset pack not installed.** Run **Settings → Reinstall Assets**.
+1. **Asset pack not installed.** Click **Set up assets** on Welcome or
+   **Settings → Download Assets**.
    This downloads the ONNX runtime, face detection + embedding
    models, and the GeoNames database. Requires internet for the
    one-time download.
-2. **Asset download was interrupted.** Re-run **Reinstall Assets** —
-   it's idempotent and resumes from where it stopped.
-3. **Disk space.** The pack is ~250 MB. Free up space and retry.
+2. **Asset download was interrupted.** Run **Download Assets** again.
+   Installation is staged, so an interrupted attempt does not replace
+   previously working assets.
+3. **Disk space.** Allow roughly 1 GB of free temporary space while the
+   ~300 MB pack is downloaded, validated, and unpacked.
 4. **Source build without assets.** Run
    `./scripts/setup_assets.sh` (Linux/macOS) or
    `.\scripts\setup_assets.ps1` (Windows) at the repo root.

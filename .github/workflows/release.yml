@@ -99,12 +99,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Download ONNX models + GeoNames + ORT
         run: |
           set -euo pipefail
           mkdir -p assets-pack/models assets-pack/data \
                    assets-pack/libs/onnxruntime/linux \
-                   assets-pack/libs/onnxruntime/windows
+                   assets-pack/libs/onnxruntime/windows \
+                   assets-pack/libs/onnxruntime/macos
 
           # Face models (Hugging Face mirror — same as scripts/setup_assets.sh)
           curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
@@ -120,8 +124,19 @@ jobs:
             https://download.geonames.org/export/dump/cities1000.zip
           unzip -o /tmp/cities1000.zip -d assets-pack/data/
           curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
-            -o assets-pack/data/country_codes.txt \
+            -o /tmp/countryInfo.txt \
             https://download.geonames.org/export/dump/countryInfo.txt
+          awk -F '\t' 'BEGIN{OFS="\t"} !/^#/ && NF>=5 {print $1, $5}' \
+            /tmp/countryInfo.txt > assets-pack/data/country_codes.txt
+
+          # Build the SQLite database that the installed application reads.
+          # Shipping only the source text made the one-click installer finish
+          # with GeoNames still reported missing.
+          cargo run --bin build_geonames -- assets-pack
+          test -s assets-pack/data/geonames.db
+          # The application consumes the SQLite DB. Keep source text out of
+          # the final download to reduce first-run transfer and disk usage.
+          rm assets-pack/data/cities1000.txt assets-pack/data/country_codes.txt
 
           # ONNX Runtime — Linux x64 .so
           ORT_VER=1.23.0
@@ -140,6 +155,22 @@ jobs:
           unzip -o /tmp/ort-win.zip -d /tmp/ort-win
           cp /tmp/ort-win/onnxruntime-win-x64-${ORT_VER}/lib/onnxruntime.dll \
              assets-pack/libs/onnxruntime/windows/
+
+          # ONNX Runtime — macOS arm64 (the architecture shipped above)
+          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
+            -o /tmp/ort-macos.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-osx-arm64-${ORT_VER}.tgz"
+          mkdir -p /tmp/ort-macos
+          tar -xzf /tmp/ort-macos.tgz -C /tmp/ort-macos
+          cp /tmp/ort-macos/onnxruntime-osx-arm64-${ORT_VER}/lib/libonnxruntime*.dylib \
+             assets-pack/libs/onnxruntime/macos/
+
+          # Fail the release before upload if the pack contract is incomplete.
+          test -s assets-pack/models/scrfd_10g_bnkps.onnx
+          test -s assets-pack/models/adaface_ir101_webface12m.onnx
+          test -s assets-pack/libs/onnxruntime/linux/libonnxruntime.so
+          test -s assets-pack/libs/onnxruntime/windows/onnxruntime.dll
+          test -n "$(find assets-pack/libs/onnxruntime/macos -name 'libonnxruntime*.dylib' -print -quit)"
 
       - name: Zip pack
         run: |
@@ -165,3 +196,18 @@ jobs:
           files: Smriti-Assets.zip
           draft: true
           prerelease: false
+      - name: Attach release checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          gh release download "${GITHUB_REF_NAME}" --dir release-assets
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > SHA256SUMS
+          test -s SHA256SUMS
+          gh release upload "${GITHUB_REF_NAME}" SHA256SUMS --clobber

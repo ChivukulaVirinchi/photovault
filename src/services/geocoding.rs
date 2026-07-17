@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, Connection, OpenFlags, Result as SqliteResult};
 
 /// A geocoding result.
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub struct GeocodingService {
 
 impl GeocodingService {
     pub fn new<P: AsRef<Path>>(db_path: P) -> SqliteResult<Self> {
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.execute_batch(
             r#"
             PRAGMA query_only = ON;

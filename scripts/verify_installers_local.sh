@@ -10,57 +10,40 @@ status_line() {
 
 fail=0
 
-check_core_build() {
-  if cargo build --release >/dev/null; then
-    status_line "core build" "PASS"
-  else
-    status_line "core build" "FAIL"
+check_tauri_bundles() {
+  npm ci --prefix src-ui >/dev/null
+  npm run build --prefix src-ui >/dev/null
+  if ! (cd src-tauri && cargo tauri build --ci --features heic >/dev/null); then
+    status_line "Tauri bundles" "FAIL"
     fail=1
+    return
   fi
-}
 
-check_deb() {
-  if command -v cargo-deb >/dev/null 2>&1 || cargo install cargo-deb --locked >/dev/null; then
-    if cargo deb >/dev/null 2>&1; then
-      local deb
-      deb=$(ls target/debian/*.deb 2>/dev/null | head -n 1 || true)
-      if [[ -n "$deb" ]]; then
-        status_line "linux deb" "PASS ($deb)"
-      else
-        status_line "linux deb" "FAIL (no .deb output)"
-        fail=1
-      fi
-    else
-      status_line "linux deb" "FAIL (cargo deb failed)"
+  case "$(uname -s)" in
+    Linux)
+      local deb appimage
+      deb=$(find target/release/bundle/deb -type f -name '*.deb' -print -quit 2>/dev/null || true)
+      appimage=$(find target/release/bundle/appimage -type f -name '*.AppImage' -print -quit 2>/dev/null || true)
+      [[ -n "$deb" ]] && status_line "Linux DEB" "PASS ($deb)" || { status_line "Linux DEB" "FAIL"; fail=1; }
+      [[ -n "$appimage" ]] && status_line "Linux AppImage" "PASS ($appimage)" || { status_line "Linux AppImage" "FAIL"; fail=1; }
+      ;;
+    Darwin)
+      local dmg
+      dmg=$(find target/release/bundle/dmg -type f -name '*.dmg' -print -quit 2>/dev/null || true)
+      [[ -n "$dmg" ]] && status_line "macOS DMG" "PASS ($dmg)" || { status_line "macOS DMG" "FAIL"; fail=1; }
+      ;;
+    *)
+      status_line "Tauri bundles" "FAIL (unsupported host $(uname -s))"
       fail=1
-    fi
-  else
-    status_line "linux deb" "FAIL (cargo-deb unavailable)"
-    fail=1
-  fi
-}
-
-check_appimage() {
-  if ./scripts/release_local.sh linux-appimage >/dev/null 2>&1 && [[ -f Smriti-x86_64.AppImage ]]; then
-    status_line "linux appimage" "PASS (Smriti-x86_64.AppImage)"
-  else
-    status_line "linux appimage" "FAIL"
-    fail=1
-  fi
+      ;;
+  esac
 }
 
 check_assets_pack() {
-  rm -rf assets-pack-local Smriti-Assets-local.zip
-  mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
-  if [[ -f libs/onnxruntime/libonnxruntime.so ]] && [[ -f models/scrfd_10g_bnkps.onnx ]] && [[ -f models/adaface_ir101_webface12m.onnx ]] && [[ -f data/geonames.db ]]; then
-    cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ 2>/dev/null || true
-    cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
-    cp models/adaface_ir101_webface12m.onnx assets-pack-local/models/
-    cp data/geonames.db assets-pack-local/data/
-    (cd assets-pack-local && zip -r ../Smriti-Assets-local.zip . >/dev/null)
-    status_line "assets pack (linux)" "PASS (Smriti-Assets-local.zip)"
+  if ./scripts/release_local.sh assets-pack >/dev/null; then
+    status_line "assets pack" "PASS (Smriti-Assets-local.zip)"
   else
-    status_line "assets pack (linux)" "FAIL (missing source assets; run setup_assets.sh)"
+    status_line "assets pack" "FAIL"
     fail=1
   fi
 }
@@ -68,9 +51,7 @@ check_assets_pack() {
 echo "Smriti local installer verification"
 echo "====================================="
 
-check_core_build
-check_deb
-check_appimage
+check_tauri_bundles
 check_assets_pack
 
 if [[ $fail -ne 0 ]]; then

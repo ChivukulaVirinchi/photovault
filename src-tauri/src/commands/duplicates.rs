@@ -60,16 +60,25 @@ pub async fn duplicates_get_group(
     state: State<'_, AppState>,
     args: DuplicatesGetGroupArgs,
 ) -> CommandResult<DuplicateGroupDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = DuplicateRepo::new(&db.conn);
-    let members = repo.get_group_members(args.id)?;
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    let group_id = args.id;
+    let members = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(DuplicateRepo::new(&conn).get_group_members(group_id)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("duplicate detail worker failed: {e}"),
+    })??;
     if members.is_empty() {
         return Err(CommandError::not_found("duplicate_group", args.id));
     }
     Ok(DuplicateGroupDto {
-        id: args.id,
+        id: group_id,
         members: members.into_iter().map(DuplicateMemberDto::from).collect(),
     })
 }

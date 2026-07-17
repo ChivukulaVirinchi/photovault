@@ -1,9 +1,14 @@
 //! Runtime bootstrap checks and setup helpers.
 
-use std::io::Cursor;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
 use zip::read::ZipArchive;
+
+const MAX_ASSET_PACK_FILES: usize = 1_000;
+const MAX_ASSET_PACK_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_ASSET_PACK_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(target_os = "windows")]
 pub const SETUP_ASSETS_HINT: &str =
@@ -12,7 +17,12 @@ pub const SETUP_ASSETS_HINT: &str =
 #[cfg(not(target_os = "windows"))]
 pub const SETUP_ASSETS_HINT: &str = "./scripts/setup_assets.sh";
 
-pub const ASSET_PACK_URL_DEFAULT: &str =
+pub const ASSET_PACK_URL_DEFAULT: &str = concat!(
+    "https://github.com/ChivukulaVirinchi/photovault/releases/download/v",
+    env!("CARGO_PKG_VERSION"),
+    "/Smriti-Assets.zip"
+);
+const ASSET_PACK_LATEST_URL: &str =
     "https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip";
 
 #[derive(Debug, Clone, Default)]
@@ -48,7 +58,9 @@ impl AssetHealth {
 
 #[cfg(target_os = "windows")]
 const ORT_LIB_NAME: &str = "onnxruntime.dll";
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+const ORT_LIB_NAME: &str = "libonnxruntime.dylib";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const ORT_LIB_NAME: &str = "libonnxruntime.so";
 #[cfg(target_os = "windows")]
 const ORT_PLATFORM_DIR: &str = "windows";
@@ -58,6 +70,24 @@ const ORT_PLATFORM_DIR: &str = "linux";
 const ORT_PLATFORM_DIR: &str = "macos";
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 const ORT_PLATFORM_DIR: &str = "";
+
+const MIN_BINARY_ASSET_BYTES: u64 = 1024 * 1024;
+
+fn usable_binary_asset(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() >= MIN_BINARY_ASSET_BYTES)
+}
+
+fn runtime_file_name_matches(name: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        name.starts_with("libonnxruntime") && name.ends_with(".dylib")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        name.starts_with(ORT_LIB_NAME)
+    }
+}
 
 pub fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -90,7 +120,7 @@ pub fn asset_pack_url() -> String {
 
 fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
     let direct = dir.join(ORT_LIB_NAME);
-    if direct.exists() {
+    if usable_binary_asset(&direct) {
         return Some(direct);
     }
 
@@ -98,7 +128,7 @@ fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
     for entry in entries.flatten() {
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with(ORT_LIB_NAME) {
+            if runtime_file_name_matches(name) && usable_binary_asset(&path) {
                 return Some(path);
             }
         }
@@ -149,6 +179,19 @@ pub fn asset_health() -> AssetHealth {
         missing_face_models: !has_face_models(),
         missing_onnx_runtime: !onnx_runtime_exists(),
         missing_geonames_db: !geonames_db_exists(),
+    }
+}
+
+fn asset_health_in_root(root: &Path) -> AssetHealth {
+    let model_dir = root.join("models");
+    let detector = model_dir.join("scrfd_10g_bnkps.onnx");
+    let embedder = model_dir.join(crate::config::AppConfig::load().face_embedder_model);
+    AssetHealth {
+        missing_face_models: !usable_binary_asset(&detector) || !usable_binary_asset(&embedder),
+        missing_onnx_runtime: onnx_runtime_path_in_root(root).is_none(),
+        missing_geonames_db: !crate::db::geonames::geonames_db_is_current(
+            &root.join("data").join("geonames.db"),
+        ),
     }
 }
 
@@ -222,7 +265,7 @@ pub fn embedder_model_path() -> PathBuf {
 }
 
 pub fn has_face_models() -> bool {
-    detector_model_path().exists() && embedder_model_path().exists()
+    usable_binary_asset(&detector_model_path()) && usable_binary_asset(&embedder_model_path())
 }
 
 pub fn ensure_geonames_db() {
@@ -232,11 +275,26 @@ pub fn ensure_geonames_db() {
         return;
     }
 
-    let root = project_root();
+    let existing_path = geonames_db_path();
+    let root = existing_path
+        .parent()
+        .and_then(Path::parent)
+        .filter(|root| {
+            root.join("data").join("cities1000.txt").is_file()
+                && root.join("data").join("country_codes.txt").is_file()
+        })
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            candidate_asset_roots().into_iter().find(|root| {
+                root.join("data").join("cities1000.txt").is_file()
+                    && root.join("data").join("country_codes.txt").is_file()
+            })
+        })
+        .unwrap_or_else(project_root);
     let data_dir = root.join("data");
     let cities = data_dir.join("cities1000.txt");
     let countries = data_dir.join("country_codes.txt");
-    let db_path = geonames_db_path();
+    let db_path = data_dir.join("geonames.db");
 
     if !cities.exists() || !countries.exists() {
         tracing::warn!(
@@ -257,33 +315,54 @@ pub fn ensure_geonames_db() {
 }
 
 pub async fn install_asset_pack() -> Result<String, String> {
+    let install_root = default_asset_install_dir();
+    let install_parent = install_root
+        .parent()
+        .ok_or_else(|| "Asset install path has no parent directory".to_string())?;
+    std::fs::create_dir_all(install_parent).map_err(|e| {
+        format!(
+            "Failed creating asset parent dir {}: {}",
+            install_parent.display(),
+            e
+        )
+    })?;
+
     // Honour SMRITI_* env vars first, fall back to legacy PHOTOVAULT_*
     // for one release worth of grace.
     let local_path = std::env::var("SMRITI_ASSET_PACK_PATH")
         .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_PATH"))
         .ok();
-    let bytes = if let Some(local_path) = local_path {
-        std::fs::read(&local_path).map_err(|e| {
+    let (archive_path, remove_archive_after) = if let Some(local_path) = local_path {
+        let path = PathBuf::from(&local_path);
+        let metadata = std::fs::metadata(&path).map_err(|e| {
             format!(
                 "Failed to read SMRITI_ASSET_PACK_PATH {}: {}",
                 local_path, e
             )
-        })?
+        })?;
+        if !metadata.is_file() || metadata.len() > MAX_ASSET_PACK_DOWNLOAD_BYTES {
+            return Err("Local asset pack is not a file or exceeds the 1 GiB limit".to_string());
+        }
+        (path, false)
     } else {
         let primary_url = asset_pack_url();
         let fallback_url = std::env::var("SMRITI_ASSET_PACK_FALLBACK_URL")
             .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_FALLBACK_URL"))
-            .unwrap_or_else(|_| {
-                format!(
-                    "https://github.com/ChivukulaVirinchi/photovault/releases/download/v{}/Smriti-Assets.zip",
-                    env!("CARGO_PKG_VERSION")
-                )
-            });
+            .unwrap_or_else(|_| ASSET_PACK_LATEST_URL.to_string());
 
+        let download_path = install_parent.join(format!(
+            ".smriti-assets-download-{}.zip",
+            std::process::id()
+        ));
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(20))
+            .timeout(std::time::Duration::from_secs(30 * 60))
+            .build()
+            .map_err(|error| format!("Failed creating asset download client: {error}"))?;
         let mut last_error = None;
-        let mut downloaded = None;
+        let mut downloaded = false;
         for url in [primary_url.as_str(), fallback_url.as_str()] {
-            let response = match reqwest::get(url).await {
+            let response = match client.get(url).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     last_error = Some(format!("request error from {}: {}", url, e));
@@ -296,47 +375,179 @@ pub async fn install_asset_pack() -> Result<String, String> {
                 continue;
             }
 
-            match response.bytes().await {
-                Ok(bytes) => {
-                    downloaded = Some(bytes.to_vec());
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_ASSET_PACK_DOWNLOAD_BYTES)
+            {
+                last_error = Some(format!("asset pack from {} exceeds 1 GiB", url));
+                continue;
+            }
+
+            let mut output = match std::fs::File::create(&download_path) {
+                Ok(file) => file,
+                Err(error) => {
+                    last_error = Some(format!("cannot create download file: {}", error));
                     break;
                 }
-                Err(e) => {
-                    last_error = Some(format!("body read error from {}: {}", url, e));
+            };
+            let mut stream = response.bytes_stream();
+            let mut written = 0_u64;
+            let mut stream_error = None;
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        stream_error = Some(format!("body read error from {}: {}", url, error));
+                        break;
+                    }
+                };
+                written = written.saturating_add(chunk.len() as u64);
+                if written > MAX_ASSET_PACK_DOWNLOAD_BYTES {
+                    stream_error = Some(format!("asset pack from {} exceeds 1 GiB", url));
+                    break;
+                }
+                if let Err(error) = output.write_all(&chunk) {
+                    stream_error = Some(format!("download write failed: {}", error));
+                    break;
                 }
             }
+            drop(output);
+            if let Some(error) = stream_error {
+                last_error = Some(error);
+                let _ = std::fs::remove_file(&download_path);
+                continue;
+            }
+            if written == 0 {
+                last_error = Some(format!("empty response from {}", url));
+                let _ = std::fs::remove_file(&download_path);
+                continue;
+            }
+            downloaded = true;
+            break;
         }
 
-        downloaded.ok_or_else(|| {
-            format!(
+        if !downloaded {
+            return Err(format!(
                 "Asset pack download failed. {}. If you are testing locally before publishing a release, set SMRITI_ASSET_PACK_PATH to a local Smriti-Assets.zip.",
                 last_error.unwrap_or_else(|| "No successful download source".to_string())
-            )
-        })?
+            ));
+        }
+        (download_path, true)
     };
 
-    let install_root = default_asset_install_dir();
-    std::fs::create_dir_all(&install_root).map_err(|e| {
-        format!(
-            "Failed creating asset install dir {}: {}",
-            install_root.display(),
-            e
+    let install_root_for_worker = install_root.clone();
+    let install_parent_for_worker = install_parent.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        install_downloaded_asset_pack(
+            &archive_path,
+            remove_archive_after,
+            &install_root_for_worker,
+            &install_parent_for_worker,
         )
-    })?;
+    })
+    .await
+    .map_err(|error| format!("Asset installation worker failed: {error}"))??;
 
-    let reader = Cursor::new(bytes);
+    Ok(format!("Assets installed to {}", install_root.display()))
+}
+
+fn install_downloaded_asset_pack(
+    archive_path: &Path,
+    remove_archive_after: bool,
+    install_root: &Path,
+    install_parent: &Path,
+) -> Result<(), String> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let staging = install_parent.join(format!(
+        ".smriti-assets-installing-{}-{nonce}",
+        std::process::id()
+    ));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|e| format!("Failed clearing stale asset staging directory: {e}"))?;
+    }
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("Failed creating asset staging directory: {e}"))?;
+
+    let install_result = (|| {
+        extract_asset_archive(archive_path, &staging)?;
+        prepare_staged_asset_pack(&staging)?;
+        merge_asset_tree(&staging, install_root)
+    })();
+
+    let cleanup_result = std::fs::remove_dir_all(&staging);
+    if remove_archive_after {
+        let _ = std::fs::remove_file(archive_path);
+    }
+    install_result?;
+    if let Err(error) = cleanup_result {
+        tracing::warn!(
+            "Assets installed, but staging cleanup failed at {}: {}",
+            staging.display(),
+            error
+        );
+    }
+
+    Ok(())
+}
+
+fn prepare_staged_asset_pack(staging: &Path) -> Result<(), String> {
+    // v0.3.1's published pack accidentally contained GeoNames source text
+    // but no geonames.db. Repair that pack locally so one-click setup works
+    // for existing releases as well as corrected future ones.
+    let staged_geonames = staging.join("data").join("geonames.db");
+    if !crate::db::geonames::geonames_db_is_current(&staged_geonames) {
+        let cities = staging.join("data").join("cities1000.txt");
+        let countries = staging.join("data").join("country_codes.txt");
+        if cities.is_file() && countries.is_file() {
+            crate::db::geonames::build_geonames_db(staging)?;
+        }
+    }
+
+    // Validate this download itself. Looking across all candidate roots could
+    // let an old development asset mask an incomplete release archive.
+    let health = asset_health_in_root(staging);
+    if health.missing_any() {
+        return Err(format!(
+            "Downloaded asset pack is incomplete. {}",
+            health.summary()
+        ));
+    }
+    Ok(())
+}
+
+fn extract_asset_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let reader = std::fs::File::open(archive_path)
+        .map_err(|e| format!("Failed opening downloaded asset zip: {}", e))?;
     let mut archive = ZipArchive::new(reader).map_err(|e| format!("Invalid asset zip: {}", e))?;
+    if archive.len() > MAX_ASSET_PACK_FILES {
+        return Err(format!(
+            "Asset zip contains too many entries ({}; maximum {})",
+            archive.len(),
+            MAX_ASSET_PACK_FILES
+        ));
+    }
 
+    let mut expanded_bytes = 0_u64;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
             .map_err(|e| format!("Failed reading zip entry {}: {}", i, e))?;
+        expanded_bytes = expanded_bytes
+            .checked_add(file.size())
+            .ok_or_else(|| "Asset zip expanded size overflow".to_string())?;
+        if expanded_bytes > MAX_ASSET_PACK_EXPANDED_BYTES {
+            return Err("Asset zip expands beyond the 2 GiB safety limit".to_string());
+        }
         let enclosed = file
             .enclosed_name()
             .ok_or_else(|| format!("Unsafe path in zip entry: {}", file.name()))?;
 
-        let out_path = install_root.join(enclosed);
-        if file.name().ends_with('/') {
+        let out_path = destination.join(enclosed);
+        if file.is_dir() {
             std::fs::create_dir_all(&out_path)
                 .map_err(|e| format!("Failed creating directory {}: {}", out_path.display(), e))?;
             continue;
@@ -357,16 +568,53 @@ pub async fn install_asset_pack() -> Result<String, String> {
         std::io::copy(&mut file, &mut out)
             .map_err(|e| format!("Failed writing {}: {}", out_path.display(), e))?;
     }
+    Ok(())
+}
 
-    let health = asset_health();
-    if health.missing_any() {
-        return Err(format!(
-            "Asset pack installed but required files are still missing. {}",
-            health.summary()
-        ));
+fn merge_asset_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("Failed creating {}: {}", destination.display(), e))?;
+    for entry in std::fs::read_dir(source)
+        .map_err(|e| format!("Failed reading {}: {}", source.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed reading asset entry: {}", e))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .map_err(|e| format!("Failed reading asset file type: {}", e))?
+            .is_dir()
+        {
+            merge_asset_tree(&source_path, &destination_path)?;
+        } else {
+            let temp_path = destination_path.with_extension("smriti-installing");
+            std::fs::copy(&source_path, &temp_path).map_err(|e| {
+                format!(
+                    "Failed staging asset {} to {}: {}",
+                    source_path.display(),
+                    temp_path.display(),
+                    e
+                )
+            })?;
+            if destination_path.exists() {
+                std::fs::remove_file(&destination_path).map_err(|e| {
+                    format!(
+                        "Failed replacing asset {}: {}",
+                        destination_path.display(),
+                        e
+                    )
+                })?;
+            }
+            std::fs::rename(&temp_path, &destination_path).map_err(|e| {
+                format!(
+                    "Failed installing asset {}: {}",
+                    destination_path.display(),
+                    e
+                )
+            })?;
+        }
     }
-
-    Ok(format!("Assets installed to {}", install_root.display()))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -386,7 +634,8 @@ mod tests {
         };
         std::fs::create_dir_all(&runtime_dir).expect("runtime dir");
         let runtime = runtime_dir.join(ORT_LIB_NAME);
-        std::fs::write(&runtime, b"not a real runtime").expect("runtime marker");
+        std::fs::write(&runtime, vec![0_u8; MIN_BINARY_ASSET_BYTES as usize])
+            .expect("runtime marker");
 
         assert_eq!(onnx_runtime_path_in_root(temp.path()), Some(runtime));
     }
@@ -404,5 +653,58 @@ mod tests {
         };
 
         assert!(path.ends_with(suffix));
+    }
+
+    #[test]
+    fn default_asset_pack_matches_running_app_version() {
+        assert!(ASSET_PACK_URL_DEFAULT.contains(&format!(
+            "/v{}/Smriti-Assets.zip",
+            env!("CARGO_PKG_VERSION")
+        )));
+    }
+
+    #[test]
+    fn rejects_truncated_runtime_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = temp.path().join("libs").join("onnxruntime");
+        std::fs::create_dir_all(&runtime_dir).expect("runtime dir");
+        std::fs::write(runtime_dir.join(ORT_LIB_NAME), b"download error page")
+            .expect("runtime marker");
+
+        assert_eq!(onnx_runtime_path_in_root(temp.path()), None);
+    }
+
+    #[test]
+    fn repairs_published_pack_with_geonames_sources_but_no_database() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        let data = root.join("data");
+        let models = root.join("models");
+        let runtime_dir = if ORT_PLATFORM_DIR.is_empty() {
+            root.join("libs").join("onnxruntime")
+        } else {
+            root.join("libs").join("onnxruntime").join(ORT_PLATFORM_DIR)
+        };
+        std::fs::create_dir_all(&data).expect("data");
+        std::fs::create_dir_all(&models).expect("models");
+        std::fs::create_dir_all(&runtime_dir).expect("runtime");
+        std::fs::write(data.join("country_codes.txt"), "ZZ\tTest Country\n").expect("countries");
+        let mut cities = String::new();
+        for id in 1..=1_001 {
+            cities.push_str(&format!(
+                "{id}\tCity {id}\tCity {id}\t\t1.0\t2.0\tP\tPPL\tZZ\t\t\t\t\t\t{id}\t\t\tUTC\t2026-01-01\n"
+            ));
+        }
+        std::fs::write(data.join("cities1000.txt"), cities).expect("cities");
+        let marker = vec![0_u8; MIN_BINARY_ASSET_BYTES as usize];
+        std::fs::write(models.join("scrfd_10g_bnkps.onnx"), &marker).expect("detector");
+        std::fs::write(models.join("adaface_ir101_webface12m.onnx"), &marker).expect("embedder");
+        std::fs::write(runtime_dir.join(ORT_LIB_NAME), marker).expect("runtime");
+
+        prepare_staged_asset_pack(root).expect("repair and validate pack");
+
+        assert!(crate::db::geonames::geonames_db_is_current(
+            &data.join("geonames.db")
+        ));
     }
 }

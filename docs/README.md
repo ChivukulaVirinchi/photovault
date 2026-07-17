@@ -42,7 +42,6 @@ photo library.
 - [Face GPU Bridge](face-gpu-bridge.md) — opt-in remote GPU
   acceleration.
 - [Testing](TESTING.md) — the test pyramid and what's enforced in CI.
-- [Future Scope](FUTURE_SCOPE.md) — open items, complexity, skill
   tags.
 
 ## Privacy and data

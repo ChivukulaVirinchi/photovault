@@ -184,6 +184,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: var(--s-4);
     animation: fade 140ms var(--ease) both;
   }
   @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
@@ -192,8 +193,8 @@
     border: 1px solid var(--line);
     border-radius: var(--r-lg, 12px);
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
-    width: min(440px, 92vw);
-    max-height: 70vh;
+    width: min(440px, 100%);
+    max-height: min(70vh, calc(100vh - 2 * var(--s-4)));
     display: flex;
     flex-direction: column;
     min-height: 0;

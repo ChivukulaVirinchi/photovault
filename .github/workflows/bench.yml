@@ -12,13 +12,6 @@ on:
       - 'Cargo.lock'
       - 'Cargo.toml'
       - '.github/workflows/bench.yml'
-  pull_request:
-    paths:
-      - 'benches/**'
-      - 'Cargo.lock'
-      - 'Cargo.toml'
-      - '.github/workflows/bench.yml'
-
 env:
   CARGO_TERM_COLOR: always
 

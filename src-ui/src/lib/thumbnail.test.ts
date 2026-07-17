@@ -9,10 +9,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 let thumbUrl: typeof import("./thumbnail").thumbUrl;
+let libraryAssetUrl: typeof import("./thumbnail").libraryAssetUrl;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ thumbUrl } = await import("./thumbnail"));
+  ({ thumbUrl, libraryAssetUrl } = await import("./thumbnail"));
 });
 
 describe("thumbUrl", () => {
@@ -55,5 +56,18 @@ describe("thumbUrl", () => {
     expect(thumbUrl("/drive", ".photovault/../secret.jpg")).toBeNull();
     expect(thumbUrl("/drive", ".photovault//thumb.jpg")).toBeNull();
     expect(thumbUrl("/drive", ".photovault\\thumb.jpg")).toBeNull();
+  });
+});
+
+describe("libraryAssetUrl", () => {
+  it("resolves a safe photo path without a backend round trip", () => {
+    expect(libraryAssetUrl("/drive", "photos/2026/image.jpg")).toBe(
+      "mock:///drive/photos/2026/image.jpg",
+    );
+  });
+
+  it("rejects paths that could escape the library", () => {
+    expect(libraryAssetUrl("/drive", "photos/../../secret.jpg")).toBeNull();
+    expect(libraryAssetUrl("/drive", "C:\\outside.jpg")).toBeNull();
   });
 });

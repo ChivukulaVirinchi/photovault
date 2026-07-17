@@ -6,6 +6,13 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 /// `.photovault/thumbs/ab/abc123_small.jpg`). We prepend the drive_root
 /// before converting so the webview can load it via the asset protocol.
 export function thumbUrl(driveRoot: string | null, path: string | null): string | null {
+  return libraryAssetUrl(driveRoot, path);
+}
+
+/// Resolve any safe library-relative media path to a Tauri asset URL.
+/// Keeping this on the frontend avoids a second database query and IPC hop
+/// when PhotoDto already contains the validated relative path.
+export function libraryAssetUrl(driveRoot: string | null, path: string | null): string | null {
   if (!path) return null;
   if (!isSafeRelativeThumbPath(path)) return null;
   if (!driveRoot) return null;

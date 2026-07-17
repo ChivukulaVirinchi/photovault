@@ -1,6 +1,8 @@
 //! Burst groups database operations
 
-use rusqlite::{params, types::ToSql, Connection, Result as SqliteResult};
+use std::collections::HashMap;
+
+use rusqlite::{params, params_from_iter, types::ToSql, Connection, Result as SqliteResult};
 
 use super::MAX_ROWS_PER_INSERT;
 
@@ -318,45 +320,46 @@ impl<'a> BurstRepo<'a> {
         // Cover thumbnails (up to 6 for the filmstrip) — suggested-best
         // first, then by date. Photo ids paired 1:1 so the frontend
         // can route directly to PhotoDetail on click.
-        let mut cover_stmt = self.conn.prepare(
-            r#"
-            SELECT m.photo_id, p.thumbnail_path
-             FROM burst_group_members m
-              JOIN photos p ON p.id = m.photo_id
-             WHERE m.group_id = ?1
-               AND p.thumbnail_path IS NOT NULL
-               AND p.is_trashed = FALSE
-          ORDER BY m.is_suggested_best DESC, p.date_taken ASC
-             LIMIT 6
-            "#,
-        )?;
+        let placeholders = vec!["?"; groups.len()].join(",");
         // Every member's photo_id in the same order — used as the
         // browseContext scope when opening a photo from the listing
         // card. Caps at the natural group size; bursts rarely exceed
         // tens of photos.
-        let mut all_stmt = self.conn.prepare(
-            r#"
-            SELECT m.photo_id
-             FROM burst_group_members m
-              JOIN photos p ON p.id = m.photo_id
-             WHERE m.group_id = ?1
-               AND p.is_trashed = FALSE
-          ORDER BY m.is_suggested_best DESC, p.date_taken ASC
-            "#,
-        )?;
-        for g in groups.iter_mut() {
-            let covers: Vec<(i64, String)> = cover_stmt
-                .query_map(params![g.id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<SqliteResult<Vec<_>>>()?;
-            g.cover_photo_ids = covers.iter().map(|(id, _)| *id).collect();
-            g.cover_thumbnail_paths = covers.into_iter().map(|(_, p)| p).collect();
-
-            let members: Vec<i64> = all_stmt
-                .query_map(params![g.id], |row| row.get::<_, i64>(0))?
-                .collect::<SqliteResult<Vec<_>>>()?;
-            g.member_photo_ids = members;
+        if !groups.is_empty() {
+            let sql = format!(
+                "SELECT m.group_id, m.photo_id, p.thumbnail_path
+                   FROM burst_group_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.group_id IN ({placeholders}) AND p.is_trashed = FALSE
+               ORDER BY m.group_id, m.is_suggested_best DESC, p.date_taken ASC, m.photo_id ASC"
+            );
+            let group_ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
+            let mut members: HashMap<i64, Vec<i64>> = HashMap::with_capacity(groups.len());
+            let mut covers: HashMap<i64, Vec<(i64, String)>> = HashMap::with_capacity(groups.len());
+            let mut detail_stmt = self.conn.prepare(&sql)?;
+            let rows = detail_stmt.query_map(params_from_iter(group_ids), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (group_id, photo_id, thumbnail) = row?;
+                members.entry(group_id).or_default().push(photo_id);
+                if let Some(path) = thumbnail {
+                    let group_covers = covers.entry(group_id).or_default();
+                    if group_covers.len() < 6 {
+                        group_covers.push((photo_id, path));
+                    }
+                }
+            }
+            for group in &mut groups {
+                group.member_photo_ids = members.remove(&group.id).unwrap_or_default();
+                let group_covers = covers.remove(&group.id).unwrap_or_default();
+                group.cover_photo_ids = group_covers.iter().map(|(id, _)| *id).collect();
+                group.cover_thumbnail_paths = group_covers.into_iter().map(|(_, p)| p).collect();
+            }
         }
 
         Ok(groups)

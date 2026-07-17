@@ -76,7 +76,8 @@ Dev mode (hot reload via Vite, opens a native window):
 
 ```bash
 cd src-ui && npm install && cd ..   # one-time
-cargo tauri dev
+./scripts/dev.sh                    # Linux / macOS
+# .\scripts\dev.ps1                 # Windows PowerShell
 ```
 
 Production bundle (`.deb` + AppImage on Linux, `.msi` on Windows,
@@ -104,25 +105,24 @@ cargo test -p smriti -p smriti-tauri
 ## Linux packaging (.deb + AppImage)
 
 The official path is `cargo tauri build` — it produces both
-`.deb` and AppImage in `src-tauri/target/release/bundle/`. Tag-driven
+`.deb` and AppImage in `target/release/bundle/`. Tag-driven
 CI (`.github/workflows/release.yml`) runs the same command on a
 fresh Ubuntu runner for every `v*` tag.
 
-For a hand-built `.deb` outside Tauri's bundler:
+For a local `.deb` build through the same Tauri path as CI:
 
 ```bash
-cargo install cargo-deb --locked
-cargo deb
+./scripts/release_local.sh ubuntu
 ```
 
 Output:
-- `target/debian/*.deb`
+- `target/release/bundle/deb/*.deb`
 
 Install test:
 
 ```bash
-sudo dpkg -i target/debian/*.deb
-smriti
+sudo dpkg -i target/release/bundle/deb/*.deb
+smriti-tauri
 ```
 
 Uninstall test:
@@ -134,33 +134,26 @@ sudo apt remove smriti
 ### Linux AppImage
 
 AppImage is built in CI from release tags (`v*`) via `.github/workflows/release.yml`.
-Current output name:
-- `Smriti-x86_64.AppImage`
+Output directory:
+- `target/release/bundle/appimage/`
 
 Run:
 
 ```bash
-chmod +x Smriti-x86_64.AppImage
-./Smriti-x86_64.AppImage
+chmod +x target/release/bundle/appimage/*.AppImage
+target/release/bundle/appimage/*.AppImage
 ```
 
 ## Windows packaging (MSI + ZIP)
 
-MSI packaging should run on native Windows with MSVC + WiX installed.
+MSI packaging should run on native Windows with the MSVC build tools.
 
 ### Prerequisites
 
-- WiX Toolset v3 (for `candle.exe` and `light.exe`)
-- `cargo-wix`:
+- Tauri CLI:
 
 ```powershell
-cargo install cargo-wix --locked
-```
-
-### Build portable ZIP payload (core app)
-
-```powershell
-cargo build --release --target x86_64-pc-windows-msvc
+cargo install tauri-cli --version "^2" --locked
 ```
 
 ### Build MSI installer
@@ -168,11 +161,12 @@ cargo build --release --target x86_64-pc-windows-msvc
 From repository root:
 
 ```powershell
-cargo wix --target x86_64-pc-windows-msvc --output target\wix\Smriti-Setup-x64.msi
+cd src-tauri
+cargo tauri build --ci --bundles msi
 ```
 
 Output:
-- `target\wix\Smriti-Setup-x64.msi`
+- `target\release\bundle\msi\*.msi`
 
 MSI installs the core app. Optional assets are installed separately.
 
@@ -229,9 +223,12 @@ By design, this script does **not** auto-publish the release.
 
 In-app optional asset installation resolves in this order:
 
-1. `PHOTOVAULT_ASSET_PACK_PATH` (local zip path override)
-2. `PHOTOVAULT_ASSET_PACK_URL` (custom URL override)
-3. latest published release URL (`.../releases/latest/download/Smriti-Assets.zip`)
-4. version-pinned fallback (`.../releases/download/v<app-version>/Smriti-Assets.zip`)
+1. `SMRITI_ASSET_PACK_PATH` (local zip path override; legacy
+   `PHOTOVAULT_ASSET_PACK_PATH` is also accepted)
+2. `SMRITI_ASSET_PACK_URL` (custom URL override; legacy
+   `PHOTOVAULT_ASSET_PACK_URL` is also accepted)
+3. version-pinned release URL (`.../releases/download/v<app-version>/Smriti-Assets.zip`)
+4. latest published release fallback (`.../releases/latest/download/Smriti-Assets.zip`)
 
-If you are testing locally before publishing a release, set `PHOTOVAULT_ASSET_PACK_PATH`.
+If you are testing locally before publishing a release, set
+`SMRITI_ASSET_PACK_PATH`.

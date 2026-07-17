@@ -21,24 +21,55 @@ foreach ($dir in @($DataDir, $ModelsDir, $CacheDir)) {
 }
 
 function Download-File {
-    param([string]$Url, [string]$OutPath)
+    param([string]$Url, [string]$OutPath, [long]$MinimumBytes = 1024)
     if (Test-Path $OutPath) {
-        if ((Get-Item $OutPath).Length -gt 0) {
+        if ((Get-Item $OutPath).Length -ge $MinimumBytes) {
             Write-Host "Using cached: $OutPath"
             return
         }
+        Remove-Item -LiteralPath $OutPath -Force
     }
     Write-Host "Downloading: $Url"
     $ProgressPreference = 'SilentlyContinue'
     Invoke-WebRequest -Uri $Url -OutFile $OutPath -UseBasicParsing
+    if (-not (Test-Path $OutPath) -or (Get-Item $OutPath).Length -lt $MinimumBytes) {
+        Remove-Item -LiteralPath $OutPath -Force -ErrorAction SilentlyContinue
+        throw "Downloaded file is unexpectedly small: $Url"
+    }
 }
 
 function Test-GeonamesDbReady {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return $false }
-    # A fully-populated cities1000 database is ~18 MB. Treat tiny DBs as
-    # incomplete so an interrupted first setup gets rebuilt.
-    return ((Get-Item $Path).Length -gt 1MB)
+    # A fully-populated cities1000 database is ~18 MB. Also inspect the
+    # first SQLite pages for the v2 column so an old schema is rebuilt.
+    if ((Get-Item $Path).Length -le 1MB) { return $false }
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $buffer = New-Object byte[] 65536
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        $header = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+        return $header.Contains("feature_code")
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Expand-ZipWithRetry {
+    param(
+        [string]$Url,
+        [string]$ZipPath,
+        [string]$Destination,
+        [long]$MinimumBytes = 1024
+    )
+    try {
+        Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
+    } catch {
+        Write-Warning "Cached archive is invalid; downloading it again."
+        Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+        Download-File $Url $ZipPath $MinimumBytes
+        Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
+    }
 }
 
 # --- GeoNames ---
@@ -47,13 +78,11 @@ Write-Host "`n==> Setting up GeoNames data"
 $CitiesZip = Join-Path $CacheDir "cities1000.zip"
 $CountryInfo = Join-Path $CacheDir "countryInfo.txt"
 
-Download-File $GeonamesCitiesUrl $CitiesZip
-Download-File $GeonamesCountryUrl $CountryInfo
+Download-File $GeonamesCitiesUrl $CitiesZip 1MB
+Download-File $GeonamesCountryUrl $CountryInfo 10KB
 
 $CitiesTxt = Join-Path $DataDir "cities1000.txt"
-if (-not (Test-Path $CitiesTxt)) {
-    Expand-Archive -Path $CitiesZip -DestinationPath $DataDir -Force
-}
+Expand-ZipWithRetry $GeonamesCitiesUrl $CitiesZip $DataDir 1MB
 
 if (-not (Test-Path $CitiesTxt)) {
     Write-Error "cities1000.txt missing after extraction"
@@ -62,15 +91,16 @@ if (-not (Test-Path $CitiesTxt)) {
 
 # Extract country codes (skip comments, take ISO code and name)
 $CountryCodes = Join-Path $DataDir "country_codes.txt"
-if (-not (Test-Path $CountryCodes) -or (Get-Item $CountryCodes).Length -eq 0) {
-    $lines = Get-Content $CountryInfo | Where-Object { $_ -notmatch "^#" -and $_.Trim() -ne "" }
-    $output = foreach ($line in $lines) {
-        $fields = $line -split "`t"
-        if ($fields.Count -ge 5) {
-            "$($fields[0])`t$($fields[4])"
-        }
+$lines = Get-Content $CountryInfo | Where-Object { $_ -notmatch "^#" -and $_.Trim() -ne "" }
+$output = foreach ($line in $lines) {
+    $fields = $line -split "`t"
+    if ($fields.Count -ge 5) {
+        "$($fields[0])`t$($fields[4])"
     }
-    $output | Set-Content -Path $CountryCodes -Encoding UTF8
+}
+$output | Set-Content -Path $CountryCodes -Encoding UTF8
+if (-not (Test-Path $CountryCodes) -or (Get-Item $CountryCodes).Length -eq 0) {
+    throw "country_codes.txt is empty after processing countryInfo.txt"
 }
 
 # Build GeoNames DB
@@ -78,8 +108,15 @@ $GeonamesDb = Join-Path $DataDir "geonames.db"
 if (-not (Test-GeonamesDbReady $GeonamesDb)) {
     Write-Host "Building geonames SQLite DB..."
     Push-Location $RootDir
-    cargo run --bin build_geonames
-    Pop-Location
+    try {
+        cargo run --bin build_geonames
+        if ($LASTEXITCODE -ne 0) { throw "GeoNames database build failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+    if (-not (Test-GeonamesDbReady $GeonamesDb)) {
+        throw "GeoNames database is missing or invalid after the build"
+    }
 } else {
     Write-Host "GeoNames DB already ready: $GeonamesDb"
 }
@@ -91,15 +128,16 @@ $LibsDir = Join-Path $RootDir "libs\onnxruntime"
 if (-not (Test-Path $LibsDir)) { New-Item -ItemType Directory -Path $LibsDir -Force | Out-Null }
 
 $OrtDll = Join-Path $LibsDir "onnxruntime.dll"
-if (Test-Path $OrtDll) {
+if ((Test-Path $OrtDll) -and (Get-Item $OrtDll).Length -ge 1MB) {
     Write-Host "Using existing ONNX Runtime in $LibsDir"
 } else {
+    Remove-Item -LiteralPath $OrtDll -Force -ErrorAction SilentlyContinue
     $OrtZip = Join-Path $CacheDir "onnxruntime-win-x64.zip"
-    Download-File $OrtUrl $OrtZip
+    Download-File $OrtUrl $OrtZip 1MB
 
     $ExtractDir = Join-Path $CacheDir "onnxruntime-win-x64"
     if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
-    Expand-Archive -Path $OrtZip -DestinationPath $ExtractDir -Force
+    Expand-ZipWithRetry $OrtUrl $OrtZip $ExtractDir 1MB
 
     $Found = Get-ChildItem -Path $ExtractDir -Recurse -Filter "onnxruntime.dll" | Select-Object -First 1
     if (-not $Found) {
@@ -113,8 +151,8 @@ if (Test-Path $OrtDll) {
 # --- Face Models ---
 Write-Host "`n==> Setting up face models"
 
-Download-File $ScrfdModelUrl (Join-Path $ModelsDir "scrfd_10g_bnkps.onnx")
-Download-File $AdafaceModelUrl (Join-Path $ModelsDir "adaface_ir101_webface12m.onnx")
+Download-File $ScrfdModelUrl (Join-Path $ModelsDir "scrfd_10g_bnkps.onnx") 1MB
+Download-File $AdafaceModelUrl (Join-Path $ModelsDir "adaface_ir101_webface12m.onnx") 1MB
 
 Write-Host "Installed models:"
 Write-Host "- $(Join-Path $ModelsDir 'scrfd_10g_bnkps.onnx')"

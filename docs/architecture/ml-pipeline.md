@@ -111,5 +111,4 @@ over- or under-clustering after running a full pass.
   acceleration.
 - [People and Faces user guide](../user-guide/people.md) — user-
   facing perspective.
-- [Face Recognition Improvements](../FACE_RECOGNITION_IMPROVEMENTS.md)
   — historical notes on tuning decisions.

@@ -172,13 +172,22 @@ pub async fn photos_get(
     state: State<'_, AppState>,
     args: PhotosGetArgs,
 ) -> CommandResult<PhotoDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = PhotoRepo::new(&db.conn);
-    let photo = repo
-        .get_by_id(args.id)?
-        .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
+    let id = args.id;
+    let photo = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        PhotoRepo::new(&conn)
+            .get_by_id(id)?
+            .ok_or_else(|| CommandError::not_found("photo", id))
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("photo detail worker failed: {e}"),
+    })??;
     Ok(photo.into())
 }
 
@@ -192,14 +201,24 @@ pub async fn photos_get_many(
     state: State<'_, AppState>,
     args: PhotosGetManyArgs,
 ) -> CommandResult<Vec<PhotoDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = PhotoRepo::new(&db.conn);
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
     let ids = normalize_limited_photo_ids(args.ids, 500);
-    let order: HashMap<i64, usize> = ids.iter().enumerate().map(|(idx, id)| (*id, idx)).collect();
-    let mut photos = repo.get_by_ids(&ids)?;
-    photos.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
+    let photos = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        let order: HashMap<i64, usize> =
+            ids.iter().enumerate().map(|(idx, id)| (*id, idx)).collect();
+        let mut photos = PhotoRepo::new(&conn).get_by_ids(&ids)?;
+        photos.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
+        Ok::<_, CommandError>(photos)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("photo detail batch worker failed: {e}"),
+    })??;
     Ok(photos.into_iter().map(Into::into).collect())
 }
 

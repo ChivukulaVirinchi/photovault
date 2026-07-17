@@ -503,30 +503,23 @@ impl DuplicateDetector {
     /// per group, since the user's win is keeping one copy and
     /// trashing the rest.
     pub fn calculate_wasted_space(conn: &Connection) -> rusqlite::Result<u64> {
-        let mut stmt = conn.prepare(
+        let wasted: i64 = conn.query_row(
             r#"
-            SELECT
-                COALESCE(SUM(p.file_size), 0) AS total_size,
-                COALESCE(MAX(p.file_size), 0) AS max_size,
-                COUNT(*) AS count
-            FROM duplicate_groups g
-            JOIN duplicate_group_members m ON m.group_id = g.id
-            JOIN photos p ON p.id = m.photo_id
-            WHERE p.is_trashed = FALSE
-            GROUP BY g.id
-            HAVING count > 1
+            SELECT COALESCE(SUM(total_size - max_size), 0)
+              FROM (
+                SELECT SUM(p.file_size) AS total_size,
+                       MAX(p.file_size) AS max_size
+                  FROM duplicate_groups g
+                  JOIN duplicate_group_members m ON m.group_id = g.id
+                  JOIN photos p ON p.id = m.photo_id
+                 WHERE p.is_trashed = FALSE
+              GROUP BY g.id
+                HAVING COUNT(*) > 1
+              )
             "#,
+            [],
+            |row| row.get(0),
         )?;
-
-        let wasted: i64 = stmt
-            .query_map([], |row| {
-                let total: i64 = row.get(0)?;
-                let max: i64 = row.get(1)?;
-                Ok(total - max)
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .sum();
 
         Ok(wasted.max(0) as u64)
     }

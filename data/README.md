@@ -10,4 +10,5 @@ Then run:
 
 `cargo run --bin build_geonames`
 
-or compile and execute `tools/build_geonames.rs` manually.
+The command always writes `data/geonames.db` beside these source files.
+The platform setup scripts download the sources and run it for you.

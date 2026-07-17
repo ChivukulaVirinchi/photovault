@@ -131,14 +131,17 @@ All builds are on the **[latest release page](https://github.com/ChivukulaVirinc
 - `.deb` for Debian / Ubuntu, `.rpm` for Fedora, `.AppImage` for any other distro (`chmod +x` then run).
 
 Linux artifacts include `SHA256SUMS` for integrity verification. Tagged
-releases run smoke tests in CI before publishing.
+releases run build and package checks in CI before publishing.
 
 ### Optional assets pack
 
-For **face recognition + offline place names**, also grab `Smriti-Assets.zip` from the [releases page](https://github.com/ChivukulaVirinchi/photovault/releases/latest) — ONNX runtime + face models + GeoNames database.
+For **face recognition + offline place names**, click **Set up assets** on
+the Welcome screen (or **Download assets** in Settings). Smriti downloads,
+validates, and installs the matching `Smriti-Assets.zip` — ONNX Runtime,
+face models, and the GeoNames database — in one step.
 
 Smriti runs without it; the asset pack just unlocks those two features.
-The app prompts you on first launch.
+The app prompts you whenever those assets are missing.
 
 Visual search is a separate optional model install from **Settings ->
 Assets**. It is intentionally not bundled into the app or the standard
@@ -160,8 +163,9 @@ than self-replacing the binary.
 ```bash
 git clone https://github.com/ChivukulaVirinchi/photovault.git
 cd photovault
-cargo build --release
-./target/release/smriti
+npm ci --prefix src-ui
+./scripts/dev.sh            # Linux / macOS
+# .\scripts\dev.ps1         # Windows PowerShell
 ```
 
 #### HEIC support (optional)
@@ -176,8 +180,9 @@ sudo apt-get install libheif-dev
 # macOS
 brew install libheif
 
-# then
-cargo build --release --features heic
+# then build a production bundle
+cd src-tauri
+cargo tauri build --features heic
 ```
 
 Shipped binaries (.deb, AppImage, macOS .tar.gz) include HEIC support

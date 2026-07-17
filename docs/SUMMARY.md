@@ -30,5 +30,3 @@
 - [Services](architecture/services.md)
 - [ML Pipeline](architecture/ml-pipeline.md)
 - [Face GPU Bridge](face-gpu-bridge.md)
-- [Future Scope](FUTURE_SCOPE.md)
-- [Face Recognition Improvements](FACE_RECOGNITION_IMPROVEMENTS.md)

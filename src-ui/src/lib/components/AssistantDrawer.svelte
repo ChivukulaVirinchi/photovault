@@ -42,11 +42,18 @@
     await assistantStore.start(message);
   }
 
-  function onKey(e: KeyboardEvent) {
+  function onInputKey(e: KeyboardEvent) {
     if (e.key === "Enter") {
       e.preventDefault();
       submit();
     } else if (e.key === "Escape") {
+      assistantStore.hide();
+    }
+  }
+
+  function onDialogKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
       assistantStore.hide();
     }
   }
@@ -68,7 +75,7 @@
 
 {#if assistantStore.open}
   <div class="scrim" onclick={() => assistantStore.hide()} aria-hidden="true"></div>
-  <div class="assistant" role="dialog" aria-modal="true" aria-label="Assistant">
+  <div class="assistant" role="dialog" aria-modal="true" aria-label="Assistant" tabindex="-1" onkeydown={onDialogKey}>
     <header>
       <div class="title">
         <Sparkles size={16} strokeWidth={1.75} />
@@ -83,7 +90,7 @@
       <input
         bind:this={inputEl}
         bind:value={input}
-        onkeydown={onKey}
+        onkeydown={onInputKey}
         placeholder="Find photos..."
         disabled={busy}
         aria-label="Assistant request"
@@ -205,7 +212,10 @@
     z-index: 81;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
   }
+
   header {
     height: 52px;
     padding: 0 var(--s-4);
@@ -213,6 +223,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
   }
   .title {
     display: flex;
@@ -233,6 +244,7 @@
     gap: var(--s-2);
     padding: var(--s-4);
     border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
   }
   input {
     min-width: 0;

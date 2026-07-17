@@ -16,11 +16,39 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
+for command_name in curl tar awk grep find; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "ERROR: required command not found in PATH: $command_name"
+    exit 1
+  fi
+done
+
 GEONAMES_CITIES_URL="https://download.geonames.org/export/dump/cities1000.zip"
 GEONAMES_COUNTRY_URL="https://download.geonames.org/export/dump/countryInfo.txt"
 SCRFD_MODEL_URL_DEFAULT="https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx"
 ADAFACE_MODEL_URL_DEFAULT="https://drive.usercontent.google.com/download?id=1dgMFOASKnaujQcCL4sSYkKOkBrmXUUU1&export=download&confirm=t"
-ORT_URL_DEFAULT="https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-linux-x64-1.23.0.tgz"
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)
+    ORT_ARCHIVE_NAME="onnxruntime-linux-x64"
+    ORT_LIBRARY_GLOB="libonnxruntime.so*"
+    ORT_CANONICAL_NAME="libonnxruntime.so"
+    ;;
+  Darwin-arm64)
+    ORT_ARCHIVE_NAME="onnxruntime-osx-arm64"
+    ORT_LIBRARY_GLOB="libonnxruntime*.dylib"
+    ORT_CANONICAL_NAME="libonnxruntime.dylib"
+    ;;
+  Darwin-x86_64)
+    ORT_ARCHIVE_NAME="onnxruntime-osx-x86_64"
+    ORT_LIBRARY_GLOB="libonnxruntime*.dylib"
+    ORT_CANONICAL_NAME="libonnxruntime.dylib"
+    ;;
+  *)
+    echo "ERROR: unsupported platform for ONNX Runtime: $(uname -s) $(uname -m)"
+    exit 1
+    ;;
+esac
+ORT_URL_DEFAULT="https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/${ORT_ARCHIVE_NAME}-1.23.0.tgz"
 SCRFD_MODEL_URL="${SCRFD_MODEL_URL:-$SCRFD_MODEL_URL_DEFAULT}"
 ADAFACE_MODEL_URL="${ADAFACE_MODEL_URL:-$ADAFACE_MODEL_URL_DEFAULT}"
 ORT_URL="${ORT_URL:-$ORT_URL_DEFAULT}"
@@ -30,10 +58,12 @@ mkdir -p "$DATA_DIR" "$MODELS_DIR" "$CACHE_DIR"
 download() {
   local url="$1"
   local out="$2"
-  if [[ -s "$out" ]]; then
+  local minimum_bytes="${3:-1024}"
+  if [[ -s "$out" ]] && [[ "$(wc -c < "$out")" -ge "$minimum_bytes" ]]; then
     echo "Using cached: $out"
     return 0
   fi
+  rm -f "$out"
   echo "Downloading: $url"
   curl -fL \
     --retry 6 \
@@ -42,6 +72,11 @@ download() {
     --connect-timeout 20 \
     -o "$out" \
     "$url"
+  if [[ ! -s "$out" ]] || [[ "$(wc -c < "$out")" -lt "$minimum_bytes" ]]; then
+    rm -f "$out"
+    echo "ERROR: downloaded file is unexpectedly small: $url"
+    return 1
+  fi
 }
 
 geonames_db_ready() {
@@ -57,7 +92,9 @@ geonames_db_ready() {
     return $?
   fi
 
-  return 0
+  # The schema is stored in the first SQLite pages. This catches old v1
+  # databases (and most interrupted files) even when sqlite3 is unavailable.
+  head -c 65536 "$db" | grep -aq 'feature_code'
 }
 
 extract_zip() {
@@ -69,6 +106,10 @@ extract_zip() {
     return 0
   fi
 
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: extracting GeoNames requires either unzip or python3"
+    return 1
+  fi
   python3 - <<'PY' "$zip_path" "$out_dir"
 import sys
 import zipfile
@@ -84,10 +125,15 @@ setup_geonames() {
   local cities_zip="$CACHE_DIR/cities1000.zip"
   local country_info="$CACHE_DIR/countryInfo.txt"
 
-  download "$GEONAMES_CITIES_URL" "$cities_zip"
-  download "$GEONAMES_COUNTRY_URL" "$country_info"
+  download "$GEONAMES_CITIES_URL" "$cities_zip" 1048576
+  download "$GEONAMES_COUNTRY_URL" "$country_info" 10240
 
-  extract_zip "$cities_zip" "$DATA_DIR"
+  if ! extract_zip "$cities_zip" "$DATA_DIR"; then
+    echo "Cached GeoNames archive is invalid; downloading it again."
+    rm -f "$cities_zip"
+    download "$GEONAMES_CITIES_URL" "$cities_zip" 1048576
+    extract_zip "$cities_zip" "$DATA_DIR"
+  fi
 
   if [[ ! -f "$DATA_DIR/cities1000.txt" ]]; then
     echo "ERROR: cities1000.txt missing after extraction"
@@ -106,14 +152,18 @@ setup_geonames() {
   else
     echo "Building geonames SQLite DB (this can take a while on first run)..."
     (cd "$ROOT_DIR" && cargo run --bin build_geonames)
+    if ! geonames_db_ready; then
+      echo "ERROR: GeoNames database is missing or invalid after the build"
+      exit 1
+    fi
   fi
 }
 
 setup_models() {
   echo "\n==> Setting up face models"
 
-  download "$SCRFD_MODEL_URL" "$MODELS_DIR/scrfd_10g_bnkps.onnx"
-  download "$ADAFACE_MODEL_URL" "$MODELS_DIR/adaface_ir101_webface12m.onnx"
+  download "$SCRFD_MODEL_URL" "$MODELS_DIR/scrfd_10g_bnkps.onnx" 1048576
+  download "$ADAFACE_MODEL_URL" "$MODELS_DIR/adaface_ir101_webface12m.onnx" 1048576
 
   echo "Installed models:"
   echo "- $MODELS_DIR/scrfd_10g_bnkps.onnx"
@@ -124,36 +174,43 @@ setup_onnxruntime() {
   echo "\n==> Setting up ONNX Runtime"
 
   local libs_dir="$ROOT_DIR/libs/onnxruntime"
-  local ort_tgz="$CACHE_DIR/onnxruntime-linux-x64.tgz"
-  local extract_dir="$CACHE_DIR/onnxruntime-linux-x64"
+  local ort_tgz="$CACHE_DIR/${ORT_ARCHIVE_NAME}.tgz"
+  local extract_dir="$CACHE_DIR/${ORT_ARCHIVE_NAME}"
 
   mkdir -p "$libs_dir"
 
-  if ls "$libs_dir"/libonnxruntime.so* >/dev/null 2>&1; then
+  if find "$libs_dir" -maxdepth 1 -type f -name "$ORT_LIBRARY_GLOB" -size +1M -print -quit | grep -q .; then
     echo "Using existing ONNX Runtime in $libs_dir"
     return 0
   fi
 
-  download "$ORT_URL" "$ort_tgz"
+  download "$ORT_URL" "$ort_tgz" 1048576
   rm -rf "$extract_dir"
   mkdir -p "$extract_dir"
-  tar -xzf "$ort_tgz" -C "$extract_dir"
+  if ! tar -xzf "$ort_tgz" -C "$extract_dir"; then
+    echo "Cached ONNX Runtime archive is invalid; downloading it again."
+    rm -f "$ort_tgz"
+    download "$ORT_URL" "$ort_tgz" 1048576
+    rm -rf "$extract_dir"
+    mkdir -p "$extract_dir"
+    tar -xzf "$ort_tgz" -C "$extract_dir"
+  fi
 
   local found
-  found="$(find "$extract_dir" -type f -name 'libonnxruntime.so*' | head -n 1 || true)"
+  found="$(find "$extract_dir" -type f -name "$ORT_LIBRARY_GLOB" | head -n 1 || true)"
   if [[ -z "$found" ]]; then
-    echo "ERROR: libonnxruntime.so not found in extracted archive"
+    echo "ERROR: $ORT_CANONICAL_NAME not found in extracted archive"
     exit 1
   fi
 
   cp "$found" "$libs_dir/"
 
-  if command -v patchelf >/dev/null 2>&1; then
+  if [[ "$(uname -s)" == "Linux" ]] && command -v patchelf >/dev/null 2>&1; then
     patchelf --set-rpath '$ORIGIN' "$libs_dir/$(basename "$found")" || true
   fi
 
-  if [[ ! -e "$libs_dir/libonnxruntime.so" ]]; then
-    ln -s "$(basename "$found")" "$libs_dir/libonnxruntime.so" || true
+  if [[ ! -e "$libs_dir/$ORT_CANONICAL_NAME" ]]; then
+    ln -s "$(basename "$found")" "$libs_dir/$ORT_CANONICAL_NAME" || true
   fi
 
   echo "Installed ONNX Runtime: $libs_dir/$(basename "$found")"

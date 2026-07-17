@@ -7,6 +7,11 @@ use std::collections::HashMap;
 
 use super::FaceEmbedding;
 
+// HNSW deliberately randomizes graph levels. Exact complete-link clustering
+// is affordable for small batches and makes repeated runs stable; large
+// libraries retain the O(n log n) path.
+const EXACT_CLUSTER_LIMIT: usize = 256;
+
 #[derive(Debug, Clone)]
 pub struct ClusterInput {
     pub face_id: i64,
@@ -46,7 +51,11 @@ impl FaceClusterer {
     ) -> HashMap<i64, i32> {
         #[cfg(feature = "hnsw_clustering")]
         {
-            cluster_hnsw(faces, self.max_distance, negatives)
+            if faces.len() <= EXACT_CLUSTER_LIMIT {
+                self.cluster_complete_link(faces, negatives)
+            } else {
+                cluster_hnsw(faces, self.max_distance, negatives)
+            }
         }
         #[cfg(not(feature = "hnsw_clustering"))]
         {
@@ -57,7 +66,6 @@ impl FaceClusterer {
     /// Legacy O(n²) complete-link path. Kept compiled when
     /// `hnsw_clustering` is off so we can A/B against the new
     /// implementation on a real library by toggling features.
-    #[cfg(not(feature = "hnsw_clustering"))]
     fn cluster_complete_link(
         &self,
         faces: &[ClusterInput],
@@ -123,7 +131,6 @@ impl FaceClusterer {
         out
     }
 
-    #[cfg(not(feature = "hnsw_clustering"))]
     fn complete_link_distance(&self, a: &[usize], b: &[usize], faces: &[ClusterInput]) -> f32 {
         let mut max_d = 0.0f32;
         for &i in a {
@@ -138,7 +145,6 @@ impl FaceClusterer {
         max_d
     }
 
-    #[cfg(not(feature = "hnsw_clustering"))]
     fn has_same_photo_conflict(cluster: &[usize], faces: &[ClusterInput]) -> bool {
         let mut seen = std::collections::HashSet::new();
         for &idx in cluster {
@@ -152,7 +158,6 @@ impl FaceClusterer {
 
     /// If any face in cluster A has a (face_id, current_cluster_id-of-some-face-in-B)
     /// pair in `negatives` — or vice versa — the merge is forbidden.
-    #[cfg(not(feature = "hnsw_clustering"))]
     fn has_negative_conflict(
         a: &[usize],
         b: &[usize],

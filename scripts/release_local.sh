@@ -6,6 +6,15 @@ cd "$ROOT_DIR"
 
 TARGET="${1:-}"
 
+prepare_frontend() {
+  npm ci --prefix src-ui
+  npm run build --prefix src-ui
+}
+
+tauri_build() {
+  (cd src-tauri && cargo tauri build --ci "$@")
+}
+
 if [[ -z "$TARGET" ]]; then
   echo "Usage: scripts/release_local.sh <windows|macos|ubuntu|linux-appimage|assets-pack|verify>"
   exit 1
@@ -14,53 +23,42 @@ fi
 case "$TARGET" in
   windows)
     echo "Windows packaging should run on Windows (MSVC toolchain)."
-    echo "Build command: cargo build --release --target x86_64-pc-windows-msvc"
-    echo "Package outputs: ZIP (portable), MSI (if wix/cargo-wix configured)"
+    echo "Build command: cd src-tauri && cargo tauri build --bundles msi"
+    echo "Package output: target/release/bundle/msi/"
     ;;
   macos)
-    echo "macOS packaging should run on macOS."
-    echo "Build command: cargo build --release --target aarch64-apple-darwin"
-    echo "Package outputs: tar.gz now; DMG when bundling pipeline is added"
+    [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS packaging must run on macOS"; exit 1; }
+    prepare_frontend
+    tauri_build --bundles dmg --features heic
+    echo "Built macOS bundle under target/release/bundle/dmg/"
     ;;
   ubuntu)
-    cargo install cargo-deb --locked
-    cargo deb
-    echo "Built DEB package under target/debian/"
+    [[ "$(uname -s)" == "Linux" ]] || { echo "Debian packaging must run on Linux"; exit 1; }
+    prepare_frontend
+    tauri_build --bundles deb --features heic
+    echo "Built DEB package under target/release/bundle/deb/"
     ;;
   linux-appimage)
-    if ! command -v wget >/dev/null 2>&1; then
-      echo "wget is required to fetch appimagetool"
-      exit 1
-    fi
-    cargo build --release --target x86_64-unknown-linux-gnu
-    rm -rf staging-local Smriti.AppDir appimagetool-x86_64.AppImage
-    mkdir -p staging-local/smriti
-    cp target/x86_64-unknown-linux-gnu/release/smriti staging-local/smriti/
-    mkdir -p Smriti.AppDir/usr/bin
-    mkdir -p Smriti.AppDir/usr/share/applications
-    mkdir -p Smriti.AppDir/usr/share/icons/hicolor/256x256/apps
-    cp staging-local/smriti/smriti Smriti.AppDir/usr/bin/
-    cp packaging/smriti.desktop Smriti.AppDir/usr/share/applications/
-    cp packaging/smriti.png Smriti.AppDir/usr/share/icons/hicolor/256x256/apps/
-    cp packaging/smriti.desktop Smriti.AppDir/
-    cp packaging/smriti.png Smriti.AppDir/
-    cat > Smriti.AppDir/AppRun <<'EOF'
-#!/bin/bash
-HERE="$(dirname "$(readlink -f "${0}")")"
-cd "${HERE}/usr/bin"
-exec "${HERE}/usr/bin/smriti" "$@"
-EOF
-    chmod +x Smriti.AppDir/AppRun
-    wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-    chmod +x appimagetool-x86_64.AppImage
-    ./appimagetool-x86_64.AppImage Smriti.AppDir Smriti-x86_64.AppImage
-    echo "Built AppImage: Smriti-x86_64.AppImage"
+    [[ "$(uname -s)" == "Linux" ]] || { echo "AppImage packaging must run on Linux"; exit 1; }
+    prepare_frontend
+    tauri_build --bundles appimage --features heic
+    echo "Built AppImage under target/release/bundle/appimage/"
     ;;
   assets-pack)
     ./scripts/setup_assets.sh
     rm -rf assets-pack-local Smriti-Assets-local.zip
-    mkdir -p assets-pack-local/libs/onnxruntime assets-pack-local/models assets-pack-local/data
-    cp libs/onnxruntime/libonnxruntime.so* assets-pack-local/libs/onnxruntime/ || true
+    case "$(uname -s)" in
+      Linux) platform="linux"; runtime_glob="libonnxruntime.so*" ;;
+      Darwin) platform="macos"; runtime_glob="libonnxruntime*.dylib" ;;
+      *) echo "Unsupported asset-pack host: $(uname -s)"; exit 1 ;;
+    esac
+    mkdir -p "assets-pack-local/libs/onnxruntime/$platform" assets-pack-local/models assets-pack-local/data
+    find libs/onnxruntime -maxdepth 1 -type f -name "$runtime_glob" \
+      -exec cp {} "assets-pack-local/libs/onnxruntime/$platform/" \;
+    if ! find "assets-pack-local/libs/onnxruntime/$platform" -type f -print -quit | grep -q .; then
+      echo "ONNX Runtime was not copied into the asset pack"
+      exit 1
+    fi
     cp models/scrfd_10g_bnkps.onnx assets-pack-local/models/
     cp models/adaface_ir101_webface12m.onnx assets-pack-local/models/
     cp data/geonames.db assets-pack-local/data/

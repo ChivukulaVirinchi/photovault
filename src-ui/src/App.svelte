@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { libraryStore } from "./lib/stores/library.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
-  import { semantic } from "./lib/api/all";
   import Welcome from "./routes/Welcome.svelte";
   import Timeline from "./routes/Timeline.svelte";
   import People from "./routes/People.svelte";
@@ -43,7 +42,6 @@
 
   let showShortcuts = $state(false);
   let lastDriveRoot = $state<string | null | undefined>(undefined);
-  let warmedSemanticRoot = $state<string | null>(null);
   let lastRouteKey: string | null = null;
 
   function safeDecode(value: string): string {
@@ -86,6 +84,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (e.defaultPrevented) return;
     if (
       (e.ctrlKey || e.metaKey) &&
       e.shiftKey &&
@@ -102,6 +101,7 @@
     else if (e.key === "/") { window.location.hash = "/search"; e.preventDefault(); }
     else if (e.key === "Escape") {
       if (showShortcuts) { showShortcuts = false; }
+      else if (document.querySelector('[role="dialog"][aria-modal="true"]')) { return; }
       else if (route.path !== "/timeline") { history.back(); }
     }
   }
@@ -132,7 +132,6 @@
       slideshow.close();
       assistantStore.resetForLibrary();
       jobs.clearLibraryScoped();
-      warmedSemanticRoot = null;
       if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
         window.location.hash = "/timeline";
       }
@@ -140,16 +139,6 @@
     lastDriveRoot = root;
   });
 
-  $effect(() => {
-    const root = libraryStore.driveRoot;
-    if (!libraryStore.isOpen || !root || warmedSemanticRoot === root) return;
-    const warmRoot = root;
-    warmedSemanticRoot = warmRoot;
-    semantic.warmRuntime().catch((e) => {
-      if (warmedSemanticRoot === warmRoot) warmedSemanticRoot = null;
-      console.debug("semantic runtime warm-up skipped", e);
-    });
-  });
 </script>
 
 {#if !libraryStore.isOpen}

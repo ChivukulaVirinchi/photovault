@@ -1,6 +1,8 @@
 //! Duplicate groups database operations
 
-use rusqlite::{params, types::ToSql, Connection, Result as SqliteResult};
+use std::collections::HashMap;
+
+use rusqlite::{params, params_from_iter, types::ToSql, Connection, Result as SqliteResult};
 
 use super::MAX_ROWS_PER_INSERT;
 
@@ -270,21 +272,28 @@ impl<'a> DuplicateRepo<'a> {
         // Pull every member's photo_id per group — drives the
         // browseContext scope when the user clicks a duplicate's
         // thumb in the listing.
-        let mut members_stmt = self.conn.prepare(
-            r#"
-            SELECT m.photo_id
-              FROM duplicate_group_members m
-              JOIN photos p ON p.id = m.photo_id
-             WHERE m.group_id = ?1
-               AND p.is_trashed = FALSE
-          ORDER BY m.is_suggested_keep DESC, m.photo_id ASC
-            "#,
-        )?;
-        for g in groups.iter_mut() {
-            let ids: Vec<i64> = members_stmt
-                .query_map(params![g.id], |row| row.get::<_, i64>(0))?
-                .collect::<SqliteResult<Vec<_>>>()?;
-            g.member_photo_ids = ids;
+        if !groups.is_empty() {
+            let placeholders = vec!["?"; groups.len()].join(",");
+            let sql = format!(
+                "SELECT m.group_id, m.photo_id
+                   FROM duplicate_group_members m
+                   JOIN photos p ON p.id = m.photo_id
+                  WHERE m.group_id IN ({placeholders}) AND p.is_trashed = FALSE
+               ORDER BY m.group_id, m.is_suggested_keep DESC, m.photo_id ASC"
+            );
+            let group_ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
+            let mut by_group: HashMap<i64, Vec<i64>> = HashMap::with_capacity(groups.len());
+            let mut members_stmt = self.conn.prepare(&sql)?;
+            let rows = members_stmt.query_map(params_from_iter(group_ids), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (group_id, photo_id) = row?;
+                by_group.entry(group_id).or_default().push(photo_id);
+            }
+            for group in &mut groups {
+                group.member_photo_ids = by_group.remove(&group.id).unwrap_or_default();
+            }
         }
 
         Ok(groups)

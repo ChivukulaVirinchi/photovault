@@ -11,9 +11,8 @@ Supported Linux artifacts:
 Published by tag-driven CI workflow:
 - `.github/workflows/release.yml`
 
-CI also runs package smoke checks on tag releases:
-- `.deb` install + launch smoke test
-- AppImage extract/layout check + launch smoke test
+CI builds each package on its native runner. A clean-machine launch remains
+the manual smoke test before publishing the draft release.
 
 ## 1) Pre-release checks
 
@@ -40,13 +39,13 @@ cargo clippy --all-targets
 ```
 
 Expected output:
-- `target/debian/*.deb`
+- `target/release/bundle/deb/*.deb`
 
 Install test:
 
 ```bash
-sudo dpkg -i target/debian/*.deb
-smriti
+sudo dpkg -i target/release/bundle/deb/*.deb
+smriti-tauri
 ```
 
 ### 2.2 Build AppImage
@@ -56,13 +55,13 @@ smriti
 ```
 
 Expected output:
-- `Smriti-x86_64.AppImage`
+- `target/release/bundle/appimage/*.AppImage`
 
 Run test:
 
 ```bash
-chmod +x Smriti-x86_64.AppImage
-./Smriti-x86_64.AppImage
+chmod +x target/release/bundle/appimage/*.AppImage
+target/release/bundle/appimage/*.AppImage
 ```
 
 ## 3) Publish Linux artifacts via CI
@@ -85,7 +84,8 @@ Ensure draft release contains at least:
 - `Smriti-x86_64.AppImage`
 - `SHA256SUMS`
 
-Note: Draft release creation is blocked unless Linux smoke-test jobs pass.
+Note: Draft release creation is blocked unless the native package build jobs
+pass.
 
 Verify checksums:
 

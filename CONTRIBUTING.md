@@ -20,7 +20,6 @@ Thanks for your interest. Contributions of all sizes are welcome.
 ## Where to find work
 
 - Good first issues: `good first issue` label
-- Future feature ideas: `docs/FUTURE_SCOPE.md`
 - Documentation improvements are always welcome
 
 ## Development

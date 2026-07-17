@@ -22,7 +22,7 @@ close it.
    **Browse** to pick one. Smriti remembers it and offers it again
    next time.
 3. **(Optional) Install the asset pack.** A first-run prompt may ask
-   to download ~250 MB of ONNX face-recognition models + the GeoNames
+   to download ~300 MB of ONNX face-recognition models + the GeoNames
    offline geocoding database. Declining is fine — face features and
    place names are the only things gated on this. The rest of the app
    works without it.

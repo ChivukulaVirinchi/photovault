@@ -240,13 +240,36 @@ fn backfill_inner(
                 message: Some("Upgrading GeoNames database…".into()),
             },
         );
-        let project_root = smriti::bootstrap::project_root();
-        if let Err(e) = smriti::db::geonames::build_geonames_db(&project_root) {
+        let source_root = path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .filter(|root| {
+                root.join("data").join("cities1000.txt").is_file()
+                    && root.join("data").join("country_codes.txt").is_file()
+            })
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                let root = smriti::bootstrap::project_root();
+                (root.join("data").join("cities1000.txt").is_file()
+                    && root.join("data").join("country_codes.txt").is_file())
+                .then_some(root)
+            })
+            .ok_or_else(|| {
+                "GeoNames database is out of date and its source data is unavailable. Use Set up assets on the Welcome screen or Download assets in Settings to replace it."
+                    .to_string()
+            })?;
+        if let Err(e) = smriti::db::geonames::build_geonames_db(&source_root) {
             tracing::error!("geonames rebuild failed: {}", e);
             return Err(format!(
-                "GeoNames database is out of date and rebuild failed: {}. Run scripts/setup_assets.ps1 (or .sh) to refresh it.",
+                "GeoNames database is out of date and rebuild failed: {}. Download assets again to refresh it.",
                 e
             ));
+        }
+        if !smriti::db::geonames::geonames_db_is_current(&path) {
+            return Err(
+                "GeoNames rebuild completed at an unexpected location. Download assets again to repair it."
+                    .to_string(),
+            );
         }
         tracing::info!("geonames.db rebuilt successfully");
     }

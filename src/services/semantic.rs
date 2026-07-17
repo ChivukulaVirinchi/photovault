@@ -140,6 +140,7 @@ pub struct SemanticIndexCache {
 #[cfg(feature = "hnsw_clustering")]
 struct SemanticHnswIndex {
     photo_ids: Vec<i64>,
+    exact_vectors: Option<Vec<Vec<f32>>>,
     hnsw: hnsw_rs::prelude::Hnsw<'static, f32, hnsw_rs::prelude::DistCosine>,
 }
 
@@ -148,6 +149,23 @@ impl SemanticHnswIndex {
     fn search(&self, query: &[f32], limit: usize) -> Vec<SemanticCandidate> {
         if self.photo_ids.is_empty() || limit == 0 {
             return Vec::new();
+        }
+        if let Some(vectors) = &self.exact_vectors {
+            let mut candidates: Vec<_> = vectors
+                .iter()
+                .zip(&self.photo_ids)
+                .map(|(vector, photo_id)| SemanticCandidate {
+                    photo_id: *photo_id,
+                    score: cosine(query, vector).clamp(-1.0, 1.0),
+                })
+                .collect();
+            candidates.sort_by(|a, b| {
+                b.score
+                    .total_cmp(&a.score)
+                    .then_with(|| a.photo_id.cmp(&b.photo_id))
+            });
+            candidates.truncate(limit);
+            return candidates;
         }
         self.hnsw
             .search(query, limit.min(self.photo_ids.len()).max(1), 200)
@@ -516,6 +534,7 @@ impl SemanticSearchService {
         if rows.is_empty() {
             return Ok(SemanticHnswIndex {
                 photo_ids: Vec::new(),
+                exact_vectors: None,
                 hnsw: Hnsw::new(16, 1, 1, 200, DistCosine {}),
             });
         }
@@ -533,8 +552,14 @@ impl SemanticSearchService {
             .map(|(idx, row)| (row.vector.as_slice(), idx))
             .collect();
         hnsw.parallel_insert_slice(&data);
+        let exact_vectors =
+            (rows.len() <= 256).then(|| rows.iter().map(|row| row.vector.clone()).collect());
         let photo_ids = rows.into_iter().map(|row| row.photo_id).collect();
-        Ok(SemanticHnswIndex { photo_ids, hnsw })
+        Ok(SemanticHnswIndex {
+            photo_ids,
+            exact_vectors,
+            hnsw,
+        })
     }
 
     fn vector_for_photo(

@@ -179,6 +179,12 @@
     }
   }
   function onGlobalKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && (exportResult || confirmingDelete)) {
+      exportResult = null;
+      confirmingDelete = false;
+      e.preventDefault();
+      return;
+    }
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (selection.active()) {
       if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
@@ -605,6 +611,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-4);
+    max-height: calc(100vh - 2 * var(--s-4));
+    overflow-y: auto;
   }
   .export-modal header,
   .export-modal footer {

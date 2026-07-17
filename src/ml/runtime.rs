@@ -32,7 +32,9 @@ pub fn active_execution_provider() -> &'static str {
 /// Platform-specific ONNX Runtime library name
 #[cfg(target_os = "windows")]
 const ORT_LIB_NAME: &str = "onnxruntime.dll";
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+const ORT_LIB_NAME: &str = "libonnxruntime.dylib";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const ORT_LIB_NAME: &str = "libonnxruntime.so";
 
 /// ONNX Runtime environment wrapper
@@ -48,9 +50,25 @@ const ORT_LIB_NAME: &str = "libonnxruntime.so";
 pub struct OnnxRuntime;
 
 impl OnnxRuntime {
+    fn usable_runtime_file(path: &Path) -> bool {
+        std::fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() >= 1024 * 1024)
+    }
+
+    fn runtime_file_name_matches(name: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            name.starts_with("libonnxruntime") && name.ends_with(".dylib")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            name.starts_with(ORT_LIB_NAME)
+        }
+    }
+
     fn find_runtime_in_dir(dir: &Path) -> Option<PathBuf> {
         let direct = dir.join(ORT_LIB_NAME);
-        if direct.exists() {
+        if Self::usable_runtime_file(&direct) {
             return Some(direct);
         }
 
@@ -59,7 +77,7 @@ impl OnnxRuntime {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with(ORT_LIB_NAME) {
+                if Self::runtime_file_name_matches(name) && Self::usable_runtime_file(&path) {
                     return Some(path);
                 }
             }

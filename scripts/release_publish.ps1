@@ -111,13 +111,7 @@ try {
 
         & gh run watch $runId --exit-status
 
-        $required = @(
-            "Smriti-Setup-x64.msi",
-            "smriti-x86_64-pc-windows-msvc.zip",
-            "Smriti-ubuntu-amd64.deb",
-            "Smriti-x86_64.AppImage",
-            "Smriti-Assets.zip"
-        )
+        $required = @("Smriti-Assets.zip")
         if (-not $SkipChecksumsVerification) {
             $required += "SHA256SUMS"
         }
@@ -133,6 +127,12 @@ try {
 
         $assetNames = @($obj.assets | ForEach-Object { $_.name })
         $missing = @($required | Where-Object { $_ -notin $assetNames })
+        $requiredPatterns = @("*.msi", "*.deb", "*.AppImage", "*.dmg")
+        foreach ($pattern in $requiredPatterns) {
+            if (-not ($assetNames | Where-Object { $_ -like $pattern })) {
+                $missing += $pattern
+            }
+        }
         if ($missing.Count -gt 0) {
             throw "Draft release is missing expected assets: $($missing -join ', ')"
         }

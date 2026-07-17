@@ -1,8 +1,10 @@
 <script module lang="ts">
   const RESOLVED_IMAGE_CACHE_CAP = 300;
   const resolvedImageCache = new Map<number, string>();
+  const photoDetailsCache = new Map<number, import("../lib/api/types").PhotoDto>();
   const preloadedMediaCache = new Set<number>();
   const preloadInFlight = new Set<number>();
+  let cachedDriveRoot: string | null = null;
 </script>
 
 <script lang="ts">
@@ -12,7 +14,6 @@
     RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras, type TimelineNeighbors } from "../lib/api/photos";
-  import { library } from "../lib/api/library";
   import { system } from "../lib/api/system";
   import { stacks, trash, type PhotoStack } from "../lib/api/all";
   import { call, commandErrorMessage } from "../lib/api/index";
@@ -21,14 +22,13 @@
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
-  import { thumbUrl } from "../lib/thumbnail";
+  import { libraryAssetUrl, thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { probeVideoPoster } from "../lib/videoProbe";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
   import ZoomImage from "../lib/components/ZoomImage.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import type { ZoomApi } from "../lib/zoomApi";
-  import { convertFileSrc } from "@tauri-apps/api/core";
   import maplibregl, { type Map as MapInstance } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
   import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
@@ -222,34 +222,60 @@
     if (timer != null) clearTimeout(timer);
   }
 
-  function rememberImageUrl(photoId: number, url: string) {
-    resolvedImageCache.set(photoId, url);
+  function rememberPhoto(p: PhotoDto, url: string) {
+    photoDetailsCache.delete(p.id);
+    photoDetailsCache.set(p.id, p);
+    resolvedImageCache.set(p.id, url);
     while (resolvedImageCache.size > RESOLVED_IMAGE_CACHE_CAP) {
       const oldest = resolvedImageCache.keys().next().value;
       if (oldest == null) break;
       resolvedImageCache.delete(oldest);
+      photoDetailsCache.delete(oldest);
       preloadedMediaCache.delete(oldest);
     }
   }
 
-  async function imageUrlFor(photoId: number): Promise<string> {
+  async function photoAndUrl(photoId: number): Promise<[PhotoDto, string]> {
+    const driveRoot = libraryStore.driveRoot;
+    if (driveRoot !== cachedDriveRoot) {
+      resolvedImageCache.clear();
+      photoDetailsCache.clear();
+      preloadedMediaCache.clear();
+      preloadInFlight.clear();
+      cachedDriveRoot = driveRoot;
+    }
+    const cachedPhoto = photoDetailsCache.get(photoId);
+    const cached = resolvedImageCache.get(photoId);
+    if (cachedPhoto && cached) {
+      photoDetailsCache.delete(photoId);
+      photoDetailsCache.set(photoId, cachedPhoto);
+      resolvedImageCache.delete(photoId);
+      resolvedImageCache.set(photoId, cached);
+      return [cachedPhoto, cached];
+    }
+    const p = await photos.get(photoId);
+    if (libraryStore.driveRoot !== driveRoot) throw new Error("Open library changed");
+    const url = libraryAssetUrl(driveRoot, p.file_path);
+    if (!url) throw new Error("Photo path is outside the open library");
+    rememberPhoto(p, url);
+    return [p, url];
+  }
+
+  function cachedImageUrl(photoId: number): string | null {
     const cached = resolvedImageCache.get(photoId);
     if (cached) {
       resolvedImageCache.delete(photoId);
       resolvedImageCache.set(photoId, cached);
       return cached;
     }
-    const { absolute_path } = await library.resolvePath(photoId);
-    const url = convertFileSrc(absolute_path);
-    rememberImageUrl(photoId, url);
-    return url;
+    return null;
   }
 
   async function preloadPhoto(photoId: number | null) {
     if (photoId == null || preloadedMediaCache.has(photoId) || preloadInFlight.has(photoId)) return;
     preloadInFlight.add(photoId);
     try {
-      const [url, p] = await Promise.all([imageUrlFor(photoId), photos.get(photoId)]);
+      const [p, url] = await photoAndUrl(photoId);
       if (p.media_type !== "video") await decodeImage(url);
       preloadedMediaCache.add(photoId);
     } catch {} finally {
@@ -282,17 +308,12 @@
       // background fallback covers the visible transition. Awaiting
       // decode used to gate the entire UI update on a 100-500ms
       // image read which made arrow-key nav feel sticky on big RAWs.
-      const urlPromise = imageUrlFor(photoId);
-      const p = await photos.get(photoId);
+      const immediateUrl = cachedImageUrl(photoId);
+      if (immediateUrl) imageUrl = immediateUrl;
+      const [p, url] = await photoAndUrl(photoId);
       if (!mounted || seq !== loadSeq) return;
       photo = p;
-      urlPromise
-        .then((url) => {
-          if (mounted && seq === loadSeq && photo?.id === photoId) imageUrl = url;
-        })
-        .catch((e) => {
-          if (mounted && seq === loadSeq) error = commandErrorMessage(e);
-        });
+      imageUrl = url;
       void call<PersonDto[]>("photos_people_in_photo", { photo_id: photoId })
         .then((nextPeople) => {
           if (mounted && seq === loadSeq) people = nextPeople;
@@ -453,6 +474,8 @@
       const updated = await photos.setFavorite(photoId, !photo.is_favorite);
       if (!mounted || seq !== loadSeq || photo?.id !== photoId) return;
       photo = updated;
+      const url = resolvedImageCache.get(photoId);
+      if (url) rememberPhoto(updated, url);
     } catch (e) {
       if (mounted && seq === loadSeq) toasts.error(`Couldn't update favourite: ${commandErrorMessage(e)}`);
     } finally {

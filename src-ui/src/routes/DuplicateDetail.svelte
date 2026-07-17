@@ -197,10 +197,13 @@
   .grid {
     padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--s-4);
+    align-content: start;
+    grid-auto-rows: max-content;
   }
   .card {
     background: var(--bg-card);
@@ -209,6 +212,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    min-width: 0;
     transition: border-color var(--t-fast) var(--ease);
   }
   .card.keep {

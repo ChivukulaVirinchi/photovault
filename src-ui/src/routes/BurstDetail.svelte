@@ -170,10 +170,13 @@
   .grid {
     padding: var(--s-4) var(--s-7) var(--s-7);
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: var(--s-3);
+    align-content: start;
+    grid-auto-rows: max-content;
   }
   .card {
     background: var(--bg-card);

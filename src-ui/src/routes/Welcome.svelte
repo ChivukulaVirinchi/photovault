@@ -5,7 +5,9 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { library } from "../lib/api/library";
   import { commandErrorMessage } from "../lib/api";
-  import type { PhotoSummaryDto } from "../lib/api/types";
+  import { systemEx } from "../lib/api/all";
+  import type { AssetHealthDto, PhotoSummaryDto } from "../lib/api/types";
+  import { jobs } from "../lib/stores/jobs.svelte";
   import { thumbUrl } from "../lib/thumbnail";
 
   let dragOver = $state(false);
@@ -18,6 +20,12 @@
   let compatLoaded = $state(false);
   let compatSeq = 0;
   let mounted = true;
+  let assetHealth = $state<AssetHealthDto | null>(null);
+  let assetError = $state<string | null>(null);
+  let assetHealthLoading = $state(false);
+  const installingAssets = $derived(jobs.isRunning("assets"));
+  const assetsJob = $derived(jobs.byKind("assets"));
+  let handledAssetJobId: string | null = null;
 
   function shortRoot(p: string): string {
     const parts = p.split(/[\\/]/).filter(Boolean);
@@ -54,6 +62,36 @@
     droppedPath = shortRoot(first);
     try { await libraryStore.open(first); } catch {}
     finally { if (mounted) droppedPath = null; }
+  }
+
+  async function loadAssetHealth() {
+    assetHealthLoading = true;
+    try {
+      const health = await systemEx.assetHealth();
+      if (mounted) {
+        assetHealth = health;
+        assetError = null;
+      }
+    } catch (error) {
+      if (mounted) assetError = commandErrorMessage(error);
+    } finally {
+      if (mounted) assetHealthLoading = false;
+    }
+  }
+
+  async function installAssets() {
+    if (installingAssets) return;
+    assetError = null;
+    const placeholderId = `pending-assets-${Date.now()}`;
+    jobs.register(placeholderId, "assets");
+    try {
+      const result = await systemEx.installAssets();
+      jobs.dismiss(placeholderId);
+      jobs.register(result.job_id, "assets");
+    } catch (error) {
+      jobs.dismiss(placeholderId);
+      if (mounted) assetError = commandErrorMessage(error);
+    }
   }
 
   const extraRemembered = $derived(
@@ -97,6 +135,7 @@
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     mounted = true;
+    void loadAssetHealth();
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (!mounted) return;
@@ -118,6 +157,19 @@
       mounted = false;
       unlisten?.();
     };
+  });
+
+  $effect(() => {
+    const job = assetsJob;
+    if (!job || job.id === handledAssetJobId) return;
+    if (job.status === "complete" || job.status === "error") {
+      handledAssetJobId = job.id;
+      if (job.status === "error") {
+        assetError = job.message || "Asset installation failed.";
+      } else {
+        void loadAssetHealth();
+      }
+    }
   });
 
   $effect(() => {
@@ -182,6 +234,23 @@
       {/if}
     {:else if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
+
+    {#if assetHealth?.missing_face_models || assetHealth?.missing_onnx_runtime || assetHealth?.missing_geonames_db}
+      <section class="asset-setup" aria-label="Optional asset setup">
+        <div class="asset-copy">
+          <strong>Enable faces and offline place names</strong>
+          <span>One download installs the local runtime, face models, and GeoNames database.</span>
+          {#if assetError}<span class="error">{assetError}</span>{/if}
+        </div>
+        <button class="primary" onclick={installAssets} disabled={installingAssets}>
+          {installingAssets ? "Installing assets…" : "Set up assets"}
+        </button>
+      </section>
+    {:else if assetError}
+      <p class="error">Couldn't check optional assets: {assetError}</p>
+    {:else if assetHealthLoading}
+      <p class="hint">Checking local assets…</p>
+    {/if}
 
     {#if extraRemembered.length > 0}
       <section>
@@ -313,6 +382,30 @@
   .hint {
     font-size: var(--t-sm);
     color: var(--ink-muted);
+  }
+  .asset-setup {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    padding: var(--s-4) var(--s-5);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--bg-paper);
+  }
+  .asset-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--ink-soft);
+    font-size: var(--t-sm);
+    line-height: 1.4;
+  }
+  .asset-copy strong { color: var(--ink); }
+  .asset-copy .error { margin: var(--s-1) 0 0; }
+  .asset-setup button { flex-shrink: 0; }
+  @media (max-width: 620px) {
+    .asset-setup { align-items: stretch; flex-direction: column; }
   }
   .schema-error {
     display: flex;

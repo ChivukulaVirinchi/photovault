@@ -137,8 +137,8 @@ Commit with `chore(release): vX.Y.Z`.
 
 The `v*` tag triggers `.github/workflows/release.yml`, which:
 
-- Builds Linux (`.deb`, `.AppImage`, `.rpm`), Windows (`.msi`,
-  portable zip), macOS (`.dmg` / tar.gz) via the Tauri bundler.
+- Builds Linux (`.deb`, `.AppImage`), Windows (`.msi`), and macOS
+  (`.dmg`) via the Tauri bundler.
 - Builds the optional `Smriti-Assets.zip` (face models + GeoNames +
   ORT).
 - Drafts a GitHub release with all artifacts attached.

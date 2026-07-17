@@ -15,11 +15,14 @@
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let project_root = PathBuf::from(".");
+    let project_root = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
     smriti::db::geonames::build_geonames_db(&project_root)?;
     println!(
         "GeoNames database created at {}",
-        smriti::db::geonames::geonames_db_path().display()
+        project_root.join("data").join("geonames.db").display()
     );
     Ok(())
 }

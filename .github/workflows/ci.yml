@@ -9,14 +9,6 @@ on:
       - 'LICENSE'
       - 'THIRD_PARTY_LICENSES.md'
       - '.github/workflows/docs.yml'
-  pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - 'THIRD_PARTY_LICENSES.md'
-      - '.github/workflows/docs.yml'
-
 env:
   CARGO_TERM_COLOR: always
 
@@ -37,10 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # PRs run Linux only to conserve minutes (Windows = 2x, macOS =
-        # 10x). Pushes to master keep the full matrix; the release
-        # pipeline exercises Windows + macOS independently.
-        os: ${{ github.event_name == 'pull_request' && fromJson('["ubuntu-latest"]') || fromJson('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
