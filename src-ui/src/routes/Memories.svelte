@@ -71,7 +71,12 @@
   }
 
   function memoryKindLabel(kind: string): string {
+    if (kind === "on_this_day") return "From this day";
     if (kind === "fallback_window") return "From your library";
+    if (kind === "person_story") return "Together over time";
+    if (kind === "place_story") return "A place in your story";
+    if (kind === "visual_pattern") return "You noticed this";
+    if (kind === "seasonal_recap" || kind === "year_recap") return "A look back";
     return kind
       .replaceAll("_", " ")
       .replace(/\b\w/g, (m) => m.toUpperCase());

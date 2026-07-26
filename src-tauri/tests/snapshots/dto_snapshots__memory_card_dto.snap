@@ -4,7 +4,7 @@ expression: dto
 ---
 {
   "id": "otd-2020-01-01",
-  "kind": "onthisday",
+  "kind": "on_this_day",
   "title": "4 years ago today",
   "hero_photo_id": 7,
   "hero_thumbnail_path": ".photovault/thumbnails/memory.jpg",

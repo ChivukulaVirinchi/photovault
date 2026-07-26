@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Timelike, Utc};
 use rusqlite::{params, Connection};
 
 use crate::db::album_suggestion_repo::AlbumSuggestionRepo;
@@ -79,8 +79,9 @@ pub fn compute_fingerprint(photo_ids: &[i64]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Pick the best cover photo from a list of IDs: prefer landscape with faces,
-/// newest first. Falls back to the first photo if nothing matches.
+/// Pick the best cover photo from a list of IDs. User favourites and the
+/// existing duplicate/burst quality ranking lead; faces and landscape framing
+/// break ties.
 pub fn pick_cover(conn: &Connection, photo_ids: &[i64]) -> Option<i64> {
     if photo_ids.is_empty() {
         return None;
@@ -98,6 +99,12 @@ pub fn pick_cover(conn: &Connection, photo_ids: &[i64]) -> Option<i64> {
            GROUP BY p.id
            ORDER BY
              p.media_type = 'photo' DESC,
+             p.is_favorite DESC,
+             COALESCE((
+               SELECT MAX(psm.quality_score)
+               FROM photo_stack_members psm
+               WHERE psm.photo_id = p.id
+             ), 0) DESC,
              COUNT(f.id) > 0 DESC,
              p.width > p.height DESC,
              p.date_taken DESC
@@ -173,85 +180,105 @@ pub fn detect_home_city(
 // Trip detection
 // ---------------------------------------------------------------------------
 
-/// Intermediate: a city visit span.
-#[allow(dead_code)]
-struct CitySpan {
+#[derive(Debug, Clone)]
+struct TripPhoto {
+    id: i64,
     city: String,
     country: String,
-    start: NaiveDate,
-    end: NaiveDate,
-    photo_ids: Vec<i64>,
+    date: NaiveDate,
+    people: HashSet<i64>,
 }
 
-/// Detect trip suggestions.
-/// A trip is a contiguous span of >= 2 days in a non-home city with >= 8 photos,
-/// where the city appears in < 10% of total photo-weeks and is >= 50 km from home.
+#[derive(Debug, Default)]
+struct TripSpan {
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+    located_photo_ids: Vec<i64>,
+    stops: Vec<(String, String)>,
+    people: HashSet<i64>,
+}
+
+impl TripSpan {
+    fn push(&mut self, photo: &TripPhoto) {
+        self.start.get_or_insert(photo.date);
+        self.end = Some(photo.date);
+        self.located_photo_ids.push(photo.id);
+        self.people.extend(photo.people.iter().copied());
+        let stop = (photo.city.clone(), photo.country.clone());
+        if self.stops.last() != Some(&stop) {
+            self.stops.push(stop);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.located_photo_ids.is_empty()
+    }
+}
+
+/// Detect complete journeys rather than independent city visits.
+///
+/// A trip starts when the timeline leaves the inferred home city and ends on a
+/// return home or a long gap. A short quiet stretch may remain connected when
+/// the same people appear on both sides. City changes inside that interval
+/// become ordered stops, so a two-week Jaipur -> Jodhpur -> Udaipur journey is
+/// proposed as one album. Once the dated envelope is known, photos without GPS
+/// are included as well.
 pub fn detect_trips(
     conn: &Connection,
     home: Option<&(String, String, f64, f64)>,
 ) -> Vec<DetectedSuggestion> {
-    // Query: all photos with city + date, ordered by city then date
-    let rows: Vec<(i64, String, String, String)> = {
+    let rows: Vec<TripPhoto> = {
         let mut stmt = match conn.prepare(
-            r#"SELECT p.id, p.location_city, COALESCE(p.location_country,''), p.date_taken
+            r#"SELECT p.id, p.location_city, COALESCE(p.location_country,''), p.date_taken,
+                      (SELECT GROUP_CONCAT(DISTINCT f.cluster_id)
+                       FROM faces f
+                       WHERE f.photo_id = p.id AND f.cluster_id IS NOT NULL)
                FROM photos p
-               WHERE p.location_city IS NOT NULL
+               WHERE p.location_city IS NOT NULL AND p.location_city != ''
                  AND p.date_taken IS NOT NULL
                  AND p.is_trashed = FALSE
-               ORDER BY p.location_city, COALESCE(p.location_country,''), p.date_taken"#,
+                 AND COALESCE(p.content_category, 'photo') = 'photo'
+               ORDER BY p.date_taken, p.id"#,
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
         })
         .and_then(|iter| iter.collect::<rusqlite::Result<Vec<_>>>())
         .unwrap_or_else(|e| {
             tracing::warn!("album trip detection skipped: failed reading city rows: {e}");
             Vec::new()
         })
+        .into_iter()
+        .filter_map(|(id, city, country, raw_date, people_csv)| {
+            Some(TripPhoto {
+                id,
+                city,
+                country,
+                date: parse_date_prefix(&raw_date)?,
+                people: people_csv
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter_map(|value| value.parse().ok())
+                    .collect(),
+            })
+        })
+        .collect()
     };
 
     if rows.is_empty() {
         return Vec::new();
     }
 
-    // Total distinct weeks across entire library (for rarity gate)
-    let total_weeks: i64 = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT strftime('%Y-%W', date_taken)) FROM photos WHERE date_taken IS NOT NULL AND is_trashed = FALSE",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(1)
-        .max(1);
-
-    // Count of distinct weeks per city
-    let city_weeks: HashMap<(String, String), i64> = {
-        let mut stmt = match conn.prepare(
-            r#"SELECT location_city, COALESCE(location_country,''), COUNT(DISTINCT strftime('%Y-%W', date_taken))
-                   FROM photos
-                   WHERE location_city IS NOT NULL AND date_taken IS NOT NULL AND is_trashed = FALSE
-                   GROUP BY location_city, COALESCE(location_country,'')"#,
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return Vec::new(),
-        };
-        stmt.query_map([], |row| {
-            Ok((
-                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
-        .unwrap_or_else(|e| {
-            tracing::warn!("album trip detection skipped: failed reading city week rows: {e}");
-            HashMap::new()
-        })
-    };
-
-    // City GPS centroids (for distance check)
     let city_centroids: HashMap<(String, String), (f64, f64)> = {
         let mut stmt = match conn.prepare(
             r#"SELECT location_city, COALESCE(location_country,''), AVG(gps_latitude), AVG(gps_longitude)
@@ -275,7 +302,6 @@ pub fn detect_trips(
         })
     };
 
-    // How many photos are already in user albums, keyed by photo_id
     let album_photo_set: HashSet<i64> = {
         match conn.prepare("SELECT DISTINCT photo_id FROM album_photos") {
             Ok(mut stmt) => stmt
@@ -291,151 +317,277 @@ pub fn detect_trips(
         }
     };
 
-    let home_place = home.as_ref().map(|h| (h.0.as_str(), h.1.as_str()));
-    let home_coords = home.as_ref().map(|h| (h.2, h.3));
-
-    // Group rows by city and split into contiguous date spans
-    let mut spans: Vec<CitySpan> = Vec::new();
-    let mut current_city = String::new();
-    let mut current_country = String::new();
-    let mut current_dates: Vec<(NaiveDate, i64)> = Vec::new();
-
-    let flush_city =
-        |city: &str, country: &str, dates: &[(NaiveDate, i64)], out: &mut Vec<CitySpan>| {
-            if dates.is_empty() {
-                return;
-            }
-            // Split into contiguous spans (gap > 3 days = new span)
-            let mut span_start = dates[0].0;
-            let mut span_end = dates[0].0;
-            let mut span_ids: Vec<i64> = vec![dates[0].1];
-
-            for &(d, id) in &dates[1..] {
-                if (d - span_end).num_days() > 3 {
-                    out.push(CitySpan {
-                        city: city.to_string(),
-                        country: country.to_string(),
-                        start: span_start,
-                        end: span_end,
-                        photo_ids: std::mem::take(&mut span_ids),
-                    });
-                    span_start = d;
-                }
-                span_end = d;
-                span_ids.push(id);
-            }
-            out.push(CitySpan {
-                city: city.to_string(),
-                country: country.to_string(),
-                start: span_start,
-                end: span_end,
-                photo_ids: span_ids,
-            });
-        };
-
-    for (id, city, country, date_str) in &rows {
-        let Some(date) = parse_date_prefix(date_str) else {
-            continue;
-        };
-
-        if city != &current_city || country != &current_country {
-            flush_city(&current_city, &current_country, &current_dates, &mut spans);
-            current_city = city.clone();
-            current_country = country.clone();
-            current_dates.clear();
+    let inferred_home: Option<(String, String)> = if home.is_none() {
+        conn.query_row(
+            r#"SELECT location_city, COALESCE(location_country, '')
+               FROM photos
+               WHERE is_trashed = FALSE
+                 AND location_city IS NOT NULL AND location_city != ''
+                 AND date_taken IS NOT NULL
+               GROUP BY location_city, COALESCE(location_country, '')
+               ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
+               LIMIT 1"#,
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+    } else {
+        None
+    };
+    let home_place = home.map(|h| (h.0.as_str(), h.1.as_str())).or_else(|| {
+        inferred_home
+            .as_ref()
+            .map(|(city, country)| (city.as_str(), country.as_str()))
+    });
+    let home_coords = home.map(|h| (h.2, h.3));
+    let is_home = |photo: &TripPhoto| {
+        if home_place == Some((photo.city.as_str(), photo.country.as_str())) {
+            return true;
         }
-        current_dates.push((date, *id));
-    }
-    flush_city(&current_city, &current_country, &current_dates, &mut spans);
+        let place = (photo.city.clone(), photo.country.clone());
+        matches!(
+            (home_coords, city_centroids.get(&place)),
+            (Some((hlat, hlng)), Some((clat, clng)))
+                if haversine_km(hlat, hlng, *clat, *clng) < 50.0
+        )
+    };
 
-    // Filter spans through the 5 gates
+    let mut spans = Vec::new();
+    let mut current = TripSpan::default();
+    for photo in &rows {
+        if is_home(photo) {
+            if !current.is_empty() {
+                spans.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if let Some(end) = current.end {
+            let gap = (photo.date - end).num_days();
+            let people_continue = !photo.people.is_disjoint(&current.people);
+            if gap > 10 || (gap > 4 && !people_continue) {
+                spans.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(photo);
+    }
+    if !current.is_empty() {
+        spans.push(current);
+    }
+
     let mut suggestions = Vec::new();
     for span in spans {
-        let duration_days = (span.end - span.start).num_days() + 1;
-
-        // Gate 1: >= 3 days. Two-day "trips" surfaced as suggestions
-        // tend to be weekend errands, not the trips users want to
-        // remember.
+        let (Some(start), Some(end)) = (span.start, span.end) else {
+            continue;
+        };
+        let duration_days = (end - start).num_days() + 1;
         if duration_days < 3 {
             continue;
         }
-        // Gate 2: >= 15 photos. The old floor (8) flagged any short
-        // outing with a photo per attraction; users called it noisy.
-        if span.photo_ids.len() < 15 {
+
+        let mut photo_ids = photos_in_date_envelope(conn, start, end);
+        if photo_ids.is_empty() {
+            photo_ids = span.located_photo_ids;
+        }
+        photo_ids.sort_unstable();
+        photo_ids.dedup();
+        if photo_ids.len() < 15 {
             continue;
         }
-        // Gate 3: city in < 10% of weeks (rarity)
-        let place = (span.city.clone(), span.country.clone());
-        let cw = city_weeks.get(&place).copied().unwrap_or(0);
-        if cw as f64 / total_weeks as f64 >= 0.10 {
-            continue;
-        }
-        // Gate 4: not the home city and >= 50 km from home
-        if home_place == Some((span.city.as_str(), span.country.as_str())) {
-            continue;
-        }
-        if let Some((hlat, hlng)) = home_coords {
-            if let Some(&(clat, clng)) = city_centroids.get(&place) {
-                if haversine_km(hlat, hlng, clat, clng) < 50.0 {
-                    continue;
-                }
-            }
-        }
-        // Gate 5: not > 60% already in albums
-        let in_album = span
-            .photo_ids
+
+        let in_album = photo_ids
             .iter()
             .filter(|id| album_photo_set.contains(id))
             .count();
-        if !span.photo_ids.is_empty() && in_album as f64 / span.photo_ids.len() as f64 > 0.60 {
+        if in_album as f64 / photo_ids.len() as f64 > 0.60 {
             continue;
         }
 
-        // Natural-prose title: "Trip to Paris  ·  Mar 3 – 7, 2024" for
-        // longer trips, "Paris weekend  ·  Mar 3 – 4, 2024" for 2-day
-        // weekends. The `·` separator gives a clean visual break
-        // between the human-readable lead and the date suffix.
-        let date_suffix =
-            if span.start.year() == span.end.year() && span.start.month() == span.end.month() {
-                format!(
-                    "{} – {}, {}",
-                    span.start.format("%b %-d"),
-                    span.end.format("%-d"),
-                    span.start.format("%Y"),
-                )
-            } else if span.start.year() == span.end.year() {
-                format!(
-                    "{} – {}",
-                    span.start.format("%b %-d"),
-                    span.end.format("%b %-d, %Y"),
-                )
+        let stops = compact_stops(&span.stops);
+        let destination = trip_destination(&stops);
+        let people = top_named_people(conn, &photo_ids, 2);
+        let lead = if people.is_empty() {
+            if stops.len() > 1 {
+                format!("A journey through {destination}")
             } else {
-                format!(
-                    "{} – {}",
-                    span.start.format("%b %-d, %Y"),
-                    span.end.format("%b %-d, %Y"),
-                )
-            };
-        let lead = if duration_days <= 2 {
-            format!("{} weekend", span.city)
+                format!("Time away in {destination}")
+            }
         } else {
-            format!("Trip to {}", span.city)
+            format!("{destination} with {}", join_names(&people))
         };
-        let title = format!("{}  ·  {}", lead, date_suffix);
+        let title = format!("{lead}  ·  {}", format_date_range(start, end));
 
-        let fp = compute_fingerprint(&span.photo_ids);
-        let cover = pick_cover(conn, &span.photo_ids);
+        let fp = compute_fingerprint(&photo_ids);
+        let cover = pick_cover(conn, &photo_ids);
 
         suggestions.push(DetectedSuggestion {
             kind: "trip".to_string(),
             title,
-            photo_ids: span.photo_ids,
+            photo_ids,
             cover_photo_id: cover,
             fingerprint: fp,
         });
     }
 
     suggestions
+}
+
+fn photos_in_date_envelope(conn: &Connection, start: NaiveDate, end: NaiveDate) -> Vec<i64> {
+    let end_exclusive = end.succ_opt().unwrap_or(end).format("%Y-%m-%d").to_string();
+    let mut stmt = match conn.prepare(
+        r#"SELECT id
+           FROM photos
+           WHERE is_trashed = FALSE
+             AND COALESCE(content_category, 'photo') = 'photo'
+             AND date_taken >= ?1 AND date_taken < ?2
+           ORDER BY date_taken, id"#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(
+        params![start.format("%Y-%m-%d").to_string(), end_exclusive],
+        |row| row.get(0),
+    )
+    .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+    .unwrap_or_default()
+}
+
+fn compact_stops(stops: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for stop in stops {
+        if !out.contains(stop) {
+            out.push(stop.clone());
+        }
+    }
+    out
+}
+
+fn trip_destination(stops: &[(String, String)]) -> String {
+    let cities: Vec<&str> = stops.iter().map(|(city, _)| city.as_str()).collect();
+    if cities.len() <= 3 {
+        return join_words(&cities);
+    }
+    let countries: HashSet<&str> = stops
+        .iter()
+        .map(|(_, country)| country.as_str())
+        .filter(|country| !country.is_empty())
+        .collect();
+    if countries.len() == 1 {
+        return countries
+            .into_iter()
+            .next()
+            .unwrap_or("your journey")
+            .to_string();
+    }
+    format!("{} and {} more stops", cities[0], cities.len() - 1)
+}
+
+fn join_words(words: &[&str]) -> String {
+    match words {
+        [] => "your journey".to_string(),
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} & {second}"),
+        _ => format!("{}, {} & {}", words[0], words[1], words[2]),
+    }
+}
+
+fn join_names(names: &[String]) -> String {
+    let words: Vec<&str> = names.iter().map(String::as_str).collect();
+    join_words(&words)
+}
+
+fn format_date_range(start: NaiveDate, end: NaiveDate) -> String {
+    if start == end {
+        return start.format("%b %-d, %Y").to_string();
+    }
+    if start.year() == end.year() && start.month() == end.month() {
+        format!(
+            "{} – {}, {}",
+            start.format("%b %-d"),
+            end.format("%-d"),
+            start.format("%Y")
+        )
+    } else if start.year() == end.year() {
+        format!("{} – {}", start.format("%b %-d"), end.format("%b %-d, %Y"))
+    } else {
+        format!(
+            "{} – {}",
+            start.format("%b %-d, %Y"),
+            end.format("%b %-d, %Y")
+        )
+    }
+}
+
+fn top_named_people(conn: &Connection, photo_ids: &[i64], limit: usize) -> Vec<String> {
+    if photo_ids.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for chunk in photo_ids.chunks(900) {
+        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            r#"SELECT fc.name, COUNT(DISTINCT f.photo_id)
+               FROM faces f
+               JOIN face_clusters fc ON fc.id = f.cluster_id
+               WHERE f.photo_id IN ({placeholders})
+                 AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
+               GROUP BY fc.id, fc.name"#
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        }) else {
+            return Vec::new();
+        };
+        for row in rows.flatten() {
+            *counts.entry(row.0).or_default() += row.1;
+        }
+    }
+    let mut ranked: Vec<_> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked
+        .into_iter()
+        .take(limit)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+fn curate_story_photos(conn: &Connection, photo_ids: &[i64]) -> Vec<i64> {
+    if photo_ids.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for chunk in photo_ids.chunks(900) {
+        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            r#"SELECT p.id
+               FROM photos p
+               WHERE p.id IN ({placeholders})
+                 AND p.is_trashed = FALSE
+                 AND COALESCE(p.content_category, 'photo') = 'photo'
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM photo_stack_members psm
+                     JOIN photo_stacks ps ON ps.id = psm.stack_id
+                     WHERE psm.photo_id = p.id
+                       AND ps.dismissed = FALSE
+                       AND psm.is_cover = FALSE
+                 )
+               ORDER BY p.date_taken, p.id"#
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return photo_ids.to_vec();
+        };
+        let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+            row.get::<_, i64>(0)
+        }) else {
+            return photo_ids.to_vec();
+        };
+        out.extend(rows.flatten());
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -592,11 +744,28 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
             .map(|dt| dt.format("%b %d, %Y").to_string())
             .unwrap_or_else(|| "Event".to_string());
 
-        // "A day in Paris  ·  Mar 12, 2024" / "A day worth remembering · Mar 12, 2024"
-        let title = if let Some(city) = primary_city {
-            format!("A day in {}  ·  {}", city, date)
+        let people = top_named_people(conn, &ids, 2);
+        let daypart = chrono::DateTime::from_timestamp(first_ts, 0)
+            .map(|dt| match dt.hour() {
+                5..=11 => "A morning",
+                12..=16 => "An afternoon",
+                17..=21 => "An evening",
+                _ => "A night",
+            })
+            .unwrap_or("A day");
+        let title = if !people.is_empty() {
+            if let Some(city) = primary_city.as_ref() {
+                format!(
+                    "{daypart} in {city} with {}  ·  {date}",
+                    join_names(&people)
+                )
+            } else {
+                format!("Time with {}  ·  {date}", join_names(&people))
+            }
+        } else if let Some(city) = primary_city {
+            format!("{daypart} in {city}  ·  {date}")
         } else {
-            format!("A day worth remembering  ·  {}", date)
+            format!("A day worth keeping  ·  {date}")
         };
 
         let fp = compute_fingerprint(&ids);
@@ -1021,6 +1190,12 @@ pub fn detect_suggestions_with_diagnostics_cancel(
     all.extend(trips);
     all.extend(events);
     all.extend(gatherings);
+    for suggestion in &mut all {
+        suggestion.photo_ids = curate_story_photos(conn, &suggestion.photo_ids);
+        suggestion.cover_photo_id = pick_cover(conn, &suggestion.photo_ids);
+        suggestion.fingerprint = compute_fingerprint(&suggestion.photo_ids);
+    }
+    all.retain(|suggestion| !suggestion.photo_ids.is_empty());
 
     // Persist only new suggestions (no matching fingerprint)
     let mut persisted = Vec::new();
@@ -1148,6 +1323,64 @@ mod tests {
 
         let suggestions = detect_trips(&conn, None);
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn detect_trips_keeps_multiple_stops_and_unlocated_photos_in_one_journey() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::create_schema(&conn).unwrap();
+        let stops = [
+            ("Jaipur", 1_u32, 4_u32, 26.9124, 75.7873),
+            ("Jodhpur", 5, 8, 26.2389, 73.0243),
+            ("Udaipur", 9, 12, 24.5854, 73.7125),
+        ];
+        let mut id = 1_i64;
+        for (city, first_day, last_day, lat, lng) in stops {
+            for day in first_day..=last_day {
+                for shot in 0..2 {
+                    conn.execute(
+                        r#"INSERT INTO photos
+                           (id, file_path, file_name, file_hash, file_size, date_taken,
+                            gps_latitude, gps_longitude, location_city, location_country)
+                           VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, 'India')"#,
+                        params![
+                            id,
+                            format!("{id}.jpg"),
+                            format!("{id}.jpg"),
+                            format!("hash-{id}"),
+                            format!("2024-03-{day:02}T10:00:{shot:02}Z"),
+                            lat,
+                            lng,
+                            city,
+                        ],
+                    )
+                    .unwrap();
+                    id += 1;
+                }
+            }
+        }
+        let unlocated_id = id;
+        conn.execute(
+            r#"INSERT INTO photos
+               (id, file_path, file_name, file_hash, file_size, date_taken)
+               VALUES (?1, ?2, ?3, ?4, 1, '2024-03-06T20:00:00Z')"#,
+            params![
+                unlocated_id,
+                format!("{unlocated_id}.jpg"),
+                format!("{unlocated_id}.jpg"),
+                format!("hash-{unlocated_id}")
+            ],
+        )
+        .unwrap();
+
+        let home = ("Delhi".to_string(), "India".to_string(), 28.6139, 77.2090);
+        let suggestions = detect_trips(&conn, Some(&home));
+
+        assert_eq!(suggestions.len(), 1);
+        let trip = &suggestions[0];
+        assert!(trip.title.contains("Jaipur, Jodhpur & Udaipur"));
+        assert!(trip.photo_ids.contains(&unlocated_id));
+        assert_eq!(trip.photo_ids.len(), 25);
     }
 
     #[test]

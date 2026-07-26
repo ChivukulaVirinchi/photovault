@@ -40,8 +40,17 @@ pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<Mem
         if !smriti::services::memories::library_is_old_enough(&db.conn, today) {
             return Ok(Vec::new());
         }
-        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
-            .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
+        let mut semantic_cache = lib
+            .semantic_index
+            .lock()
+            .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+        let cards = smriti::services::memories::generate_for_today_with_semantic(
+            &db.conn,
+            today,
+            &lib.drive_root,
+            &mut semantic_cache,
+        )
+        .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let mut dtos: Vec<MemoryCardDto> = cards.into_iter().map(Into::into).collect();
         let inputs = collect_hero_inputs(&db.conn, &dtos)?;
         // The medium-thumbnail upgrade runs outside this lock to keep
@@ -80,8 +89,17 @@ pub async fn memories_detail(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let today = Local::now().date_naive();
-        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
-            .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
+        let mut semantic_cache = lib
+            .semantic_index
+            .lock()
+            .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+        let cards = smriti::services::memories::generate_for_today_with_semantic(
+            &db.conn,
+            today,
+            &lib.drive_root,
+            &mut semantic_cache,
+        )
+        .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let card = cards
             .into_iter()
             .find(|c| c.id == args.memory_id)
@@ -195,8 +213,17 @@ pub async fn memories_save_as_album(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let today = Local::now().date_naive();
-    let cards = smriti::services::memories::generate_for_today(&db.conn, today)
-        .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
+    let mut semantic_cache = lib
+        .semantic_index
+        .lock()
+        .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+    let cards = smriti::services::memories::generate_for_today_with_semantic(
+        &db.conn,
+        today,
+        &lib.drive_root,
+        &mut semantic_cache,
+    )
+    .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
     let card = cards
         .into_iter()
         .find(|c| c.id == args.memory_id)

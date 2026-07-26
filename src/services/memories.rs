@@ -6,9 +6,12 @@
 //! user's block preferences.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::{params, Connection, Result as SqliteResult};
+
+use crate::services::semantic::{SemanticIndexCache, SemanticSearchService, SEMANTIC_MODEL_KEY};
 
 pub type MemoryId = String;
 
@@ -17,6 +20,9 @@ pub enum MemoryKind {
     OnThisDay,
     FallbackWindow,
     SeasonalRecap,
+    PersonStory,
+    PlaceStory,
+    VisualPattern,
     /// Ultimate fallback: surfaces "X years ago" with photos from a prior
     /// year when no other generator produced anything. Guarantees a sparse
     /// library still sees something if it has any history at all.
@@ -89,6 +95,27 @@ const MAX_MEMORY_PHOTOS: usize = 500;
 /// Top entry point: full pipeline. Runs all three generators, scores,
 /// filters blocks, picks heroes, returns cards.
 pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<MemoryCard>, String> {
+    generate_for_today_inner(conn, today, None)
+}
+
+pub fn generate_for_today_with_semantic(
+    conn: &Connection,
+    today: NaiveDate,
+    drive_root: &Path,
+    cache: &mut SemanticIndexCache,
+) -> Result<Vec<MemoryCard>, String> {
+    let visual = visual_pattern(conn, today, drive_root, cache).unwrap_or_else(|err| {
+        tracing::debug!("visual-pattern memory skipped: {err}");
+        None
+    });
+    generate_for_today_inner(conn, today, visual)
+}
+
+fn generate_for_today_inner(
+    conn: &Connection,
+    today: NaiveDate,
+    visual: Option<Memory>,
+) -> Result<Vec<MemoryCard>, String> {
     let current_year = today.year();
 
     let mut all: Vec<Memory> = Vec::new();
@@ -107,6 +134,20 @@ pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<Mem
     let seasonal = seasonal_recap(conn, today, current_year)
         .map_err(|e| format!("SeasonalRecap query failed: {}", e))?;
     all.extend(seasonal);
+
+    if let Some(person) =
+        person_story(conn, today).map_err(|e| format!("PersonStory query failed: {e}"))?
+    {
+        all.push(person);
+    }
+    if let Some(place) =
+        place_story(conn, today).map_err(|e| format!("PlaceStory query failed: {e}"))?
+    {
+        all.push(place);
+    }
+    if let Some(visual) = visual {
+        all.push(visual);
+    }
 
     // Ultimate fallback. Only fires when no specific anniversary or season
     // qualifies; surfaces "X years ago" cards from prior years so a sparse
@@ -174,6 +215,9 @@ fn memory_id(kind: MemoryKind, year: i32, today: NaiveDate) -> MemoryId {
             MemoryKind::OnThisDay => "otd",
             MemoryKind::FallbackWindow => "fw",
             MemoryKind::SeasonalRecap => "sr",
+            MemoryKind::PersonStory => "person",
+            MemoryKind::PlaceStory => "place",
+            MemoryKind::VisualPattern => "visual",
             MemoryKind::YearRecap => "yr",
         },
         year,
@@ -394,7 +438,7 @@ fn seasonal_recap(
         out.push(Memory {
             id: memory_id(MemoryKind::SeasonalRecap, yr, today),
             kind: MemoryKind::SeasonalRecap,
-            title: format!("{} {}", month_name, yr),
+            title: format!("{} {}, worth another look", month_name, yr),
             photo_ids,
             hero_photo_id: 0,
             hero_thumbnail_path: None,
@@ -404,6 +448,336 @@ fn seasonal_recap(
         });
     }
     Ok(out)
+}
+
+/// Find one recurring visual pattern without trying to name it. The image
+/// embeddings do the discovery directly; dates make sure the result is a
+/// genuine rediscovery rather than a burst or duplicate set.
+fn visual_pattern(
+    conn: &Connection,
+    today: NaiveDate,
+    drive_root: &Path,
+    cache: &mut SemanticIndexCache,
+) -> Result<Option<Memory>, String> {
+    let cutoff = (today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30))
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut stmt = conn
+        .prepare(
+            r#"SELECT p.id
+               FROM photos p
+               JOIN semantic_index_state s
+                 ON s.photo_id = p.id AND s.model_key = ?1 AND s.status = 'indexed'
+               WHERE p.is_trashed = FALSE
+                 AND p.content_category = 'photo'
+                 AND p.date_taken IS NOT NULL AND p.date_taken < ?2
+               ORDER BY p.is_favorite DESC,
+                        p.date_taken DESC, p.id DESC
+               LIMIT 64"#,
+        )
+        .map_err(|e| e.to_string())?;
+    let seeds = stmt
+        .query_map(params![SEMANTIC_MODEL_KEY, cutoff], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<SqliteResult<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    if seeds.is_empty() {
+        return Ok(None);
+    }
+
+    let service = SemanticSearchService::new(drive_root);
+    let start = today.ordinal0() as usize % seeds.len();
+    for offset in 0..seeds.len().min(12) {
+        let seed = seeds[(start + offset) % seeds.len()];
+        let neighbors = service
+            .similar_to_photo_cached(conn, cache, seed, 48)
+            .map_err(|e| e.to_string())?;
+        let Some(top_score) = neighbors.first().map(|candidate| candidate.score) else {
+            continue;
+        };
+        if top_score < 0.70 {
+            continue;
+        }
+        let threshold = (top_score - 0.04).max(top_score * 0.90);
+        let candidate_ids: Vec<i64> = std::iter::once(seed)
+            .chain(
+                neighbors
+                    .into_iter()
+                    .filter(|candidate| candidate.score >= threshold)
+                    .map(|candidate| candidate.photo_id),
+            )
+            .collect();
+        let dated = dated_active_photos(conn, &candidate_ids)?;
+        let mut seen_days = HashSet::new();
+        let mut photo_ids = Vec::new();
+        let mut years = HashSet::new();
+        let mut first_year = today.year();
+        for (photo_id, date) in dated {
+            if seen_days.insert(date) {
+                years.insert(date.year());
+                first_year = first_year.min(date.year());
+                photo_ids.push(photo_id);
+            }
+            if photo_ids.len() == 24 {
+                break;
+            }
+        }
+        if photo_ids.len() < 4 || years.len() < 2 {
+            continue;
+        }
+        if dominant_named_person_coverage(conn, &photo_ids)? >= 0.60 {
+            continue;
+        }
+        return Ok(Some(Memory {
+            id: format!("visual-{seed}-{}-{:03}", today.year(), today.ordinal()),
+            kind: MemoryKind::VisualPattern,
+            title: "Something you kept noticing".to_string(),
+            photo_ids,
+            hero_photo_id: 0,
+            hero_thumbnail_path: None,
+            score: 0.0,
+            year: first_year,
+            has_faces: false,
+        }));
+    }
+    Ok(None)
+}
+
+fn dated_active_photos(
+    conn: &Connection,
+    photo_ids: &[i64],
+) -> Result<Vec<(i64, NaiveDate)>, String> {
+    if photo_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rank: HashMap<i64, usize> = photo_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect();
+    let mut out = Vec::new();
+    let mut seen_hashes = HashSet::new();
+    for chunk in photo_ids.chunks(900) {
+        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, date_taken, file_hash FROM photos
+             WHERE is_trashed = FALSE AND content_category = 'photo'
+               AND date_taken IS NOT NULL AND id IN ({placeholders})
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM photo_stack_members psm
+                   JOIN photo_stacks ps ON ps.id = psm.stack_id
+                   WHERE psm.photo_id = photos.id
+                     AND ps.dismissed = FALSE
+                     AND psm.is_cover = FALSE
+               )"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, raw, file_hash) = row.map_err(|e| e.to_string())?;
+            if !seen_hashes.insert(file_hash) {
+                continue;
+            }
+            if let Ok(date) =
+                NaiveDate::parse_from_str(raw.get(..10).unwrap_or_default(), "%Y-%m-%d")
+            {
+                out.push((id, date));
+            }
+        }
+    }
+    out.sort_by_key(|(id, _)| rank.get(id).copied().unwrap_or(usize::MAX));
+    Ok(out)
+}
+
+fn dominant_named_person_coverage(conn: &Connection, photo_ids: &[i64]) -> Result<f32, String> {
+    if photo_ids.is_empty() {
+        return Ok(0.0);
+    }
+    let placeholders = (0..photo_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        r#"SELECT COUNT(DISTINCT f.photo_id)
+           FROM faces f
+           JOIN face_clusters fc ON fc.id = f.cluster_id
+           WHERE f.photo_id IN ({placeholders})
+             AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
+           GROUP BY f.cluster_id
+           ORDER BY COUNT(DISTINCT f.photo_id) DESC
+           LIMIT 1"#
+    );
+    let count: i64 = conn
+        .query_row(
+            &sql,
+            rusqlite::params_from_iter(photo_ids.iter().copied()),
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    Ok(count as f32 / photo_ids.len() as f32)
+}
+
+/// Rotate one named person with a real history through the library. Requiring
+/// three separate years keeps this personal without turning every face cluster
+/// into a card.
+fn person_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memory>> {
+    let mut stmt = conn.prepare(
+        r#"
+        WITH appearances AS (
+            SELECT DISTINCT f.cluster_id, fc.name, p.id AS photo_id,
+                   CAST(strftime('%Y', p.date_taken) AS INTEGER) AS yr,
+                   p.date_taken, p.is_favorite
+            FROM faces f
+            JOIN face_clusters fc ON fc.id = f.cluster_id
+            JOIN photos p ON p.id = f.photo_id
+            LEFT JOIN memory_blocks mb
+              ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
+            WHERE p.is_trashed = FALSE
+              AND p.content_category = 'photo'
+              AND p.date_taken IS NOT NULL
+              AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
+              AND mb.id IS NULL
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY cluster_id, yr
+                       ORDER BY is_favorite DESC, date_taken DESC, photo_id DESC
+                   ) AS rn
+            FROM appearances
+        )
+        SELECT cluster_id, name, GROUP_CONCAT(photo_id), MIN(yr), MAX(yr),
+               COUNT(DISTINCT yr) AS year_count, COUNT(*) AS photo_count
+        FROM ranked
+        WHERE rn <= 8
+        GROUP BY cluster_id, name
+        HAVING year_count >= 3 AND photo_count >= 9
+        ORDER BY year_count DESC, photo_count DESC, name
+        LIMIT 24
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i32>(3)?,
+            row.get::<_, i32>(4)?,
+        ))
+    })?;
+    let candidates = rows.collect::<SqliteResult<Vec<_>>>()?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let index = today.ordinal0() as usize % candidates.len();
+    let (cluster_id, name, ids, first_year, last_year) = &candidates[index];
+    Ok(Some(Memory {
+        id: format!(
+            "person-{cluster_id}-{}-{:03}",
+            today.year(),
+            today.ordinal()
+        ),
+        kind: MemoryKind::PersonStory,
+        title: format!("{name}, through the years"),
+        photo_ids: parse_ids(ids),
+        hero_photo_id: 0,
+        hero_thumbnail_path: None,
+        score: 0.0,
+        year: *first_year.min(last_year),
+        has_faces: true,
+    }))
+}
+
+/// Rotate one non-home place photographed in at least three different years.
+fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memory>> {
+    let home_city: Option<String> = conn
+        .query_row(
+            r#"SELECT location_city
+               FROM photos
+               WHERE is_trashed = FALSE
+                 AND location_city IS NOT NULL AND location_city != ''
+                 AND date_taken IS NOT NULL
+               GROUP BY location_city
+               ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
+               LIMIT 1"#,
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let mut stmt = conn.prepare(
+        r#"
+        WITH ranked AS (
+            SELECT id, location_city AS city,
+                   CAST(strftime('%Y', date_taken) AS INTEGER) AS yr,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY location_city, CAST(strftime('%Y', date_taken) AS INTEGER)
+                       ORDER BY is_favorite DESC, date_taken DESC, id DESC
+                   ) AS rn
+            FROM photos
+            WHERE is_trashed = FALSE
+              AND content_category = 'photo'
+              AND date_taken IS NOT NULL
+              AND location_city IS NOT NULL AND location_city != ''
+              AND (?1 IS NULL OR location_city != ?1)
+        )
+        SELECT city, GROUP_CONCAT(id), MIN(yr), MAX(yr),
+               COUNT(DISTINCT yr) AS year_count, COUNT(*) AS photo_count
+        FROM ranked
+        WHERE rn <= 8
+        GROUP BY city
+        HAVING year_count >= 3 AND photo_count >= 9
+        ORDER BY year_count DESC, photo_count DESC, city
+        LIMIT 24
+        "#,
+    )?;
+    let rows = stmt.query_map(params![home_city], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i32>(2)?,
+            row.get::<_, i32>(3)?,
+        ))
+    })?;
+    let candidates = rows.collect::<SqliteResult<Vec<_>>>()?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let index = (today.ordinal0() as usize / 3) % candidates.len();
+    let (city, ids, first_year, last_year) = &candidates[index];
+    Ok(Some(Memory {
+        id: format!(
+            "place-{}-{}-{:03}",
+            stable_text_id(city),
+            today.year(),
+            today.ordinal()
+        ),
+        kind: MemoryKind::PlaceStory,
+        title: format!("Back to {city}, through the years"),
+        photo_ids: parse_ids(ids),
+        hero_photo_id: 0,
+        hero_thumbnail_path: None,
+        score: 0.0,
+        year: *first_year.min(last_year),
+        has_faces: false,
+    }))
+}
+
+fn stable_text_id(value: &str) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn year_recap(
@@ -641,6 +1015,7 @@ fn rank(memories: &mut [Memory], current_year: i32) {
         let face_factor = if m.has_faces { 1.3 } else { 1.0 };
         let kind_factor = match m.kind {
             MemoryKind::SeasonalRecap => 1.5,
+            MemoryKind::PersonStory | MemoryKind::PlaceStory | MemoryKind::VisualPattern => 1.8,
             _ => 1.0,
         };
         m.score = count_factor * age_factor * face_factor * kind_factor;
@@ -713,6 +1088,7 @@ fn filter_blocked(
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use tempfile::tempdir;
 
     fn fresh_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -889,5 +1265,104 @@ mod tests {
         assert_eq!(a, b);
         let c = memory_id(MemoryKind::OnThisDay, 2021, today);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn named_person_across_three_years_becomes_a_personal_story() {
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO face_clusters (id, name, is_user_named) VALUES (7, 'Asha', TRUE)",
+            [],
+        )
+        .unwrap();
+        let mut id = 1_i64;
+        for year in 2021..=2023 {
+            for day in 1..=3 {
+                insert_photo(&conn, id, &format!("{year}-06-{day:02} 10:00:00"));
+                conn.execute(
+                    r#"INSERT INTO faces
+                       (id, photo_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                        embedding, cluster_id, confidence)
+                       VALUES (?1, ?1, 0.1, 0.1, 0.3, 0.3, X'00', 7, 0.99)"#,
+                    [id],
+                )
+                .unwrap();
+                id += 1;
+            }
+        }
+
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let cards = generate_for_today(&conn, today).unwrap();
+        let story = cards
+            .iter()
+            .find(|card| card.kind == MemoryKind::PersonStory)
+            .unwrap();
+        assert_eq!(story.title, "Asha, through the years");
+        assert_eq!(story.photo_count, 9);
+    }
+
+    #[test]
+    fn recurring_place_story_excludes_the_inferred_home_city() {
+        let conn = fresh_db();
+        let mut id = 1_i64;
+        for year in 2021..=2023 {
+            for month in 1..=4 {
+                insert_photo(&conn, id, &format!("{year}-{month:02}-01 10:00:00"));
+                conn.execute(
+                    "UPDATE photos SET location_city = 'Delhi' WHERE id = ?1",
+                    [id],
+                )
+                .unwrap();
+                id += 1;
+            }
+            for day in 1..=3 {
+                insert_photo(&conn, id, &format!("{year}-08-{day:02} 10:00:00"));
+                conn.execute(
+                    "UPDATE photos SET location_city = 'Goa' WHERE id = ?1",
+                    [id],
+                )
+                .unwrap();
+                id += 1;
+            }
+        }
+
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let cards = generate_for_today(&conn, today).unwrap();
+        let story = cards
+            .iter()
+            .find(|card| card.kind == MemoryKind::PlaceStory)
+            .unwrap();
+        assert_eq!(story.title, "Back to Goa, through the years");
+    }
+
+    #[test]
+    fn semantic_neighbors_across_years_become_one_visual_pattern() {
+        let mut conn = fresh_db();
+        let dir = tempdir().unwrap();
+        let service = SemanticSearchService::new(dir.path());
+        for id in 1..=6_i64 {
+            let year = 2020 + ((id - 1) / 2) as i32;
+            let day = ((id - 1) % 2) + 1;
+            insert_photo(&conn, id, &format!("{year}-09-{day:02} 10:00:00"));
+            conn.execute(
+                "UPDATE photos SET file_hash = ?1 WHERE id = ?2",
+                params![format!("hash-{id}"), id],
+            )
+            .unwrap();
+            let mut vector = vec![0.0_f32; crate::services::semantic::SEMANTIC_DIM];
+            vector[0] = 1.0;
+            vector[1] = id as f32 * 0.001;
+            service.mark_indexed(&mut conn, id, &vector).unwrap();
+        }
+
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let mut cache = SemanticIndexCache::default();
+        let cards = generate_for_today_with_semantic(&conn, today, dir.path(), &mut cache).unwrap();
+        let visual = cards
+            .iter()
+            .find(|card| card.kind == MemoryKind::VisualPattern)
+            .unwrap();
+        assert_eq!(visual.title, "Something you kept noticing");
+        assert_eq!(visual.photo_count, 6);
     }
 }

@@ -181,6 +181,13 @@
       }
     }
   }
+
+  function suggestionKindLabel(kind: string): string {
+    if (kind === "trip") return "Journey";
+    if (kind === "gathering") return "Together";
+    if (kind === "event") return "A moment worth keeping";
+    return kind;
+  }
   function closePreview() {
     previewSeq++;
     previewSugg = null;
@@ -321,7 +328,7 @@
               <img src={thumbUrl(libraryStore.driveRoot, s.cover_thumbnail_path) ?? ""} alt="" />
             {/if}
             <div class="body">
-              <span class="kind mono">{s.kind}</span>
+              <span class="kind mono">{suggestionKindLabel(s.kind)}</span>
               <strong class="title">{s.title}</strong>
               <span class="muted small">{s.photo_ids.length} photos · click to preview</span>
             </div>
@@ -350,7 +357,7 @@
     <div class="modal-scrim" role="presentation" onclick={closePreview}>
       <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
         <header>
-          <span class="kind mono">{s.kind}</span>
+          <span class="kind mono">{suggestionKindLabel(s.kind)}</span>
           <strong class="title">{s.title}</strong>
           <span class="muted small">{s.photo_ids.length} photos</span>
         </header>

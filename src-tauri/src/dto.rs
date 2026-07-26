@@ -666,9 +666,18 @@ pub struct MemoryCardDto {
 
 impl From<MemoryCard> for MemoryCardDto {
     fn from(m: MemoryCard) -> Self {
+        let kind = match m.kind {
+            smriti::services::memories::MemoryKind::OnThisDay => "on_this_day",
+            smriti::services::memories::MemoryKind::FallbackWindow => "fallback_window",
+            smriti::services::memories::MemoryKind::SeasonalRecap => "seasonal_recap",
+            smriti::services::memories::MemoryKind::PersonStory => "person_story",
+            smriti::services::memories::MemoryKind::PlaceStory => "place_story",
+            smriti::services::memories::MemoryKind::VisualPattern => "visual_pattern",
+            smriti::services::memories::MemoryKind::YearRecap => "year_recap",
+        };
         Self {
             id: m.id,
-            kind: format!("{:?}", m.kind).to_lowercase(),
+            kind: kind.to_string(),
             title: m.title,
             hero_photo_id: m.hero_photo_id,
             hero_thumbnail_path: m.hero_thumbnail_path,
