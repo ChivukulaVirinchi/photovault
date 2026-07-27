@@ -203,6 +203,8 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 
 | Channel | Direction | Payload | When |
 |---|---|---|---|
+| `takeout:progress` | server → client | `TakeoutEvent` | archive inspection, extraction, indexing and metadata restoration |
+| `takeout:complete` | server → client | `TakeoutEvent` | import completed, completed with warnings, failed or was cancelled |
 | `album_export:progress` | server → client | `JobProgress` | while copying originals to the export folder |
 | `album_export:complete` | server → client | `AlbumExportComplete` | after export finishes or is cancelled |
 | `semantic:progress` | server → client | `JobProgress` | while downloading semantic model assets or indexing vectors |
@@ -454,6 +456,17 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 **`SchemaTooNewDto`** = `{ db_version: i32, max_supported: i32 }`
 **`IndexChangesDto`** = `{ added: u64, removed: u64, moved: u64, modified: u64, sample: ChangeSampleDto }`
 **`ApplyResultDto`** = `{ added: u64, removed: u64, moved: u64, modified: u64, marked_for_face_reprocess: u64 }`
+
+### 1a. `takeout` — Google Photos migration
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `takeout.start_import` | `{ archive_paths: Vec<String> }` | `{ job_id: String }` | requires an open destination library; treats every selected ZIP as one export; emits `takeout:progress` and `takeout:complete`; cancel through `jobs.cancel` |
+
+The import job validates all archives, streams unique originals into
+`Imported from Google Photos/`, runs normal indexing, then restores
+Takeout-only dates, GPS, favorites and albums from the local import
+ledger. Re-running the same archive set resumes idempotently.
 
 ### 2. `photos` — listing, fetching, lookups
 

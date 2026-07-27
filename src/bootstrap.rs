@@ -62,14 +62,16 @@ const ORT_LIB_NAME: &str = "onnxruntime.dll";
 const ORT_LIB_NAME: &str = "libonnxruntime.dylib";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const ORT_LIB_NAME: &str = "libonnxruntime.so";
-#[cfg(target_os = "windows")]
-const ORT_PLATFORM_DIR: &str = "windows";
-#[cfg(target_os = "linux")]
-const ORT_PLATFORM_DIR: &str = "linux";
-#[cfg(target_os = "macos")]
-const ORT_PLATFORM_DIR: &str = "macos";
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-const ORT_PLATFORM_DIR: &str = "";
+fn ort_platform_dir() -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    return Some("windows");
+    #[cfg(target_os = "linux")]
+    return Some("linux");
+    #[cfg(target_os = "macos")]
+    return Some("macos");
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    return None;
+}
 
 const MIN_BINARY_ASSET_BYTES: u64 = 1024 * 1024;
 
@@ -151,18 +153,18 @@ fn onnx_runtime_path_in_root(root: &Path) -> Option<PathBuf> {
     if let Some(path) = find_runtime_in_dir(&candidate) {
         return Some(path);
     }
-    if !ORT_PLATFORM_DIR.is_empty() {
-        return find_runtime_in_dir(&candidate.join(ORT_PLATFORM_DIR));
+    if let Some(platform_dir) = ort_platform_dir() {
+        return find_runtime_in_dir(&candidate.join(platform_dir));
     }
     None
 }
 
 pub fn onnx_runtime_install_path() -> PathBuf {
     let base = default_asset_install_dir().join("libs").join("onnxruntime");
-    if ORT_PLATFORM_DIR.is_empty() {
-        base.join(ORT_LIB_NAME)
+    if let Some(platform_dir) = ort_platform_dir() {
+        base.join(platform_dir).join(ORT_LIB_NAME)
     } else {
-        base.join(ORT_PLATFORM_DIR).join(ORT_LIB_NAME)
+        base.join(ORT_LIB_NAME)
     }
 }
 
@@ -624,13 +626,13 @@ mod tests {
     #[test]
     fn resolves_runtime_from_asset_pack_platform_subdir() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let runtime_dir = if ORT_PLATFORM_DIR.is_empty() {
-            temp.path().join("libs").join("onnxruntime")
-        } else {
+        let runtime_dir = if let Some(platform_dir) = ort_platform_dir() {
             temp.path()
                 .join("libs")
                 .join("onnxruntime")
-                .join(ORT_PLATFORM_DIR)
+                .join(platform_dir)
+        } else {
+            temp.path().join("libs").join("onnxruntime")
         };
         std::fs::create_dir_all(&runtime_dir).expect("runtime dir");
         let runtime = runtime_dir.join(ORT_LIB_NAME);
@@ -643,13 +645,13 @@ mod tests {
     #[test]
     fn runtime_install_path_matches_asset_pack_layout() {
         let path = onnx_runtime_install_path();
-        let suffix = if ORT_PLATFORM_DIR.is_empty() {
-            PathBuf::from("libs").join("onnxruntime").join(ORT_LIB_NAME)
-        } else {
+        let suffix = if let Some(platform_dir) = ort_platform_dir() {
             PathBuf::from("libs")
                 .join("onnxruntime")
-                .join(ORT_PLATFORM_DIR)
+                .join(platform_dir)
                 .join(ORT_LIB_NAME)
+        } else {
+            PathBuf::from("libs").join("onnxruntime").join(ORT_LIB_NAME)
         };
 
         assert!(path.ends_with(suffix));
@@ -680,10 +682,10 @@ mod tests {
         let root = temp.path();
         let data = root.join("data");
         let models = root.join("models");
-        let runtime_dir = if ORT_PLATFORM_DIR.is_empty() {
-            root.join("libs").join("onnxruntime")
+        let runtime_dir = if let Some(platform_dir) = ort_platform_dir() {
+            root.join("libs").join("onnxruntime").join(platform_dir)
         } else {
-            root.join("libs").join("onnxruntime").join(ORT_PLATFORM_DIR)
+            root.join("libs").join("onnxruntime")
         };
         std::fs::create_dir_all(&data).expect("data");
         std::fs::create_dir_all(&models).expect("models");

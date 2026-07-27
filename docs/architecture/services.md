@@ -9,6 +9,7 @@ it. Services are the unit of integration testing in `tests/`.
 
 | Service | Role |
 |---|---|
+| `takeout_import` | Safely streams Google Photos Takeout ZIPs, deduplicates originals, and restores sidecar metadata/albums. |
 | `scanner` | Walks the library, dispatches per-photo work. Async, cancellable. |
 | `metadata_processor` | EXIF + GPS + file-hash extraction per photo. |
 | `exif_extractor` | Pulls and normalises EXIF tags. |

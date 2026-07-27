@@ -22,6 +22,7 @@ pub mod semantic;
 pub mod settings;
 pub mod stacks;
 pub mod system;
+pub mod takeout;
 pub mod trash;
 
 use crate::pagination::Cursor;

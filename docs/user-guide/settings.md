@@ -123,6 +123,8 @@ installed Smriti:
 These are one-shot operations — Smriti doesn't run them on a
 schedule.
 
+- **Import Takeout ZIPs** — migrate all parts of a Google Photos
+  Takeout export into the open library without manually extracting it.
 - **Rescan Library** — re-walk the drive and pick up newly added,
   moved, or deleted files.
 - **Rebuild Faces (Full)** — re-run face detection + clustering

@@ -406,6 +406,12 @@ fn should_skip(
     scan_hidden_folders: bool,
     exclusions: &ExclusionMatcher,
 ) -> bool {
+    // The selected library root itself is always traversed. A perfectly
+    // valid library can live in a dot-prefixed parent/test directory; hidden
+    // filtering applies to descendants, not to the root the user selected.
+    if entry.path() == root {
+        return false;
+    }
     let file_name = entry.file_name().to_string_lossy();
 
     if !scan_hidden_folders && file_name.starts_with('.') {
@@ -426,7 +432,7 @@ fn is_supported_file(entry: &DirEntry) -> bool {
     media_type_for_path(entry.path()).is_some()
 }
 
-pub(crate) fn media_type_for_path(path: &Path) -> Option<MediaType> {
+pub fn media_type_for_path(path: &Path) -> Option<MediaType> {
     let lower = path.extension()?.to_str()?.to_lowercase();
     if !SUPPORTED_EXTENSIONS.contains(&lower.as_str()) {
         return None;
@@ -440,7 +446,7 @@ pub(crate) fn media_type_for_path(path: &Path) -> Option<MediaType> {
 }
 
 /// Calculate SHA256 hash of a file (full streaming hash).
-pub(crate) fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
+pub fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path)?;

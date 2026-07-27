@@ -45,6 +45,7 @@ describe("jobs store", () => {
     jobs.jobs = new Map([
       ["scan", job({ id: "scan", kind: "scan" })],
       ["thumbs", job({ id: "thumbs", kind: "thumbnails" })],
+      ["takeout", job({ id: "takeout", kind: "takeout" })],
       ["assets", job({ id: "assets", kind: "assets" })],
       ["semantic-install", job({ id: "semantic-install", kind: "semantic", stage: "download" })],
       ["semantic-index", job({ id: "semantic-index", kind: "semantic", stage: "index" })],

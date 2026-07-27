@@ -32,6 +32,12 @@ close it.
    take longer — see [People and Faces](people.md) for how to speed
    that up with an optional remote GPU.
 
+Already have a Google Photos library? Choose **Import Google Photos**
+on Welcome, select every ZIP from the same Takeout export, then choose
+the destination library. Smriti handles extraction, duplicate album
+copies and sidecar metadata. See
+[Importing Google Photos](google-photos-import.md).
+
 ## Where your data goes
 
 - **Originals** — untouched, in their folders.
@@ -82,6 +88,8 @@ during model load. See
 [Troubleshooting](troubleshooting.md).
 
 ## See also
+
+- [Importing Google Photos](google-photos-import.md) — direct Takeout migration
 
 - [Indexing](indexing.md) — what scanning does, how reindex works
 - [Settings](settings.md) — every preference and what it changes

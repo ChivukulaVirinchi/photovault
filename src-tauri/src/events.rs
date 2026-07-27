@@ -30,6 +30,8 @@ pub const EV_SEMANTIC_PROGRESS: &str = "semantic:progress";
 pub const EV_SEMANTIC_COMPLETE: &str = "semantic:complete";
 pub const EV_ASSETS_PROGRESS: &str = "assets:progress";
 pub const EV_ASSETS_COMPLETE: &str = "assets:complete";
+pub const EV_TAKEOUT_PROGRESS: &str = "takeout:progress";
+pub const EV_TAKEOUT_COMPLETE: &str = "takeout:complete";
 pub const EV_ASSISTANT_ACTIVITY: &str = "assistant:activity";
 
 /// Generic progress payload used by most jobs that don't need

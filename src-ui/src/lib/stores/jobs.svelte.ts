@@ -41,7 +41,8 @@ export type JobKind =
   | "semantic"
   | "geocoding"
   | "albumSuggestions"
-  | "albumExport";
+  | "albumExport"
+  | "takeout";
 
 const LIBRARY_SCOPED_KINDS = new Set<JobKind>([
   "scan",
@@ -53,6 +54,7 @@ const LIBRARY_SCOPED_KINDS = new Set<JobKind>([
   "geocoding",
   "albumSuggestions",
   "albumExport",
+  "takeout",
 ]);
 
 const KIND_TITLE: Record<JobKind, string> = {
@@ -67,6 +69,7 @@ const KIND_TITLE: Record<JobKind, string> = {
   geocoding:        "Resolving places",
   albumSuggestions: "Looking for trips",
   albumExport:      "Exporting album",
+  takeout:          "Importing Google Photos",
 };
 
 type WireJobEvent = {
@@ -226,6 +229,8 @@ class JobsStore {
       ["album_suggestions:complete", "albumSuggestions", true ],
       ["album_export:progress", "albumExport", false],
       ["album_export:complete", "albumExport", true ],
+      ["takeout:progress", "takeout", false],
+      ["takeout:complete", "takeout", true],
     ];
     const results = await Promise.allSettled(
       subs.map(([ev, kind, done]) => listen<Wire>(ev, handle(kind, done))),

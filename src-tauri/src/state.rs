@@ -170,6 +170,7 @@ pub enum JobKind {
     /// can navigate freely while it runs.
     AlbumSuggestions,
     AlbumExport,
+    GoogleTakeoutImport,
 }
 
 impl JobKind {
@@ -201,19 +202,23 @@ mod tests {
     fn cancel_library_scoped_leaves_install_jobs_running() {
         let mut registry = JobRegistry::default();
         let (scan_flag, scan) = handle(JobKind::Scan);
+        let (takeout_flag, takeout) = handle(JobKind::GoogleTakeoutImport);
         let (assets_flag, assets) = handle(JobKind::AssetInstall);
         let (semantic_assets_flag, semantic_assets) = handle(JobKind::SemanticAssets);
 
         registry.register("scan".into(), scan);
+        registry.register("takeout".into(), takeout);
         registry.register("assets".into(), assets);
         registry.register("semantic-assets".into(), semantic_assets);
 
         registry.cancel_library_scoped();
 
         assert!(scan_flag.load(Ordering::Relaxed));
+        assert!(takeout_flag.load(Ordering::Relaxed));
         assert!(!assets_flag.load(Ordering::Relaxed));
         assert!(!semantic_assets_flag.load(Ordering::Relaxed));
         assert!(!registry.has_any_of_kind(JobKind::Scan));
+        assert!(!registry.has_any_of_kind(JobKind::GoogleTakeoutImport));
         assert!(registry.has_any_of_kind(JobKind::AssetInstall));
         assert!(registry.has_any_of_kind(JobKind::SemanticAssets));
     }

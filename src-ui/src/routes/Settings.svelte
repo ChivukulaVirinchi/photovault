@@ -62,6 +62,8 @@
   const assetsJob = $derived(jobs.byKind("assets"));
   const semanticRunning = $derived(jobs.isRunning("semantic"));
   const semanticJob = $derived(jobs.byKind("semantic"));
+  const importingTakeout = $derived(jobs.isRunning("takeout"));
+  const takeoutJob = $derived(jobs.byKind("takeout"));
   function assetReady(id: string): boolean {
     return Boolean(assets?.assets.some(
       (item) => item.id === id && (item.status === "active" || item.status === "extra"),
@@ -82,6 +84,34 @@
     visualSearchReady ? "ready" : visualSearchMissingRuntime ? "runtime missing" : "missing",
   );
   const hasLibrary = $derived(libraryStore.isOpen);
+
+  async function importGooglePhotos() {
+    if (!hasLibrary || importingTakeout) return;
+    let selected: string | string[] | null;
+    try {
+      selected = await openDialog({
+        directory: false,
+        multiple: true,
+        title: "Choose all Google Takeout ZIP files",
+        filters: [{ name: "Google Takeout ZIP", extensions: ["zip"] }],
+      });
+    } catch {
+      toasts.error("Couldn't open the Takeout file picker.");
+      return;
+    }
+    const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+    if (paths.length === 0) return;
+    const placeholderId = `pending-takeout-${Date.now()}`;
+    jobs.register(placeholderId, "takeout");
+    try {
+      const result = await library.importGoogleTakeout(paths);
+      jobs.dismiss(placeholderId);
+      jobs.register(result.job_id, "takeout");
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      toasts.error(`Couldn't start import: ${commandErrorMessage(e)}`);
+    }
+  }
 
   function sameLibrary(root: string | null): boolean {
     return hasLibrary && libraryStore.driveRoot === root;
@@ -231,6 +261,17 @@
       toastedMetadataIds.add(metadataJob.id);
       const msg = metadataJob.message || "Metadata refresh finished.";
       if (metadataJob.status === "error") toasts.error(msg);
+      else toasts.success(msg);
+    }
+  });
+
+  let toastedTakeoutIds = new Set<string>();
+  $effect(() => {
+    if (!takeoutJob) return;
+    if ((takeoutJob.status === "complete" || takeoutJob.status === "error") && !toastedTakeoutIds.has(takeoutJob.id)) {
+      toastedTakeoutIds.add(takeoutJob.id);
+      const msg = takeoutJob.message || "Google Photos import finished.";
+      if (takeoutJob.status === "error") toasts.error(msg);
       else toasts.success(msg);
     }
   });
@@ -741,6 +782,22 @@
 
     <section>
       <h3 class="section-title">Library</h3>
+      <div class="subsection">
+        <div class="section-heading-row">
+          <div>
+            <h4 class="subsection-title">Google Photos</h4>
+            <p class="hint blurb">
+              Select every ZIP from one Google Takeout export. Smriti imports each original once, restores dates, locations, favorites and albums, and safely resumes the same export.
+            </p>
+          </div>
+          <button class="primary" onclick={importGooglePhotos} disabled={!hasLibrary || importingTakeout}>
+            {importingTakeout ? "Importing..." : "Import Takeout ZIPs"}
+          </button>
+        </div>
+        {#if !hasLibrary}
+          <p class="hint blurb">Open the destination library before importing.</p>
+        {/if}
+      </div>
       <label>
         <span class="label-text">Thumbnail size</span>
         <input type="number" min="100" max="1000" value={s.thumbnail_size}

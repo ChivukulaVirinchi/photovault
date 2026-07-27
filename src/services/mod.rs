@@ -29,6 +29,7 @@ pub mod scanner;
 pub mod search;
 pub mod self_replace;
 pub mod semantic;
+pub mod takeout_import;
 pub mod thumbnail;
 pub mod tile_cache;
 pub mod trash;

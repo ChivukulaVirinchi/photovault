@@ -5,6 +5,9 @@ photo library.
 
 ## User guide
 
+- [Importing Google Photos](user-guide/google-photos-import.md) — migrate
+  a Google Takeout export directly from its ZIP files.
+
 - [Getting Started](user-guide/getting-started.md) — first run, picking a
   library, where data lives.
 - [Indexing Photos](user-guide/indexing.md) — what scanning does, what

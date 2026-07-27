@@ -30,6 +30,7 @@ remain idempotent across versions.
 | `albums` | Manual + accepted-suggestion albums. |
 | `album_photos` | Join table; ordered for manual album reordering. |
 | `album_suggestions` | Detected-but-not-accepted trip / event suggestions. |
+| `google_takeout_items` / `google_takeout_albums` | Content-hash ledger, Google-only sidecar metadata, and imported album membership used for safe resume/refresh. |
 | `faces` | Per-photo detected faces: bbox, embedding, quality score. |
 | `clusters` (a.k.a. `persons`) | Named identity groups; one row per person. |
 | `face_assignments` | Which face belongs to which cluster, with confidence. |

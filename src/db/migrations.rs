@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 27;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 28;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -139,9 +139,43 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 27 {
         migrate_v26_to_v27(conn)?;
     }
+    if current_version < 28 {
+        migrate_v27_to_v28(conn)?;
+    }
     ensure_performance_indexes(conn)?;
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+fn migrate_v27_to_v28(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS google_takeout_items (
+            content_hash TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL UNIQUE,
+            metadata_json TEXT,
+            imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS google_takeout_albums (
+            content_hash TEXT NOT NULL,
+            album_name TEXT NOT NULL,
+            PRIMARY KEY (content_hash, album_name),
+            FOREIGN KEY (content_hash) REFERENCES google_takeout_items(content_hash)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_google_takeout_items_path
+            ON google_takeout_items(file_path);
+
+        INSERT INTO schema_version (version) VALUES (28);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 28 (Google Takeout imports)");
     Ok(())
 }
 
@@ -1001,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn run_migrations_adds_timeline_order_index_without_version_bump() {
+    fn migrate_v27_to_v28_adds_takeout_ledger() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             r#"
@@ -1010,6 +1044,34 @@ mod tests {
                 applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             INSERT INTO schema_version (version) VALUES (27);
+            "#,
+        )
+        .unwrap();
+
+        migrate_v27_to_v28(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn).unwrap(), 28);
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table'
+                   AND name IN ('google_takeout_items', 'google_takeout_albums')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 2);
+    }
+
+    #[test]
+    fn run_migrations_adds_timeline_order_index_without_version_bump() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (28);
             CREATE TABLE photos (
                 id INTEGER PRIMARY KEY,
                 date_taken DATETIME,
@@ -1031,7 +1093,7 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let version = get_schema_version(&conn).unwrap();
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
         let plan = conn
             .prepare(
                 "EXPLAIN QUERY PLAN

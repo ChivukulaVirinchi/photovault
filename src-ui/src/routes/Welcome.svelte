@@ -24,6 +24,7 @@
   let assetError = $state<string | null>(null);
   let assetHealthLoading = $state(false);
   const installingAssets = $derived(jobs.isRunning("assets"));
+  const importingTakeout = $derived(jobs.isRunning("takeout"));
   const assetsJob = $derived(jobs.byKind("assets"));
   let handledAssetJobId: string | null = null;
 
@@ -55,8 +56,54 @@
     }
   }
 
+  async function startTakeoutImport(paths?: string[]) {
+    pickError = null;
+    try {
+      let archives = paths;
+      if (!archives) {
+        const selected = await openDialog({
+          directory: false,
+          multiple: true,
+          title: "Choose all Google Takeout ZIP files",
+          filters: [{ name: "Google Takeout ZIP", extensions: ["zip"] }],
+        });
+        archives = Array.isArray(selected) ? selected : selected ? [selected] : [];
+      }
+      if (archives.length === 0) return;
+      const selectedDestination = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose where Smriti should keep the imported photos",
+      });
+      const destination = Array.isArray(selectedDestination)
+        ? selectedDestination[0]
+        : selectedDestination;
+      if (!destination) return;
+      droppedPath = "Preparing Google Photos";
+      await libraryStore.open(destination);
+      const placeholderId = `pending-takeout-${Date.now()}`;
+      jobs.register(placeholderId, "takeout");
+      try {
+        const result = await library.importGoogleTakeout(archives);
+        jobs.dismiss(placeholderId);
+        jobs.register(result.job_id, "takeout");
+      } catch (error) {
+        jobs.dismiss(placeholderId);
+        throw error;
+      }
+    } catch (error) {
+      if (mounted) pickError = commandErrorMessage(error);
+    } finally {
+      if (mounted) droppedPath = null;
+    }
+  }
+
   async function handleDrop(paths: string[]) {
     if (paths.length === 0) return;
+    if (paths.every((path) => path.toLowerCase().endsWith(".zip"))) {
+      await startTakeoutImport(paths);
+      return;
+    }
     const first = paths[0];
     if (!mounted) return;
     droppedPath = shortRoot(first);
@@ -306,16 +353,23 @@
       <button class="primary cta" onclick={browseForFolder} disabled={libraryStore.loading}>
         Choose a folder
       </button>
+      <button
+        class="ghost settings-link"
+        onclick={() => startTakeoutImport()}
+        disabled={libraryStore.loading || importingTakeout}
+      >
+        {importingTakeout ? "Importing Google Photos" : "Import Google Photos"}
+      </button>
       <a class="ghost settings-link" href="#/settings">Settings</a>
-      <span class="hint">or drag one onto this window</span>
+      <span class="hint">or drop a folder / Takeout ZIPs</span>
     </div>
   </div>
 
   <!-- Drag-drop overlay covers the whole window. -->
   <div class="drop-overlay" aria-hidden={!dragOver}>
     <div class="drop-stamp">
-      <strong class="drop-title display">Open this folder</strong>
-      <span class="drop-sub">Release to begin</span>
+      <strong class="drop-title display">Open or import</strong>
+      <span class="drop-sub">Drop a folder or all Takeout ZIPs</span>
     </div>
   </div>
 

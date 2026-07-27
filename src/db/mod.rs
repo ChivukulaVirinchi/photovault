@@ -33,6 +33,7 @@ pub mod photo_repo;
 pub mod recent_search_repo;
 pub mod schema;
 pub mod stack_repo;
+pub mod takeout_import_repo;
 pub mod trash_repo;
 
 pub use album_repo::{AlbumRecord, AlbumRepo};
@@ -48,4 +49,5 @@ pub use photo_repo::PhotoRepo;
 pub use recent_search_repo::{RecentSearch, RecentSearchRepo};
 pub use schema::create_schema;
 pub use stack_repo::{PhotoStackMemberRecord, PhotoStackRecord, PhotoStackRepo, StackCandidate};
+pub use takeout_import_repo::{TakeoutImportRepo, TakeoutLedgerItem};
 pub use trash_repo::{TrashRepo, TrashedPhotoRecord};

@@ -84,6 +84,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # File system utilities
 walkdir = "2"
 dirs = "5"                      # Platform-specific directories
+fs2 = "0.4"
 
 # Hashing
 sha2 = "0.10"

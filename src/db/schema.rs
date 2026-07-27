@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (27);
+INSERT INTO schema_version (version) VALUES (28);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -275,6 +275,28 @@ CREATE TABLE IF NOT EXISTS album_photos (
     FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
     FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
     UNIQUE(album_id, photo_id)
+);
+
+-- ============================================================
+-- GOOGLE PHOTOS TAKEOUT
+-- Durable source metadata and album membership for resumable imports.
+-- Originals remain ordinary files under the library root.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS google_takeout_items (
+    content_hash TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL UNIQUE,
+    metadata_json TEXT,
+    imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS google_takeout_albums (
+    content_hash TEXT NOT NULL,
+    album_name TEXT NOT NULL,
+    PRIMARY KEY (content_hash, album_name),
+    FOREIGN KEY (content_hash) REFERENCES google_takeout_items(content_hash)
+        ON DELETE CASCADE
 );
 
 -- ============================================================
@@ -530,6 +552,7 @@ CREATE INDEX IF NOT EXISTS idx_trash_trashed_at ON trash(trashed_at);
 -- Albums
 CREATE INDEX IF NOT EXISTS idx_album_photos_album ON album_photos(album_id);
 CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
+CREATE INDEX IF NOT EXISTS idx_google_takeout_items_path ON google_takeout_items(file_path);
 
 -- Album suggestions
 CREATE INDEX IF NOT EXISTS idx_album_suggestions_status ON album_suggestions(status);

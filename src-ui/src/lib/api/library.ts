@@ -61,4 +61,6 @@ export const library = {
   /// in it is optional).
   regenerateThumbnails: () =>
     call<JobIdDto>("library_regenerate_thumbnails", { photo_ids: null }),
+  importGoogleTakeout: (archivePaths: string[]) =>
+    call<JobIdDto>("takeout_start_import", { archive_paths: archivePaths }),
 };

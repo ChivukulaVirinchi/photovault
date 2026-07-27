@@ -680,11 +680,15 @@ pub async fn library_start_scan(
     // Refuse a second Scan if one is already mid-run. Old code prevented
     // this implicitly via the try_unwrap dance on the Database Arc;
     // since we now share the Arc, we have to be explicit.
-    if state.jobs.lock().await.has_any_of_kind(JobKind::Scan) {
+    let jobs_guard = state.jobs.lock().await;
+    if jobs_guard.has_any_of_kind(JobKind::Scan)
+        || jobs_guard.has_any_of_kind(JobKind::GoogleTakeoutImport)
+    {
         return Err(CommandError::Conflict {
-            reason: "a scan is already in progress".into(),
+            reason: "a scan or Google Photos import is already in progress".into(),
         });
     }
+    drop(jobs_guard);
 
     // Read the drive_root + clone the db Arc. No more take()/try_unwrap dance.
     let (drive_root, db, thumbnails) = {
@@ -995,7 +999,7 @@ async fn run_metadata_stage(
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let (rx, handle) =
-        smriti::services::metadata_processor::start_metadata_job(drive_root, db, cancel);
+        smriti::services::metadata_processor::start_metadata_job(drive_root, db.clone(), cancel);
     while let Ok(p) = rx.recv().await {
         let dto = MetadataProgressDto {
             job_id: job_id.clone(),
@@ -1015,6 +1019,18 @@ async fn run_metadata_stage(
         }
     }
     let _ = handle.await;
+    // Google-only dates, locations and favorites live in Takeout sidecars,
+    // not necessarily in the media file. Reapply the durable local ledger
+    // after every metadata pass so "Refresh dates" cannot erase corrected
+    // Google Photos timestamps.
+    {
+        let guard = db.lock().await;
+        if let Err(error) =
+            smriti::services::takeout_import::apply_takeout_metadata_and_albums(&guard.conn)
+        {
+            tracing::warn!("Could not reapply Google Takeout metadata: {error}");
+        }
+    }
     let st: tauri::State<AppState> = app.state();
     jobs::finish_job(&st, &job_id).await;
 }
@@ -1364,7 +1380,7 @@ fn validate_exclusion_path(drive_root: &std::path::Path, input: &str) -> Command
 /// prewarm, then existing duplicates/bursts detection. Face detection
 /// is deliberately NOT auto-chained — it's heavy enough that users
 /// should opt in via the People page.
-async fn run_post_scan_pipeline(
+pub(crate) async fn run_post_scan_pipeline(
     app: AppHandle,
     drive_root: PathBuf,
     db: Arc<tokio::sync::Mutex<Database>>,

@@ -48,6 +48,8 @@ pub fn run() {
             commands::library::library_pending_thumbnail_count,
             commands::library::jobs_cancel,
             commands::library::library_regenerate_thumbnails,
+            // Google Photos Takeout
+            commands::takeout::takeout_start_import,
             // photos
             commands::photos::photos_list,
             commands::photos::photos_list_at,
