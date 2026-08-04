@@ -110,7 +110,7 @@ on your drive, in their folders, exactly as you left them.
 
 ## Install
 
-All builds are on the **[latest release page](https://github.com/ChivukulaVirinchi/photovault/releases/latest)**. Pick the artifact for your OS — file names follow the standard pattern.
+The **[Smriti website](https://chivukulavirinchi.github.io/photovault/#download)** detects your operating system and downloads the normal installer directly. Advanced package choices and checksums remain on the [latest release page](https://github.com/ChivukulaVirinchi/photovault/releases/latest).
 
 ### Windows
 
@@ -133,19 +133,13 @@ All builds are on the **[latest release page](https://github.com/ChivukulaVirinc
 Linux artifacts include `SHA256SUMS` for integrity verification. Tagged
 releases run build and package checks in CI before publishing.
 
-### Optional assets pack
+### Optional smart features
 
-For **face recognition + offline place names**, click **Set up assets** on
-the Welcome screen (or **Download assets** in Settings). Smriti downloads,
-validates, and installs the matching `Smriti-Assets.zip` — ONNX Runtime,
-face models, and the GeoNames database — in one step.
-
-Smriti runs without it; the asset pack just unlocks those two features.
-The app prompts you whenever those assets are missing.
-
-Visual search is a separate optional model install from **Settings ->
-Assets**. It is intentionally not bundled into the app or the standard
-asset pack because the local text/image encoders are large.
+Click **Set up smart features** on Welcome. One action downloads and verifies
+faces, offline place names, and visual search (about 1.8 GB, once). If a
+library is open, visual indexing begins automatically; pending photos are
+also picked up after later scans and imports. Smriti remains fully usable if
+you decline.
 
 ### Automatic updates
 

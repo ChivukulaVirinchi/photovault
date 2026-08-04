@@ -196,6 +196,31 @@ jobs:
           files: Smriti-Assets.zip
           draft: true
           prerelease: false
+      - name: Attach stable, human-readable installer names
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir native-assets stable-assets
+          gh release download "${GITHUB_REF_NAME}" --dir native-assets
+
+          copy_one() {
+            local target="$1" pattern="$2"
+            mapfile -t matches < <(find native-assets -maxdepth 1 -type f -name "$pattern" | sort)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one $pattern artifact, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            cp "${matches[0]}" "stable-assets/$target"
+          }
+
+          copy_one Smriti-Windows-Setup.exe '*_x64-setup.exe'
+          copy_one Smriti-Windows-x64.msi '*_x64_en-US.msi'
+          copy_one Smriti-macOS-Apple-Silicon.dmg '*_aarch64.dmg'
+          copy_one Smriti-Ubuntu-Debian-x64.deb '*_amd64.deb'
+          copy_one Smriti-Linux-x64.AppImage '*_amd64.AppImage'
+          copy_one Smriti-Linux-x64.rpm '*-1.x86_64.rpm'
+          gh release upload "${GITHUB_REF_NAME}" stable-assets/* --clobber
       - name: Attach release checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

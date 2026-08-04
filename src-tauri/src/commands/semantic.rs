@@ -56,16 +56,15 @@ pub async fn semantic_install_model(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobIdDto> {
-    if state
-        .jobs
-        .lock()
-        .await
-        .has_any_of_kind(JobKind::SemanticAssets)
+    let registry = state.jobs.lock().await;
+    if registry.has_any_of_kind(JobKind::SemanticAssets)
+        || registry.has_any_of_kind(JobKind::AssetInstall)
     {
         return Err(CommandError::Conflict {
             reason: "semantic model installation is already in progress".into(),
         });
     }
+    drop(registry);
 
     let job = jobs::start_job(&state, JobKind::SemanticAssets).await?;
     let job_id = job.id.clone();
@@ -149,6 +148,10 @@ pub async fn semantic_start_indexing(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobIdDto> {
+    start_semantic_indexing_job(app, &state).await
+}
+
+async fn start_semantic_indexing_job(app: AppHandle, state: &AppState) -> CommandResult<JobIdDto> {
     if state
         .jobs
         .lock()
@@ -185,7 +188,7 @@ pub async fn semantic_start_indexing(
             reason: "Install ONNX Runtime from Settings -> Assets -> Download assets first.".into(),
         });
     }
-    let job = jobs::start_job(&state, JobKind::SemanticIndex).await?;
+    let job = jobs::start_job(state, JobKind::SemanticIndex).await?;
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
     let started = job.started_at;
@@ -269,6 +272,50 @@ pub async fn semantic_start_indexing(
     });
 
     Ok(JobIdDto { job_id })
+}
+
+/// Start indexing pending photos when the user has installed the local model.
+/// This is intentionally best-effort: opening a library must never fail because
+/// an optional background index could not be started.
+pub(crate) async fn maybe_start_semantic_indexing(app: AppHandle) {
+    if !SemanticSearchService::model_assets_installed() || !smriti::bootstrap::onnx_runtime_exists()
+    {
+        return;
+    }
+    let state: tauri::State<AppState> = app.state();
+    if state
+        .jobs
+        .lock()
+        .await
+        .has_any_of_kind(JobKind::SemanticIndex)
+    {
+        return;
+    }
+    let pending = {
+        let library = state.library.read().await;
+        let Some(library) = library.as_ref() else {
+            return;
+        };
+        let drive_root = library.drive_root.clone();
+        let db_path = db_path_for(&drive_root);
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_secondary(&db_path).ok()?;
+            SemanticSearchService::new(&drive_root)
+                .index_stats(&conn)
+                .ok()
+                .map(|stats| stats.pending)
+        })
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+    };
+    if pending == 0 {
+        return;
+    }
+    if let Err(err) = start_semantic_indexing_job(app.clone(), &state).await {
+        tracing::debug!("automatic semantic indexing skipped: {err}");
+    }
 }
 
 #[derive(Debug, Deserialize)]

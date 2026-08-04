@@ -61,7 +61,7 @@
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link
-            href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..500&family=JetBrains+Mono:wght@400;500;600&display=swap"
+            href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Cormorant+Garamond:ital,wght@1,500&family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..500&family=JetBrains+Mono:wght@400;500;600&display=swap"
             rel="stylesheet"
         />
 
@@ -452,24 +452,14 @@
                 text-decoration: none;
                 color: var(--ink);
             }
-            .brand-mark {
-                font-family: var(--font-editorial);
-                font-style: italic;
-                font-weight: 500;
-                font-size: 1.5rem;
-                letter-spacing: -0.005em;
+            .brand-logo {
+                width: 112px;
+                height: auto;
+                display: block;
                 color: var(--ink);
-                font-variation-settings: "opsz" 32;
             }
-            .brand-mark::after {
-                content: "";
-                display: inline-block;
-                width: 6px;
-                height: 6px;
-                border-radius: 50%;
-                background: var(--accent);
-                margin-left: 6px;
-                vertical-align: middle;
+            .brand-logo .wordmark {
+                fill: currentColor;
             }
             .brand-script {
                 font-family: var(--font-editorial);
@@ -1250,7 +1240,321 @@
                 color: var(--ink-faint);
             }
 
-            /* ===== Fold 6 — DRIVE PORTABILITY DEMO ==================== */
+            /* ===== GOOGLE PHOTOS MIGRATION ============================ */
+            .migration-card {
+                overflow: hidden;
+                background:
+                    radial-gradient(
+                        circle at 12% 18%,
+                        var(--accent-ghost),
+                        transparent 34%
+                    ),
+                    var(--bg-paper);
+                border: 1px solid var(--line-soft);
+                border-radius: var(--r-xl);
+                box-shadow:
+                    0 1px 0 var(--line-hair) inset,
+                    0 24px 60px -32px rgba(20, 24, 35, 0.18);
+            }
+            .migration-route {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr);
+                align-items: stretch;
+                min-height: 360px;
+            }
+            .migration-stop {
+                padding: var(--s-7);
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }
+            .migration-kicker {
+                display: flex;
+                align-items: center;
+                gap: var(--s-2);
+                margin-bottom: var(--s-5);
+                font-family: var(--font-mono);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                color: var(--ink-muted);
+            }
+            .migration-kicker .lights {
+                display: inline-grid;
+                grid-template-columns: repeat(2, 5px);
+                gap: 2px;
+            }
+            .migration-kicker .lights i {
+                width: 5px;
+                height: 5px;
+                border-radius: 50%;
+                background: var(--ink-faint);
+            }
+            .migration-kicker .lights i:nth-child(2) {
+                background: var(--accent);
+            }
+            .migration-kicker .lights i:nth-child(3) {
+                background: var(--keep);
+            }
+            .migration-kicker .lights i:nth-child(4) {
+                background: var(--hot);
+            }
+            .takeout-pile {
+                position: relative;
+                height: 184px;
+                margin: var(--s-2) 0 var(--s-5);
+            }
+            .takeout-file {
+                position: absolute;
+                inset: 0 auto auto 50%;
+                width: min(260px, 88%);
+                min-height: 110px;
+                padding: var(--s-4);
+                background: var(--bg);
+                border: 1px solid var(--line);
+                border-radius: var(--r-lg);
+                box-shadow: 0 12px 28px -22px rgba(20, 24, 35, 0.32);
+                transform-origin: 50% 100%;
+                transition: transform var(--t-base-d) var(--ease-out);
+            }
+            .takeout-file:nth-child(1) {
+                transform: translate(-54%, 42px) rotate(-5deg);
+            }
+            .takeout-file:nth-child(2) {
+                transform: translate(-47%, 22px) rotate(4deg);
+            }
+            .takeout-file:nth-child(3) {
+                transform: translate(-50%, 0) rotate(-1deg);
+            }
+            .migration-card:hover .takeout-file:nth-child(1) {
+                transform: translate(-58%, 48px) rotate(-7deg);
+            }
+            .migration-card:hover .takeout-file:nth-child(2) {
+                transform: translate(-43%, 24px) rotate(6deg);
+            }
+            .takeout-file strong,
+            .takeout-file span {
+                display: block;
+                font-family: var(--font-mono);
+            }
+            .takeout-file strong {
+                color: var(--ink);
+                font-size: var(--t-xs);
+                font-weight: 500;
+            }
+            .takeout-file span {
+                margin-top: var(--s-2);
+                color: var(--ink-faint);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.06em;
+            }
+            .takeout-file::after {
+                content: "ZIP";
+                position: absolute;
+                right: var(--s-4);
+                bottom: var(--s-4);
+                padding: 2px 6px;
+                border: 1px solid var(--line);
+                border-radius: var(--r-sm);
+                font-family: var(--font-mono);
+                font-size: 9px;
+                letter-spacing: 0.12em;
+                color: var(--ink-muted);
+            }
+            .migration-note {
+                color: var(--ink-muted);
+                font-family: var(--font-mono);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.04em;
+            }
+            .migration-transfer {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: var(--s-3);
+                color: var(--accent-deep);
+            }
+            .migration-transfer::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 50%;
+                border-left: 1px dashed var(--line);
+            }
+            .migration-transfer svg {
+                position: relative;
+                width: 44px;
+                height: 44px;
+                padding: 11px;
+                border-radius: 50%;
+                background: var(--bg);
+                border: 1px solid var(--accent-soft);
+                box-shadow: 0 0 0 8px var(--bg-paper);
+            }
+            .migration-transfer span {
+                position: relative;
+                padding: 3px 7px;
+                background: var(--bg-paper);
+                font-family: var(--font-mono);
+                font-size: 9px;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+            }
+            .migration-library {
+                background: color-mix(
+                    in oklab,
+                    var(--accent-tint) 75%,
+                    transparent
+                );
+                border-left: 1px solid var(--line-soft);
+            }
+            .migration-receipt {
+                background: var(--bg);
+                border: 1px solid var(--line);
+                border-radius: var(--r-lg);
+                padding: var(--s-5);
+                box-shadow: 0 18px 36px -28px rgba(20, 24, 35, 0.4);
+            }
+            .migration-receipt-head {
+                display: flex;
+                justify-content: space-between;
+                gap: var(--s-3);
+                padding-bottom: var(--s-4);
+                border-bottom: 1px solid var(--line-hair);
+                font-family: var(--font-mono);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                color: var(--ink-muted);
+            }
+            .migration-receipt-head strong {
+                color: var(--accent-deep);
+                font-weight: 600;
+            }
+            .migration-checks {
+                list-style: none;
+                margin: var(--s-4) 0 0;
+                padding: 0;
+            }
+            .migration-checks li {
+                display: grid;
+                grid-template-columns: 18px 1fr;
+                gap: var(--s-2);
+                padding: 7px 0;
+                color: var(--ink-soft);
+                font-size: var(--t-sm);
+                border-bottom: 1px solid var(--line-hair);
+            }
+            .migration-checks li:last-child {
+                border-bottom: none;
+            }
+            .migration-checks b {
+                color: var(--keep);
+                font-weight: 600;
+            }
+            .migration-checks strong {
+                color: var(--ink);
+                font-weight: 500;
+            }
+            .migration-footer {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: var(--s-5);
+                padding: var(--s-5) var(--s-7);
+                border-top: 1px solid var(--line-soft);
+                background: var(--bg);
+            }
+            .migration-footer p {
+                color: var(--ink);
+                font-family: var(--font-editorial);
+                font-size: var(--t-xl);
+                font-style: italic;
+            }
+            .migration-actions {
+                display: flex;
+                align-items: center;
+                gap: var(--s-3);
+                flex-shrink: 0;
+            }
+            .migration-docs {
+                font-family: var(--font-mono);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.06em;
+                color: var(--ink-muted);
+            }
+            .migration-card[data-migration-state="idle"] .migration-receipt {
+                opacity: 0.48;
+                transform: translateY(6px);
+            }
+            .migration-receipt {
+                transition:
+                    opacity 420ms var(--ease-out),
+                    transform 420ms var(--ease-out);
+            }
+            .migration-card[data-migration-state="idle"] .migration-checks li,
+            .migration-card[data-migration-state="running"] .migration-checks li {
+                opacity: 0.24;
+                transform: translateX(-5px);
+            }
+            .migration-card[data-migration-state="running"] .takeout-file {
+                animation: takeout-send 1050ms ease-in-out forwards;
+            }
+            .migration-card[data-migration-state="running"] .takeout-file:nth-child(2) {
+                animation-delay: 260ms;
+            }
+            .migration-card[data-migration-state="running"] .takeout-file:nth-child(1) {
+                animation-delay: 520ms;
+            }
+            .migration-card[data-migration-state="running"] .migration-transfer svg {
+                animation: migration-pulse 720ms ease-in-out 3;
+            }
+            .migration-card[data-migration-state="running"] .migration-checks li {
+                animation: migration-check-in 360ms var(--ease-out) forwards;
+            }
+            .migration-card[data-migration-state="running"] .migration-checks li:nth-child(1) {
+                animation-delay: 1050ms;
+            }
+            .migration-card[data-migration-state="running"] .migration-checks li:nth-child(2) {
+                animation-delay: 1400ms;
+            }
+            .migration-card[data-migration-state="running"] .migration-checks li:nth-child(3) {
+                animation-delay: 1750ms;
+            }
+            .migration-card[data-migration-state="running"] .migration-checks li:nth-child(4) {
+                animation-delay: 2100ms;
+            }
+            .migration-card[data-migration-state="complete"] .migration-receipt,
+            .migration-card[data-migration-state="complete"] .migration-checks li {
+                opacity: 1;
+                transform: none;
+            }
+            .migration-card[data-migration-state="complete"] .takeout-file {
+                opacity: 0.34;
+            }
+            @keyframes takeout-send {
+                0% { translate: 0 0; opacity: 1; }
+                65%, 100% {
+                    translate: calc(100% + 185px) 0;
+                    opacity: 0;
+                }
+            }
+            @keyframes takeout-send-down {
+                0% { translate: 0 0; opacity: 1; }
+                65%, 100% { translate: 0 calc(100% + 120px); opacity: 0; }
+            }
+            @keyframes migration-pulse {
+                0%, 100% { box-shadow: 0 0 0 8px var(--bg-paper); }
+                50% { box-shadow: 0 0 0 13px var(--accent-ghost); }
+            }
+            @keyframes migration-check-in {
+                to { opacity: 1; transform: none; }
+            }
+
+            /* ===== DRIVE PORTABILITY DEMO ============================= */
             .demo-port-wrap {
                 max-width: 980px;
                 margin: 0 auto;
@@ -1302,6 +1606,7 @@
                 transition:
                     filter var(--t-base-d) var(--ease),
                     transform var(--t-base-d) var(--ease);
+                z-index: 1;
             }
             .laptop[data-drop-active="true"] {
                 transform: translateY(-2px);
@@ -1482,6 +1787,7 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                z-index: 2;
             }
             .drive-track::before,
             .drive-track::after {
@@ -1512,9 +1818,13 @@
                 will-change: transform;
                 user-select: none;
                 touch-action: none;
+                z-index: 3;
             }
             .drive:active {
                 cursor: grabbing;
+            }
+            .drive[data-where] {
+                color: var(--accent-deep);
             }
             .drive.dragging {
                 transition: none;
@@ -1734,6 +2044,20 @@
                 gap: var(--s-4);
                 margin-top: var(--s-6);
             }
+            .download-primary {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: var(--s-4);
+                margin-top: var(--s-6);
+                padding: var(--s-5) var(--s-6);
+                border: 1px solid var(--accent);
+                border-radius: var(--r-lg);
+                background: var(--accent-tint);
+            }
+            .download-primary-copy { display: grid; gap: 4px; }
+            .download-primary-copy strong { color: var(--ink); }
+            .download-primary-copy span { color: var(--ink-muted); font-size: var(--t-sm); }
             .download-card {
                 position: relative;
                 border: 1px solid var(--line);
@@ -1872,8 +2196,8 @@
                 margin-bottom: var(--s-7);
                 align-items: start;
             }
-            .footer-brand .brand-mark {
-                font-size: 1.8rem;
+            .footer-brand .brand-logo {
+                width: 136px;
             }
             .footer-brand p {
                 max-width: 40ch;
@@ -1992,6 +2316,30 @@
                 .agent-card {
                     grid-template-columns: 1fr;
                 }
+                .migration-route {
+                    grid-template-columns: 1fr;
+                }
+                .migration-card[data-migration-state="running"] .takeout-file {
+                    animation-name: takeout-send-down;
+                }
+                .migration-transfer {
+                    min-height: 110px;
+                }
+                .migration-transfer::before {
+                    top: 50%;
+                    right: 0;
+                    bottom: auto;
+                    left: 0;
+                    border-top: 1px dashed var(--line);
+                    border-left: none;
+                }
+                .migration-transfer svg {
+                    transform: rotate(90deg);
+                }
+                .migration-library {
+                    border-top: 1px solid var(--line-soft);
+                    border-left: none;
+                }
             }
             @media (max-width: 640px) {
                 .feature-grid,
@@ -2039,6 +2387,22 @@
                 }
                 .topbar-actions .btn {
                     display: none;
+                }
+                .migration-stop {
+                    padding: var(--s-5);
+                }
+                .migration-footer {
+                    align-items: flex-start;
+                    flex-direction: column;
+                    padding: var(--s-5);
+                }
+                .migration-actions {
+                    align-items: stretch;
+                    flex-direction: column-reverse;
+                    width: 100%;
+                }
+                .migration-actions .btn {
+                    width: 100%;
                 }
             }
 
@@ -3281,6 +3645,13 @@
                 margin: 0 var(--s-2);
                 color: var(--ink-faint);
             }
+            .compare-meta a {
+                color: var(--accent-deep);
+                text-decoration: none;
+            }
+            .compare-meta a:hover {
+                text-decoration: underline;
+            }
 
             @media (max-width: 980px) {
                 .trip-result {
@@ -3343,11 +3714,18 @@
         <header class="topbar">
             <div class="container topbar-inner">
                 <a class="brand plain" href="#" aria-label="Smriti — home">
-                    <span class="brand-mark">smriti</span>
+                    <svg class="brand-logo" viewBox="0 0 320 100" role="img" aria-label="Smriti">
+                        <text class="wordmark" x="20" y="68"
+                            font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
+                            font-style="italic" font-weight="500" font-size="64"
+                            letter-spacing="0.5">smriti</text>
+                        <circle cx="195" cy="22" r="6" fill="#c89968" />
+                    </svg>
                     <span class="brand-script" aria-hidden="true">स्मृति</span>
                 </a>
                 <nav class="nav-primary" aria-label="Primary">
                     <a href="#features">Features</a>
+                    <a href="#migrate">Migrate</a>
                     <a href="#compare">Compare</a>
                     <a href="#privacy">Privacy</a>
                     <a
@@ -7220,8 +7598,10 @@
                         <img
                             class="compare-img"
                             id="compare-original"
-                            alt="Original photo"
+                            alt="High-resolution autumn park and footbridge before recompression"
                             src="./quality-photo.jpg"
+                            loading="lazy"
+                            decoding="async"
                         />
                         <div class="compare-overlay">
                             <img
@@ -7259,8 +7639,8 @@
                                 <span class="mono">website/</span></strong
                             >
                             <span
-                                >A high-detail photo (faces, sky, hair) makes
-                                compression visible.</span
+                                >A high-detail photo with fine texture makes
+                                recompression visible.</span
                             >
                         </div>
                     </div>
@@ -7271,15 +7651,150 @@
                             ><span class="dot">·</span>JPEG · conservative
                             recompress · originals untouched
                         </span>
+                        <span>
+                            Photo:
+                            <a
+                                href="https://commons.wikimedia.org/wiki/File:D%C3%BClmen,_Wildpark,_Br%C3%BCcke_am_Herzteich_--_2022_--_4642.jpg"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                >Dietmar Rabich</a
+                            >
+                            <span class="dot">·</span>
+                            <a
+                                href="https://creativecommons.org/licenses/by-sa/4.0/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                >CC BY-SA 4.0</a
+                            >
+                        </span>
                     </div>
                 </div>
             </section>
 
-            <!-- ============ FOLD 10 — DRIVE PORTABILITY ============ -->
+            <!-- ============ FOLD 10 — GOOGLE PHOTOS MIGRATION ============ -->
+            <section
+                class="container fold"
+                id="migrate"
+                aria-labelledby="migrate-title"
+            >
+                <header class="fold-head">
+                    <div>
+                        <span class="fold-num">09 — your escape hatch</span>
+                        <h2
+                            id="migrate-title"
+                            class="fold-title display"
+                            style="margin-top: var(--s-3)"
+                        >
+                            Your photos called.<br />They want to
+                            <em>come home</em>.
+                        </h2>
+                        <p class="fold-sub">
+                            Google Takeout hands you a pile of ZIPs and
+                            sidecar files. Hand the whole pile to Smriti. It
+                            reconnects dates and places, restores favourites
+                            and real albums, collapses export duplicates, and
+                            keeps the originals on your drive.
+                        </p>
+                    </div>
+                </header>
+
+                <div class="migration-card" id="migration-demo" data-migration-state="idle">
+                    <div class="migration-route">
+                        <div class="migration-stop">
+                            <div class="migration-kicker">
+                                <span class="lights" aria-hidden="true"
+                                    ><i></i><i></i><i></i><i></i
+                                ></span>
+                                Google Takeout
+                            </div>
+                            <div
+                                class="takeout-pile"
+                                role="img"
+                                aria-label="Several Google Takeout ZIP files ready to import"
+                            >
+                                <div class="takeout-file">
+                                    <strong>takeout-003.zip</strong>
+                                    <span>albums · metadata.json</span>
+                                </div>
+                                <div class="takeout-file">
+                                    <strong>takeout-002.zip</strong>
+                                    <span>photos · videos · sidecars</span>
+                                </div>
+                                <div class="takeout-file">
+                                    <strong>takeout-001.zip</strong>
+                                    <span>the beginning of everything</span>
+                                </div>
+                            </div>
+                            <p class="migration-note">
+                                Select every part together. Leave them zipped.
+                            </p>
+                        </div>
+
+                        <div class="migration-transfer" aria-hidden="true">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.6"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M5 12h14" />
+                                <path d="m14 7 5 5-5 5" />
+                            </svg>
+                            <span>one import</span>
+                        </div>
+
+                        <div class="migration-stop migration-library">
+                            <div class="migration-kicker">
+                                Smriti · on your drive
+                            </div>
+                            <div class="migration-receipt">
+                                <div class="migration-receipt-head">
+                                    <span>Import complete</span>
+                                    <strong>local</strong>
+                                </div>
+                                <ul class="migration-checks">
+                                    <li>
+                                        <b>✓</b><span><strong>Originals</strong> copied safely</span>
+                                    </li>
+                                    <li>
+                                        <b>✓</b><span><strong>Dates + places</strong> restored</span>
+                                    </li>
+                                    <li>
+                                        <b>✓</b><span><strong>Favourites + albums</strong> rebuilt</span>
+                                    </li>
+                                    <li>
+                                        <b>✓</b><span><strong>Export duplicates</strong> collapsed</span>
+                                    </li>
+                                </ul>
+                            </div>
+                            <p class="migration-note" style="margin-top: var(--s-5)">
+                                Interrupted? Run it again. Smriti resumes safely.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="migration-footer">
+                        <p id="migration-status" aria-live="polite">Three ZIPs. One clean library.</p>
+                        <div class="migration-actions">
+                            <a
+                                class="migration-docs"
+                                href="./docs/user-guide/google-photos-import.html"
+                                >How migration works</a
+                            >
+                            <button class="btn btn--primary" id="migration-run" type="button"
+                                >Run the escape&nbsp;→</button
+                            >
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ FOLD 11 — DRIVE PORTABILITY ============ -->
             <section class="container fold" aria-labelledby="port-title">
                 <header class="fold-head">
                     <div>
-                        <span class="fold-num">09 — interactive</span>
+                        <span class="fold-num">10 — interactive</span>
                         <h2
                             id="port-title"
                             class="fold-title display"
@@ -7379,7 +7894,6 @@
                                 <div
                                     class="drive"
                                     id="drive"
-                                    data-where="a"
                                     tabindex="0"
                                     role="button"
                                     aria-label="Drag the USB drive between laptops"
@@ -7546,7 +8060,7 @@
                 </div>
             </section>
 
-            <!-- ============ FOLD 11 — NETWORK HONESTY ============ -->
+            <!-- ============ FOLD 12 — NETWORK HONESTY ============ -->
             <section
                 class="container fold"
                 id="privacy"
@@ -7554,7 +8068,7 @@
             >
                 <header class="fold-head">
                     <div>
-                        <span class="fold-num">10 — network honesty</span>
+                        <span class="fold-num">11 — network honesty</span>
                         <h2
                             id="network-title"
                             class="fold-title display"
@@ -7644,11 +8158,11 @@
                 </ol>
             </section>
 
-            <!-- ============ FOLD 12 — CLOUD BRIDGE ============ -->
+            <!-- ============ FOLD 13 — CLOUD BRIDGE ============ -->
             <section class="container fold" aria-labelledby="bridge-title">
                 <div class="bridge">
                     <div class="bridge-prose">
-                        <span class="fold-num">11 — design discipline</span>
+                        <span class="fold-num">12 — design discipline</span>
                         <h2
                             id="bridge-title"
                             class="display"
@@ -7697,7 +8211,7 @@
                 </div>
             </section>
 
-            <!-- ============ FOLD 13 — DOWNLOAD ============ -->
+            <!-- ============ FOLD 14 — DOWNLOAD ============ -->
             <section
                 class="container fold"
                 id="download"
@@ -7705,7 +8219,7 @@
             >
                 <header class="fold-head">
                     <div>
-                        <span class="fold-num">12 — get smriti</span>
+                        <span class="fold-num">13 — get smriti</span>
                         <h2
                             id="download-title"
                             class="fold-title display"
@@ -7720,6 +8234,15 @@
                         </p>
                     </div>
                 </header>
+
+                <div class="download-primary">
+                    <div class="download-primary-copy">
+                        <strong id="download-primary-title">Download Smriti</strong>
+                        <span id="download-primary-detail">We'll pick the right installer for this computer.</span>
+                    </div>
+                    <a class="btn btn--primary" id="download-primary-button"
+                       href="https://github.com/ChivukulaVirinchi/photovault/releases/latest">Choose download</a>
+                </div>
 
                 <div class="download-grid" id="download-cards">
                     <a
@@ -7739,12 +8262,12 @@
                             <rect x="13" y="13" width="9" height="9" />
                         </svg>
                         <h4>Windows</h4>
-                        <span class="filename">.msi installer</span>
+                        <span class="filename">Windows installer</span>
                         <p class="desc">
-                            For Windows 10 and 11. Preview builds — SmartScreen
-                            prompt on first launch.
+                            For Windows 10 and 11. One installer, no package
+                            choice needed.
                         </p>
-                        <span class="alt">See latest release&nbsp;→</span>
+                        <span class="alt">Download installer&nbsp;→</span>
                     </a>
 
                     <a
@@ -7765,10 +8288,10 @@
                         <h4>macOS</h4>
                         <span class="filename">.dmg / .tar.gz</span>
                         <p class="desc">
-                            Universal builds. Preview builds — Gatekeeper prompt
-                            on first launch.
+                            For Apple Silicon Macs. Preview builds may show a
+                            Gatekeeper prompt on first launch.
                         </p>
-                        <span class="alt">See latest release&nbsp;→</span>
+                        <span class="alt">Download installer&nbsp;→</span>
                     </a>
 
                     <a
@@ -7811,12 +8334,12 @@
                             />
                         </svg>
                         <h4>Linux</h4>
-                        <span class="filename">.deb · .AppImage · .rpm</span>
+                        <span class="filename">Ubuntu / Debian installer</span>
                         <p class="desc">
                             Debian, Ubuntu, Fedora — plus a portable AppImage
                             for other distros.
                         </p>
-                        <span class="alt">See latest release&nbsp;→</span>
+                        <span class="alt">Download installer&nbsp;→</span>
                     </a>
                 </div>
 
@@ -7839,15 +8362,10 @@
                         <path d="M12 8v4M12 16h.01" />
                     </svg>
                     <div>
-                        <strong>Optional:</strong> for face recognition +
-                        offline geocoding, also grab
-                        <a
-                            href="https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip"
-                            >Smriti-Assets.zip</a
-                        >
-                        (ONNX runtime + face models + GeoNames database). Smriti
-                        runs without it — the asset pack just unlocks those two
-                        features. The app prompts you on first launch.
+                        <strong>Nothing else to hunt down.</strong> On first run,
+                        one optional button enables faces, offline place names,
+                        and visual search. Smriti downloads and verifies the
+                        files for you, then indexes automatically.
                     </div>
                 </div>
 
@@ -7863,7 +8381,13 @@
             <div class="container">
                 <div class="footer-grid">
                     <div class="footer-brand">
-                        <span class="brand-mark">smriti</span>
+                        <svg class="brand-logo" viewBox="0 0 320 100" role="img" aria-label="Smriti">
+                            <text class="wordmark" x="20" y="68"
+                                font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
+                                font-style="italic" font-weight="500" font-size="64"
+                                letter-spacing="0.5">smriti</text>
+                            <circle cx="195" cy="22" r="6" fill="#c89968" />
+                        </svg>
                         <p>
                             A photo library that stays on your machine.
                             <span class="editorial">स्मृति</span> · remembered.
@@ -8013,18 +8537,55 @@
                     }
                 })();
 
-                // ============ OS detection — highlight recommended download ============
+                // ============ OS detection + direct installer resolution ============
                 (function () {
                     var ua = navigator.userAgent || "";
                     var os = null;
                     if (/Windows/i.test(ua)) os = "windows";
                     else if (/Mac OS X|Macintosh/i.test(ua)) os = "macos";
                     else if (/Linux|X11/i.test(ua)) os = "linux";
-                    if (!os) return;
-                    var card = document.querySelector(
-                        '.download-card[data-os="' + os + '"]',
-                    );
-                    if (card) card.classList.add("recommended");
+                    var labels = {
+                        windows: ["Windows", "Windows 10 or 11"],
+                        macos: ["macOS", "Apple Silicon Mac"],
+                        linux: ["Linux", "Ubuntu or Debian"],
+                    };
+                    var matchers = {
+                        windows: [/Smriti-Windows-Setup\.exe$/i, /_x64-setup\.exe$/i],
+                        macos: [/Smriti-macOS-Apple-Silicon\.dmg$/i, /_aarch64\.dmg$/i],
+                        linux: [/Smriti-Ubuntu-Debian-x64\.deb$/i, /_amd64\.deb$/i],
+                    };
+                    var primary = document.getElementById("download-primary-button");
+                    var title = document.getElementById("download-primary-title");
+                    var detail = document.getElementById("download-primary-detail");
+                    if (os) {
+                        var card = document.querySelector('.download-card[data-os="' + os + '"]');
+                        if (card) card.classList.add("recommended");
+                        title.textContent = "Download for " + labels[os][0];
+                        detail.textContent = labels[os][1] + " · we'll choose the installer";
+                        primary.textContent = "Download for " + labels[os][0];
+                    }
+
+                    fetch("https://api.github.com/repos/ChivukulaVirinchi/photovault/releases/latest")
+                        .then(function (response) {
+                            if (!response.ok) throw new Error("release lookup failed");
+                            return response.json();
+                        })
+                        .then(function (release) {
+                            Object.keys(matchers).forEach(function (platform) {
+                                var asset = (release.assets || []).find(function (candidate) {
+                                    return matchers[platform].some(function (pattern) {
+                                        return pattern.test(candidate.name);
+                                    });
+                                });
+                                if (!asset) return;
+                                var platformCard = document.querySelector('.download-card[data-os="' + platform + '"]');
+                                if (platformCard) platformCard.href = asset.browser_download_url;
+                                if (platform === os) primary.href = asset.browser_download_url;
+                            });
+                        })
+                        .catch(function () {
+                            // The release page remains a safe fallback when GitHub's API is unavailable.
+                        });
                 })();
 
                 // ============ Face clustering demo ============
@@ -8306,6 +8867,42 @@
                 if (clusterBtn) clusterBtn.addEventListener("click", doCluster);
                 if (resetBtn) resetBtn.addEventListener("click", doReset);
 
+                // ============ Google Takeout migration demo ============
+                (function () {
+                    var migration = document.getElementById("migration-demo");
+                    var run = document.getElementById("migration-run");
+                    var status = document.getElementById("migration-status");
+                    if (!migration || !run || !status) return;
+
+                    var finishTimer = null;
+                    var reducedMotion = window.matchMedia(
+                        "(prefers-reduced-motion: reduce)",
+                    ).matches;
+
+                    function runMigration() {
+                        if (finishTimer) window.clearTimeout(finishTimer);
+                        migration.dataset.migrationState = "idle";
+                        // Force the animation timeline to restart on replay.
+                        void migration.offsetWidth;
+                        migration.dataset.migrationState = "running";
+                        run.disabled = true;
+                        run.textContent = "Bringing them home…";
+                        status.textContent = "Reading ZIPs · restoring metadata · rebuilding albums";
+
+                        finishTimer = window.setTimeout(
+                            function () {
+                                migration.dataset.migrationState = "complete";
+                                run.disabled = false;
+                                run.textContent = "Replay import";
+                                status.textContent = "Your photos have left the chat.";
+                            },
+                            reducedMotion ? 20 : 2700,
+                        );
+                    }
+
+                    run.addEventListener("click", runMigration);
+                })();
+
                 // ============ Drive portability demo ============
                 // Drag a USB drive between two laptops; thumbnails appear on
                 // whichever laptop the drive is plugged into. Pointer-events
@@ -8348,36 +8945,33 @@
                 };
 
                 function setDriveLocation(where) {
-                    // Move drive into the laptop's location. We accomplish this
-                    // by parking the drive in the destination laptop's slot — a
-                    // hidden visual position over the screen — using CSS class
-                    // states on the laptops + drive translate.
+                    // CSS transforms are relative to the drive's natural
+                    // position (centred in the track), not to the track edge.
+                    // Recover that untransformed origin from its current rect
+                    // so snapping remains exact after a drag or resize.
                     drive.dataset.where = where;
                     var laptopRect =
                         DRIVE_LOCATIONS[where].laptop.getBoundingClientRect();
-                    var trackRect = drive.parentElement.getBoundingClientRect();
-                    // Default: keep drive centered in the track. When "plugged",
-                    // the drive sits next to its target laptop.
-                    var dx, dy;
+                    var driveRect = drive.getBoundingClientRect();
+                    var translated = parseTransform(drive.style.transform);
+                    var baseLeft = driveRect.left - translated.x;
+                    var baseTop = driveRect.top - translated.y;
+
+                    // Park just inside the laptop edge nearest the track. This
+                    // reads as plugged in without covering the photo grid.
+                    var targetLeft;
                     if (where === "a") {
-                        dx =
-                            laptopRect.right -
-                            trackRect.left -
-                            drive.offsetWidth -
-                            4;
-                        dy =
-                            laptopRect.top +
-                            laptopRect.height / 2 -
-                            (trackRect.top + trackRect.height / 2) -
-                            drive.offsetHeight / 2;
+                        targetLeft =
+                            laptopRect.right - driveRect.width - 4;
                     } else {
-                        dx = laptopRect.left - trackRect.right + 4;
-                        dy =
-                            laptopRect.top +
-                            laptopRect.height / 2 -
-                            (trackRect.top + trackRect.height / 2) -
-                            drive.offsetHeight / 2;
+                        targetLeft = laptopRect.left + 4;
                     }
+                    var targetTop =
+                        laptopRect.top +
+                        (laptopRect.height - driveRect.height) / 2;
+                    var dx = targetLeft - baseLeft;
+                    var dy = targetTop - baseTop;
+
                     drive.style.transform =
                         "translate(" + dx + "px, " + dy + "px)";
                     laptopA.dataset.state = where === "a" ? "full" : "empty";
@@ -8398,7 +8992,6 @@
                     startY = 0,
                     baseDx = 0,
                     baseDy = 0;
-                var currentTransform = { x: 0, y: 0 };
 
                 function parseTransform(s) {
                     if (!s) return { x: 0, y: 0 };
@@ -8416,7 +9009,6 @@
                     drive.classList.add("dragging");
                     drive.setPointerCapture(e.pointerId);
                     var t = parseTransform(drive.style.transform);
-                    currentTransform = t;
                     baseDx = t.x;
                     baseDy = t.y;
                     startX = e.clientX;
@@ -8429,7 +9021,6 @@
                     var y = baseDy + (e.clientY - startY);
                     drive.style.transform =
                         "translate(" + x + "px, " + y + "px)";
-                    currentTransform = { x: x, y: y };
 
                     // Hover detection
                     var rect = drive.getBoundingClientRect();
@@ -8472,6 +9063,7 @@
                     else {
                         // Snap back to track center
                         drive.style.transform = "";
+                        delete drive.dataset.where;
                         laptopA.dataset.state = "empty";
                         laptopB.dataset.state = "empty";
                         if (whereEl) whereEl.textContent = "unplugged";
@@ -8498,7 +9090,7 @@
                 if (resetPort) {
                     resetPort.addEventListener("click", function () {
                         drive.style.transform = "";
-                        drive.dataset.where = "a";
+                        delete drive.dataset.where;
                         laptopA.dataset.state = "empty";
                         laptopB.dataset.state = "empty";
                         if (whereEl) whereEl.textContent = "unplugged";

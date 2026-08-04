@@ -111,7 +111,15 @@ try {
 
         & gh run watch $runId --exit-status
 
-        $required = @("Smriti-Assets.zip")
+        $required = @(
+            "Smriti-Assets.zip",
+            "Smriti-Windows-Setup.exe",
+            "Smriti-Windows-x64.msi",
+            "Smriti-macOS-Apple-Silicon.dmg",
+            "Smriti-Ubuntu-Debian-x64.deb",
+            "Smriti-Linux-x64.AppImage",
+            "Smriti-Linux-x64.rpm"
+        )
         if (-not $SkipChecksumsVerification) {
             $required += "SHA256SUMS"
         }

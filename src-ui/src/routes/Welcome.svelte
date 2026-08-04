@@ -5,7 +5,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { library } from "../lib/api/library";
   import { commandErrorMessage } from "../lib/api";
-  import { systemEx } from "../lib/api/all";
+  import { systemEx, type AssetInventory } from "../lib/api/all";
   import type { AssetHealthDto, PhotoSummaryDto } from "../lib/api/types";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -21,11 +21,28 @@
   let compatSeq = 0;
   let mounted = true;
   let assetHealth = $state<AssetHealthDto | null>(null);
+  let assetInventory = $state<AssetInventory | null>(null);
   let assetError = $state<string | null>(null);
   let assetHealthLoading = $state(false);
   const installingAssets = $derived(jobs.isRunning("assets"));
   const importingTakeout = $derived(jobs.isRunning("takeout"));
   const assetsJob = $derived(jobs.byKind("assets"));
+  const semanticAssetIds = [
+    "vision.semantic.visual",
+    "vision.semantic.text",
+    "vision.semantic.tokenizer",
+    "vision.semantic.preprocess",
+    "vision.semantic.config",
+  ];
+  const smartFeaturesReady = $derived(Boolean(
+    assetHealth &&
+      !assetHealth.missing_face_models &&
+      !assetHealth.missing_onnx_runtime &&
+      !assetHealth.missing_geonames_db &&
+      semanticAssetIds.every((id) =>
+        assetInventory?.assets.some((asset) => asset.id === id && asset.active),
+      ),
+  ));
   let handledAssetJobId: string | null = null;
 
   function shortRoot(p: string): string {
@@ -114,9 +131,13 @@
   async function loadAssetHealth() {
     assetHealthLoading = true;
     try {
-      const health = await systemEx.assetHealth();
+      const [health, inventory] = await Promise.all([
+        systemEx.assetHealth(),
+        systemEx.assetsInventory(),
+      ]);
       if (mounted) {
         assetHealth = health;
+        assetInventory = inventory;
         assetError = null;
       }
     } catch (error) {
@@ -282,21 +303,21 @@
     {:else if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
 
-    {#if assetHealth?.missing_face_models || assetHealth?.missing_onnx_runtime || assetHealth?.missing_geonames_db}
-      <section class="asset-setup" aria-label="Optional asset setup">
+    {#if assetHealth && assetInventory && !smartFeaturesReady}
+      <section class="asset-setup" aria-label="Optional smart feature setup">
         <div class="asset-copy">
-          <strong>Enable faces and offline place names</strong>
-          <span>One download installs the local runtime, face models, and GeoNames database.</span>
+          <strong>Enable faces, places, and visual search</strong>
+          <span>One click, about 1.8 GB downloaded once. Everything stays on this computer.</span>
           {#if assetError}<span class="error">{assetError}</span>{/if}
         </div>
         <button class="primary" onclick={installAssets} disabled={installingAssets}>
-          {installingAssets ? "Installing assets…" : "Set up assets"}
+          {installingAssets ? "Setting things up…" : "Set up smart features"}
         </button>
       </section>
     {:else if assetError}
-      <p class="error">Couldn't check optional assets: {assetError}</p>
+      <p class="error">Couldn't check smart features: {assetError}</p>
     {:else if assetHealthLoading}
-      <p class="hint">Checking local assets…</p>
+      <p class="hint">Checking smart features…</p>
     {/if}
 
     {#if extraRemembered.length > 0}

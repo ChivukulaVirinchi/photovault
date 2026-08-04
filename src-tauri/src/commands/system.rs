@@ -42,16 +42,15 @@ pub async fn system_install_assets(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobIdDto> {
-    if state
-        .jobs
-        .lock()
-        .await
-        .has_any_of_kind(JobKind::AssetInstall)
+    let registry = state.jobs.lock().await;
+    if registry.has_any_of_kind(JobKind::AssetInstall)
+        || registry.has_any_of_kind(JobKind::SemanticAssets)
     {
         return Err(CommandError::Conflict {
-            reason: "asset installation is already in progress".into(),
+            reason: "smart feature setup is already in progress".into(),
         });
     }
+    drop(registry);
 
     let job = jobs::start_job(&state, JobKind::AssetInstall).await?;
     let job_id = job.id.clone();
@@ -70,11 +69,45 @@ pub async fn system_install_assets(
                 total: None,
                 elapsed_ms: 0,
                 eta_ms: None,
-                message: Some("Downloading Smriti assets...".into()),
+                message: Some("Setting up faces, places, and visual search...".into()),
             },
         );
 
-        match smriti::bootstrap::install_asset_pack().await {
+        let result = async {
+            if smriti::bootstrap::asset_health().missing_any() {
+                smriti::bootstrap::install_asset_pack().await?;
+            }
+            smriti::services::semantic::SemanticSearchService::install_model_assets(
+                Some(job.cancel.as_ref()),
+                |stage, processed, total| {
+                    emit(
+                        &app_clone,
+                        EV_ASSETS_PROGRESS,
+                        JobProgress {
+                            job_id: job_id_clone.clone(),
+                            stage: format!("visual-search-{stage}"),
+                            processed,
+                            total,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            eta_ms: None,
+                            message: Some("Downloading visual search (one time)...".into()),
+                        },
+                    );
+                },
+            )
+            .await?;
+            let health = smriti::bootstrap::asset_health();
+            if health.missing_any()
+                || !smriti::services::semantic::SemanticSearchService::model_assets_installed()
+            {
+                return Err("Setup finished, but one or more files did not verify".into());
+            }
+            Ok::<_, String>("Smart features are ready".to_string())
+        }
+        .await;
+
+        let setup_succeeded = result.is_ok();
+        match result {
             Ok(message) => emit(
                 &app_clone,
                 EV_ASSETS_COMPLETE,
@@ -98,13 +131,16 @@ pub async fn system_install_assets(
                     total: Some(1),
                     elapsed_ms: started.elapsed().as_millis() as u64,
                     eta_ms: None,
-                    message: Some(format!("Asset install failed: {err}")),
+                    message: Some(format!("Smart setup failed: {err}")),
                 },
             ),
         }
 
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
+        if setup_succeeded {
+            super::semantic::maybe_start_semantic_indexing(app_clone).await;
+        }
     });
 
     Ok(JobIdDto { job_id })
@@ -220,6 +256,51 @@ fn build_asset_inventory() -> AssetInventoryDto {
         true,
         "Optional local text-to-image search model.",
     ));
+    for (id, relative, label) in [
+        (
+            "vision.semantic.tokenizer",
+            "textual/tokenizer.json",
+            "Semantic tokenizer",
+        ),
+        (
+            "vision.semantic.preprocess",
+            "visual/preprocess_cfg.json",
+            "Semantic preprocessing config",
+        ),
+        (
+            "vision.semantic.config",
+            "config.json",
+            "Semantic model config",
+        ),
+    ] {
+        let relative = PathBuf::from(relative);
+        assets.push(asset_file(
+            id,
+            label,
+            "model",
+            smriti::bootstrap::asset_roots()
+                .into_iter()
+                .map(|root| {
+                    root.join("models")
+                        .join("semantic")
+                        .join("vit-b-32-siglip2-256-webli")
+                        .join(&relative)
+                })
+                .find(|path| path.exists())
+                .or_else(|| {
+                    Some(
+                        install_root
+                            .join("models")
+                            .join("semantic")
+                            .join("vit-b-32-siglip2-256-webli")
+                            .join(&relative),
+                    )
+                }),
+            false,
+            true,
+            "Required by the optional local visual search model.",
+        ));
+    }
 
     let total_size_bytes = assets.iter().filter_map(|a| a.size_bytes).sum();
     AssetInventoryDto {

@@ -103,40 +103,40 @@
            the dark-mode invisibility the external <img> SVG had. -->
       <svg
         class="brand-logomark"
-        viewBox="0 0 64 64"
+        viewBox="0 0 100 100"
         role="img"
         aria-label="Smriti"
       >
         <text
-          x="14"
-          y="48"
-          font-family="'Cormorant Garamond', Georgia, serif"
+          x="20"
+          y="78"
+          font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
           font-style="italic"
           font-weight="500"
-          font-size="56"
+          font-size="84"
           fill="currentColor"
         >s</text>
-        <circle cx="46" cy="20" r="5" fill="#c89968" />
+        <circle cx="78" cy="32" r="7" fill="#c89968" />
       </svg>
     {:else}
       <div class="brand">
         <svg
           class="brand-wordmark"
-          viewBox="0 0 220 56"
+          viewBox="0 0 320 100"
           role="img"
           aria-label="Smriti"
         >
           <text
-            x="2"
-            y="44"
-            font-family="'Cormorant Garamond', Georgia, serif"
+            x="20"
+            y="68"
+            font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
             font-style="italic"
             font-weight="500"
-            font-size="44"
+            font-size="64"
             fill="currentColor"
             letter-spacing="0.5"
           >smriti</text>
-          <circle cx="135" cy="14" r="4" fill="#c89968" />
+          <circle cx="195" cy="22" r="6" fill="#c89968" />
         </svg>
         <span class="brand-tagline">Photo library</span>
       </div>

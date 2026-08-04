@@ -41,8 +41,8 @@ matching assets being installed.
   and is stored in the user asset directory, not bundled into Smriti.
 - **Index visual search** — creates per-library image vectors under
   `<library>/.photovault/semantic`. It also requires the ONNX Runtime
-  installed by **Download assets**. It is resumable; rerun it after adding
-  new files.
+  installed by smart setup. It is resumable; the Welcome setup starts it
+  automatically and later scans pick up pending files.
 - **Recheck visual search** — refreshes the status counts shown in
   Settings.
 

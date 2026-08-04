@@ -83,10 +83,9 @@ Use `videos`, `video`, `photos`, or `photo` to filter media type.
 
 ## Visual Meaning
 
-Visual search is optional. Install the visual model from
-**Settings -> Assets -> Visual search** and install the runtime pack with
-**Download assets**, then run **Index visual search**. Smriti stores the
-model outside the app binary and stores per-library vectors under
+Visual search is optional. Click **Set up smart features** on Welcome;
+Smriti installs the local model and runtime, then indexes automatically.
+The model lives outside the app binary and per-library vectors stay under
 `.photovault/semantic`.
 
 When visual search is ready, natural queries such as:

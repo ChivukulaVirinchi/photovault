@@ -19,7 +19,7 @@
   <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Cormorant+Garamond:ital,wght@1,500&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root, :root[data-theme="light"] {
       --bg: #fafaf8; --bg-paper: #f4f5f3;
@@ -54,23 +54,18 @@
       text-align: center;
     }
     .brand {
-      font-family: "Fraunces", Georgia, serif;
-      font-style: italic;
-      font-size: 2.2rem;
-      font-weight: 500;
-      letter-spacing: -0.005em;
-      display: inline-block;
+      width: 176px;
       margin-bottom: 1.6rem;
       color: var(--ink);
-    }
-    .brand::after {
-      content: "";
       display: inline-block;
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: var(--accent);
-      margin-left: 8px;
-      vertical-align: middle;
+    }
+    .brand svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .brand .wordmark {
+      fill: currentColor;
     }
     .code {
       font-family: "JetBrains Mono", monospace;
@@ -151,7 +146,15 @@
 </head>
 <body>
   <article class="card">
-    <div class="brand">smriti</div>
+    <div class="brand">
+      <svg viewBox="0 0 320 100" role="img" aria-label="Smriti">
+        <text class="wordmark" x="20" y="68"
+              font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
+              font-style="italic" font-weight="500" font-size="64"
+              letter-spacing="0.5">smriti</text>
+        <circle cx="195" cy="22" r="6" fill="#c89968" />
+      </svg>
+    </div>
     <div class="code">404 — not found</div>
     <h1>That page is&nbsp;<em>forgotten.</em></h1>
     <p class="muted">

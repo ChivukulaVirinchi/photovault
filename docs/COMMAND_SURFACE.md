@@ -847,7 +847,7 @@ struct SettingsDto {
 |---|---|---|
 | `system.asset_health` | `{}` | `AssetHealthDto` |
 | `system.assets_inventory` | `{}` | `AssetInventoryDto` |
-| `system.install_assets` | `{}` | `{ job_id: String }` | installs runtime/model/geodata assets; emits `assets:progress`, `assets:complete` |
+| `system.install_assets` | `{}` | `{ job_id: String }` | one-click smart setup: installs and verifies runtime, face/geodata, and semantic model assets; emits `assets:progress`, `assets:complete`, then starts pending semantic indexing automatically |
 | `system.inference_provider` | `{}` | `String` | active inference provider label |
 | `system.test_gpu_bridge` | `{ url: String }` | `BridgeTestResult` | tests the optional user-owned GPU bridge |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |

@@ -52,6 +52,11 @@ const TOKENIZER_BYTES: u64 = 34_362_885;
 const PREPROCESS_BYTES: u64 = 154;
 const CONFIG_BYTES: u64 = 551;
 
+/// Total network payload for the optional local visual-search model pack.
+/// Exposed so setup surfaces can accurately disclose the one-time download.
+pub const SEMANTIC_MODEL_DOWNLOAD_BYTES: u64 =
+    VISUAL_MODEL_BYTES + TEXTUAL_MODEL_BYTES + TOKENIZER_BYTES + PREPROCESS_BYTES + CONFIG_BYTES;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticStatus {
     pub model_key: String,
@@ -211,6 +216,11 @@ impl SemanticSearchService {
         })
     }
 
+    /// Whether every file needed for local visual search is present.
+    pub fn model_assets_installed() -> bool {
+        Self::find_assets().is_some_and(|paths| paths.installed())
+    }
+
     pub async fn install_model_assets<F>(
         cancel: Option<&AtomicBool>,
         mut progress: F,
@@ -251,7 +261,7 @@ impl SemanticSearchService {
                 expected_size: CONFIG_BYTES,
             },
         ];
-        let total = assets.iter().map(|a| a.expected_size).sum::<u64>();
+        let total = SEMANTIC_MODEL_DOWNLOAD_BYTES;
         let mut completed = 0;
         for asset in assets {
             completed = download_asset(asset, completed, total, cancel, &mut progress).await?;
@@ -955,10 +965,19 @@ async fn download_asset<F>(
 where
     F: FnMut(&str, u64, Option<u64>) + Send,
 {
-    if asset.destination.exists() {
+    if asset
+        .destination
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == asset.expected_size)
+    {
         let completed = completed_before + asset.expected_size;
         progress(asset.stage, completed, Some(total_bytes));
         return Ok(completed);
+    }
+    if asset.destination.exists() {
+        tokio::fs::remove_file(&asset.destination)
+            .await
+            .map_err(|e| format!("failed replacing {}: {e}", asset.destination.display()))?;
     }
     if let Some(parent) = asset.destination.parent() {
         tokio::fs::create_dir_all(parent)
@@ -1012,6 +1031,13 @@ where
         .await
         .map_err(|e| format!("failed flushing {}: {e}", tmp.display()))?;
     drop(file);
+    if downloaded != asset.expected_size {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!(
+            "download size mismatch for {}: expected {} bytes, got {}",
+            asset.url, asset.expected_size, downloaded
+        ));
+    }
     tokio::fs::rename(&tmp, &asset.destination)
         .await
         .map_err(|e| format!("failed moving {}: {e}", asset.destination.display()))?;

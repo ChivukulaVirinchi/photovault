@@ -256,6 +256,7 @@ pub struct LibraryOpenResult {
 
 #[tauri::command]
 pub async fn library_open(
+    app: AppHandle,
     state: State<'_, AppState>,
     args: LibraryOpenArgs,
 ) -> CommandResult<LibraryOpenResult> {
@@ -313,7 +314,10 @@ pub async fn library_open(
     *state.unsupported_library.write().await = None;
     let mut guard = state.library.write().await;
     *guard = Some(open_library);
+    drop(guard);
     state.assistant.lock().await.sessions.clear();
+
+    super::semantic::maybe_start_semantic_indexing(app).await;
 
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
@@ -1461,7 +1465,8 @@ pub(crate) async fn run_post_scan_pipeline(
     }
 
     // Existing post-scan detections (duplicates, bursts) — already idempotent.
-    run_post_scan_detection(app, drive_root).await;
+    run_post_scan_detection(app.clone(), drive_root).await;
+    super::semantic::maybe_start_semantic_indexing(app).await;
 }
 
 /// Run duplicate + burst detection passes after a scan completes. Both

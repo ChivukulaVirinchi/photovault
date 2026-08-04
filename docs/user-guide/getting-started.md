@@ -21,10 +21,10 @@ close it.
 2. **Pick a library.** Drag a folder onto the window, or click
    **Browse** to pick one. Smriti remembers it and offers it again
    next time.
-3. **(Optional) Install the asset pack.** A first-run prompt may ask
-   to download ~300 MB of ONNX face-recognition models + the GeoNames
-   offline geocoding database. Declining is fine — face features and
-   place names are the only things gated on this. The rest of the app
+3. **(Optional) Set up smart features.** One click downloads and verifies
+   faces, offline place names, and visual search (about 1.8 GB, once).
+   Visual indexing starts automatically when a library is available and
+   catches up after future scans. Declining is fine; the rest of the app
    works without it.
 4. **Watch the scan.** The timeline populates live as photos are
    indexed. The first scan on a 10K-photo library typically takes

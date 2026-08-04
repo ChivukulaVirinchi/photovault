@@ -141,6 +141,10 @@ The `v*` tag triggers `.github/workflows/release.yml`, which:
   (`.dmg`) via the Tauri bundler.
 - Builds the optional `Smriti-Assets.zip` (face models + GeoNames +
   ORT).
+- Adds stable consumer download names (`Smriti-Windows-Setup.exe`,
+  `Smriti-macOS-Apple-Silicon.dmg`, `Smriti-Ubuntu-Debian-x64.deb`)
+  plus advanced MSI, AppImage, and RPM aliases. The website resolves these
+  directly so visitors do not need to understand release filenames.
 - Drafts a GitHub release with all artifacts attached.
 
 ### 5. Post-tag steps
