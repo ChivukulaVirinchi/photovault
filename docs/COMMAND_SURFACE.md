@@ -700,13 +700,20 @@ use their poster thumbnail, so thumbnail generation must have run first.
 | Command | Args | Returns |
 |---|---|---|
 | `memories.today` | `{}` | `Vec<MemoryCardDto>` |
+| `memories.surprise` | `{ album_id: Option<i64>, exclude_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` |
 | `memories.detail` | `{ memory_id: String }` | `{ card: MemoryCardDto, photos: Vec<PhotoSummaryDto> }` |
 | `memories.block_person` | `{ person_id: i64 }` | `()` | hides cards prominently featuring this cluster |
 | `memories.unblock_person` | `{ person_id: i64 }` | `()` |
 | `memories.blocked_people` | `{}` | `Vec<PersonDto>` | for settings UI |
 | `memories.save_as_album` | `{ memory_id: String, name: Option<String> }` | `AlbumDto` |
 
-`memories.today` is cheap enough (~50ms) that the frontend can poll on day-rollover client-side via a `setInterval`. No event channel needed.
+`memories.surprise` selects at most 36 photos from up to 12 days, with
+older days favored and up to three distinct photos per day. An album ID
+limits the scope (-1 selects Favorites); null uses the library. Up to
+256 recent/queued IDs are excluded, relaxing recent-history exclusions
+when the pool is exhausted. Trash, non-photo categories, videos and
+blocked-person photos remain excluded on every pass. No event channel
+or model inference is required.
 
 ### 7. `duplicates`
 

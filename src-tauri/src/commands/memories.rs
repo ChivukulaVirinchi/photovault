@@ -27,6 +27,51 @@ fn validated_album_name(name: String) -> CommandResult<String> {
     Ok(name)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MemoriesSurpriseArgs {
+    pub album_id: Option<i64>,
+    #[serde(default)]
+    pub exclude_ids: Vec<i64>,
+}
+
+#[tauri::command]
+pub async fn memories_surprise(
+    state: State<'_, AppState>,
+    args: MemoriesSurpriseArgs,
+) -> CommandResult<Vec<PhotoSummaryDto>> {
+    let db_path = {
+        let library = state.library.read().await;
+        let lib = library.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        let mut ids =
+            smriti::services::memories::surprise_photos(&conn, args.album_id, &args.exclude_ids)?;
+        // A small album can exhaust the recent-history window. Begin a
+        // fresh pass without immediately repeating the last queued photo.
+        if ids.is_empty() && !args.exclude_ids.is_empty() {
+            ids = smriti::services::memories::surprise_photos(
+                &conn,
+                args.album_id,
+                &args.exclude_ids[args.exclude_ids.len() - 1..],
+            )?;
+            if ids.is_empty() {
+                ids = smriti::services::memories::surprise_photos(&conn, args.album_id, &[])?;
+            }
+        }
+        let photos = smriti::db::PhotoRepo::new(&conn).get_by_ids(&ids)?;
+        let by_id: std::collections::HashMap<_, _> = photos.iter().map(|p| (p.id, p)).collect();
+        Ok(ids
+            .iter()
+            .filter_map(|id| by_id.get(id))
+            .map(|p| PhotoSummaryDto::from(*p))
+            .collect())
+    })
+    .await
+    .map_err(|error| CommandError::internal(format!("surprise worker failed: {error}")))?
+}
+
 #[tauri::command]
 pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<MemoryCardDto>> {
     if !smriti::config::AppConfig::load().memories_enabled {

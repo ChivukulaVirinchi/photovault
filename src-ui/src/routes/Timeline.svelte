@@ -44,6 +44,7 @@
   import { Check, Layers, Play, X } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
+  import SurpriseButton from "../lib/components/SurpriseButton.svelte";
 
   interface Props { revealId?: number | null }
   let { revealId = null }: Props = $props();
@@ -1365,6 +1366,7 @@
 </script>
 
 <PageHeader title="Timeline">
+  <SurpriseButton disabled={libraryStore.photoCount === 0} />
   <button class="icon-action" onclick={startTimelineSlideshow} disabled={items.length === 0} title="Start slideshow" aria-label="Start timeline slideshow">
     <Play size={15} strokeWidth={2} />
   </button>

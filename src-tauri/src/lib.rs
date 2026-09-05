@@ -133,6 +133,7 @@ pub fn run() {
             commands::semantic::semantic_similar_photos,
             // memories
             commands::memories::memories_today,
+            commands::memories::memories_surprise,
             commands::memories::memories_detail,
             commands::memories::memories_blocked_people,
             commands::memories::memories_block_person,

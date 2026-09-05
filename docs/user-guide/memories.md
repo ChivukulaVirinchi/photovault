@@ -1,5 +1,19 @@
 # Memories
 
+## Surprise me
+
+The ✨ button beside slideshow controls in Timeline and album headers starts
+an image-first, continuous slowshow. Timeline draws from the library; an album
+stays within that album. Older days get preference, with occasional related
+photos and duplicate suppression.
+
+The default is 12 seconds per image. Use the existing timing control,
+Space to pause, arrow keys to revisit a photo, and Escape to close.
+Date/place details appear briefly when known; there are no captions to write.
+Recent selections stay in local app storage, separately for each library.
+Blocked people are respected. A library with just one eligible photo shows
+it without autoplay; an empty eligible pool leaves the current view in place.
+
 Memories surfaces "*this day, N years ago*" style cards when you open
 Smriti. They're generated locally, on demand, when you visit the
 Memories view (or read the banner on the Timeline). Nothing is

@@ -1304,7 +1304,10 @@
     align-items: baseline;
     justify-content: space-between;
     gap: var(--s-3);
+    flex-wrap: wrap;
   }
+  .section-heading-row > div { flex: 1 1 280px; min-width: 0; }
+  .section-heading-row > button { flex: 0 0 auto; }
 
   label {
     display: grid;
@@ -1359,6 +1362,7 @@
     border-radius: var(--r-sm);
     color: var(--ink);
     text-decoration: none;
+    white-space: nowrap;
   }
   .inline-action:hover { background: var(--bg-paper); }
   .exclusion-list {

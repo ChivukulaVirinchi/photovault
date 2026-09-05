@@ -19,6 +19,7 @@
   import { Check, Download, FolderOpen, Play, X } from "lucide-svelte";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
+  import SurpriseButton from "../lib/components/SurpriseButton.svelte";
 
   interface Props { id: number }
   let { id }: Props = $props();
@@ -435,6 +436,7 @@
         <button class="ghost icon-action" onclick={startAlbumSlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start album slideshow">
           <Play size={15} strokeWidth={2} />
         </button>
+        <SurpriseButton albumId={id} label={a.name} disabled={a.photo_count === 0} />
         <button class="ghost export-action" onclick={exportAlbum} disabled={a.photo_count === 0 || exporting || actionBusy} title="Export album originals">
           <Download size={14} strokeWidth={1.9} />
           {exporting ? "Exporting" : "Export"}

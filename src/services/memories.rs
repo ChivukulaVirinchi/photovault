@@ -15,6 +15,82 @@ use crate::services::semantic::{SemanticIndexCache, SemanticSearchService, SEMAN
 
 pub type MemoryId = String;
 
+/// A bounded slowshow batch: sample days rather than photos so a huge
+/// burst cannot dominate. Older days get more chances, not exclusivity.
+pub fn surprise_photos(
+    conn: &Connection,
+    album_id: Option<i64>,
+    exclude_ids: &[i64],
+) -> SqliteResult<Vec<i64>> {
+    let excluded = serde_json::to_string(&exclude_ids.iter().rev().take(256).collect::<Vec<_>>())
+        .expect("integer IDs serialize");
+    let mut stmt = conn.prepare(
+        "WITH eligible AS MATERIALIZED (
+          SELECT p.id, p.file_hash, p.phash, p.is_favorite,
+                 COALESCE(p.width * p.height, 0) AS area,
+                 COALESCE(substr(p.date_taken, 1, 10), 'undated:' || p.id) AS day
+          FROM photos p
+          WHERE p.is_trashed = FALSE AND p.media_type = 'photo'
+            AND COALESCE(p.content_category, 'photo') = 'photo'
+            AND lower(p.file_name) NOT LIKE 'screenshot%'
+            AND (p.date_taken IS NULL OR substr(p.date_taken, 1, 10) <= date('now'))
+            AND (?1 IS NULL OR (?1 = -1 AND p.is_favorite = TRUE)
+                 OR EXISTS (SELECT 1 FROM album_photos ap WHERE ap.album_id = ?1 AND ap.photo_id = p.id))
+            AND p.id NOT IN (SELECT value FROM json_each(?2))
+            AND NOT EXISTS (
+              SELECT 1 FROM faces f JOIN memory_blocks mb
+              ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
+              WHERE f.photo_id = p.id)
+        ), days AS MATERIALIZED (
+          SELECT day, ((random() & 2147483647) + 1) /
+            CASE WHEN day < date('now', '-1 year') THEN 4 ELSE 1 END AS ticket
+          FROM eligible GROUP BY day ORDER BY ticket LIMIT 12
+        ), ranked AS (
+          SELECT e.*, d.ticket, row_number() OVER (
+            PARTITION BY e.day ORDER BY e.is_favorite DESC, e.area DESC, random()) AS rank
+          FROM eligible e JOIN days d ON e.day = d.day
+        )
+        SELECT id, file_hash, phash, day,
+          (SELECT group_id FROM duplicate_group_members WHERE photo_id = ranked.id LIMIT 1)
+        FROM ranked WHERE rank <= 8 ORDER BY ticket, day, rank"
+    )?;
+    let mut rows = stmt.query(params![album_id, excluded])?;
+    let mut ids = Vec::new();
+    let mut hashes = HashSet::new();
+    let mut phashes: Vec<u64> = Vec::new();
+    let mut groups = HashSet::new();
+    let mut per_day = HashMap::<String, usize>::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let hash: String = row.get(1)?;
+        let phash: Option<i64> = row.get(2)?;
+        let day: String = row.get(3)?;
+        let group: Option<i64> = row.get(4)?;
+        let count = per_day.entry(day).or_default();
+        if *count >= 3
+            || hashes.contains(&hash)
+            || group.is_some_and(|g| groups.contains(&g))
+            || phash.is_some_and(|h| {
+                phashes
+                    .iter()
+                    .any(|other| (*other ^ h as u64).count_ones() <= 4)
+            })
+        {
+            continue;
+        }
+        *count += 1;
+        hashes.insert(hash);
+        if let Some(hash) = phash {
+            phashes.push(hash as u64);
+        }
+        if let Some(group) = group {
+            groups.insert(group);
+        }
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {
     OnThisDay,
@@ -1116,6 +1192,49 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
         let cards = generate_for_today(&conn, today).unwrap();
         assert!(cards.is_empty());
+    }
+
+    #[test]
+    fn surprise_respects_scope_exclusions_and_safety_filters() {
+        let conn = fresh_db();
+        for id in 1..=7 {
+            insert_photo(&conn, id, "2017-11-12T12:00:00Z");
+        }
+        conn.execute_batch(
+            "UPDATE photos SET file_hash = CAST(id AS TEXT);
+             UPDATE photos SET is_trashed=TRUE WHERE id=2;
+             UPDATE photos SET media_type='video' WHERE id=3;
+             UPDATE photos SET content_category='screenshot' WHERE id=4;
+             INSERT INTO albums(id,name) VALUES(1,'Trip');
+             INSERT INTO album_photos(album_id,photo_id) VALUES(1,1),(1,2),(1,3),(1,4),(1,5);
+             UPDATE photos SET is_favorite=TRUE WHERE id=1;
+             INSERT INTO face_clusters(id,name) VALUES(1,'Blocked');
+             INSERT INTO faces(photo_id,bbox_x,bbox_y,bbox_width,bbox_height,confidence,embedding,cluster_id)
+             VALUES(5,0,0,1,1,0.9,zeroblob(16),1);
+             INSERT INTO memory_blocks(kind,target_key) VALUES('person','1');"
+        ).unwrap();
+        assert_eq!(surprise_photos(&conn, Some(1), &[]).unwrap(), vec![1]);
+        assert!(surprise_photos(&conn, Some(1), &[1]).unwrap().is_empty());
+        assert_eq!(surprise_photos(&conn, Some(-1), &[]).unwrap(), vec![1]);
+        assert!(surprise_photos(&conn, Some(999), &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn surprise_limits_moments_and_suppresses_duplicates() {
+        let conn = fresh_db();
+        for id in 1..=30 {
+            insert_photo(&conn, id, "2017-11-12T12:00:00Z");
+        }
+        conn.execute_batch("UPDATE photos SET file_hash=CAST(id AS TEXT)")
+            .unwrap();
+        let ids = surprise_photos(&conn, None, &[]).unwrap();
+        assert_eq!(ids.len(), 3);
+        conn.execute_batch("UPDATE photos SET file_hash='identical'")
+            .unwrap();
+        assert_eq!(surprise_photos(&conn, None, &[]).unwrap().len(), 1);
+        conn.execute_batch("UPDATE photos SET file_hash=CAST(id AS TEXT), phash=0")
+            .unwrap();
+        assert_eq!(surprise_photos(&conn, None, &[]).unwrap().len(), 1);
     }
 
     #[test]

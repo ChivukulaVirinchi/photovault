@@ -251,6 +251,7 @@ button {
   border: 1px solid var(--line);
   padding: 7px 14px;
   border-radius: var(--r-md);
+  white-space: nowrap;
   cursor: pointer;
   transition: background    var(--t-fast) var(--ease),
               border-color  var(--t-fast) var(--ease),

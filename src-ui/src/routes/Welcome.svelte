@@ -5,8 +5,7 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { library } from "../lib/api/library";
   import { commandErrorMessage } from "../lib/api";
-  import { systemEx, type AssetInventory } from "../lib/api/all";
-  import type { AssetHealthDto, PhotoSummaryDto } from "../lib/api/types";
+  import type { PhotoSummaryDto } from "../lib/api/types";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { thumbUrl } from "../lib/thumbnail";
 
@@ -20,30 +19,7 @@
   let compatLoaded = $state(false);
   let compatSeq = 0;
   let mounted = true;
-  let assetHealth = $state<AssetHealthDto | null>(null);
-  let assetInventory = $state<AssetInventory | null>(null);
-  let assetError = $state<string | null>(null);
-  let assetHealthLoading = $state(false);
-  const installingAssets = $derived(jobs.isRunning("assets"));
   const importingTakeout = $derived(jobs.isRunning("takeout"));
-  const assetsJob = $derived(jobs.byKind("assets"));
-  const semanticAssetIds = [
-    "vision.semantic.visual",
-    "vision.semantic.text",
-    "vision.semantic.tokenizer",
-    "vision.semantic.preprocess",
-    "vision.semantic.config",
-  ];
-  const smartFeaturesReady = $derived(Boolean(
-    assetHealth &&
-      !assetHealth.missing_face_models &&
-      !assetHealth.missing_onnx_runtime &&
-      !assetHealth.missing_geonames_db &&
-      semanticAssetIds.every((id) =>
-        assetInventory?.assets.some((asset) => asset.id === id && asset.active),
-      ),
-  ));
-  let handledAssetJobId: string | null = null;
 
   function shortRoot(p: string): string {
     const parts = p.split(/[\\/]/).filter(Boolean);
@@ -128,40 +104,6 @@
     finally { if (mounted) droppedPath = null; }
   }
 
-  async function loadAssetHealth() {
-    assetHealthLoading = true;
-    try {
-      const [health, inventory] = await Promise.all([
-        systemEx.assetHealth(),
-        systemEx.assetsInventory(),
-      ]);
-      if (mounted) {
-        assetHealth = health;
-        assetInventory = inventory;
-        assetError = null;
-      }
-    } catch (error) {
-      if (mounted) assetError = commandErrorMessage(error);
-    } finally {
-      if (mounted) assetHealthLoading = false;
-    }
-  }
-
-  async function installAssets() {
-    if (installingAssets) return;
-    assetError = null;
-    const placeholderId = `pending-assets-${Date.now()}`;
-    jobs.register(placeholderId, "assets");
-    try {
-      const result = await systemEx.installAssets();
-      jobs.dismiss(placeholderId);
-      jobs.register(result.job_id, "assets");
-    } catch (error) {
-      jobs.dismiss(placeholderId);
-      if (mounted) assetError = commandErrorMessage(error);
-    }
-  }
-
   const extraRemembered = $derived(
     libraryStore.remembered.filter(
       (p) => !libraryStore.drives.some((d) => d.path === p),
@@ -203,7 +145,6 @@
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     mounted = true;
-    void loadAssetHealth();
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (!mounted) return;
@@ -225,19 +166,6 @@
       mounted = false;
       unlisten?.();
     };
-  });
-
-  $effect(() => {
-    const job = assetsJob;
-    if (!job || job.id === handledAssetJobId) return;
-    if (job.status === "complete" || job.status === "error") {
-      handledAssetJobId = job.id;
-      if (job.status === "error") {
-        assetError = job.message || "Asset installation failed.";
-      } else {
-        void loadAssetHealth();
-      }
-    }
   });
 
   $effect(() => {
@@ -269,7 +197,6 @@
         {#if libraryStore.driveRoot}
           <p class="schema-note mono">{libraryStore.driveRoot}</p>
         {/if}
-        <a class="primary small-action" href="#/settings">Open Settings</a>
       </div>
       {#if libraryStore.unsupportedSchema}
         <section class="compat-preview">
@@ -302,23 +229,6 @@
       {/if}
     {:else if libraryStore.error}<p class="error">{libraryStore.error}</p>{/if}
     {#if pickError}<p class="error">{pickError}</p>{/if}
-
-    {#if assetHealth && assetInventory && !smartFeaturesReady}
-      <section class="asset-setup" aria-label="Optional smart feature setup">
-        <div class="asset-copy">
-          <strong>Enable faces, places, and visual search</strong>
-          <span>One click, about 1.8 GB downloaded once. Everything stays on this computer.</span>
-          {#if assetError}<span class="error">{assetError}</span>{/if}
-        </div>
-        <button class="primary" onclick={installAssets} disabled={installingAssets}>
-          {installingAssets ? "Setting things up…" : "Set up smart features"}
-        </button>
-      </section>
-    {:else if assetError}
-      <p class="error">Couldn't check smart features: {assetError}</p>
-    {:else if assetHealthLoading}
-      <p class="hint">Checking smart features…</p>
-    {/if}
 
     {#if extraRemembered.length > 0}
       <section>
@@ -370,19 +280,20 @@
       </section>
     {/if}
 
-    <div class="cta-row">
+    <div class="open-actions">
       <button class="primary cta" onclick={browseForFolder} disabled={libraryStore.loading}>
         Choose a folder
       </button>
-      <button
-        class="ghost settings-link"
-        onclick={() => startTakeoutImport()}
-        disabled={libraryStore.loading || importingTakeout}
-      >
-        {importingTakeout ? "Importing Google Photos" : "Import Google Photos"}
-      </button>
-      <a class="ghost settings-link" href="#/settings">Settings</a>
-      <span class="hint">or drop a folder / Takeout ZIPs</span>
+      <p class="hint takeout-note">
+        Or drop a folder here.
+        <button
+          class="takeout-link"
+          onclick={() => startTakeoutImport()}
+          disabled={libraryStore.loading || importingTakeout}
+        >
+          {importingTakeout ? "Importing Google Photos…" : "Import a Google Photos export"}
+        </button>
+      </p>
     </div>
   </div>
 
@@ -443,44 +354,32 @@
     margin: 0;
   }
 
-  .cta-row {
+  .open-actions {
     display: flex;
-    align-items: center;
-    gap: var(--s-4);
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-2);
   }
-  .primary.cta {
+  .cta {
     font-size: var(--t-base);
-    font-weight: 600;
     padding: 11px 22px;
   }
+  .primary.cta { font-weight: 600; }
+  .takeout-note { margin: 0; }
+  button.takeout-link {
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    color: var(--ink-soft);
+    font-size: inherit;
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  button.takeout-link:hover { background: transparent; color: var(--ink); }
   .hint {
     font-size: var(--t-sm);
     color: var(--ink-muted);
-  }
-  .asset-setup {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-4);
-    padding: var(--s-4) var(--s-5);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: var(--bg-paper);
-  }
-  .asset-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    color: var(--ink-soft);
-    font-size: var(--t-sm);
-    line-height: 1.4;
-  }
-  .asset-copy strong { color: var(--ink); }
-  .asset-copy .error { margin: var(--s-1) 0 0; }
-  .asset-setup button { flex-shrink: 0; }
-  @media (max-width: 620px) {
-    .asset-setup { align-items: stretch; flex-direction: column; }
   }
   .schema-error {
     display: flex;
@@ -534,28 +433,6 @@
     font-size: var(--t-sm);
     padding: 8px 12px;
   }
-  .small-action {
-    text-decoration: none;
-    font-size: var(--t-sm);
-    font-weight: 600;
-    padding: 8px 12px;
-  }
-  .settings-link {
-    text-decoration: none;
-    font-size: var(--t-base);
-    padding: 11px 16px;
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    background: transparent;
-    transition: background var(--t-fast) var(--ease),
-                border-color var(--t-fast) var(--ease);
-  }
-  .settings-link:hover {
-    background: var(--bg-paper);
-    border-color: var(--ink-faint);
-  }
-
   section {
     display: flex;
     flex-direction: column;

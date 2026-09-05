@@ -21,6 +21,7 @@
   import { thumbUrl } from "../thumbnail";
   import { libraryStore } from "../stores/library.svelte";
   import { decodeOffscreen } from "../decodeOffscreen";
+  import { memoryContext } from "../surpriseHistory";
   import type { PhotoDto } from "../api/types";
 
   // Stable double-buffer. We keep two <img> elements mounted at all
@@ -38,9 +39,14 @@
   let loadError = $state<string | null>(null);
   let chromeActive = $state(true);
   let stageEl = $state<HTMLElement | undefined>(undefined);
+  let dialogEl = $state<HTMLElement | undefined>(undefined);
   /// True once at least one image has been shown — gates auto-advance
   /// and lets the cold-start "loading..." disappear permanently.
   let booted = $state(false);
+  let loading = $state(false);
+  let introduction = $state(false);
+  let introduced = false;
+  const surprise = $derived(slideshow.kind === "surprise");
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let advanceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadSeq = 0;
@@ -52,6 +58,7 @@
   const currentId = $derived(slideshow.currentId());
   const position = $derived(slideshow.position());
   const frontPhoto = $derived(slots[frontIdx].photo);
+  const context = $derived(frontPhoto ? memoryContext(frontPhoto) : "");
   const frontUrl = $derived(slots[frontIdx].url);
   const backPhoto = $derived(slots[1 - frontIdx].photo);
   const backUrl = $derived(slots[1 - frontIdx].url);
@@ -104,6 +111,17 @@
 
   function onKey(e: KeyboardEvent) {
     if (!slideshow.active) return;
+    bumpChrome();
+    if (e.key === "Tab" && dialogEl) {
+      const controls = Array.from(dialogEl.querySelectorAll<HTMLElement>("button:not(:disabled), select, video[controls]"));
+      const first = controls[0], last = controls.at(-1);
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogEl)) {
+        e.preventDefault(); last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first?.focus();
+      }
+      return;
+    }
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
     switch (e.key) {
       case "Escape":
@@ -158,6 +176,7 @@
 
   async function loadSlide(id: number) {
     const seq = ++loadSeq;
+    loading = true;
     loadError = null;
     try {
       const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
@@ -174,6 +193,10 @@
       slots[backSlot] = { photo: p, url };
       frontIdx = backSlot;
       booted = true;
+      loading = false;
+      introduction = !introduced;
+      introduced = true;
+      slideshow.presented(id);
       void syncVideos();
       void preloadNeighbors();
       void slideshow.ensureMoreAhead();
@@ -181,6 +204,7 @@
       if (seq !== loadSeq) return;
       loadError = commandErrorMessage(e);
       booted = true;
+      loading = false;
     }
   }
 
@@ -242,6 +266,9 @@
     if (!slideshow.active) {
       loadSeq++;
       booted = false;
+      loading = false;
+      introduced = false;
+      introduction = false;
       loadError = null;
       pauseVideos();
       slots = [
@@ -261,8 +288,8 @@
   $effect(() => {
     void currentId;
     clearAdvanceTimer();
-    if (!slideshow.active || !slideshow.playing || !booted) return;
-    if (frontPhoto?.media_type === "video") {
+    if (!slideshow.active || !slideshow.playing || !booted || loading) return;
+    if (!loadError && frontPhoto?.media_type === "video") {
       void syncVideos();
       return clearAdvanceTimer;
     }
@@ -279,8 +306,13 @@
   $effect(() => {
     if (slideshow.active) {
       bumpChrome();
+      const previousFocus = document.activeElement;
+      void tick().then(() => { if (slideshow.active) dialogEl?.focus(); });
       window.addEventListener("keydown", onKey, { capture: true });
-      return () => window.removeEventListener("keydown", onKey, { capture: true });
+      return () => {
+        window.removeEventListener("keydown", onKey, { capture: true });
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+      };
     }
   });
 
@@ -294,12 +326,17 @@
 
 {#if slideshow.active}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <section
+  <div
     class="slideshow"
+    class:slowshow={surprise}
     class:active={chromeActive}
+    bind:this={dialogEl}
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
     onmousemove={bumpChrome}
     onpointerdown={bumpChrome}
-    aria-label="Slideshow"
+    aria-label={surprise ? "Surprise me slideshow" : "Slideshow"}
   >
     <div class="stage" bind:this={stageEl}>
       {#if thumb}
@@ -348,13 +385,24 @@
       {/if}
     </div>
 
+    {#if surprise && frontPhoto && !loadError && !loading}
+      {#key frontPhoto.id}
+        <div class="memory-context">
+          {#if introduction}<span class="memory-intro">Remember this?</span>{/if}
+          {#if context}<span>{context}</span>{/if}
+        </div>
+      {/key}
+    {/if}
+
     <div class="topbar">
       <button class="tool" onclick={close} title="Close (Esc)" aria-label="Close slideshow">
         <X size={17} strokeWidth={1.8} />
       </button>
       <div class="title">
-        <strong>{slideshow.label}</strong>
-        {#if frontPhoto}
+        <strong>{surprise ? "Surprise me" : slideshow.label}</strong>
+        {#if surprise}
+          <span>{slideshow.label}</span>
+        {:else if frontPhoto}
           <span class="mono" title={frontPhoto.file_name}>{frontPhoto.file_name}</span>
         {/if}
       </div>
@@ -401,6 +449,7 @@
           <option value="12000">12s</option>
         </select>
       </label>
+      {#if !surprise}
       <button class="control" class:on={slideshow.loop} onclick={() => slideshow.toggleLoop()} title="Loop slideshow" aria-label="Toggle loop">
         {#if slideshow.loop}
           <Repeat1 size={17} strokeWidth={1.8} />
@@ -408,17 +457,41 @@
           <Repeat size={17} strokeWidth={1.8} />
         {/if}
       </button>
+      {/if}
     </div>
 
-    {#if position}
+    {#if position && !surprise}
       <div class="progress mono">
         {position.index} / {position.total}{#if slideshow.loadingMore}+{/if}
       </div>
     {/if}
-  </section>
+  </div>
 {/if}
 
 <style>
+  .slowshow .slide-image {
+    transform: translate(-50%, -50%);
+    transition: opacity 900ms var(--ease);
+  }
+  .slowshow .slide-image.visible { transform: translate(-50%, -50%); }
+  .memory-context {
+    position: absolute; left: var(--s-5); right: var(--s-5); bottom: 88px;
+    z-index: 2; display: flex; flex-direction: column; gap: 4px;
+    align-items: center; text-align: center; pointer-events: none;
+    color: rgba(255,255,255,0.8); font-size: var(--t-sm);
+    text-shadow: 0 2px 12px rgba(0,0,0,0.9);
+    opacity: 0; animation: memory-context 5s var(--ease) both;
+  }
+  .memory-intro { font-family: var(--font-display); font-size: var(--t-lg); }
+  @keyframes memory-context {
+    0%, 100% { opacity: 0; }
+    12%, 70% { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slide-image, .slowshow .slide-image { transition: none; transform: translate(-50%, -50%); }
+    .slide-image.visible { transform: translate(-50%, -50%); }
+    .memory-context { animation-timing-function: steps(1, end); }
+  }
   .slideshow {
     position: fixed;
     inset: 0;
