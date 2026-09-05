@@ -44,8 +44,8 @@ copies and sidecar metadata. See
 - **Database** — at `<library>/.photovault/photovault.db`, on the same
   drive as the photos. Unplug the drive, plug it into another machine,
   point Smriti there: same library, same faces, same albums.
-- **Thumbnails** — at `<library>/.photovault/thumbnails/`, three sizes,
-  generated on demand.
+- **Thumbnails** — at `<library>/.photovault/thumbnails/`, three preview
+  sizes plus display renditions for supported non-browser formats.
 - **Application settings** — in your OS's user config directory
   (Linux: `~/.config/smriti/`, macOS:
   `~/Library/Application Support/smriti/`, Windows:

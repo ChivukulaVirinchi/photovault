@@ -21,6 +21,30 @@ async function flush() {
 }
 
 describe("thumbnailQueue priority handling", () => {
+  it("does not deliver an old library result to a reused photo id", async () => {
+    const old = deferred<string | null>();
+    let calls = 0;
+    const ready: string[] = [];
+    const queue = createThumbnailQueue(() => ++calls === 1 ? old.promise : Promise.resolve("new"), 1);
+    queue.enqueue(1, path => ready.push(`old:${path}`));
+    queue.reset();
+    queue.enqueue(1, path => ready.push(path));
+    old.resolve("stale");
+    await flush();
+    expect(ready).toEqual(["new"]);
+  });
+
+  it("unsubscribes a handler after its queued request starts", async () => {
+    const result = deferred<string | null>();
+    const ready: string[] = [];
+    const queue = createThumbnailQueue(() => result.promise);
+    const cancel = queue.enqueue(1, path => ready.push(path));
+    cancel();
+    result.resolve("unused");
+    await flush();
+    expect(ready).toEqual([]);
+  });
+
   it("runs the highest-priority queued item next after the in-flight one resolves", async () => {
     const first = deferred<string | null>();
     const second = deferred<string | null>();

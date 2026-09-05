@@ -225,6 +225,7 @@ pub async fn duplicates_run(
     state: State<'_, AppState>,
     args: DuplicatesRunArgs,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -305,32 +306,34 @@ pub async fn duplicates_run(
             });
             return;
         }
-        let exact = match DuplicateDetector::find_duplicates(&conn, &drive_root) {
-            Ok(groups) => groups,
-            Err(e) => {
-                tracing::error!("duplicates: exact pass failed: {}", e);
-                emit(
-                    &app_clone,
-                    EV_DUPLICATES_PROGRESS,
-                    JobProgress {
-                        job_id: job_id_clone.clone(),
-                        stage: "error".into(),
-                        processed: 0,
-                        total: None,
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        eta_ms: None,
-                        message: Some(format!("Duplicate detection failed: {e}")),
-                    },
-                );
-                let app_for_finish = app_clone.clone();
-                let finish_job_id = job_id_clone.clone();
-                finish_handle.spawn(async move {
-                    let st: tauri::State<AppState> = app_for_finish.state();
-                    jobs::finish_job(&st, &finish_job_id).await;
-                });
-                return;
-            }
-        };
+        let exact =
+            match DuplicateDetector::find_duplicates_cancellable(&conn, &drive_root, Some(&cancel))
+            {
+                Ok(groups) => groups,
+                Err(e) => {
+                    tracing::error!("duplicates: exact pass failed: {}", e);
+                    emit(
+                        &app_clone,
+                        EV_DUPLICATES_PROGRESS,
+                        JobProgress {
+                            job_id: job_id_clone.clone(),
+                            stage: "error".into(),
+                            processed: 0,
+                            total: None,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            eta_ms: None,
+                            message: Some(format!("Duplicate detection failed: {e}")),
+                        },
+                    );
+                    let app_for_finish = app_clone.clone();
+                    let finish_job_id = job_id_clone.clone();
+                    finish_handle.spawn(async move {
+                        let st: tauri::State<AppState> = app_for_finish.state();
+                        jobs::finish_job(&st, &finish_job_id).await;
+                    });
+                    return;
+                }
+            };
         let mut groups_found = exact.len();
         let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
             Vec::with_capacity(exact.len());

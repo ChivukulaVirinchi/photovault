@@ -51,18 +51,16 @@ pub fn db_path_for(drive_root: &Path) -> PathBuf {
     library_metadata_dir(drive_root).join("photovault.db")
 }
 
-/// Returns the map tile cache directory for a drive root.
-pub fn tile_cache_dir(drive_root: &Path) -> PathBuf {
-    library_metadata_dir(drive_root).join("tile_cache")
-}
-
 /// Open a fresh connection to an existing Smriti database.
 ///
 /// Configures the same WAL / cache pragmas as `open_for_drive` so
 /// background detection tasks see the same performance profile.
 /// Returns an error if the path doesn't exist or can't be opened.
 pub fn open_secondary(db_path: &Path) -> Result<Connection, DatabaseError> {
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     Database::configure_connection(&conn)?;
     Ok(conn)
 }
@@ -191,8 +189,14 @@ impl Database {
 
     /// Create a backup of the database file.
     ///
-    /// Copies the DB to `<db_path>.backup`. Keeps up to `max_backups` copies.
+    /// Takes a consistent SQLite snapshot, including committed WAL transactions.
     pub fn backup(drive_root: &Path, max_backups: usize) -> std::io::Result<PathBuf> {
+        if max_backups == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "max_backups must be positive",
+            ));
+        }
         let db_path = library_metadata_dir(drive_root).join("photovault.db");
         if !db_path.exists() {
             return Err(std::io::Error::new(
@@ -205,10 +209,12 @@ impl Database {
         std::fs::create_dir_all(&backup_dir)?;
 
         // Name with timestamp
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
         let backup_path = backup_dir.join(format!("photovault_{}.db", timestamp));
 
-        std::fs::copy(&db_path, &backup_path)?;
+        let conn = open_secondary(&db_path).map_err(std::io::Error::other)?;
+        conn.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])
+            .map_err(std::io::Error::other)?;
 
         // Clean old backups (keep max_backups newest)
         let mut backups: Vec<_> = std::fs::read_dir(&backup_dir)?

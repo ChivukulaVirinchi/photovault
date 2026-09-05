@@ -55,19 +55,9 @@ impl Reindexer {
     }
 
     pub fn new_with_options(scan_hidden_folders: bool) -> Self {
-        // Keep this list in sync with scanner.rs's SUPPORTED_EXTENSIONS.
-        // The reindexer walks the same files as a fresh scan, so they
-        // need identical allowlists or the reindex misses formats the
-        // scanner indexes.
+        // Share format support with the initial scanner.
         let mut supported_extensions = HashSet::new();
-        for ext in [
-            // Stills
-            "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
-            // RAWs (TIFF-based, embedded-JPEG path)
-            "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
-            // Videos
-            "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2", "mts", "m2ts",
-        ] {
+        for ext in crate::services::scanner::SUPPORTED_EXTENSIONS {
             supported_extensions.insert(ext.to_string());
         }
 
@@ -90,6 +80,13 @@ impl Reindexer {
         conn: &Connection,
         drive_root: &Path,
     ) -> SqliteResult<IndexChanges> {
+        let metadata = fs::metadata(drive_root)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if !metadata.is_dir() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "library root is not a directory".into(),
+            ));
+        }
         let mut changes = IndexChanges::default();
         let exclusions = ExclusionMatcher::from_db(conn)?;
 
@@ -98,13 +95,14 @@ impl Reindexer {
         conn.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS found_files (
                 path TEXT PRIMARY KEY,
-                mtime INTEGER
+                mtime INTEGER,
+                size INTEGER
             );
             DELETE FROM found_files;",
         )?;
 
-        let mut insert_stmt =
-            conn.prepare("INSERT OR IGNORE INTO found_files (path, mtime) VALUES (?1, ?2)")?;
+        let mut insert_stmt = conn
+            .prepare("INSERT OR IGNORE INTO found_files (path, mtime, size) VALUES (?1, ?2, ?3)")?;
 
         for entry in WalkDir::new(drive_root)
             .follow_links(false)
@@ -113,7 +111,7 @@ impl Reindexer {
         {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
             };
 
             if !entry.file_type().is_file() {
@@ -140,7 +138,7 @@ impl Reindexer {
 
             let metadata = match fs::metadata(entry.path()) {
                 Ok(metadata) => metadata,
-                Err(_) => continue,
+                Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
             };
             let mtime = metadata
                 .modified()
@@ -148,7 +146,7 @@ impl Reindexer {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64);
 
-            insert_stmt.execute(params![relative_path, mtime])?;
+            insert_stmt.execute(params![relative_path, mtime, metadata.len() as i64])?;
         }
         drop(insert_stmt);
 
@@ -156,7 +154,7 @@ impl Reindexer {
         {
             let mut stmt = conn.prepare(
                 "SELECT f.path FROM temp.found_files f
-                 LEFT JOIN photos p ON p.file_path = f.path AND p.is_trashed = FALSE
+                 LEFT JOIN photos p ON p.file_path = f.path
                  WHERE p.id IS NULL",
             )?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -174,8 +172,7 @@ impl Reindexer {
                 "SELECT p.id, p.file_path FROM photos p
                  INNER JOIN temp.found_files f ON f.path = p.file_path
                  WHERE p.is_trashed = FALSE
-                   AND f.mtime IS NOT NULL
-                   AND (p.file_mtime IS NULL OR f.mtime > p.file_mtime)",
+                   AND (f.mtime IS NOT p.file_mtime OR f.size != p.file_size)",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -299,18 +296,9 @@ impl Reindexer {
             result.moves_applied += 1;
         }
 
-        for (photo_id, path) in &changes.removed {
-            let original_path = path.to_string_lossy().to_string();
-            tx.execute(
-                "INSERT OR IGNORE INTO trash (photo_id, original_path) VALUES (?1, ?2)",
-                params![photo_id, original_path],
-            )?;
-            tx.execute(
-                "UPDATE photos SET is_trashed = TRUE, trashed_at = CURRENT_TIMESTAMP WHERE id = ?1",
-                params![photo_id],
-            )?;
-            result.removals_applied += 1;
-        }
+        let removed_ids: Vec<_> = changes.removed.iter().map(|(id, _)| *id).collect();
+        result.removals_applied =
+            crate::services::trash::TrashService::trash_photos_tx(&tx, &removed_ids)?;
 
         for (photo_id, path) in &changes.modified {
             clear_face_derivatives_for_photo(&tx, *photo_id)?;
@@ -337,22 +325,80 @@ impl Reindexer {
                         thumbnailed = FALSE,
                         thumbnail_path = NULL,
                         faces_processed = FALSE,
+                        phash = NULL,
+                        brightness = NULL,
+                        ocr_text = NULL,
+                        ocr_processed = FALSE,
                         updated_at = CURRENT_TIMESTAMP
                   WHERE id = ?1",
                 params![photo_id, file_size, file_mtime, file_hash],
             )?;
             result.updates_applied += 1;
+            tx.execute(
+                "DELETE FROM semantic_index_state WHERE photo_id = ?1",
+                [photo_id],
+            )?;
         }
 
+        if !changes.added.is_empty() {
+            let db_path: String = tx.query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )?;
+            let root = Path::new(&db_path)
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "new files require an on-disk library database".into(),
+                    )
+                })?;
+            let mut insert = tx.prepare(
+                "INSERT INTO photos(file_path,file_name,file_hash,file_size,file_mtime,media_type)
+                VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(file_path) DO NOTHING",
+            )?;
+            for path in &changes.added {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                let relative = crate::services::path_util::relative_path_for_storage(relative);
+                crate::services::path_util::safe_existing_path_under_root(root, &relative)
+                    .map_err(rusqlite::Error::InvalidParameterName)?;
+                let metadata = fs::metadata(path)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|time| time.as_secs() as i64);
+                let hash = calculate_fast_hash(path, metadata.len(), mtime)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                let media_type =
+                    crate::services::scanner::media_type_for_path(path).ok_or_else(|| {
+                        rusqlite::Error::InvalidParameterName("unsupported media file".into())
+                    })?;
+                result.new_files += insert.execute(params![
+                    relative,
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    hash,
+                    metadata.len() as i64,
+                    mtime,
+                    media_type.as_str()
+                ])?;
+            }
+        }
         tx.commit()?;
         if !changes.modified.is_empty() {
             FaceRepo::new(conn).normalize_cluster_stats()?;
         }
-        result.new_files = changes.added.len();
         Ok(result)
     }
 
     fn should_skip(&self, drive_root: &Path, path: &Path, exclusions: &ExclusionMatcher) -> bool {
+        if path == drive_root {
+            return false;
+        }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !self.scan_hidden_folders && name.starts_with('.') {
             return true;

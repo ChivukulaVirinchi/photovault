@@ -23,7 +23,7 @@
 
 - [Build from Source](BUILD.md)
 - [Testing](TESTING.md)
-- [Contributing](CONTRIBUTING.md)
+- [Release Checklist](RELEASE_CHECKLIST.md)
 - [Linux Release Guide](RELEASE_LINUX.md)
 - [Architecture Overview](architecture/overview.md)
 - [Database](architecture/database.md)

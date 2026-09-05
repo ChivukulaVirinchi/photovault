@@ -240,7 +240,9 @@
     };
     probe.onerror = () => {
       clearTimeout(timer);
-      /* leave the old image visible; nothing we can do */
+      if (!mounted || seq !== loadSeq) return;
+      displayedSrc = target;
+      displayedAlt = `Unable to display: ${alt}`;
     };
     probe.src = target;
     if (probe.complete) {

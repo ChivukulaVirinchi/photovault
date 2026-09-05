@@ -279,6 +279,37 @@ fn unique_export_folder(root: &Path, preferred_name: &str) -> PathBuf {
     root.join(format!("{base} {}", chrono::Utc::now().timestamp()))
 }
 
+fn write_export_file(
+    mut source: impl std::io::Read,
+    destination: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing export directory"))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    let mut buffer = [0u8; 65536];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "export cancelled",
+            ));
+        }
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        staged.write_all(&buffer[..count])?;
+    }
+    staged.as_file().sync_all()?;
+    staged
+        .persist_noclobber(destination)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
 fn unique_file_path(folder: &Path, file_name: &str, reserved: &mut HashSet<String>) -> PathBuf {
     let fallback = "photo".to_string();
     let clean_name = sanitize_export_folder_name(file_name);
@@ -460,6 +491,7 @@ pub async fn albums_export(
     state: State<'_, AppState>,
     args: AlbumsExportArgs,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     if state
         .jobs
         .lock()
@@ -584,7 +616,9 @@ pub async fn albums_export(
                 }
             };
             let dest = unique_file_path(&export_folder_clone, &item.file_name, &mut reserved);
-            match std::fs::copy(&source_path, &dest) {
+            match std::fs::File::open(&source_path)
+                .and_then(|source| write_export_file(source, &dest, &cancel))
+            {
                 Ok(_) => exported += 1,
                 Err(err) => {
                     failed += 1;
@@ -922,6 +956,7 @@ pub async fn albums_suggestions_run_detection(
     state: State<'_, AppState>,
     args: AlbumsSuggestionsRunDetectionArgs,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -1249,5 +1284,32 @@ mod tests {
                 assert!(resolve_export_source(root.path(), &escaped).is_err());
             }
         }
+    }
+    #[test]
+    fn export_failure_never_publishes_partial_data_or_overwrites_files() {
+        use std::sync::atomic::AtomicBool;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("photo.jpg");
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&destination, b"existing").unwrap();
+        assert!(write_export_file(&b"replacement"[..], &destination, &cancel).is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        let new_destination = dir.path().join("new.jpg");
+        struct BrokenReader(bool);
+        impl std::io::Read for BrokenReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::Error::other("injected read failure"));
+                }
+                self.0 = true;
+                buf[0] = 1;
+                Ok(1)
+            }
+        }
+        assert!(write_export_file(BrokenReader(false), &new_destination, &cancel).is_err());
+        assert!(!new_destination.exists());
+        cancel.store(true, Ordering::Relaxed);
+        assert!(write_export_file(&b"photo"[..], &new_destination, &cancel).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

@@ -159,10 +159,9 @@ While the workflow runs (~15–30 minutes):
 
 #### For release-candidate (`-rc.N`) tags
 
-- [ ] **Manually toggle "Set as a pre-release"** on the draft release
-      UI. The current `release.yml` has `prerelease: false` hardcoded
-      for every tag — fine for stable but wrong for rc. Once toggled
-      to pre-release, the website's `/releases/latest/download/...`
+- [ ] Confirm the draft is marked as a pre-release. The workflow
+      detects the SemVer prerelease separator in the tag. For a
+      pre-release, the website's `/releases/latest/download/...`
       links keep pointing at the previous *stable* (which is what
       you want — rc users come find rc explicitly).
 
@@ -171,6 +170,29 @@ While the workflow runs (~15–30 minutes):
 - [ ] Install at least one artifact on a clean VM. CI smoke tests
       cover binary launch; eye-on verification catches first-run UX
       regressions.
+- [ ] On supported OSes, exercise open → scan → detail → slideshow →
+      trash → restore → close/reopen, rapid library switching, and
+      Timeline paging/selection/scroll anchors.
+- [ ] Use real RAW/HEIC/TIFF/video files and actual ONNX inference.
+      Verify CSP, removable-drive asset access and offline behavior
+      in both Map and photo minimaps; inspect optional network traffic.
+- [ ] Verify OS credential set/change/clear, legacy-key migration and
+      locked/unavailable-store errors. Unit tests use a mock store.
+- [ ] Exercise disk-full and interrupted import/export/delete on target
+      filesystems, including Windows junctions. SQL failure tests are
+      not power-loss certification.
+- [ ] Verify upgrades from retained historical library fixtures and
+      restore a backup. Recent migration tests do not cover every
+      historical schema.
+- [ ] Verify installer/update failure paths and trusted signing.
+      Signing keys/certificates require maintainer setup; unsigned
+      checksums alone do not establish authenticity.
+- [ ] Confirm hosted dependency-audit jobs pass. The local CI script
+      does not run Rust advisory/license audits.
+
+Decoder timeout checks are cooperative: they cannot interrupt a native
+decoder inside a call. Include corrupt/oversized media in native testing;
+do not interpret a timeout setting as process isolation.
 
 ### 6. Publish
 
@@ -206,9 +228,9 @@ patch releases and rc releases follow the same path.
 **Settings → Branches → Add branch protection rule** for `master`.
 
 - [ ] Require PR before merging (1 approval is fine for a solo project).
-- [ ] Require status checks: `Format`, `Quality (ubuntu-latest)`,
-      `Quality (windows-latest)`, `Quality (macos-latest)`,
-      `Security advisories`, `Dependency policy`.
+- [ ] Require status checks matching the current CI workflow:
+      `Format`, `Quality ubuntu-latest`, `Quality windows-latest`,
+      `Quality macos-latest`, `MSRV (1.88)` and `Supply chain (audit + deny)`.
 - [ ] Require branches up-to-date before merging.
 - [ ] Include administrators.
 
@@ -234,22 +256,6 @@ patch releases and rc releases follow the same path.
 - [ ] **Settings → Pages → Source: GitHub Actions** (not "Deploy
       from a branch"). `.github/workflows/docs.yml` uses
       `actions/deploy-pages` and needs this setting.
-
----
-
-## Future polish (not blocking)
-
-- **Auto-detect rc tags** in `release.yml` and set `prerelease: true`
-  for tags matching `*-rc.*` / `*-beta.*`. Removes the manual toggle.
-- **Homebrew tap** — `gh repo create ChivukulaVirinchi/homebrew-smriti
-  --public`. Auto-maintained once the first stable release is published.
-- **winget** — fork `microsoft/winget-pkgs`, write the first manifest
-  by hand. After acceptance `winget-create` can auto-submit PRs.
-- **Flathub** — write `in.smriti.app.yaml`, open a PR against
-  `flathub/flathub`. Review usually 1-2 weeks.
-- **AUR package** — `PKGBUILD` against the `.tar.gz` artifact.
-- **Code signing** — Authenticode ($80-400/yr), Apple Developer ID
-  ($99/yr). Skip until donations cover the cost.
 
 ---
 

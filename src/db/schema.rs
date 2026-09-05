@@ -12,9 +12,31 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// This should be called once when initializing a new database.
 pub fn create_schema(conn: &Connection) -> SqliteResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute_batch(SEMANTIC_REVISION_SQL)?;
     tracing::info!("Database schema created successfully");
     Ok(())
 }
+
+pub(crate) const SEMANTIC_REVISION_SQL: &str = "
+CREATE TABLE IF NOT EXISTS semantic_revision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL);
+INSERT OR IGNORE INTO semantic_revision VALUES (1, 0);
+CREATE TRIGGER IF NOT EXISTS semantic_revision_insert AFTER INSERT ON semantic_index_state BEGIN
+    UPDATE semantic_revision SET revision = revision + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS semantic_revision_update AFTER UPDATE ON semantic_index_state BEGIN
+    UPDATE semantic_revision SET revision = revision + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS semantic_revision_delete AFTER DELETE ON semantic_index_state BEGIN
+    UPDATE semantic_revision SET revision = revision + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS semantic_revision_visibility AFTER UPDATE OF is_trashed ON photos
+WHEN old.is_trashed IS NOT new.is_trashed BEGIN
+    UPDATE semantic_revision SET revision = revision + 1 WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS semantic_revision_photo_delete AFTER DELETE ON photos BEGIN
+    UPDATE semantic_revision SET revision = revision + 1 WHERE id = 1;
+END;
+";
 
 const SCHEMA_SQL: &str = r#"
 -- ============================================================
@@ -26,7 +48,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (28);
+INSERT INTO schema_version (version) VALUES (30);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -430,11 +452,12 @@ CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
-    UPDATE photos_fts SET ocr_text = COALESCE(new.ocr_text, '') WHERE rowid = new.id;
+    INSERT INTO photos_fts(photos_fts, rowid, ocr_text) VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
+    INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
-    DELETE FROM photos_fts WHERE rowid = old.id;
+    INSERT INTO photos_fts(photos_fts, rowid, ocr_text) VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
 END;
 
 -- ============================================================

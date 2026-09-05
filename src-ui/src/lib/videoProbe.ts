@@ -7,7 +7,7 @@ const VIDEO_METADATA_TIMEOUT_MS = 8_000;
 const VIDEO_SEEK_TIMEOUT_MS = 5_000;
 
 export async function probeVideoPoster(id: number): Promise<string | null> {
-  const { absolute_path } = await library.resolvePath(id);
+  const { absolute_path, library_session_id, file_hash } = await library.resolvePath(id);
   const src = convertFileSrc(absolute_path);
   const video = document.createElement("video");
   video.preload = "metadata";
@@ -25,6 +25,8 @@ export async function probeVideoPoster(id: number): Promise<string | null> {
     const posterBase64 = await capturePoster(video);
     const result = await photos.saveVideoProbe({
       id,
+      library_session_id,
+      file_hash,
       duration_ms: durationMs,
       width,
       height,

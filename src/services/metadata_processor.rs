@@ -94,24 +94,54 @@ async fn run_metadata_job(
         }
 
         let root = drive_root.clone();
-        let extracted: Vec<(i64, String, ExtractedMetadata)> = chunk
-            .par_iter()
-            .map(|(id, rel_path, file_hash)| {
-                let abs = match crate::services::path_util::safe_join_relative(&root, rel_path) {
-                    Ok(abs) => abs,
-                    Err(e) => {
-                        tracing::debug!("metadata skipped unsafe path for photo_id={id}: {e}");
-                        return (*id, file_hash.clone(), ExtractedMetadata::Skipped);
-                    }
-                };
-                let meta = match media_type_for_path(&abs).unwrap_or_default() {
-                    MediaType::Video => ExtractedMetadata::Video(VideoMetadata::from_path(&abs)),
-                    MediaType::Photo => {
-                        ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
-                    }
-                };
-                (*id, file_hash.clone(), meta)
+        let extracted =
+            tokio::task::spawn_blocking(move || -> Vec<(i64, String, ExtractedMetadata)> {
+                chunk
+                    .par_iter()
+                    .map(|(id, rel_path, file_hash)| {
+                        let abs =
+                            match crate::services::path_util::safe_join_relative(&root, rel_path) {
+                                Ok(abs) => abs,
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "metadata skipped unsafe path for photo_id={id}: {e}"
+                                    );
+                                    return (*id, file_hash.clone(), ExtractedMetadata::Skipped);
+                                }
+                            };
+                        let meta = match media_type_for_path(&abs).unwrap_or_default() {
+                            MediaType::Video => {
+                                ExtractedMetadata::Video(VideoMetadata::from_path(&abs))
+                            }
+                            MediaType::Photo => {
+                                ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
+                            }
+                        };
+                        (*id, file_hash.clone(), meta)
+                    })
+                    .collect()
             })
+            .await;
+        let extracted = match extracted {
+            Ok(extracted) => extracted,
+            Err(error) => {
+                hard_error = Some(format!("metadata worker failed: {error}"));
+                break;
+            }
+        };
+
+        // Geocoding can query another database; do it before taking the writer lock.
+        let locations: Vec<_> = extracted
+            .iter()
+            .map(
+                |(_, _, meta)| match (meta.gps_latitude(), meta.gps_longitude(), &geocoder) {
+                    (Some(lat), Some(lon), Some(g)) => g
+                        .reverse_geocode(lat, lon)
+                        .map(|r| (Some(r.city), Some(r.country)))
+                        .unwrap_or((None, None)),
+                    _ => (None, None),
+                },
+            )
             .collect();
 
         let mut errors_this_chunk = 0usize;
@@ -126,7 +156,7 @@ async fn run_metadata_job(
                 }
             };
 
-            for (id, file_hash, meta) in &extracted {
+            for ((id, file_hash, meta), (city, country)) in extracted.iter().zip(&locations) {
                 if matches!(meta, ExtractedMetadata::Skipped) {
                     errors_this_chunk += 1;
                     failed_ids.insert(*id);
@@ -134,14 +164,6 @@ async fn run_metadata_job(
                 }
                 let gps_latitude = meta.gps_latitude();
                 let gps_longitude = meta.gps_longitude();
-                let (city, country): (Option<String>, Option<String>) =
-                    match (gps_latitude, gps_longitude, &geocoder) {
-                        (Some(lat), Some(lon), Some(g)) => g
-                            .reverse_geocode(lat, lon)
-                            .map(|r| (Some(r.city), Some(r.country)))
-                            .unwrap_or((None, None)),
-                        _ => (None, None),
-                    };
 
                 let res = tx.execute(
                     "UPDATE photos SET
@@ -222,7 +244,7 @@ async fn run_metadata_job(
             }
         }
 
-        done += (chunk.len() - errors_this_chunk) as u64;
+        done += (extracted.len() - errors_this_chunk) as u64;
         let _ = progress_tx.try_send(MetadataProgress {
             total,
             done,

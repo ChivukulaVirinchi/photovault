@@ -144,7 +144,7 @@
       urlCache.set(id, cached);
       return cached;
     }
-    const { absolute_path } = await library.resolvePath(id);
+    const { absolute_path } = await library.resolvePath(id, true);
     const url = convertFileSrc(absolute_path);
     urlCache.set(id, url);
     while (urlCache.size > URL_CACHE_CAP) {

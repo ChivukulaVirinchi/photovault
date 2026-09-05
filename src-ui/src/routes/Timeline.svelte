@@ -7,6 +7,7 @@
   let cachedTimeline:
     | {
         driveRoot: string | null;
+        session: number;
         items: CachedPhotoSummaryDto[];
         nextCursor: string | null;
         hasMore: boolean;
@@ -22,7 +23,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
   import { photos } from "../lib/api/photos";
@@ -48,8 +49,9 @@
   let { revealId = null }: Props = $props();
 
   const currentDriveRoot = libraryStore.driveRoot;
+  const currentSession = libraryStore.session;
   const currentTimelineCache =
-    cachedTimeline?.driveRoot === currentDriveRoot ? cachedTimeline : null;
+    cachedTimeline?.driveRoot === currentDriveRoot && cachedTimeline.session === currentSession ? cachedTimeline : null;
   const scrollStorageKey = `scroll:/timeline:${currentDriveRoot ?? "closed"}`;
   const returnAnchorKey = `return-anchor:/timeline:${currentDriveRoot ?? "closed"}`;
   const thumbnailPromptDismissKey = `dismiss:/timeline-thumbnails:${currentDriveRoot ?? "closed"}`;
@@ -75,6 +77,7 @@
   /// runway between loadMore calls — on big libraries (50k+) the old
   /// 720 made the scrollbar feel like it was constantly catching up.
   const PAGE_LIMIT = 2000;
+  const RETAINED_PAGE_LIMIT = 3;
   /// Trigger loadMore when the virtualizer's `last` is within this
   /// many rows of the end. Bigger than the page size of label rows
   /// so we always start the next page well before the user runs out.
@@ -185,6 +188,7 @@
   function saveTimelineCache() {
     cachedTimeline = {
       driveRoot: currentDriveRoot,
+      session: currentSession,
       items,
       nextCursor,
       hasMore,
@@ -343,9 +347,6 @@
     const removed = before - items.length;
     browseContext.remove(ids);
     if (total !== null && removed > 0) total = Math.max(0, total - removed);
-    if (removed > 0 && windowStartIndex > 0) {
-      windowStartIndex = Math.max(0, windowStartIndex - removed);
-    }
     saveTimelineCache();
   }
 
@@ -427,12 +428,29 @@
       const page = await photos.list({ cursor: nextCursor, limit: PAGE_LIMIT });
       if (!mounted || seq !== pageSeq) return false;
       const fresh = page.items.map((p) => p.id);
+      const anchorRowIndex = rows.findIndex((row, index) => index >= v.first && row.kind === "photos");
+      const anchorRow = rows[anchorRowIndex];
+      const anchorId = anchorRow?.kind === "photos" ? anchorRow.photos[0]?.id : undefined;
+      const anchorOffset = v.offsets[anchorRowIndex] ?? 0;
+      const previousScroll = scrollEl?.scrollTop ?? 0;
       items = items.concat(page.items);
       if (nextCursor === null && windowStartIndex === 0) browseContext.set("timeline", fresh);
       else                                               browseContext.extend(fresh);
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       if (page.total !== null) total = page.total;
+      const excess = items.length - PAGE_LIMIT * RETAINED_PAGE_LIMIT;
+      const anchorIndex = anchorId == null ? -1 : items.findIndex(photo => photo.id === anchorId);
+      if (excess > 0 && anchorIndex >= excess) {
+        items = items.slice(excess);
+        windowStartIndex += excess;
+        focusedIdx = Math.max(-1, focusedIdx - excess);
+        browseContext.set("timeline", items.map(photo => photo.id));
+        await tick();
+        if (!mounted || seq !== pageSeq) return false;
+        const newRowIndex = rowIndexForPhoto(anchorId!);
+        if (newRowIndex >= 0) setTimelineScrollTop(previousScroll + (v.offsets[newRowIndex] ?? 0) - anchorOffset);
+      }
       saveTimelineCache();
       return page.items.length > 0;
     } catch (e: unknown) {
@@ -472,7 +490,7 @@
     jobs.register(placeholderId, "scan");
     toasts.success("Scanning library — feel free to navigate away.");
     try {
-      const r = await library.startScan(false);
+      const r = await library.startScan();
       jobs.dismiss(placeholderId);
       if (!sameLibrary(root)) return;
       jobs.register(r.job_id, "scan");
@@ -560,15 +578,15 @@
     let bucket: PhotoSummaryDto[] = [];
     let bucketFirstIso: string | null = null;
     const flush = () => {
-      while (bucket.length > 0) {
+      for (let start = 0; start < bucket.length; start += C) {
         out.push({
           kind: "photos",
           height: RH,
-          photos: bucket.slice(0, C),
+          photos: bucket.slice(start, start + C),
           firstIso: bucketFirstIso,
         });
-        bucket = bucket.slice(C);
       }
+      bucket = [];
     };
     for (const p of items) {
       const k = bucketKey(p.date_taken, zoom);

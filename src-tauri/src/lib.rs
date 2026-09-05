@@ -176,9 +176,6 @@ pub fn run() {
             commands::map::map_pins,
             commands::map::map_pins_all,
             commands::map::map_cluster_filmstrip,
-            commands::map::map_tile_cache_stats,
-            commands::map::map_tile_cache_set_limit,
-            commands::map::map_tile_cache_clear,
             // insights
             commands::insights::insights_compute,
             commands::insights::insights_invalidate,
@@ -204,4 +201,27 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+#[cfg(test)]
+mod ipc_contract_tests {
+    #[test]
+    fn frontend_envelopes_deserialize_into_command_arguments() {
+        use crate::commands::{
+            library::ResolvePathArgs, photos::SaveVideoProbeArgs, settings::SettingsUpdateArgs,
+        };
+        let contracts: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/ipc.json")).unwrap();
+        let path: ResolvePathArgs =
+            serde_json::from_value(contracts["library_resolve_path"]["args"].clone()).unwrap();
+        assert_eq!(path.photo_id, 42);
+        assert!(path.for_display);
+        let settings: SettingsUpdateArgs =
+            serde_json::from_value(contracts["settings_update"]["args"].clone()).unwrap();
+        assert_eq!(settings.assistant_api_key, Some(None));
+        assert_eq!(settings.home_city_override, Some(None));
+        let video: SaveVideoProbeArgs =
+            serde_json::from_value(contracts["photos_save_video_probe"]["args"].clone()).unwrap();
+        assert_eq!(video.library_session_id, 7);
+        assert_eq!(video.file_hash, "abcd");
+    }
 }

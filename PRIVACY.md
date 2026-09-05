@@ -4,27 +4,26 @@ Smriti is offline-first. Here is exactly what that means.
 
 ## What stays local
 
-**All of your photos.** Smriti never uploads, syncs, or
-transmits your photos anywhere. They stay on your drive.
-
-**All of your metadata.** Face data, locations, dates, EXIF —
-stored in a SQLite database on the same drive as your photos.
-Nothing leaves.
+Your original files and library database stay on your drive.
+Local indexing and inference do not upload them. If you enable
+the optional GPU bridge or provider-backed assistant, the data
+described below is sent to your configured service.
 
 **All of your activity.** No analytics, no usage tracking, no
 telemetry.
 
 ## What touches the network
 
-Four things, all by design and clearly scoped:
+Network features are described below. Remote processing is optional.
 
 ### 1. Map tiles (OpenStreetMap)
 
-When you open the **Map** view, Smriti downloads map tiles for
+When you open the **Map** view or a photo's location minimap, Smriti downloads map tiles for
 the regions you pan/zoom to. Tiles are cached locally; subsequent
-views of the same region are served from cache. To limit or
-disable: avoid the Map view, or cap the cache size in
-**Settings → Map**.
+views of the same region are served from cache. To limit storage,
+set the map tile cache limit in Settings. A cache
+limit does not disable network access. Previously cached regions
+remain usable offline.
 
 The requests go to `tile.openstreetmap.org` and include only the
 standard headers any HTTP client sends (User-Agent, Accept).
@@ -39,6 +38,9 @@ recognition and reverse-geocoding are the features that rely on
 them).
 
 Re-triggered from **Settings → Advanced → Reinstall Assets**.
+
+Optional visual-search models are downloaded from Hugging Face.
+These downloads do not send library contents.
 
 ### 3. Update check (opt-in)
 
@@ -70,15 +72,35 @@ If you enable update checks and click **Download** in the banner
 when a new version is available:
 
 - Smriti downloads the matching installer for your platform
-  (AppImage, MSI, .dmg, or portable zip) from `github.com/…/releases`.
-- Downloaded bytes are verified against the signed `SHA256SUMS`
-  published alongside the release.
+  (AppImage, MSI or .dmg) from `github.com/…/releases`. Unsupported
+  portable installations open the release page instead.
+- Downloaded bytes are checked against the release's `SHA256SUMS`.
+  These checksums detect mismatched downloads; they are not signed
+  and do not provide independent publisher authentication.
 - Only the installer artifact is fetched; no metadata about your
   install or library is sent.
 
 If you installed via a system package manager (apt, Homebrew,
 winget, Flatpak), Smriti shows the matching upgrade command
 instead of self-replacing. No download happens in that path.
+
+### 5. Optional remote face embedding
+
+When you enable the GPU bridge, detected face crops are JPEG-encoded
+and uploaded to your configured endpoint for embedding. This is
+photo-derived image data. The default face-processing path is local.
+The endpoint operator's retention and privacy practices apply.
+
+### 6. Optional provider-backed assistant
+
+When enabled, the assistant sends conversation messages, tool context
+and library-derived information (such as album names, counts and
+resolved people/places) to the configured provider. Disabling this
+integration retains local library functionality. Provider credentials
+are stored in the operating system credential store (Keychain on macOS,
+Credential Manager on Windows, Secret Service on Linux). Legacy plaintext
+keys migrate on the next successful settings save. If secure storage is
+unavailable, saving a key fails rather than writing a new plaintext copy.
 
 ## Where your data lives
 
@@ -90,7 +112,8 @@ instead of self-replacing. No download happens in that path.
   - Linux: `~/.config/smriti/`
   - macOS: `~/Library/Application Support/smriti/`
   - Windows: `%APPDATA%\smriti\`
-- **Map tile cache** — OS user cache directory.
+- **Map tile cache** — WebView Cache API storage, shared across libraries;
+  clear it from Settings.
 - **Logs (if any)** — OS user data directory.
 
 ## What we do not do

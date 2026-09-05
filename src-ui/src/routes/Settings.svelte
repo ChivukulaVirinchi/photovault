@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { clearTileCache, setTileCacheLimit, tileCacheStats } from "../lib/tile-cache-storage";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { albums, geocoding, health, people, semantic, stacks, systemEx } from "../lib/api/all";
@@ -14,6 +15,14 @@
   import type { ExcludedFolderDto } from "../lib/api/types";
 
   let saving = $state(false);
+  let mapCacheMessage = $state("");
+  async function clearMapTiles() {
+    try {
+      const stats = await tileCacheStats();
+      await clearTileCache();
+      mapCacheMessage = `Cleared ${(stats.size_bytes / 1024 / 1024).toFixed(1)} MB of map tiles`;
+    } catch (e) { mapCacheMessage = commandErrorMessage(e); }
+  }
   let error = $state<string | null>(null);
   let healthData = $state<LibraryHealthData | null>(null);
   let assets = $state<AssetInventory | null>(null);
@@ -798,28 +807,26 @@
           <p class="hint blurb">Open the destination library before importing.</p>
         {/if}
       </div>
-      <label>
-        <span class="label-text">Thumbnail size</span>
-        <input type="number" min="100" max="1000" value={s.thumbnail_size}
-          onchange={(e) => patch({ thumbnail_size: Number((e.target as HTMLInputElement).value) })} />
-      </label>
       <label class="checkbox">
         <input type="checkbox" checked={s.scan_hidden_folders}
           onchange={(e) => patch({ scan_hidden_folders: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Scan hidden folders</span>
       </label>
+      <label>
+        <span class="label-text">Map tile cache (MB, shared across libraries)</span>
+        <input type="number" min="50" max="10000" value={s.map_cache_limit_mb}
+          onchange={async (e) => {
+            const limit = Number((e.target as HTMLInputElement).value);
+            await patch({ map_cache_limit_mb: limit });
+            try { await setTileCacheLimit(limit); } catch (error) { mapCacheMessage = commandErrorMessage(error); }
+          }} />
+      </label>
+      <button class="ghost" onclick={clearMapTiles}>Clear cached map tiles</button>
+      {#if mapCacheMessage}<p class="hint">{mapCacheMessage}</p>{/if}
       <label class="checkbox">
         <input type="checkbox" checked={s.show_timeline_stacks}
           onchange={(e) => patch({ show_timeline_stacks: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Show stacks in timeline</span>
-      </label>
-      <label>
-        <span class="label-text">Auto-delete from trash after</span>
-        <span class="number-with-unit">
-          <input type="number" min="1" max="365" value={s.trash_auto_delete_days}
-            onchange={(e) => patch({ trash_auto_delete_days: Number((e.target as HTMLInputElement).value) })} />
-          <span class="unit mono">days</span>
-        </span>
       </label>
       <label>
         <span class="label-text">

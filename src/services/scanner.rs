@@ -27,7 +27,7 @@ use crate::services::exclusions::ExclusionMatcher;
 ///      `services::raw_preview`. Files in this group don't need any
 ///      special handling here at scan time; they go through the same
 ///      hash + EXIF + thumbnail pipeline as ordinary JPEGs.
-const SUPPORTED_EXTENSIONS: &[&str] = &[
+pub(crate) const SUPPORTED_EXTENSIONS: &[&str] = &[
     // Stills
     "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
     // RAWs (TIFF-based, embedded-JPEG path)
@@ -447,6 +447,13 @@ pub fn media_type_for_path(path: &Path) -> Option<MediaType> {
 
 /// Calculate SHA256 hash of a file (full streaming hash).
 pub fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
+    calculate_hash_cancellable(path, None)
+}
+
+pub fn calculate_hash_cancellable<P: AsRef<Path>>(
+    path: P,
+    cancel: Option<&AtomicBool>,
+) -> std::io::Result<String> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path)?;
@@ -454,6 +461,12 @@ pub fn calculate_hash<P: AsRef<Path>>(path: P) -> std::io::Result<String> {
     let mut buffer = [0u8; 65536]; // 64KB buffer
 
     loop {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "hashing cancelled",
+            ));
+        }
         let bytes_read = file.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
@@ -471,6 +484,25 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn full_hash_honors_cancellation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("photo");
+        std::fs::write(&path, [7u8; 65537]).unwrap();
+        let cancel = AtomicBool::new(true);
+        assert_eq!(
+            calculate_hash_cancellable(&path, Some(&cancel))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::Interrupted
+        );
+        cancel.store(false, Ordering::Relaxed);
+        assert_eq!(
+            calculate_hash_cancellable(&path, Some(&cancel)).unwrap(),
+            calculate_hash(&path).unwrap()
+        );
+    }
 
     #[test]
     fn test_should_skip_hidden() {

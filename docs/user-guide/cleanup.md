@@ -77,12 +77,8 @@ The Trash view lists trashed photos. From it you can:
   database row. There's no undo for this.
 - **Empty trash** — permanent-delete everything in trash.
 
-### Auto-delete
-
-**Settings → Trash → Auto-delete after** (default 30 days)
-permanently deletes photos that have been in the trash longer than
-the configured window. Set to 0 to disable auto-delete (you'll have
-to empty trash manually).
+There is no automatic age-based deletion. Empty the trash explicitly
+after reviewing it.
 
 ## Workflow
 
@@ -93,11 +89,10 @@ A typical cleanup pass:
 2. Open **Bursts** → review each burst → keep the best, trash the
    rest.
 3. Browse the Timeline for anything obviously bad you missed.
-4. Open **Trash** → verify the list → empty trash, or wait for
-   auto-delete.
+4. Open **Trash** → verify the list → empty trash when ready.
 
 ## See also
 
-- [Settings → Trash](settings.md) — auto-delete window
+- [Settings → Trash](settings.md) — deletion behavior
 - [Settings → Burst detection](settings.md) — burst window
 - [Indexing](indexing.md) — when these detectors run

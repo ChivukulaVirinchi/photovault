@@ -135,6 +135,7 @@ pub async fn geocoding_backfill(
     state: State<'_, AppState>,
     args: GeocodingBackfillArgs,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     if state.jobs.lock().await.has_any_of_kind(JobKind::Geocoding) {
         return Err(CommandError::Conflict {
             reason: "geocoding is already in progress".into(),

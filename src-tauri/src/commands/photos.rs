@@ -572,9 +572,13 @@ pub async fn photos_request_thumbnail(
 
     // Already generated — short-circuit.
     if let Some(rel) = existing {
-        return Ok(ThumbnailResultDto {
-            thumbnail_path: Some(rel),
-        });
+        if smriti::services::path_util::safe_existing_path_under_root(&drive_root, &rel)
+            .is_ok_and(|path| path.is_file())
+        {
+            return Ok(ThumbnailResultDto {
+                thumbnail_path: Some(rel),
+            });
+        }
     }
 
     if media_type == smriti::models::MediaType::Video {
@@ -666,11 +670,15 @@ pub async fn photos_request_thumbnails(
     let mut work = Vec::new();
     for p in photos {
         if let Some(rel) = p.thumbnail_path {
-            ready.push(ThumbnailBatchItemDto {
-                id: p.id,
-                thumbnail_path: Some(rel),
-            });
-            continue;
+            if smriti::services::path_util::safe_existing_path_under_root(&drive_root, &rel)
+                .is_ok_and(|path| path.is_file())
+            {
+                ready.push(ThumbnailBatchItemDto {
+                    id: p.id,
+                    thumbnail_path: Some(rel),
+                });
+                continue;
+            }
         }
         if p.media_type != smriti::models::MediaType::Photo {
             continue;
@@ -782,6 +790,8 @@ fn relative_video_thumbnail_path(file_hash: &str) -> String {
 #[derive(Debug, Deserialize)]
 pub struct SaveVideoProbeArgs {
     pub id: i64,
+    pub library_session_id: u64,
+    pub file_hash: String,
     pub duration_ms: Option<i64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
@@ -797,9 +807,14 @@ pub async fn photos_save_video_probe(
 ) -> CommandResult<ThumbnailResultDto> {
     use base64::Engine as _;
 
+    // Keep the session stable through validation and persistence.
+    let _lifecycle = state.library_lifecycle.lock().await;
     let (drive_root, db) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        if lib.session_id != args.library_session_id {
+            return Err(CommandError::LibraryClosed);
+        }
         (lib.drive_root.clone(), lib.db.clone())
     };
     let (file_hash, media_type) = {
@@ -808,6 +823,12 @@ pub async fn photos_save_video_probe(
         let p = repo
             .get_by_id(args.id)?
             .ok_or_else(|| CommandError::not_found("photo", args.id))?;
+        if p.file_hash != args.file_hash {
+            return Err(CommandError::Validation {
+                field: "file_hash".into(),
+                reason: "video changed during probing".into(),
+            });
+        }
         (p.file_hash, p.media_type)
     };
     if media_type != smriti::models::MediaType::Video {

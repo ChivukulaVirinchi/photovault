@@ -909,6 +909,7 @@ pub async fn people_start_processing(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;

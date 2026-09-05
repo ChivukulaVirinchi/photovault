@@ -177,6 +177,7 @@ fn test_v14_to_latest_migration_creates_v15_composite_indexes() {
             indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE VIRTUAL TABLE photos_fts USING fts5(ocr_text, content='photos', content_rowid='id');
         CREATE TABLE face_clusters (
             id INTEGER PRIMARY KEY,
             name TEXT,

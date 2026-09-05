@@ -13,7 +13,7 @@ it. Services are the unit of integration testing in `tests/`.
 | `scanner` | Walks the library, dispatches per-photo work. Async, cancellable. |
 | `metadata_processor` | EXIF + GPS + file-hash extraction per photo. |
 | `exif_extractor` | Pulls and normalises EXIF tags. |
-| `thumbnail` | Three-tier thumbnail generation, lazy + cached. |
+| `thumbnail` | Three preview sizes plus decoded-resolution display renditions, lazy + cached. |
 | `image_io` | Decodes JPEG/PNG/WebP/HEIC + RAW preview extraction. |
 | `raw_preview` | Extracts embedded JPEG previews from TIFF-based RAWs. |
 | `geocoding` | Resolves GPS → city/country via local GeoNames DB. |
@@ -25,10 +25,9 @@ it. Services are the unit of integration testing in `tests/`.
 | `burst_detector` | Time-window-based grouping with similarity gate. |
 | `duplicate_detector` | SHA-256 exact + DCT-pHash perceptual dedup. |
 | `photo_stacks` | Conservative timeline stack generation from duplicate/burst results, including best-photo scoring. |
-| `trash` | Soft-delete, restore, permanent-delete, auto-delete. |
-| `tile_cache` | LRU-managed cache for OpenStreetMap tiles. |
+| `trash` | Soft-delete, restore and staged permanent deletion with recovery. |
 | `update_checker` | Opt-in version check against the GitHub releases API. |
-| `self_replace` | Atomic binary swap for AppImage / portable Windows. |
+| `self_replace` | Verified-download staging, native installer launch and AppImage replacement; unsupported portable archives use the release page. |
 | `library_health` | Asset-pack presence, DB integrity, model availability. |
 | `path_util` | Cross-platform path normalisation. |
 | `reindexer` | Detects moves, deletions, and changed files. |
@@ -37,8 +36,6 @@ it. Services are the unit of integration testing in `tests/`.
 | `map_math` | Cluster math for the map view. |
 | `drive_detector` | Identifies the indexed drive's filesystem ID. |
 | `install_method` | Detects how Smriti was installed (apt, brew, msi, ...). |
-| `document_detector` | Heuristic detection of scanned-document photos. |
-| `ocr_processor` | (Reserved) OCR pipeline scaffolding. |
 
 ## Boundary discipline
 

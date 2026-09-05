@@ -17,8 +17,8 @@ if [ -d target/release/bundle ]; then
   done
 fi
 
-# Old build dirs (rust-incremental output for hashes no longer needed)
-find target/debug/build -maxdepth 1 -type d -mtime +3 -exec rm -rf {} + 2>/dev/null || true
+# Cargo build-script outputs can remain valid for months. Age does not tell
+# us whether they are stale; keep them with the dependency cache.
 
 after=$(du -sh target/ 2>/dev/null | cut -f1 || echo "0")
 echo "After:  $after"

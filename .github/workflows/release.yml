@@ -65,6 +65,7 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
+            libdbus-1-dev \
             pkg-config \
             libheif-dev
 
@@ -91,7 +92,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Smriti ${{ github.ref_name }}"
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: --target ${{ matrix.target }} ${{ matrix.heic_flag }}
 
   assets-pack:
@@ -195,7 +196,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: Smriti-Assets.zip
           draft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
       - name: Attach stable, human-readable installer names
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

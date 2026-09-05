@@ -1,4 +1,5 @@
 import { library } from "../api/library";
+import { resetThumbnailRequests } from "../thumbnailRequest";
 import { settings } from "../api/all";
 import { commandErrorMessage } from "../api";
 import type {
@@ -11,6 +12,7 @@ import type {
 const MAX_REMEMBERED = 10;
 
 class LibraryStore {
+  session = $state(0);
   isOpen = $state(false);
   driveRoot = $state<string | null>(null);
   photoCount = $state(0);
@@ -62,6 +64,7 @@ class LibraryStore {
   }
 
   async open(drivePath: string) {
+    resetThumbnailRequests();
     const seq = ++this.seq;
     this.loading = true;
     this.error = null;
@@ -69,6 +72,8 @@ class LibraryStore {
     try {
       const r = await library.open(drivePath);
       if (seq !== this.seq) return;
+      resetThumbnailRequests();
+      this.session += 1;
       this.isOpen = !r.read_only;
       this.driveRoot = r.drive_root;
       this.photoCount = r.photo_count;
@@ -108,10 +113,12 @@ class LibraryStore {
   }
 
   async close() {
+    resetThumbnailRequests();
     const seq = ++this.seq;
     await library.close();
     if (seq !== this.seq) return;
     this.isOpen = false;
+    this.session += 1;
     this.driveRoot = null;
     this.photoCount = 0;
     this.unsupportedSchema = null;

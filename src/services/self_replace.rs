@@ -108,6 +108,14 @@ pub async fn install_update(
 
         // AppImage on Linux or portable zip on Windows: atomic swap.
         InstallMethod::Portable => {
+            // Archives are not executables. Until archive extraction and bundle
+            // installation are supported, use the release page on those systems.
+            if !cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_none() {
+                open_in_browser(&latest.html_url)?;
+                return Ok(InstallOutcome::OpenedReleasePage {
+                    url: latest.html_url,
+                });
+            }
             let asset = pick_portable_asset(&latest.assets)?.clone();
             let downloaded = download_and_verify(&asset, &latest.assets, progress).await?;
             replace_running_binary(&downloaded).await?;
@@ -119,6 +127,9 @@ pub async fn install_update(
             let asset = pick_msi_asset(&latest.assets)?.clone();
             let downloaded = download_and_verify(&asset, &latest.assets, progress).await?;
             launch_msi(&downloaded)?;
+            downloaded
+                .keep()
+                .map_err(|error| UpdateError::Io(error.error))?;
             Ok(InstallOutcome::InstallerLaunched {
                 installer: asset.name,
             })
@@ -129,6 +140,9 @@ pub async fn install_update(
             let asset = pick_dmg_asset(&latest.assets)?.clone();
             let downloaded = download_and_verify(&asset, &latest.assets, progress).await?;
             open_dmg(&downloaded)?;
+            downloaded
+                .keep()
+                .map_err(|error| UpdateError::Io(error.error))?;
             Ok(InstallOutcome::InstallerLaunched {
                 installer: asset.name,
             })
@@ -148,22 +162,41 @@ fn pick_portable_asset(assets: &[ReleaseAsset]) -> Result<&ReleaseAsset, UpdateE
 
     assets
         .iter()
-        .find(|a| patterns.iter().any(|p| a.name.contains(p)))
+        .find(|a| {
+            patterns.iter().any(|p| a.name.ends_with(p))
+                && asset_matches_arch(&a.name, std::env::consts::ARCH)
+        })
         .ok_or(UpdateError::NoAssetForPlatform)
 }
 
 fn pick_msi_asset(assets: &[ReleaseAsset]) -> Result<&ReleaseAsset, UpdateError> {
     assets
         .iter()
-        .find(|a| a.name.to_ascii_lowercase().ends_with(".msi"))
+        .find(|a| {
+            a.name.to_ascii_lowercase().ends_with(".msi")
+                && asset_matches_arch(&a.name, std::env::consts::ARCH)
+        })
         .ok_or(UpdateError::NoAssetForPlatform)
 }
 
 fn pick_dmg_asset(assets: &[ReleaseAsset]) -> Result<&ReleaseAsset, UpdateError> {
     assets
         .iter()
-        .find(|a| a.name.to_ascii_lowercase().ends_with(".dmg"))
+        .find(|a| {
+            a.name.to_ascii_lowercase().ends_with(".dmg")
+                && asset_matches_arch(&a.name, std::env::consts::ARCH)
+        })
         .ok_or(UpdateError::NoAssetForPlatform)
+}
+
+fn asset_matches_arch(name: &str, arch: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let aliases: &[&str] = match arch {
+        "x86_64" => &["x86_64", "amd64", "x64"],
+        "aarch64" => &["aarch64", "arm64", "apple-silicon"],
+        _ => return false,
+    };
+    aliases.iter().any(|alias| name.contains(alias)) || name.contains("universal")
 }
 
 // --- Download + verify -------------------------------------------------
@@ -175,13 +208,14 @@ async fn download_and_verify(
     asset: &ReleaseAsset,
     all_assets: &[ReleaseAsset],
     mut progress: Option<ProgressCallback>,
-) -> Result<PathBuf, UpdateError> {
+) -> Result<tempfile::TempPath, UpdateError> {
     let expected_hash = fetch_expected_hash(all_assets, &asset.name).await?;
 
-    let temp_path = std::env::temp_dir().join(format!(
-        "smriti-update-{}",
-        safe_temp_file_name(&asset.name)
-    ));
+    let staged = tempfile::Builder::new()
+        .prefix("smriti-update-")
+        .suffix(&format!("-{}", safe_temp_file_name(&asset.name)))
+        .tempfile()?;
+    let (file, temp_path) = staged.into_parts();
     let client = build_client()?;
 
     let response = client
@@ -192,7 +226,7 @@ async fn download_and_verify(
         .map_err(|e| UpdateError::Network(e.to_string()))?;
 
     let total = response.content_length().unwrap_or(asset.size_bytes);
-    let mut file = tokio::fs::File::create(&temp_path).await?;
+    let mut file = tokio::fs::File::from_std(file);
     let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
     let mut last_progress_report: u64 = 0;
@@ -200,6 +234,13 @@ async fn download_and_verify(
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| UpdateError::Network(e.to_string()))?;
+        if asset.size_bytes != 0 && downloaded.saturating_add(chunk.len() as u64) > asset.size_bytes
+        {
+            return Err(UpdateError::SizeMismatch {
+                got: downloaded + chunk.len() as u64,
+                expected: asset.size_bytes,
+            });
+        }
         hasher.update(&chunk);
         file.write_all(&chunk).await?;
         downloaded += chunk.len() as u64;
@@ -214,6 +255,7 @@ async fn download_and_verify(
         }
     }
     file.flush().await?;
+    file.sync_all().await?;
     drop(file);
 
     if asset.size_bytes != 0 && downloaded != asset.size_bytes {
@@ -306,7 +348,10 @@ fn build_client() -> Result<reqwest::Client, UpdateError> {
 // --- Binary swap / installer spawn ------------------------------------
 
 async fn replace_running_binary(new_binary: &Path) -> Result<(), UpdateError> {
-    let current = std::env::current_exe().map_err(UpdateError::Io)?;
+    let current = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file())
+        .ok_or_else(|| UpdateError::Replace("AppImage installation path is unavailable".into()))?;
     let new_binary = new_binary.to_path_buf();
     let current_clone = current.clone();
 
@@ -378,6 +423,21 @@ fn open_in_browser(url: &str) -> Result<(), UpdateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_assets_must_match_the_running_architecture() {
+        assert!(asset_matches_arch("Smriti-Linux-x64.AppImage", "x86_64"));
+        assert!(!asset_matches_arch("Smriti-Linux-x64.AppImage", "aarch64"));
+        assert!(asset_matches_arch(
+            "Smriti-macOS-Apple-Silicon.dmg",
+            "aarch64"
+        ));
+        assert!(!asset_matches_arch(
+            "Smriti-macOS-Apple-Silicon.dmg",
+            "x86_64"
+        ));
+        assert!(!asset_matches_arch("Smriti.dmg", "x86_64"));
+    }
 
     #[test]
     fn sha256sums_parse_plain_format() {

@@ -74,6 +74,14 @@ impl DuplicateDetector {
         conn: &Connection,
         drive_root: &Path,
     ) -> rusqlite::Result<Vec<DuplicateGroup>> {
+        Self::find_duplicates_cancellable(conn, drive_root, None)
+    }
+
+    pub fn find_duplicates_cancellable(
+        conn: &Connection,
+        drive_root: &Path,
+        cancel: Option<&AtomicBool>,
+    ) -> rusqlite::Result<Vec<DuplicateGroup>> {
         // Fast scanner hashes include file metadata, so byte-identical
         // copies with different mtimes may not share photos.file_hash.
         // Use file_size only to narrow candidates, then compute the
@@ -96,6 +104,9 @@ impl DuplicateDetector {
         let mut groups = Vec::new();
 
         for size in sizes {
+            if is_cancelled(cancel) {
+                return Ok(Vec::new());
+            }
             let mut photo_stmt = conn.prepare(
                 r#"
                 SELECT id, file_path, date_taken, file_size
@@ -118,10 +129,15 @@ impl DuplicateDetector {
             let mut by_full_hash: std::collections::HashMap<String, Vec<ExactCandidate>> =
                 std::collections::HashMap::new();
             for photo in photos {
+                if is_cancelled(cancel) {
+                    return Ok(Vec::new());
+                }
                 let Ok(path) = safe_join_relative(drive_root, &photo.1) else {
                     continue;
                 };
-                let Ok(full_hash) = crate::services::scanner::calculate_hash(&path) else {
+                let Ok(full_hash) =
+                    crate::services::scanner::calculate_hash_cancellable(&path, cancel)
+                else {
                     continue;
                 };
                 by_full_hash.entry(full_hash).or_default().push(photo);
@@ -143,6 +159,9 @@ impl DuplicateDetector {
             }
         }
 
+        if is_cancelled(cancel) {
+            return Ok(Vec::new());
+        }
         groups.sort_by_key(|g| std::cmp::Reverse(g.photo_ids.len()));
         Ok(groups)
     }
@@ -222,6 +241,8 @@ impl DuplicateDetector {
         }
         let n = rows.len();
         let phashes: Vec<u64> = rows.iter().map(|r| r.1 as u64).collect();
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut representatives = std::collections::HashMap::new();
         const BANDS: [(u32, u32); 5] = [(0, 13), (13, 13), (26, 13), (39, 13), (52, 12)];
         let mut buckets: std::collections::HashMap<(usize, u64), Vec<usize>> =
             std::collections::HashMap::with_capacity(n * BANDS.len());
@@ -229,6 +250,11 @@ impl DuplicateDetector {
             if is_cancelled(cancel) {
                 return Ok(Vec::new());
             }
+            if let Some(&representative) = representatives.get(&hash) {
+                parent[idx] = representative;
+                continue;
+            }
+            representatives.insert(hash, idx);
             for (band_idx, (shift, width)) in BANDS.iter().copied().enumerate() {
                 let mask = (1u64 << width) - 1;
                 buckets
@@ -245,26 +271,40 @@ impl DuplicateDetector {
             message: format!("checking {} candidate buckets", buckets.len()),
         });
 
-        let mut seen_pairs = std::collections::HashSet::new();
-        let mut pairs = Vec::new();
+        let mut matches = 0usize;
         let total_buckets = buckets.len() as u64;
         let tick = total_buckets.div_ceil(40).max(1_000);
-        for (bucket_idx, members) in buckets.into_values().enumerate() {
+        for (bucket_idx, ((band_idx, _), members)) in buckets.into_iter().enumerate() {
             if is_cancelled(cancel) {
                 return Ok(Vec::new());
             }
             if members.len() > 1 {
                 for i in 0..members.len() {
+                    if is_cancelled(cancel) {
+                        return Ok(Vec::new());
+                    }
                     for j in (i + 1)..members.len() {
+                        if j % 256 == 0 && is_cancelled(cancel) {
+                            return Ok(Vec::new());
+                        }
                         let a_idx = members[i].min(members[j]);
                         let b_idx = members[i].max(members[j]);
-                        let key = ((a_idx as u64) << 32) | b_idx as u64;
-                        if !seen_pairs.insert(key) {
+                        // Compare a pair only in its first shared band, without
+                        // retaining a potentially quadratic set of seen pairs.
+                        if BANDS[..band_idx].iter().any(|&(shift, width)| {
+                            ((phashes[a_idx] ^ phashes[b_idx]) >> shift) & ((1u64 << width) - 1)
+                                == 0
+                        }) {
                             continue;
                         }
                         let dist = (phashes[a_idx] ^ phashes[b_idx]).count_ones();
                         if dist <= PHASH_HAMMING_THRESHOLD {
-                            pairs.push((a_idx, b_idx));
+                            let ra = find(&mut parent, a_idx);
+                            let rb = find(&mut parent, b_idx);
+                            if ra != rb {
+                                parent[ra] = rb;
+                            }
+                            matches += 1;
                         }
                     }
                 }
@@ -275,20 +315,12 @@ impl DuplicateDetector {
                     stage: "perceptual-compare",
                     processed,
                     total: Some(total_buckets),
-                    message: format!("{} visual matches", pairs.len()),
+                    message: format!("{} visual matches", matches),
                 });
             }
         }
         if is_cancelled(cancel) {
             return Ok(Vec::new());
-        }
-        let mut parent: Vec<usize> = (0..n).collect();
-        for (i, j) in pairs {
-            let ra = find(&mut parent, i);
-            let rb = find(&mut parent, j);
-            if ra != rb {
-                parent[ra] = rb;
-            }
         }
 
         let mut groups_map: std::collections::HashMap<usize, Vec<usize>> =
@@ -308,8 +340,8 @@ impl DuplicateDetector {
                 .map(|&m| (rows[m].0, rows[m].2.clone(), rows[m].3.clone(), rows[m].4))
                 .collect();
             let suggested_keep_id = Self::suggest_keep(&photo_quad);
-            // Use the first member's phash as the group key (any
-            // member would work — they're all within Hamming 10).
+            // Components are transitively connected; their endpoints need not
+            // be within the pairwise threshold. Use the first member as a key.
             let phash_key = format!("phash:{:016x}", rows[members[0]].1 as u64);
             groups.push(DuplicateGroup {
                 hash: phash_key,

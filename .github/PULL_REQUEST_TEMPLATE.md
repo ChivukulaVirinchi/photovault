@@ -4,7 +4,7 @@ biggest single thing that gets your change merged. The maintainer
 uses it as a checklist — if a box isn't ticked but should be, the
 PR gets a "please add tests" comment and waits.
 
-Reference: docs/CONTRIBUTING.md + docs/TESTING.md.
+Reference: CONTRIBUTING.md + docs/TESTING.md.
 -->
 
 ## Type of change

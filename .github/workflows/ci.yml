@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [master, main]
     paths-ignore:
@@ -52,6 +53,7 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
+            libdbus-1-dev \
             pkg-config
 
       # Frontend dist must exist before any Rust build of `smriti-tauri`
@@ -93,6 +95,7 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
+            libdbus-1-dev \
             pkg-config
       - uses: actions/setup-node@v4
         with:

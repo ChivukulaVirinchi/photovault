@@ -28,6 +28,8 @@ export interface TimelineNeighbors {
 
 export interface SaveVideoProbeArgs {
   id: number;
+  library_session_id: number;
+  file_hash: string;
   duration_ms: number | null;
   width: number | null;
   height: number | null;

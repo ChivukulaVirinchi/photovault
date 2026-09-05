@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 28;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 30;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -142,10 +142,39 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 28 {
         migrate_v27_to_v28(conn)?;
     }
+    if current_version < 29 {
+        migrate_v28_to_v29(conn)?;
+    }
+    if current_version < 30 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(super::schema::SEMANTIC_REVISION_SQL)?;
+        tx.execute("INSERT INTO schema_version(version) VALUES (30)", [])?;
+        tx.commit()?;
+    }
     ensure_performance_indexes(conn)?;
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
     Ok(())
+}
+
+fn migrate_v28_to_v29(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS photos_fts_update;
+         DROP TRIGGER IF EXISTS photos_fts_delete;
+         CREATE TRIGGER photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
+             INSERT INTO photos_fts(photos_fts, rowid, ocr_text)
+                 VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
+             INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
+         END;
+         CREATE TRIGGER photos_fts_delete AFTER DELETE ON photos BEGIN
+             INSERT INTO photos_fts(photos_fts, rowid, ocr_text)
+                 VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
+         END;
+         INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');
+         INSERT INTO schema_version(version) VALUES (29);",
+    )?;
+    tx.commit()
 }
 
 fn migrate_v27_to_v28(conn: &Connection) -> SqliteResult<()> {
@@ -1012,6 +1041,100 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    fn revision_28_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER semantic_revision_insert;
+             DROP TRIGGER semantic_revision_update;
+             DROP TRIGGER semantic_revision_delete;
+             DROP TRIGGER semantic_revision_visibility;
+             DROP TRIGGER semantic_revision_photo_delete;
+             DROP TABLE semantic_revision;
+             DELETE FROM schema_version;
+             INSERT INTO schema_version(version) VALUES(28);
+             INSERT INTO photos(file_path,file_name,file_hash,file_size,ocr_text)
+                VALUES('one.jpg','one.jpg','abcd',1,'before');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn latest_migrations_match_fresh_objects_and_preserve_search_data() {
+        let migrated = revision_28_fixture();
+        run_migrations(&migrated).unwrap();
+        run_migrations(&migrated).unwrap();
+        let fresh = Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&fresh).unwrap();
+        run_migrations(&fresh).unwrap();
+        fn objects(conn: &Connection) -> Vec<(String, String)> {
+            conn.prepare("SELECT type,name FROM sqlite_master ORDER BY type,name")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        }
+        assert_eq!(objects(&migrated), objects(&fresh));
+        migrated
+            .execute("UPDATE photos SET ocr_text='after' WHERE id=1", [])
+            .unwrap();
+        let matches: i64 = migrated
+            .query_row(
+                "SELECT count(*) FROM photos_fts WHERE photos_fts MATCH 'after'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(matches, 1);
+        assert_eq!(
+            get_schema_version(&migrated).unwrap(),
+            MAX_KNOWN_SCHEMA_VERSION
+        );
+        assert_eq!(
+            migrated
+                .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert!(!migrated
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap());
+    }
+
+    #[test]
+    fn failed_fts_migration_rolls_back_and_can_retry() {
+        let conn = revision_28_fixture();
+        let before: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='photos_fts_update'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_version BEFORE INSERT ON schema_version
+            WHEN new.version=29 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        assert!(run_migrations(&conn).is_err());
+        assert_eq!(get_schema_version(&conn).unwrap(), 28);
+        let after: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='photos_fts_update'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        conn.execute_batch("DROP TRIGGER reject_version").unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn).unwrap(), MAX_KNOWN_SCHEMA_VERSION);
+    }
+
     #[test]
     fn run_migrations_reports_newer_schema_version() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1071,7 +1194,7 @@ mod tests {
                 version INTEGER PRIMARY KEY,
                 applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (28);
+            INSERT INTO schema_version (version) VALUES (30);
             CREATE TABLE photos (
                 id INTEGER PRIMARY KEY,
                 date_taken DATETIME,
@@ -1093,7 +1216,7 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let version = get_schema_version(&conn).unwrap();
-        assert_eq!(version, 28);
+        assert_eq!(version, MAX_KNOWN_SCHEMA_VERSION);
         let plan = conn
             .prepare(
                 "EXPLAIN QUERY PLAN

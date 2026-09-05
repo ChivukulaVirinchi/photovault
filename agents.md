@@ -74,12 +74,13 @@ The `target/` directory has separate artifacts per platform. Windows = `smriti.e
 
 ## Platform-Specific Code
 
-Only two files have `#[cfg]` gates:
+Platform-specific paths include:
 
 - **`src/services/drive_detector.rs`** — drive enumeration (Linux: /media, /mnt; Windows: drive letters A-Z; macOS: /Volumes)
 - **`src/ml/runtime.rs`** — ONNX Runtime library name (`libonnxruntime.so` on Linux, `onnxruntime.dll` on Windows)
 
-Everything else is platform-agnostic.
+Native installers, credential storage and filesystem durability also have
+platform-specific behavior; verify them on their target OS.
 
 ### ONNX Runtime
 
@@ -177,7 +178,7 @@ What to remove:
 - `target/release/incremental`
 - old files under `target/release/bundle`, keeping only the newest artifact of
   each package format
-- stale directories under `target/debug/build`
+- build-script outputs only when proven unused (age alone is not sufficient)
 - any temporary target dirs created by the agent, for example
   `/tmp/photovault-codex-target`
 
@@ -218,7 +219,6 @@ src/                   Rust engine (lib-only after iced removal)
   db/                  SQLite layer (schema, repos, migrations)
   ml/                  ONNX Runtime + face detection + embedding + clustering
   models/              Data structs
-  scoring/             Image quality (blur, sharpness)
   search/              Query parsing
   services/            Business logic (scanner, thumbnails, faces, duplicates, bursts, geocoding)
 src-tauri/             Tauri shell — IPC handlers + state + DTOs
@@ -250,7 +250,7 @@ data/                  GeoNames database (gitignored)
 - **tauri 2** — desktop shell (IPC, asset protocol, native windowing)
 - **svelte 5** + **vite 8** — frontend
 - **maplibre-gl 4** — map view + photo-detail minimap
-- **@tanstack/svelte-virtual** — kept as dep but unused; custom virtualizer in `src-ui/src/lib/virtualizer.svelte.ts`
+- **Virtualization** — custom virtualizer in `src-ui/src/lib/virtualizer.svelte.ts`
 
 ## Optional integrations
 

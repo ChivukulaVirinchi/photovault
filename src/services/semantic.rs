@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::{DynamicImage, ImageBuffer, Rgb};
-use ndarray::Array1;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
@@ -137,7 +136,7 @@ pub struct SemanticSearchService {
 
 #[derive(Default)]
 pub struct SemanticIndexCache {
-    indexed_count: u64,
+    revision: i64,
     #[cfg(feature = "hnsw_clustering")]
     index: Option<SemanticHnswIndex>,
 }
@@ -501,10 +500,16 @@ impl SemanticSearchService {
             if query.len() != SEMANTIC_DIM {
                 return Ok(Vec::new());
             }
-            let indexed_count = self.index_stats(conn).map_err(|e| e.to_string())?.indexed;
-            if cache.index.is_none() || cache.indexed_count != indexed_count {
+            let revision = conn
+                .query_row(
+                    "SELECT revision FROM semantic_revision WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if cache.index.is_none() || cache.revision != revision {
                 cache.index = Some(self.build_hnsw_index(conn)?);
-                cache.indexed_count = indexed_count;
+                cache.revision = revision;
             }
             Ok(cache
                 .index
@@ -608,7 +613,8 @@ impl SemanticSearchService {
              WHERE s.model_key = ?1
                AND s.status = 'indexed'
                AND s.vector_dim = ?2
-               AND p.is_trashed = FALSE",
+               AND p.is_trashed = FALSE
+             ORDER BY s.vector_offset",
         )?;
         let rows = stmt.query_map(params![SEMANTIC_MODEL_KEY, SEMANTIC_DIM as i64], |row| {
             Ok((
@@ -618,10 +624,15 @@ impl SemanticSearchService {
             ))
         })?;
         let store = VectorStore::new(&self.drive_root)?;
+        let mut file = match File::open(store.vector_path()) {
+            Ok(file) => std::io::BufReader::new(file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
+        };
         let mut out = Vec::new();
         for row in rows {
             let (photo_id, offset, dim) = row?;
-            if let Ok(vector) = store.read(offset as u64, dim as usize) {
+            if let Ok(vector) = VectorStore::read_from(&mut file, offset as u64, dim as usize) {
                 out.push(IndexRow { photo_id, vector });
             }
         }
@@ -887,21 +898,36 @@ impl VectorStore {
             .seek(SeekFrom::End(0))
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut offsets = Vec::with_capacity(vectors.len());
+        let mut bytes = Vec::with_capacity(SEMANTIC_DIM * 4);
         for vector in vectors {
             offsets.push(offset);
+            bytes.clear();
             for value in vector {
-                file.write_all(&value.to_le_bytes())
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                bytes.extend_from_slice(&value.to_le_bytes());
             }
+            file.write_all(&bytes)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             offset += (SEMANTIC_DIM * 4) as u64;
         }
+        file.sync_data()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         self.bump_manifest_by(offsets.len() as u64)?;
         Ok(offsets)
     }
 
     fn read(&self, offset: u64, dim: usize) -> std::io::Result<Vec<f32>> {
         let mut file = File::open(self.vector_path())?;
-        file.seek(SeekFrom::Start(offset))?;
+        Self::read_from(&mut file, offset, dim)
+    }
+
+    fn read_from(
+        file: &mut (impl Read + Seek),
+        offset: u64,
+        dim: usize,
+    ) -> std::io::Result<Vec<f32>> {
+        if file.stream_position()? != offset {
+            file.seek(SeekFrom::Start(offset))?;
+        }
         let mut bytes = vec![0u8; dim * 4];
         file.read_exact(&mut bytes)?;
         Ok(bytes
@@ -1079,11 +1105,17 @@ pub fn relevant_text_search_candidates(
 }
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    let av = Array1::from_vec(a.to_vec());
-    let bv = Array1::from_vec(b.to_vec());
-    let dot = av.dot(&bv);
-    let na = av.dot(&av).sqrt();
-    let nb = bv.dot(&bv).sqrt();
+    if a.len() != b.len() {
+        return 0.0;
+    }
+    let (mut dot, mut aa, mut bb) = (0.0_f32, 0.0_f32, 0.0_f32);
+    for (&x, &y) in a.iter().zip(b) {
+        dot += x * y;
+        aa += x * x;
+        bb += y * y;
+    }
+    let na = aa.sqrt();
+    let nb = bb.sqrt();
     if na > 0.0 && nb > 0.0 {
         dot / (na * nb)
     } else {
@@ -1143,6 +1175,52 @@ mod tests {
         assert_eq!(off_b, (SEMANTIC_DIM * 4) as u64);
         assert_eq!(store.read(off_a, SEMANTIC_DIM).unwrap(), first);
         assert_eq!(store.read(off_b, SEMANTIC_DIM).unwrap(), second);
+    }
+
+    #[test]
+    #[cfg(feature = "hnsw_clustering")]
+    fn cached_search_refreshes_replaced_vectors_without_count_change() {
+        let dir = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn.execute("INSERT INTO photos(id,file_path,file_name,file_hash,file_size) VALUES(1,'one.jpg','one.jpg','hash',1)", []).unwrap();
+        let mut first = vec![0.0; SEMANTIC_DIM];
+        let mut second = first.clone();
+        first[0] = 1.0;
+        second[1] = 1.0;
+        let mut store = VectorStore::new(dir.path()).unwrap();
+        let offsets = store
+            .append_many([first.as_slice(), second.as_slice()])
+            .unwrap();
+        conn.execute("INSERT INTO semantic_index_state(photo_id,model_key,status,vector_offset,vector_dim) VALUES(1,?1,'indexed',?2,?3)", params![SEMANTIC_MODEL_KEY, offsets[0] as i64, SEMANTIC_DIM as i64]).unwrap();
+        let service = SemanticSearchService::new(dir.path());
+        let mut cache = SemanticIndexCache::default();
+        assert!(
+            service
+                .search_vector_cached(&conn, &mut cache, &first, 1)
+                .unwrap()[0]
+                .score
+                > 0.99
+        );
+        conn.execute(
+            "UPDATE semantic_index_state SET vector_offset=?1",
+            [offsets[1] as i64],
+        )
+        .unwrap();
+        assert!(
+            service
+                .search_vector_cached(&conn, &mut cache, &first, 1)
+                .unwrap()[0]
+                .score
+                .abs()
+                < 0.01
+        );
+        conn.execute("UPDATE photos SET is_trashed=TRUE", [])
+            .unwrap();
+        assert!(service
+            .search_vector_cached(&conn, &mut cache, &first, 1)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

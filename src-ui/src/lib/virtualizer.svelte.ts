@@ -1,9 +1,4 @@
-/// Hand-rolled vertical virtualizer.
-///
-/// Why not @tanstack/svelte-virtual? We tried, and the integration with Svelte
-/// 5's `$derived` re-creates the virtualizer on every reactive change which
-/// effectively defeats virtualization. The math here is small enough that
-/// owning it directly is cheaper than fighting the abstraction.
+/// Vertical virtualizer for rows with known heights.
 ///
 /// Usage:
 ///   const v = createVirtualScroll({ rows: () => myRows, scrollEl: () => el });

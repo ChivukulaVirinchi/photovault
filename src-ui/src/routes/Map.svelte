@@ -11,6 +11,7 @@
   let cachedMapRoute:
     | {
         driveRoot: string | null;
+        session: number;
         drawerOpen: boolean;
         drawerRef: CachedClusterRef | null;
         drawerPhotos: CachedPhotoSummaryDto[];
@@ -38,7 +39,8 @@
   installTileCache();
 
   const currentDriveRoot = libraryStore.driveRoot;
-  const currentMapCache = cachedMapRoute?.driveRoot === currentDriveRoot ? cachedMapRoute : null;
+  const currentSession = libraryStore.session;
+  const currentMapCache = cachedMapRoute?.driveRoot === currentDriveRoot && cachedMapRoute.session === currentSession ? cachedMapRoute : null;
 
   /// Each geotagged photo, stored once and clustered client-side. The
   /// previous design did the clustering on the backend and re-fetched
@@ -119,6 +121,7 @@
   function saveMapRouteCache() {
     cachedMapRoute = {
       driveRoot: currentDriveRoot,
+      session: currentSession,
       drawerOpen,
       drawerRef,
       drawerPhotos,

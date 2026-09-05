@@ -19,6 +19,7 @@ sudo apt-get install -y \
   librsvg2-dev \
   libsoup-3.0-dev \
   libjavascriptcoregtk-4.1-dev \
+  libdbus-1-dev \
   pkg-config \
   libheif-dev          # only if you want HEIC decoding
 ```

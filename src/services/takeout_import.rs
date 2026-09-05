@@ -708,12 +708,16 @@ fn atomic_move(source: &Path, destination: &Path) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
-    fs::rename(source, destination).map_err(|e| {
+    let mut staged = tempfile::TempPath::try_from_path(source)
+        .map_err(|e| format!("Could not stage imported file: {e}"))?;
+    staged.disable_cleanup(true);
+    staged.persist_noclobber(destination).map_err(|e| {
         format!(
             "Could not place imported file at {}: {e}",
             destination.display()
         )
-    })
+    })?;
+    Ok(())
 }
 
 fn prepare_staging(staging: &Path) -> Result<(), String> {
@@ -1096,5 +1100,16 @@ mod tests {
         let shortened = sanitize_file_name(&long);
         assert!(shortened.len() <= 180);
         assert!(shortened.ends_with(".jpeg"));
+    }
+    #[test]
+    fn publishing_import_does_not_overwrite_a_new_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("staged");
+        let destination = dir.path().join("photo.jpg");
+        fs::write(&source, b"import").unwrap();
+        fs::write(&destination, b"existing").unwrap();
+        assert!(atomic_move(&source, &destination).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"import");
+        assert_eq!(fs::read(&destination).unwrap(), b"existing");
     }
 }

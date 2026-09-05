@@ -1,6 +1,36 @@
-//! Settings (read-only get; update is M2).
+//! Settings reads and validated partial updates.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+// Missing leaves a setting unchanged; explicit null clears it.
+fn nullable_patch<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod nullable_patch_tests {
+    use super::SettingsUpdateArgs;
+
+    #[test]
+    fn distinguishes_missing_null_and_value() {
+        let missing: SettingsUpdateArgs = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.assistant_api_key, None);
+        let clear: SettingsUpdateArgs = serde_json::from_str(
+            r#"{"assistant_api_key":null,"home_city_override":null,"face_gpu_bridge_url":null}"#,
+        )
+        .unwrap();
+        assert_eq!(clear.assistant_api_key, Some(None));
+        assert_eq!(clear.home_city_override, Some(None));
+        assert_eq!(clear.face_gpu_bridge_url, Some(None));
+        let set: SettingsUpdateArgs =
+            serde_json::from_str(r#"{"assistant_api_key":"key"}"#).unwrap();
+        assert_eq!(set.assistant_api_key, Some(Some("key".into())));
+    }
+}
 
 use crate::dto::SettingsDto;
 use crate::{CommandError, CommandResult};
@@ -12,7 +42,7 @@ pub async fn settings_get() -> CommandResult<SettingsDto> {
 }
 
 /// Partial settings patch — every field optional. Unknown fields ignored.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct SettingsUpdateArgs {
     pub theme: Option<String>,
@@ -26,6 +56,7 @@ pub struct SettingsUpdateArgs {
     pub date_format: Option<String>,
     pub map_cache_limit_mb: Option<u32>,
     pub memories_enabled: Option<bool>,
+    #[serde(deserialize_with = "nullable_patch")]
     pub home_city_override: Option<Option<String>>,
     pub auto_update_check_enabled: Option<bool>,
     pub sidebar_collapsed: Option<bool>,
@@ -34,6 +65,7 @@ pub struct SettingsUpdateArgs {
     /// Welcome screen can list "Recent" libraries.
     pub remembered_drives: Option<Vec<String>>,
     pub thumbnail_cache_gb: Option<f64>,
+    #[serde(deserialize_with = "nullable_patch")]
     pub face_gpu_bridge_url: Option<Option<String>>,
     pub face_gpu_bridge_enabled: Option<bool>,
     pub assistant_enabled: Option<bool>,
@@ -41,11 +73,14 @@ pub struct SettingsUpdateArgs {
     pub assistant_provider: Option<String>,
     pub assistant_base_url: Option<String>,
     pub assistant_model: Option<String>,
+    #[serde(deserialize_with = "nullable_patch")]
     pub assistant_api_key: Option<Option<String>>,
 }
 
 #[tauri::command]
 pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<SettingsDto> {
+    static UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _update = UPDATE_LOCK.lock().await;
     use smriti::config::{AppTheme, DateFormat};
     let mut cfg = smriti::config::AppConfig::load();
     if let Some(t) = args.theme {
@@ -153,9 +188,7 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     }
     if let Some(v) = args.assistant_base_url {
         let trimmed = v.trim().trim_end_matches('/').to_string();
-        let allowed = trimmed.starts_with("https://")
-            || trimmed.starts_with("http://localhost")
-            || trimmed.starts_with("http://127.0.0.1");
+        let allowed = smriti::config::is_allowed_assistant_url(&trimmed);
         if !allowed {
             return Err(CommandError::Validation {
                 field: "assistant_base_url".into(),
@@ -183,6 +216,11 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
                 Some(trimmed)
             }
         });
+        if cfg.assistant_api_key.is_none() {
+            smriti::config::credentials::store(None).map_err(|e| CommandError::Io {
+                message: e.to_string(),
+            })?;
+        }
     }
     cfg.validate();
     cfg.save().map_err(|e| CommandError::Io {

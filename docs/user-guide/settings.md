@@ -8,8 +8,6 @@ Changes are persisted locally in user config storage.
 ## Appearance
 
 - **Theme** — dark, light, or follow the system theme.
-- **Thumbnail size** — grid density. Smaller thumbnails fit more
-  photos per row at the cost of per-photo detail.
 - **Show photo stacks in timeline** — collapse conservative burst and
   duplicate groups into one timeline tile. Turn this off to show every
   photo individually.
@@ -73,8 +71,8 @@ resolution, file size, faces, sharpness, and exposure.
 
 ## Trash
 
-- **Auto-delete after** — days before trashed photos are permanently
-  removed. Default 30.
+Trashing is reversible. Permanent deletion is explicit; there is no
+automatic age-based deletion.
 
 ## Map
 
@@ -131,7 +129,7 @@ schedule.
   from scratch. Useful after a face-model update.
 - **Check for Changes** — scan for moves and deletions without
   re-indexing unchanged files.
-- **Regenerate Thumbnails** — rebuild all three thumbnail tiers.
+- **Regenerate Thumbnails** — invalidate cached paths and run the thumbnail pass.
 - **Refresh Capture Dates** — re-read capture dates for photos and
   videos. Smriti prefers embedded metadata, then strict filename dates,
   and uses file modified time only as a marked fallback.

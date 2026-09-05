@@ -940,13 +940,6 @@ pub struct MapPinDto {
     pub photo_ids: Vec<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TileCacheStatsDto {
-    pub size_bytes: u64,
-    pub file_count: u64,
-    pub limit_bytes: u64,
-}
-
 // ---------- insights ----------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1339,6 +1332,7 @@ pub struct MetadataProgressDto {
 /// from `thumbnailed = FALSE` to `TRUE`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ThumbnailReadyDto {
+    pub job_id: String,
     pub photo_ids: Vec<i64>,
 }
 

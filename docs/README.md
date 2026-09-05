@@ -45,7 +45,6 @@ photo library.
 - [Face GPU Bridge](face-gpu-bridge.md) — opt-in remote GPU
   acceleration.
 - [Testing](TESTING.md) — the test pyramid and what's enforced in CI.
-  tags.
 
 ## Privacy and data
 

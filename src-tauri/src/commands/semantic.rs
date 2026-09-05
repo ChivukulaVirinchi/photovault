@@ -152,6 +152,7 @@ pub async fn semantic_start_indexing(
 }
 
 async fn start_semantic_indexing_job(app: AppHandle, state: &AppState) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     if state
         .jobs
         .lock()

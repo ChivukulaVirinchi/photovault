@@ -73,6 +73,7 @@ pub async fn takeout_start_import(
     state: State<'_, AppState>,
     args: TakeoutStartImportArgs,
 ) -> CommandResult<JobIdDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
     if args.archive_paths.is_empty() {
         return Err(CommandError::Validation {
             field: "archive_paths".into(),

@@ -18,13 +18,14 @@ export const library = {
   compatPhotos: (offset: number, limit = 100) =>
     call<Page<PhotoSummaryDto>>("library_compat_photos_list", { offset, limit }),
   close: () => call<null>("library_close"),
-  startScan: (scanHidden = false) =>
+  startScan: (scanHidden?: boolean) =>
     call<JobIdDto>("library_start_scan", { scan_hidden_folders: scanHidden }),
   cancelScan: (jobId: string) =>
     call<null>("library_cancel_scan", { job_id: jobId }),
-  resolvePath: (photoId: number) =>
-    call<{ absolute_path: string }>("library_resolve_path", {
+  resolvePath: (photoId: number, forDisplay = false) =>
+    call<{ absolute_path: string; library_session_id: number; file_hash: string }>("library_resolve_path", {
       photo_id: photoId,
+      for_display: forDisplay,
     }),
   exclusions: {
     list: () => call<ExcludedFolderDto[]>("library_exclusions_list"),

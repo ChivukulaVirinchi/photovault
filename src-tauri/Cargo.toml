@@ -9,7 +9,8 @@ publish = false
 
 [lib]
 name = "smriti_tauri_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop binaries only need the Rust library; avoid redundant native archives.
+crate-type = ["rlib"]
 
 [[bin]]
 name = "smriti-tauri"
@@ -45,6 +46,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 open = "5"
 async-channel = "2"
 kamadak-exif = "0.5"
+tempfile = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # `setsid()` for the show-in-folder fix: file managers spawned by us
@@ -67,7 +69,6 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
 # Snapshot testing for the wire-format DTOs and JSON shapes produced
 # by Tauri command handlers. See tests/dto_snapshots.rs.
 # Reviewers update snapshots with `cargo insta review`.

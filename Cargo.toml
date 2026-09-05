@@ -84,6 +84,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # File system utilities
 walkdir = "2"
 dirs = "5"                      # Platform-specific directories
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 fs2 = "0.4"
 
 # Hashing
@@ -152,8 +153,16 @@ semver = { version = "1", features = ["serde"] }
 self_update = { version = "1.0.0-rc.3", default-features = false, features = ["reqwest", "rustls", "archive-zip", "compression-zip-deflate"] }
 futures = "0.3"
 open = "5"
+tempfile = "3"
 
 # Optimize key deps even in debug mode — image decoding is unusable without this
+[profile.dev.package.smriti]
+debug = 0
+strip = "debuginfo"
+[profile.dev.package.smriti-tauri]
+debug = 0
+strip = "debuginfo"
+
 [profile.dev.package.image]
 opt-level = 3
 [profile.dev.package.png]
@@ -180,7 +189,6 @@ panic = "abort"
 # bundler owns .deb, AppImage, .msi, and .dmg packaging now.
 
 [dev-dependencies]
-tempfile = "3"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 # `insta` provides inline snapshot tests. Used by integration tests
 # under `tests/` and by `src-tauri/tests/dto_snapshots.rs` to catch

@@ -435,7 +435,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.compat_photos_list` | `{ offset: u32, limit: Option<u32> }` | `Page<PhotoSummaryDto>` | read-only preview for schema-too-new libraries; reads only stable `photos` columns, never generates thumbnails or mutates the DB |
 | `library.close` | `{}` | `()` | for "switch library" flow; flushes pending writes |
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
-| `library.start_scan` | `{ scan_hidden_folders: bool }` | `{ job_id: String }` | emits `scan:progress`, `scan:complete` |
+| `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; emits `scan:progress`, `scan:complete` |
 | `library.cancel_scan` | `{ job_id: String }` | `()` | flips cancel flag; scan finishes mid-batch |
 | `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
 | `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |
@@ -450,7 +450,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.exclusions.remove` | `{ relative_path: String }` | `()` | future scans can index the folder again |
 | `library.regenerate_thumbnails` | `{ photo_ids: Option<Vec<i64>> }` | `{ job_id: String }` | None = all; emits `thumbnails:progress` |
 | `library.refresh_photo_dates` | `{}` | `{ job_id: String }` | clears stored capture dates for non-trashed photos/videos and emits metadata progress while re-reading embedded metadata, strict filename dates, and mtime fallback |
-| `library.resolve_path` | `{ photo_id: i64 }` | `{ absolute_path: String }` | resolves relative path to absolute, errors if drive not mounted |
+| `library.resolve_path` | `{ photo_id: i64, for_display?: bool }` | `{ absolute_path: String, library_session_id: u64, file_hash: String }` | validates containment; display mode converts unsupported browser formats to a cached JPEG |
 
 **`LibraryOpenResult`** = `{ drive_root, photo_count, first_run: bool, read_only: bool, schema_too_new: Option<SchemaTooNewDto> }`
 **`SchemaTooNewDto`** = `{ db_version: i32, max_supported: i32 }`
@@ -481,7 +481,7 @@ ledger. Re-running the same archive set resumes idempotently.
 | `photos.request_thumbnail` | `{ id: i64 }` | `{ thumbnail_path: Option<String> }` | demand-generation for one visible photo cell |
 | `photos.request_thumbnails` | `{ ids: Vec<i64> }` | `{ items: Vec<{ id: i64, thumbnail_path: Option<String> }> }` | up to 200; demand-generation for visible/near-visible photo cells; failures omitted so callers can retry |
 | `photos.exif_extras` | `{ photo_id: i64 }` | `ExifExtrasDto` | lazy tier-2 EXIF details for photo detail |
-| `photos.save_video_probe` | `{ photo_id: i64, ... }` | `()` | stores probed video metadata/poster information |
+| `photos.save_video_probe` | `{ id: i64, library_session_id: u64, file_hash: String, duration_ms: i64?, width: i32?, height: i32?, poster_jpeg_base64: String? }` | `{ thumbnail_path: String? }` | rejects a changed library session or source before persisting the probe |
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_person` | `{ person_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_date` | `{ start: String, end: String, cursor, limit }` | `Page<PhotoSummaryDto>` | inclusive range |
@@ -784,11 +784,8 @@ for the day this returns.
 | `map.pins` | `{ bounds: { north, south, east, west }, zoom: u8, max_pins: Option<u32> }` | `Vec<MapPinDto>` | server-side aggregation if too many; cluster `photo_ids` capped at 500 |
 | `map.pins_all` | `{ max_pins: Option<u32> }` | `Vec<MapPinDto>` | fallback/full-library map mode |
 | `map.cluster_filmstrip` | `{ photo_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` | for clicked-pin overlay |
-| `map.tile_cache.stats` | `{}` | `{ size_bytes: u64, file_count: u32, limit_bytes: u64 }` |
-| `map.tile_cache.set_limit` | `{ limit_mb: u32 }` | `()` |
-| `map.tile_cache.clear` | `{}` | `{ freed_bytes: u64 }` |
 
-> **Maps note:** MapLibre GL JS handles tile fetching directly via HTTPS to OSM — Tauri doesn't proxy tiles. The `map.tile_cache.*` commands manage *our* offline tile cache (MapLibre's IndexedDB cache or our pre-cached tiles). Pins are the only photo-side data crossing IPC.
+MapLibre fetches OSM tiles through the shared WebView Cache API. Settings controls its byte limit and clearing through `tile-cache-storage.ts`; the unused Rust tile cache and its misleading IPC commands were removed. Detail minimaps use the same cache. Stale cached tiles remain available offline.
 
 ### 13. `insights`
 

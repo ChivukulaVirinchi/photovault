@@ -180,7 +180,8 @@ If your test takes longer than ~1 second, ask:
 
 The 50k-photo `timeline_scale.rs` test is marked `#[ignore]` so it
 doesn't run by default. Heavyweight benchmarks live in `benches/`
-and run only nightly.
+and are run explicitly; the benchmark workflow compiles them but does
+not establish performance results.
 
 ## Snapshot tests in detail
 

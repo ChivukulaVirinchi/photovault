@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod credentials;
+
 /// Application settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub theme: AppTheme,
     pub thumbnail_size: u32,
@@ -135,6 +137,7 @@ pub struct AppConfig {
 
     /// Provider API key. DTOs only expose whether this is set.
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub assistant_api_key: Option<String>,
 }
 
@@ -245,9 +248,26 @@ impl Default for AppConfig {
     }
 }
 
+impl std::fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("theme", &self.theme)
+            .field("assistant_api_key_set", &self.assistant_api_key.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl AppConfig {
     /// Load config from disk. Falls back to defaults on any failure.
     pub fn load() -> Self {
+        let mut cfg = Self::load_from_disk();
+        if cfg.assistant_api_key.is_none() {
+            cfg.assistant_api_key = credentials::load();
+        }
+        cfg
+    }
+
+    fn load_from_disk() -> Self {
         let path = Self::config_path();
         // If the new path is empty but a pre-rename config exists,
         // pick that up once so upgrading users don't lose their settings.
@@ -324,8 +344,7 @@ impl AppConfig {
         if let Some(ref url) = self.face_gpu_bridge_url {
             if !is_allowed_gpu_bridge_url(url) {
                 tracing::warn!(
-                    "Invalid face_gpu_bridge_url '{}' — must use https:// or local http://. Disabling.",
-                    url
+                    "Invalid face_gpu_bridge_url — must use https:// or local http://. Disabling."
                 );
                 self.face_gpu_bridge_url = None;
                 self.face_gpu_bridge_enabled = false;
@@ -368,10 +387,7 @@ impl AppConfig {
         ) {
             self.assistant_provider = default_assistant_provider();
         }
-        if !self.assistant_base_url.starts_with("https://")
-            && !self.assistant_base_url.starts_with("http://localhost")
-            && !self.assistant_base_url.starts_with("http://127.0.0.1")
-        {
+        if !is_allowed_assistant_url(&self.assistant_base_url) {
             self.assistant_base_url = default_assistant_base_url();
         }
         if self.assistant_model.trim().is_empty() {
@@ -393,7 +409,18 @@ impl AppConfig {
             std::fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, content)
+        use std::io::Write;
+        let mut staged =
+            tempfile::NamedTempFile::new_in(path.parent().expect("config has a parent"))?;
+        staged.write_all(content.as_bytes())?;
+        staged.as_file().sync_all()?;
+        // Migrate legacy plaintext only once secure storage succeeds.
+        // On failure leave the existing config untouched.
+        if let Some(key) = self.assistant_api_key.as_deref() {
+            credentials::store(Some(key))?;
+        }
+        staged.persist(path).map_err(|error| error.error)?;
+        Ok(())
     }
 
     /// Config file path.
@@ -422,20 +449,24 @@ impl AppConfig {
     }
 }
 
-pub fn is_allowed_gpu_bridge_url(url: &str) -> bool {
-    if url.starts_with("https://") {
-        return true;
-    }
-    let Some(rest) = url.strip_prefix("http://") else {
+pub fn is_allowed_assistant_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
         return false;
     };
-    let host_port = rest.split('/').next().unwrap_or_default();
-    let host = host_port
-        .strip_prefix('[')
-        .and_then(|s| s.split(']').next())
-        .unwrap_or_else(|| host_port.split(':').next().unwrap_or_default());
+    if !url.username().is_empty() || url.password().is_some() || url.host().is_none() {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("");
+    let loopback = host == "localhost"
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    url.scheme() == "https" || (url.scheme() == "http" && loopback)
+}
 
-    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.")
+pub fn is_allowed_gpu_bridge_url(url: &str) -> bool {
+    is_allowed_assistant_url(url)
 }
 
 /// Theme setting.
@@ -460,6 +491,20 @@ pub enum DateFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_are_never_serialized_or_debugged_but_legacy_keys_can_be_read() {
+        let cfg = AppConfig {
+            assistant_api_key: Some("private-key".into()),
+            ..Default::default()
+        };
+        assert!(!format!("{cfg:?}").contains("private-key"));
+        let mut json = serde_json::to_value(&cfg).unwrap();
+        assert!(json.get("assistant_api_key").is_none());
+        json["assistant_api_key"] = serde_json::json!("legacy-key");
+        let legacy: AppConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy.assistant_api_key.as_deref(), Some("legacy-key"));
+    }
 
     #[test]
     fn validate_forces_adaface_embedder() {

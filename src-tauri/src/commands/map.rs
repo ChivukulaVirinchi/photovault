@@ -1,4 +1,4 @@
-//! Map: pins (with server-side zoom-level clustering) and tile cache stats.
+//! Map pins with server-side zoom-level clustering.
 
 use std::collections::HashMap;
 
@@ -7,7 +7,7 @@ use tauri::State;
 
 use smriti::db::{db_path_for, open_secondary, PhotoRepo};
 
-use crate::dto::{MapPinDto, PhotoSummaryDto, TileCacheStatsDto};
+use crate::dto::{MapPinDto, PhotoSummaryDto};
 use crate::state::AppState;
 use crate::{CommandError, CommandResult};
 
@@ -133,97 +133,90 @@ pub async fn map_pins(
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
-        let repo = PhotoRepo::new(&conn);
-
-        // Hard upper bound for SQL; clustering operates on this snapshot.
-        let cap = 50_000i64;
-        let raw = repo.list_in_bounds(bounds.north, bounds.south, bounds.east, bounds.west, cap)?;
-
-        // Always cluster at low zoom (≤7 = country / continent level), even
-        // for small libraries. Otherwise a few hundred geotagged photos
-        // render as individual thumb pins splattered across a continent —
-        // visually noisy and useless. At higher zooms we fall back to
-        // "single pins until pin_count exceeds max_pins".
-        let zoom = args.zoom.min(22);
-        let max_pins = args.max_pins.unwrap_or(1000).clamp(100, 5_000) as usize;
-        let force_cluster = zoom <= 7;
-        if !force_cluster && raw.len() <= max_pins {
-            return Ok(raw
-                .into_iter()
-                .filter_map(|p| {
-                    let lat = p.gps_latitude?;
-                    let lng = p.gps_longitude?;
-                    Some(MapPinDto {
-                        photo_id: p.id,
-                        lat,
-                        lng,
-                        thumbnail_path: p.thumbnail_path,
-                        count: 1,
-                        photo_ids: Vec::new(),
-                    })
-                })
-                .collect());
-        }
-
-        // Cluster server-side: snap to grid, count members, remember
-        // member ids for the filmstrip drawer. The pin's lat/lng is set
-        // to the **cell center** so adjacent clusters never visually
-        // collide along the representative photo's exact coords.
-        let cell = cell_size_deg(zoom);
-        type Key = (i64, i64);
-        struct CellAcc {
-            thumb: Option<String>,
-            rep_id: i64,
-            photo_ids: Vec<i64>,
-        }
-        let mut cells: HashMap<Key, CellAcc> = HashMap::new();
-
-        for p in raw.iter() {
-            let (Some(lat), Some(lng)) = (p.gps_latitude, p.gps_longitude) else {
-                continue;
-            };
-            let key: Key = ((lat / cell).floor() as i64, (lng / cell).floor() as i64);
-            let entry = cells.entry(key).or_insert_with(|| CellAcc {
-                thumb: p.thumbnail_path.clone(),
-                rep_id: p.id,
-                photo_ids: Vec::new(),
-            });
-            entry.photo_ids.push(p.id);
-            // Keep the newest member as representative (raw is ordered
-            // date_taken DESC, so first-seen is newest).
-        }
-
-        Ok(cells
-            .into_iter()
-            .map(|((kx, ky), mut acc)| {
-                // Cell center: (kx + 0.5) * cell_size_deg.
-                let cell_lat = (kx as f64 + 0.5) * cell;
-                let cell_lng = (ky as f64 + 0.5) * cell;
-                let count = acc.photo_ids.len() as u32;
-                // Leave photo_ids empty for single-photo "clusters" — the
-                // frontend renders those as regular thumb pins, no
-                // filmstrip needed.
-                let photo_ids = if count > 1 {
-                    acc.photo_ids.truncate(500);
-                    acc.photo_ids
-                } else {
-                    Vec::new()
-                };
-                MapPinDto {
-                    photo_id: acc.rep_id,
-                    lat: cell_lat,
-                    lng: cell_lng,
-                    thumbnail_path: acc.thumb,
-                    count,
-                    photo_ids,
-                }
-            })
-            .collect())
+        collect_pins(&conn, bounds, args.zoom, args.max_pins)
     })
     .await
     .map_err(|e| CommandError::Internal {
         message: format!("map pins worker failed: {e}"),
     })?
+}
+
+fn collect_pins(
+    conn: &rusqlite::Connection,
+    bounds: QueryBounds,
+    zoom: u8,
+    max_pins: Option<u32>,
+) -> CommandResult<Vec<MapPinDto>> {
+    // Stream just the fields we need. Do not truncate before clustering:
+    // doing so silently loses older photos and undercounts clusters.
+    let mut stmt = conn.prepare(
+        "SELECT id, gps_latitude, gps_longitude, thumbnail_path FROM photos
+         WHERE is_trashed = FALSE AND gps_latitude BETWEEN ?1 AND ?2
+         AND ((?3 <= ?4 AND gps_longitude BETWEEN ?3 AND ?4)
+           OR (?3 > ?4 AND (gps_longitude >= ?3 OR gps_longitude <= ?4)))
+         ORDER BY date_taken DESC, id DESC",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![
+        bounds.south,
+        bounds.north,
+        bounds.west,
+        bounds.east
+    ])?;
+    let cell = cell_size_deg(zoom);
+    let max_pins = max_pins.unwrap_or(1000).clamp(100, 5000) as usize;
+    let mut singles = Vec::new();
+    let mut cells: HashMap<(i64, i64), MapPinDto> = HashMap::new();
+    let mut clustered = zoom <= 7;
+    let mut add = |pin: MapPinDto| {
+        let key = (
+            (pin.lat / cell).floor() as i64,
+            (pin.lng / cell).floor() as i64,
+        );
+        let id = pin.photo_id;
+        let entry = cells.entry(key).or_insert_with(|| MapPinDto {
+            lat: ((key.0 as f64 + 0.5) * cell).clamp(-90.0, 90.0),
+            lng: ((key.1 as f64 + 0.5) * cell).clamp(-180.0, 180.0),
+            count: 0,
+            ..pin
+        });
+        entry.count = entry.count.saturating_add(1);
+        if entry.photo_ids.len() < 500 {
+            entry.photo_ids.push(id);
+        }
+    };
+    while let Some(row) = rows.next()? {
+        let pin = MapPinDto {
+            photo_id: row.get(0)?,
+            lat: row.get(1)?,
+            lng: row.get(2)?,
+            thumbnail_path: row.get(3)?,
+            count: 1,
+            photo_ids: Vec::new(),
+        };
+        if clustered {
+            add(pin);
+        } else {
+            singles.push(pin);
+            if singles.len() > max_pins {
+                clustered = true;
+                for pin in singles.drain(..) {
+                    add(pin);
+                }
+            }
+        }
+    }
+    if !clustered {
+        return Ok(singles);
+    }
+    Ok(cells
+        .into_values()
+        .map(|mut pin| {
+            if pin.count == 1 {
+                pin.photo_ids.clear();
+            }
+            pin
+        })
+        .collect())
 }
 
 /// Return every geotagged photo (lat/lng + thumb) in one shot.
@@ -304,151 +297,40 @@ pub async fn map_cluster_filmstrip(
     Ok(photos.iter().map(PhotoSummaryDto::from).collect())
 }
 
-#[tauri::command]
-pub async fn map_tile_cache_stats(state: State<'_, AppState>) -> CommandResult<TileCacheStatsDto> {
-    let dir = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        smriti::db::tile_cache_dir(&lib.drive_root)
-    };
-    let (size_bytes, file_count) = tauri::async_runtime::spawn_blocking(move || {
-        let mut size_bytes: u64 = 0;
-        let mut file_count: u64 = 0;
-        if dir.exists() {
-            for path in walk_files(&dir) {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    size_bytes = size_bytes.saturating_add(meta.len());
-                    file_count += 1;
-                }
-            }
-        }
-        (size_bytes, file_count)
-    })
-    .await
-    .map_err(|e| CommandError::Internal {
-        message: format!("tile cache stats worker failed: {e}"),
-    })?;
-    let cfg = smriti::config::AppConfig::load();
-    let limit_bytes = (cfg.map_cache_limit_mb as u64) * 1024 * 1024;
-    Ok(TileCacheStatsDto {
-        size_bytes,
-        file_count,
-        limit_bytes,
-    })
-}
-
-// ---------- mutations ----------
-
-#[derive(Debug, Deserialize)]
-pub struct MapTileCacheSetLimitArgs {
-    pub limit_mb: u32,
-}
-
-#[tauri::command]
-pub async fn map_tile_cache_set_limit(args: MapTileCacheSetLimitArgs) -> CommandResult<()> {
-    let mut cfg = smriti::config::AppConfig::load();
-    cfg.map_cache_limit_mb = args.limit_mb.clamp(50, 10_000);
-    cfg.save().map_err(|e| CommandError::Io {
-        message: e.to_string(),
-    })?;
-    Ok(())
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct MapTileCacheClearedDto {
-    pub freed_bytes: u64,
-}
-
-#[tauri::command]
-pub async fn map_tile_cache_clear(
-    state: State<'_, AppState>,
-) -> CommandResult<MapTileCacheClearedDto> {
-    let dir = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        smriti::db::tile_cache_dir(&lib.drive_root)
-    };
-    let freed = tauri::async_runtime::spawn_blocking(move || {
-        let mut freed: u64 = 0;
-        if dir.exists() {
-            for path in walk_files(&dir) {
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    freed = freed.saturating_add(meta.len());
-                }
-                let _ = std::fs::remove_file(&path);
-            }
-            remove_empty_dirs(&dir);
-        }
-        freed
-    })
-    .await
-    .map_err(|e| CommandError::Internal {
-        message: format!("tile cache clear worker failed: {e}"),
-    })?;
-    Ok(MapTileCacheClearedDto { freed_bytes: freed })
-}
-
-fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return files;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        match entry.file_type() {
-            Ok(t) if t.is_dir() => files.extend(walk_files(&path)),
-            Ok(t) if t.is_file() => files.push(path),
-            _ => {}
-        }
-    }
-    files
-}
-
-fn remove_empty_dirs(dir: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            remove_empty_dirs(&path);
-            let _ = std::fs::remove_dir(path);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn walk_files_finds_nested_tile_cache_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("tile_cache");
-        let nested = root.join("12").join("2201");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("1320.png"), b"tile").unwrap();
-        std::fs::write(root.join("manifest.txt"), b"meta").unwrap();
-
-        let mut files = walk_files(&root);
-        files.sort();
-
-        assert_eq!(files.len(), 2);
-        assert!(files.contains(&nested.join("1320.png")));
-        assert!(files.contains(&root.join("manifest.txt")));
-    }
-
-    #[test]
-    fn remove_empty_dirs_keeps_cache_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("tile_cache");
-        let nested = root.join("12").join("2201");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        remove_empty_dirs(&root);
-
-        assert!(root.exists());
-        assert!(!root.join("12").exists());
+    fn clusters_include_rows_beyond_old_cap_and_bound_member_samples() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE photos(id INTEGER PRIMARY KEY, gps_latitude REAL,
+             gps_longitude REAL, thumbnail_path TEXT, is_trashed INTEGER, date_taken TEXT);
+             WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<50001)
+             INSERT INTO photos SELECT id, 10, 179, NULL, 0, '2026' FROM n;
+             INSERT INTO photos VALUES(50002, 10, -179, NULL, 0, '2026');
+             INSERT INTO photos VALUES(50003, 10, 0, NULL, 0, '2026');
+             INSERT INTO photos VALUES(50004, 10, 179, NULL, 1, '2026');",
+        )
+        .unwrap();
+        let pins = collect_pins(
+            &conn,
+            QueryBounds {
+                north: 20.0,
+                south: 0.0,
+                west: 170.0,
+                east: -170.0,
+            },
+            5,
+            None,
+        )
+        .unwrap();
+        assert_eq!(pins.iter().map(|p| p.count).sum::<u32>(), 50002);
+        let cluster = pins.iter().find(|p| p.count > 1).unwrap();
+        assert_eq!(cluster.count, 50001);
+        assert_eq!(cluster.photo_ids.len(), 500);
+        assert_eq!(cluster.photo_id, 50001);
     }
 
     #[test]

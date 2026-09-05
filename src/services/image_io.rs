@@ -16,6 +16,16 @@ use std::path::Path;
 
 use image::DynamicImage;
 
+/// Formats that need conversion before display in the system WebView.
+pub fn needs_display_rendition(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    is_raw_extension(&ext) || matches!(ext.as_str(), "raf" | "heic" | "heif" | "tif" | "tiff")
+}
+
 /// Open and decode an image. Returns a fully-decoded `DynamicImage`
 /// regardless of the on-disk format. HEIC/HEIF route through libheif
 /// when compiled in; RAW files route through `raw_preview` to extract
@@ -44,7 +54,7 @@ pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
 /// path. Kept in sync with `scanner::SUPPORTED_EXTENSIONS` and
 /// `reindexer`'s extension allowlist — adding a new RAW extension
 /// means touching this list too.
-fn is_raw_extension(e: &str) -> bool {
+pub fn is_raw_extension(e: &str) -> bool {
     matches!(
         e,
         "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw"

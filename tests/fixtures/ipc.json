@@ -1,0 +1,8 @@
+{
+  "library_resolve_path": { "args": { "photo_id": 42, "for_display": true } },
+  "settings_update": { "args": { "assistant_api_key": null, "home_city_override": null } },
+  "photos_save_video_probe": {
+    "args": { "id": 42, "library_session_id": 7, "file_hash": "abcd", "duration_ms": 1000,
+      "width": 640, "height": 480, "poster_jpeg_base64": null }
+  }
+}

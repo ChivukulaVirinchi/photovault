@@ -39,7 +39,7 @@ pub mod trash_repo;
 pub use album_repo::{AlbumRecord, AlbumRepo};
 pub use album_suggestion_repo::{AlbumSuggestionRecord, AlbumSuggestionRepo};
 pub use burst_repo::{BurstGroupMemberRecord, BurstGroupRecord, BurstRepo};
-pub use connection::{db_path_for, open_secondary, tile_cache_dir, Database};
+pub use connection::{db_path_for, open_secondary, Database};
 pub use document_repo::DocumentRepo;
 pub use duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord, DuplicateRepo};
 pub use excluded_folder_repo::{ExcludedFolderRecord, ExcludedFolderRepo};

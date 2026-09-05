@@ -23,7 +23,7 @@ impl<'a> ExcludedFolderRepo<'a> {
             "SELECT e.relative_path, e.created_at,
                     (SELECT COUNT(*) FROM photos p
                      WHERE p.is_trashed = FALSE
-                       AND (p.file_path = e.relative_path OR p.file_path LIKE e.relative_path || '/%'))
+                       AND (p.file_path = e.relative_path OR substr(p.file_path, 1, length(e.relative_path) + 1) = e.relative_path || '/'))
              FROM excluded_folders e
              ORDER BY e.relative_path COLLATE NOCASE",
         )?;
@@ -51,7 +51,7 @@ impl<'a> ExcludedFolderRepo<'a> {
         self.conn.query_row(
             "SELECT COUNT(*) FROM photos
              WHERE is_trashed = FALSE
-               AND (file_path = ?1 OR file_path LIKE ?1 || '/%')",
+               AND (file_path = ?1 OR substr(file_path, 1, length(?1) + 1) = ?1 || '/')",
             params![relative_path],
             |row| row.get(0),
         )
@@ -68,7 +68,7 @@ impl<'a> ExcludedFolderRepo<'a> {
         )?;
         tx.execute(
             "DELETE FROM photos
-             WHERE file_path = ?1 OR file_path LIKE ?1 || '/%'",
+             WHERE file_path = ?1 OR substr(file_path, 1, length(?1) + 1) = ?1 || '/'",
             params![relative_path],
         )?;
         tx.commit()?;
@@ -88,7 +88,7 @@ impl<'a> ExcludedFolderRepo<'a> {
             "SELECT e.relative_path, e.created_at,
                     (SELECT COUNT(*) FROM photos p
                      WHERE p.is_trashed = FALSE
-                       AND (p.file_path = e.relative_path OR p.file_path LIKE e.relative_path || '/%'))
+                       AND (p.file_path = e.relative_path OR substr(p.file_path, 1, length(e.relative_path) + 1) = e.relative_path || '/'))
              FROM excluded_folders e
              WHERE e.relative_path = ?1",
             params![relative_path],

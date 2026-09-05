@@ -17,25 +17,22 @@ specific places.
 Smriti uses [OpenStreetMap](https://www.openstreetmap.org/) tiles via
 [MapLibre GL](https://maplibre.org/). Tiles are downloaded on demand
 when you pan to a region for the first time, then cached locally on
-your drive. Subsequent visits to the same region serve from cache —
-no further network requests.
+in the app's WebView storage. Fresh cached tiles avoid network requests;
+expired tiles are refreshed when online.
 
-**Cache location:** OS user cache directory (Linux:
-`~/.cache/smriti/map-tiles/`, macOS:
-`~/Library/Caches/smriti/map-tiles/`, Windows:
-`%LOCALAPPDATA%\smriti\Cache\map-tiles\`).
+**Cache location:** the WebView Cache API, shared by Map and the photo-detail
+minimap. Use Settings to manage it; it is not stored on the photo drive.
 
 **Cache size cap:** configurable in **Settings → Map → Tile cache
 size**. The default 500 MB is enough for the regions you regularly
-visit; older tiles are evicted LRU-style.
+visit; older inserted tiles are evicted first.
 
-**To disable map tile loading entirely:** simply don't open the Map
-view. Tiles only load while it's visible.
+Both Map and photo location minimaps can request tiles while visible.
 
 ## Working offline
 
 Once you've panned over a region in Map view, those tiles are
-permanently cached and work without internet. Useful before a trip
+available offline until evicted or cleared. Useful before a trip
 where you know you'll want to browse without connectivity.
 
 To clear the cache (e.g. before donating the drive), use

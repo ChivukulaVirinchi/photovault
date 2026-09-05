@@ -24,10 +24,7 @@ if (Test-Path target/release/bundle) {
   }
 }
 
-# Old build dirs (more than 3 days old)
-Get-ChildItem -Path target/debug/build -Directory -ErrorAction SilentlyContinue |
-  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-3) } |
-  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# Build-script outputs can remain valid for months; age is not a stale-cache test.
 
 if (Test-Path target) {
   $after = (Get-ChildItem target -Recurse | Measure-Object -Property Length -Sum).Sum

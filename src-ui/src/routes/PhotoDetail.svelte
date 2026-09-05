@@ -5,10 +5,13 @@
   const preloadedMediaCache = new Set<number>();
   const preloadInFlight = new Set<number>();
   let cachedDriveRoot: string | null = null;
+  let cachedSession = -1;
 </script>
 
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { library } from "../lib/api/library";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Fullscreen,
     RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
@@ -22,7 +25,7 @@
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
-  import { libraryAssetUrl, thumbUrl } from "../lib/thumbnail";
+  import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { probeVideoPoster } from "../lib/videoProbe";
   import { extractDominantColor, type RGB } from "../lib/dominantColor";
@@ -30,11 +33,13 @@
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import type { ZoomApi } from "../lib/zoomApi";
   import maplibregl, { type Map as MapInstance } from "maplibre-gl";
+  import { installTileCache } from "../lib/tile-cache";
   import "maplibre-gl/dist/maplibre-gl.css";
   import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
 
   interface Props { id: number }
   let { id }: Props = $props();
+  installTileCache();
 
   let photo = $state<PhotoDto | null>(null);
   let imageUrl = $state<string | null>(null);
@@ -237,12 +242,14 @@
 
   async function photoAndUrl(photoId: number): Promise<[PhotoDto, string]> {
     const driveRoot = libraryStore.driveRoot;
-    if (driveRoot !== cachedDriveRoot) {
+    const session = libraryStore.session;
+    if (driveRoot !== cachedDriveRoot || session !== cachedSession) {
       resolvedImageCache.clear();
       photoDetailsCache.clear();
       preloadedMediaCache.clear();
       preloadInFlight.clear();
       cachedDriveRoot = driveRoot;
+      cachedSession = session;
     }
     const cachedPhoto = photoDetailsCache.get(photoId);
     const cached = resolvedImageCache.get(photoId);
@@ -254,8 +261,10 @@
       return [cachedPhoto, cached];
     }
     const p = await photos.get(photoId);
-    if (libraryStore.driveRoot !== driveRoot) throw new Error("Open library changed");
-    const url = libraryAssetUrl(driveRoot, p.file_path);
+    if (libraryStore.driveRoot !== driveRoot || libraryStore.session !== session) throw new Error("Open library changed");
+    const resolved = await library.resolvePath(photoId, true);
+    if (libraryStore.driveRoot !== driveRoot || libraryStore.session !== session) throw new Error("Open library changed");
+    const url = convertFileSrc(resolved.absolute_path);
     if (!url) throw new Error("Photo path is outside the open library");
     rememberPhoto(p, url);
     return [p, url];
@@ -347,7 +356,11 @@
         }, 0);
       }
     } catch (e) {
-      if (mounted && seq === loadSeq) error = commandErrorMessage(e);
+      if (mounted && seq === loadSeq) {
+        photo = null;
+        imageUrl = null;
+        error = commandErrorMessage(e);
+      }
     }
   }
 
@@ -362,9 +375,9 @@
           osm: {
             type: "raster",
             tiles: [
-              "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              "cached://https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              "cached://https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              "cached://https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
             ],
             tileSize: 256,
             attribution: "© OSM",

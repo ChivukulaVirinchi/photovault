@@ -23,47 +23,15 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost asset: http://asset.localhost https://asset.localhost https://*.tile.openstreetmap.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$HOME/**",
-          "$HOME/**/.*/**",
-          "A:/**",
-          "B:/**",
-          "C:/**",
-          "D:/**",
-          "E:/**",
-          "F:/**",
-          "G:/**",
-          "H:/**",
-          "I:/**",
-          "J:/**",
-          "K:/**",
-          "L:/**",
-          "M:/**",
-          "N:/**",
-          "O:/**",
-          "P:/**",
-          "Q:/**",
-          "R:/**",
-          "S:/**",
-          "T:/**",
-          "U:/**",
-          "V:/**",
-          "W:/**",
-          "X:/**",
-          "Y:/**",
-          "Z:/**",
-          "\\\\**",
-          "/media/**",
-          "/media/**/.*/**",
-          "/mnt/**",
-          "/mnt/**/.*/**",
-          "/run/media/**",
-          "/run/media/**/.*/**"
-        ]
-      }
+        "scope": {
+          "allow": [],
+          "requireLiteralLeadingDot": false
+        }
+      },
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; connect-src 'self' ws://localhost:5173 http://localhost:5173 ipc: http://ipc.localhost https://ipc.localhost asset: http://asset.localhost https://asset.localhost https://*.tile.openstreetmap.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
@@ -83,7 +51,9 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["libheif1"]
+        "depends": [
+          "libheif1"
+        ]
       },
       "appimage": {
         "bundleMediaFramework": false
@@ -94,7 +64,9 @@
     },
     "windows": {
       "wix": {
-        "language": ["en-US"]
+        "language": [
+          "en-US"
+        ]
       }
     }
   }

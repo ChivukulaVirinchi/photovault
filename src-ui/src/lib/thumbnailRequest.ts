@@ -40,12 +40,24 @@ export function enqueueThumbnail(
   return queue.enqueue(id, onReady, priority, mediaType, batchable);
 }
 
+export function resetThumbnailRequests() {
+  queue.reset();
+}
+
 export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestOptions) {
   let options = initial;
   let prefetchObserver: IntersectionObserver | null = null;
   let viewportObserver: IntersectionObserver | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe: (() => void) | null = null;
+  let failedPath: string | null = null;
+  function retryMissingImage(event: Event) {
+    if (!(event.target instanceof HTMLImageElement) || !options.thumbnailPath || failedPath === options.thumbnailPath) return;
+    failedPath = options.thumbnailPath;
+    options = { ...options, thumbnailPath: null };
+    schedule(true);
+  }
+  node.addEventListener("error", retryMissingImage, true);
 
   function cleanupPending() {
     if (timer != null) {
@@ -157,6 +169,7 @@ export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestO
       if (!prefetchObserver || !viewportObserver || rootChanged || idChanged || pathChanged) attach();
     },
     destroy() {
+      node.removeEventListener("error", retryMissingImage, true);
       cleanupObserver();
     },
   };

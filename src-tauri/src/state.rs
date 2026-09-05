@@ -17,6 +17,8 @@ use tokio::sync::{Mutex, RwLock};
 use smriti::services::assistant::{AssistantDraft, AssistantRun};
 
 pub struct AppState {
+    pub active_session: std::sync::atomic::AtomicU64,
+    pub library_lifecycle: Mutex<()>,
     pub library: RwLock<Option<OpenLibrary>>,
     pub unsupported_library: RwLock<Option<UnsupportedLibrary>>,
     pub jobs: Mutex<JobRegistry>,
@@ -26,6 +28,8 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            active_session: std::sync::atomic::AtomicU64::new(0),
+            library_lifecycle: Mutex::new(()),
             library: RwLock::new(None),
             unsupported_library: RwLock::new(None),
             jobs: Mutex::new(JobRegistry::default()),
@@ -41,6 +45,8 @@ impl Default for AppState {
 }
 
 pub struct OpenLibrary {
+    pub maintenance_cancel: Arc<AtomicBool>,
+    pub session_id: u64,
     pub drive_root: PathBuf,
     pub db: Arc<Mutex<Database>>,
     /// On-demand thumbnail generator. Shared across handlers so the
@@ -61,8 +67,11 @@ impl OpenLibrary {
     /// `drive_root`. Returns an io::Error if the cache directories
     /// can't be created (e.g. read-only mount, permission denied).
     pub fn new(drive_root: PathBuf, database: Database) -> std::io::Result<Self> {
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let thumbnails = Self::build_thumbnails(&drive_root)?;
         Ok(Self {
+            maintenance_cancel: Arc::new(AtomicBool::new(false)),
+            session_id: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             drive_root,
             db: Arc::new(Mutex::new(database)),
             thumbnails,
@@ -78,10 +87,14 @@ impl OpenLibrary {
         // surprised after a fresh install.
         let cfg = smriti::config::AppConfig::load();
         let svc = ThumbnailService::new(drive_root, cfg.thumbnail_cache_gb)?;
-        if let Err(e) = svc.load_existing_thumbnails() {
-            tracing::warn!("failed to load existing thumbnails: {}", e);
-        }
         Ok(Arc::new(svc))
+    }
+}
+
+impl Drop for OpenLibrary {
+    fn drop(&mut self) {
+        self.maintenance_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

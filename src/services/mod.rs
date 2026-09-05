@@ -4,7 +4,6 @@ pub mod album_suggestions;
 pub mod assistant;
 pub mod burst_detector;
 pub mod camera_names;
-pub mod document_detector;
 pub mod drive_detector;
 pub mod duplicate_detector;
 pub mod exclusions;
@@ -19,7 +18,6 @@ pub mod library_health;
 pub mod map_math;
 pub mod memories;
 pub mod metadata_processor;
-pub mod ocr_processor;
 pub mod path_util;
 pub mod photo_stacks;
 #[cfg(feature = "raw")]
@@ -31,12 +29,10 @@ pub mod self_replace;
 pub mod semantic;
 pub mod takeout_import;
 pub mod thumbnail;
-pub mod tile_cache;
 pub mod trash;
 pub mod update_checker;
 
 pub use burst_detector::{BurstConfig, BurstDetector};
-pub use document_detector::DocumentDetector;
 pub use drive_detector::{DriveDetector, DriveInfo};
 pub use duplicate_detector::DuplicateDetector;
 pub use face_processor::{
@@ -46,7 +42,6 @@ pub use geocoding::GeocodingService;
 pub use library_health::LibraryHealth;
 pub use memories::MemoryCard;
 pub use metadata_processor::MetadataProgress;
-pub use ocr_processor::{OcrProcessor, OcrProgress};
 pub use photo_stacks::{PhotoStackService, StackRefreshResult};
 pub use reindexer::{ApplyResult, IndexChanges, Reindexer};
 pub use scanner::ScanProgress;
@@ -58,5 +53,4 @@ pub use semantic::{
     SemanticStatus,
 };
 pub use thumbnail::{ThumbnailService, ThumbnailSize};
-pub use tile_cache::TileCache;
 pub use trash::{TrashService, TrashStats};

@@ -2,17 +2,11 @@
 
 ## Does Smriti upload my photos?
 
-No. Smriti is offline-first and processes media locally. The
-app never sends your photos, thumbnails, EXIF data, face embeddings,
-or anything derived from them to a server. The only network
-touchpoints are:
-
-- Map tiles from OpenStreetMap when the Map view is open.
-- Optional asset-pack download (ONNX runtime + ML models + GeoNames)
-  from the project's GitHub releases, only if you accept the
-  first-run installer.
-- Optional update check against `api.github.com`, only if you
-  opt in from the first-run prompt or Settings.
+Processing is local by default. If enabled, the GPU bridge uploads face
+crops and the provider-backed assistant sends conversation and library
+context to your configured service. Maps and photo-location minimaps
+fetch tiles; optional model/asset downloads and update checks also use
+the network.
 
 See [PRIVACY.md](../../PRIVACY.md) for the full disclosure.
 

@@ -2,12 +2,12 @@
 //!
 //! Follows a modified freedesktop.org thumbnail spec:
 //! - Thumbnails stored on the drive itself for portability
-//! - Named by SHA256 hash of file path
+//! - Named by the indexed file fingerprint
 //! - Stored as JPEG for smaller size
-//! - Three sizes: 128, 256, 512
+//! - Three thumbnail sizes and a source-resolution display rendition
 //!
-//! Performance strategy (matches production photo apps):
-//! 1. Extract embedded EXIF thumbnail first (~2ms vs ~200-500ms for full decode)
+//! Decode strategy:
+//! 1. Reuse an adequate embedded EXIF thumbnail
 //! 2. Fall back to bounded full decode when no adequate embedded preview exists
 //! 3. Per-image timeout to prevent stuck queue from corrupt/huge images
 //! 4. Priority-aware concurrency so visible cells beat background prewarm
@@ -33,20 +33,19 @@ const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThumbnailSize {
-    Small,  // 300x300 (timeline grid)
-    Medium, // 500x500 (detail preview)
-    Large,  // 1000x1000 (high quality / viewer)
+    Small,    // 260 px (timeline grid)
+    Medium,   // 430 px (detail preview)
+    Large,    // 860 px (larger preview)
+    Original, // Browser-compatible rendition at decoded source resolution.
 }
 
 impl ThumbnailSize {
     pub fn pixels(&self) -> u32 {
-        // ~15% smaller than the previous 300/500/1000 defaults. The quadratic
-        // pixel reduction (~30%) translates to similar CPU/IO savings per
-        // thumbnail with negligible visible-quality loss at typical grid sizes.
         match self {
             ThumbnailSize::Small => 260,
             ThumbnailSize::Medium => 430,
             ThumbnailSize::Large => 860,
+            ThumbnailSize::Original => u32::MAX,
         }
     }
 
@@ -55,6 +54,7 @@ impl ThumbnailSize {
             ThumbnailSize::Small => "small",
             ThumbnailSize::Medium => "medium",
             ThumbnailSize::Large => "large",
+            ThumbnailSize::Original => "original",
         }
     }
 }
@@ -248,6 +248,8 @@ pub struct ThumbnailService {
 
     /// Current cache size in bytes
     current_cache_bytes: Arc<RwLock<u64>>,
+    // Serialize inventory with publication, not with image decoding or cache hits.
+    accounting: Mutex<()>,
 
     /// Concurrency limiter for generation (std::sync for blocking context)
     generation_limiter: Arc<ConcurrencyLimiter>,
@@ -268,6 +270,7 @@ impl ThumbnailService {
             ThumbnailSize::Small,
             ThumbnailSize::Medium,
             ThumbnailSize::Large,
+            ThumbnailSize::Original,
         ] {
             std::fs::create_dir_all(cache_dir.join(size.dir_name()))?;
         }
@@ -283,6 +286,7 @@ impl ThumbnailService {
             cache: Arc::new(RwLock::new(LruCache::new(capacity))),
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
+            accounting: Mutex::new(()),
             // Cap concurrent decodes at 4. Each large JPEG holds ~50–80 MB
             // of decoded RGB while resizing — at 8-wide we saw OOM on
             // mid-spec laptops. 4 keeps the working set under ~320 MB.
@@ -406,10 +410,7 @@ impl ThumbnailService {
             return Ok(thumb_path);
         }
 
-        // Otherwise, regenerate it by falling through.
-        if thumb_path.exists() {
-            let _ = std::fs::remove_file(&thumb_path);
-        }
+        // Keep any old rendition until the replacement is fully encoded.
 
         // Create the hash subdirectory if it doesn't exist
         if let Some(parent) = thumb_path.parent() {
@@ -432,7 +433,11 @@ impl ThumbnailService {
         }
 
         // Generate thumbnail
-        let thumb = self.create_thumbnail(&img, size);
+        let thumb = if size == ThumbnailSize::Original {
+            img
+        } else {
+            self.create_thumbnail(&img, size)
+        };
 
         // Save as JPEG. Lower quality at the small end where artifacts
         // are invisible to the eye anyway, kept high for the viewer-size
@@ -441,17 +446,29 @@ impl ThumbnailService {
             ThumbnailSize::Small => 78,
             ThumbnailSize::Medium => 83,
             ThumbnailSize::Large => 88,
+            ThumbnailSize::Original => 95,
         };
-        let mut out = std::fs::File::create(&thumb_path)
-            .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
+        let mut out =
+            tempfile::NamedTempFile::new_in(thumb_path.parent().expect("cache directory"))
+                .map_err(|e| format!("Failed to create thumbnail file: {}", e))?;
         let mut encoder = JpegEncoder::new_with_quality(&mut out, quality);
         encoder
             .encode_image(&thumb)
             .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+        let _accounting = self
+            .accounting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let replaced_bytes = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
+        out.persist(&thumb_path)
+            .map_err(|e| format!("Failed to publish thumbnail: {e}"))?;
 
+        if let Ok(mut current) = self.current_cache_bytes.write() {
+            *current = current.saturating_sub(replaced_bytes);
+        }
         self.add_to_cache(file_hash, size, &thumb_path);
         self.track_cache_size(&thumb_path);
-        self.evict_if_needed();
+        self.evict_if_needed(Some(&thumb_path));
 
         Ok(thumb_path)
     }
@@ -485,7 +502,10 @@ impl ThumbnailService {
             .ok()
             .and_then(|r| r.with_guessed_format().ok())
             .and_then(|r| r.into_dimensions().ok())
-            .map(|(width, height)| width.max(height) >= size.pixels())
+            .map(|(width, height)| {
+                (size == ThumbnailSize::Original && width > 0 && height > 0)
+                    || width.max(height) >= size.pixels()
+            })
             .unwrap_or(false)
     }
 
@@ -507,7 +527,11 @@ impl ThumbnailService {
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase());
-        if matches!(ext.as_deref(), Some("heic") | Some("heif")) {
+        if matches!(ext.as_deref(), Some("heic") | Some("heif"))
+            || ext
+                .as_deref()
+                .is_some_and(crate::services::image_io::is_raw_extension)
+        {
             return crate::services::image_io::open_image(photo_path);
         }
 
@@ -573,11 +597,13 @@ impl ThumbnailService {
     /// Create a thumbnail from an image, maintaining aspect ratio.
     ///
     /// Filter choice trades quality for speed:
-    /// - Small (grid): `Triangle` is ~4× faster than `Lanczos3` and the
-    ///   difference is invisible at 260 px on a typical screen.
+    /// - Small (grid): `Triangle` prioritizes inexpensive resampling.
     /// - Medium: `CatmullRom` keeps edges crisp without Lanczos3's cost.
     /// - Large (viewer): `Lanczos3` — the user is going to look at this.
     fn create_thumbnail(&self, img: &DynamicImage, size: ThumbnailSize) -> DynamicImage {
+        if size == ThumbnailSize::Original {
+            return img.clone();
+        }
         let max_dim = size.pixels();
         let (width, height) = img.dimensions();
 
@@ -594,6 +620,7 @@ impl ThumbnailService {
             ThumbnailSize::Small => FilterType::Triangle,
             ThumbnailSize::Medium => FilterType::CatmullRom,
             ThumbnailSize::Large => FilterType::Lanczos3,
+            ThumbnailSize::Original => unreachable!("originals are not resized"),
         };
         img.resize(new_width, new_height, filter)
     }
@@ -629,7 +656,7 @@ impl ThumbnailService {
     /// byte budget. LruCache's `pop_lru` gives O(1) access to the
     /// oldest entry, vs. the previous O(n log n) sort of every
     /// thumbnail by timestamp.
-    fn evict_if_needed(&self) {
+    fn evict_if_needed(&self, protected: Option<&Path>) {
         let current = match self.current_cache_bytes.read() {
             Ok(v) => *v,
             Err(_) => return,
@@ -642,10 +669,52 @@ impl ThumbnailService {
         let target = self.max_cache_bytes * 80 / 100;
         let mut freed = 0u64;
 
+        // The bounded LRU is only a hot-path index, not a disk inventory.
+        // Evict untracked files first so older cache entries cannot escape
+        // the byte budget after falling out of the in-memory index.
+        let tracked: std::collections::HashSet<PathBuf> = self
+            .cache
+            .read()
+            .map(|cache| cache.iter().map(|(_, entry)| entry.path.clone()).collect())
+            .unwrap_or_default();
+        for size in [
+            ThumbnailSize::Small,
+            ThumbnailSize::Medium,
+            ThumbnailSize::Large,
+            ThumbnailSize::Original,
+        ] {
+            for entry in walkdir::WalkDir::new(self.cache_dir.join(size.dir_name()).join("v2"))
+                .follow_links(false)
+                .follow_root_links(false)
+                .into_iter()
+                .filter_map(Result::ok)
+            {
+                if current.saturating_sub(freed) <= target {
+                    break;
+                }
+                let path = entry.path();
+                if !entry.file_type().is_file()
+                    || path.extension().is_none_or(|ext| ext != "jpg")
+                    || tracked.contains(path)
+                    || protected == Some(path)
+                {
+                    continue;
+                }
+                if let Ok(metadata) = entry.metadata() {
+                    if std::fs::remove_file(path).is_ok() {
+                        freed += metadata.len();
+                    }
+                }
+            }
+        }
+
         // Pop oldest entries one at a time until we're under target.
         // The cache lock is held only for the pop; file deletion
         // happens without it.
         loop {
+            if current.saturating_sub(freed) <= target {
+                break;
+            }
             let popped = {
                 let mut cache = match self.cache.write() {
                     Ok(c) => c,
@@ -654,7 +723,13 @@ impl ThumbnailService {
                 cache.pop_lru()
             };
 
-            let Some((_, entry)) = popped else { break };
+            let Some((key, entry)) = popped else { break };
+            if protected == Some(entry.path.as_path()) {
+                if let Ok(mut cache) = self.cache.write() {
+                    cache.put(key, entry);
+                }
+                break;
+            }
 
             if std::fs::remove_file(&entry.path).is_ok() {
                 freed += entry.file_size;
@@ -674,12 +749,24 @@ impl ThumbnailService {
 
     /// Scan existing thumbnails on disk and populate cache
     pub fn load_existing_thumbnails(&self) -> std::io::Result<()> {
+        self.load_existing_thumbnails_until(&std::sync::atomic::AtomicBool::new(false))
+    }
+
+    pub fn load_existing_thumbnails_until(
+        &self,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> std::io::Result<()> {
+        let _accounting = self
+            .accounting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut total_size = 0u64;
 
         for size in [
             ThumbnailSize::Small,
             ThumbnailSize::Medium,
             ThumbnailSize::Large,
+            ThumbnailSize::Original,
         ] {
             let size_dir = self.cache_dir.join(size.dir_name()).join("v2");
 
@@ -694,7 +781,13 @@ impl ThumbnailService {
                 }
 
                 for file_entry in std::fs::read_dir(subdir_entry.path())? {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Ok(());
+                    }
                     let file_entry = file_entry?;
+                    if !file_entry.file_type()?.is_file() {
+                        continue;
+                    }
                     let path = file_entry.path();
 
                     if path.extension().map(|e| e == "jpg").unwrap_or(false) {
@@ -721,6 +814,7 @@ impl ThumbnailService {
         if let Ok(mut current) = self.current_cache_bytes.write() {
             *current = total_size;
         }
+        self.evict_if_needed(None);
 
         let count = self.cache.read().map(|c| c.len()).unwrap_or(0);
         tracing::info!(
@@ -736,6 +830,44 @@ impl ThumbnailService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_evicts_untracked_files_and_restarts_with_exact_accounting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = ThumbnailService::new(dir.path(), 1.0).unwrap();
+        let folder = service.cache_dir.join("small/v2/ab");
+        std::fs::create_dir_all(&folder).unwrap();
+        for i in 0..CACHE_ENTRY_CAPACITY + 5 {
+            std::fs::write(folder.join(format!("ab{i:08x}.jpg")), [1u8]).unwrap();
+        }
+        service.load_existing_thumbnails().unwrap();
+        assert_eq!(service.cache.read().unwrap().len(), CACHE_ENTRY_CAPACITY);
+        // Remove memory tracking to reproduce the worst case: all disk
+        // entries have fallen out of the bounded LRU.
+        service.cache.write().unwrap().clear();
+        service.max_cache_bytes = 10;
+        service.evict_if_needed(None);
+        let remaining = std::fs::read_dir(&folder).unwrap().count() as u64;
+        assert!(remaining <= 8);
+        assert_eq!(*service.current_cache_bytes.read().unwrap(), remaining);
+        service.load_existing_thumbnails().unwrap();
+        assert_eq!(*service.current_cache_bytes.read().unwrap(), remaining);
+    }
+
+    #[test]
+    fn repeated_inventory_does_not_double_count_published_renditions() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.png");
+        DynamicImage::new_rgb8(48, 32).save(&source).unwrap();
+        let service = ThumbnailService::new(dir.path(), 1.0).unwrap();
+        let path = service
+            .generate_thumbnail(&source, "abcdef12", 1, ThumbnailSize::Original)
+            .unwrap();
+        let size = std::fs::metadata(path).unwrap().len();
+        service.load_existing_thumbnails().unwrap();
+        service.load_existing_thumbnails().unwrap();
+        assert_eq!(*service.current_cache_bytes.read().unwrap(), size);
+    }
     use tempfile::tempdir;
 
     #[test]

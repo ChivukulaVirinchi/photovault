@@ -28,6 +28,7 @@ export function createThumbnailQueue(
   let pumpScheduled = false;
   const queued = new Map<number, QueueEntry>();
   const activeHandlers = new Map<number, Set<ThumbnailReadyHandler>>();
+  let generation = 0;
 
   function bestEntry(match?: (entry: QueueEntry) => boolean, remove = true): QueueEntry | null {
     let best: QueueEntry | null = null;
@@ -75,6 +76,7 @@ export function createThumbnailQueue(
 
       const entries = nextBatch();
       if (entries.length === 0) return;
+      const runGeneration = generation;
       active += 1;
       if (urgent) activeUrgent += 1;
       for (const entry of entries) {
@@ -91,6 +93,7 @@ export function createThumbnailQueue(
             );
       void run
         .then((thumbnailPaths) => {
+          if (runGeneration !== generation) return;
           for (const entry of entries) {
             const handlers = activeHandlers.get(entry.id);
             const thumbnailPath = thumbnailPaths.get(entry.id);
@@ -104,7 +107,9 @@ export function createThumbnailQueue(
         .finally(() => {
           active -= 1;
           if (urgent) activeUrgent -= 1;
-          for (const entry of entries) activeHandlers.delete(entry.id);
+          if (runGeneration === generation) {
+            for (const entry of entries) activeHandlers.delete(entry.id);
+          }
           requestPump();
         });
     }
@@ -130,6 +135,7 @@ export function createThumbnailQueue(
     mediaType: "photo" | "video" = "photo",
     batchable = true,
   ) {
+    const enqueueGeneration = generation;
     const running = activeHandlers.get(id);
     if (running) {
       running.add(onReady);
@@ -155,6 +161,8 @@ export function createThumbnailQueue(
     requestPump();
 
     return () => {
+      if (enqueueGeneration !== generation) return;
+      activeHandlers.get(id)?.delete(onReady);
       const entry = queued.get(id);
       if (!entry) return;
       entry.handlers.delete(onReady);
@@ -164,6 +172,11 @@ export function createThumbnailQueue(
 
   return {
     enqueue,
+    reset: () => {
+      generation += 1;
+      queued.clear();
+      activeHandlers.clear();
+    },
     pendingCount: () => queued.size,
     activeCount: () => active,
   };

@@ -42,6 +42,7 @@
 
   let showShortcuts = $state(false);
   let lastDriveRoot = $state<string | null | undefined>(undefined);
+  let lastSession = $state(-1);
   let lastRouteKey: string | null = null;
 
   function safeDecode(value: string): string {
@@ -125,7 +126,7 @@
   $effect(() => {
     const root = libraryStore.driveRoot;
     const previousRoot = lastDriveRoot;
-    if (previousRoot !== undefined && root !== previousRoot) {
+    if (previousRoot !== undefined && (root !== previousRoot || libraryStore.session !== lastSession)) {
       browseContext.clear();
       selection.clear();
       photoVisibility.clear();
@@ -137,6 +138,7 @@
       }
     }
     lastDriveRoot = root;
+    lastSession = libraryStore.session;
   });
 
 </script>
@@ -150,7 +152,7 @@
     <Welcome />
   {/if}
 {:else}
-  {#key libraryStore.driveRoot}
+  {#key `${libraryStore.driveRoot}:${libraryStore.session}`}
     <div class="shell">
       <Sidebar current={route.path} />
       <div class="main">

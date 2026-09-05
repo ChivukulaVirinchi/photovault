@@ -10,8 +10,8 @@ Smriti is a desktop app split across three crates / workspaces:
     that name for backwards compatibility with libraries indexed
     before the rename).
   - `src/ml/` — ONNX Runtime wrapper, face detector, embedder.
-  - `src/config/`, `src/models/`, `src/scoring/`, `src/search/` — config,
-    domain types, image-quality scoring, query parsing.
+  - `src/config/`, `src/models/`, `src/search/` — config,
+    domain types and query parsing.
   - `src/bootstrap.rs` — runtime asset checks (ONNX runtime, models,
     GeoNames DB).
 - **`src-tauri/`** — Tauri 2 shell. One bin crate that mounts every
