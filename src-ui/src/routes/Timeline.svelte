@@ -1466,7 +1466,6 @@
                   class:selected={selection.has(photo.id)}
                   class:focused={focusedIdx >= 0 && items[focusedIdx]?.id === photo.id}
                   href="#/photo?id={photo.id}"
-                  title="#{photo.id}"
                   use:thumbnailOnVisible={{
                     id: photo.id,
                     thumbnailPath: photo.thumbnail_path,

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-CL78S29HK5"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-CL78S29HK5');
+  </script>
+  <title>How to organise 100,000+ photos on an external drive — Smriti</title>
+  <meta name="description" content="Most photo software wants to import, copy or upload a large library. If your photos already live on a drive, here is how to index them in place and keep the catalog on the disk." />
+  <link rel="canonical" href="https://chivukulavirinchi.github.io/photovault/organise-photos-external-drive.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="How to organise 100,000+ photos on an external drive" />
+  <meta property="og:description" content="Index in place, keep the catalog on the drive, and stop the software from copying your library." />
+  <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
+  <meta name="theme-color" content="#fafaf8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0f1015" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root, :root[data-theme="light"] {
+      --bg: #fafaf8; --bg-paper: #f4f5f3;
+      --ink: #15171c; --ink-soft: #3a3d44; --ink-muted: #797d85; --ink-faint: #adb0b8;
+      --line: #d2d4d2; --line-soft: #e1e3e0;
+      --accent: #466996; --accent-deep: #2f4f7a;
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1015; --bg-paper: #161821;
+      --ink: #e7eaf0; --ink-soft: #aeb3bf; --ink-muted: #80858f; --ink-faint: #4d525c;
+      --line: #2a2e38; --line-soft: #1e2129;
+      --accent: #9eb3d4; --accent-deep: #b8c7e0;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 1.02rem;
+      line-height: 1.68;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell { max-width: 760px; margin: 0 auto; padding: 1.4rem 1.5rem 5rem; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 2.5rem; }
+    .brand { width: 118px; color: var(--ink); }
+    .brand svg { width: 100%; height: auto; display: block; }
+    .brand .wordmark { fill: currentColor; }
+    .eyebrow {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--accent-deep); font-weight: 600; margin: 0 0 0.9rem;
+    }
+    h1 { font-weight: 400; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.08; letter-spacing: -0.028em; margin: 0 0 1.1rem; }
+    h1 em { font-family: "Fraunces", Georgia, serif; font-style: italic; color: var(--accent-deep); }
+    h2 { font-weight: 500; font-size: 1.32rem; letter-spacing: -0.012em; margin: 2.8rem 0 0.7rem; }
+    p { margin: 0 0 1.05rem; color: var(--ink-soft); }
+    .lead { font-size: 1.14rem; color: var(--ink); font-weight: 350; }
+    strong { color: var(--ink); font-weight: 600; }
+    a { color: var(--accent-deep); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+    ol, ul { padding-left: 1.2rem; color: var(--ink-soft); }
+    li { margin-bottom: 0.5rem; }
+    code {
+      font-family: "JetBrains Mono", monospace; font-size: 0.86em;
+      background: var(--bg-paper); border: 1px solid var(--line-soft);
+      border-radius: 3px; padding: 0.1em 0.35em;
+    }
+    pre {
+      font-family: "JetBrains Mono", monospace; font-size: 0.8rem;
+      background: var(--bg-paper); border: 1px solid var(--line-soft);
+      border-radius: 8px; padding: 0.9rem 1rem; overflow-x: auto; color: var(--ink-soft);
+    }
+    pre code { background: none; border: 0; padding: 0; font-size: 1em; }
+    table { width: 100%; border-collapse: collapse; margin: 1.4rem 0; font-size: 0.93rem; }
+    th, td { text-align: left; padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    th { font-weight: 600; color: var(--ink); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; }
+    td { color: var(--ink-soft); }
+    td:first-child { color: var(--ink); }
+    .callout {
+      background: var(--bg-paper); border: 1px solid var(--line-soft);
+      border-left: 2px solid var(--accent); border-radius: 6px;
+      padding: 1rem 1.1rem; margin: 1.6rem 0;
+    }
+    .callout p:last-child { margin-bottom: 0; }
+    .cta { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin: 2.6rem 0 0; }
+    .btn {
+      display: inline-flex; align-items: center;
+      padding: 0.68rem 1.3rem; border-radius: 999px;
+      font-size: 0.87rem; font-weight: 500; text-decoration: none;
+      border: 1px solid transparent;
+      transition: all 140ms cubic-bezier(0.32, 0.72, 0.24, 1);
+    }
+    .btn--primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .btn--primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); color: #fafaf8; }
+    .btn--ghost { color: var(--ink); border-color: var(--line); }
+    .btn--ghost:hover { border-color: var(--ink); }
+    .fineprint {
+      margin-top: 3.4rem; padding-top: 1.4rem; border-top: 1px solid var(--line-soft);
+      font-family: "JetBrains Mono", monospace; font-size: 0.68rem;
+      letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint);
+    }
+  </style>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("smriti-theme");
+      var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var theme = saved === "dark" || saved === "light" ? saved : (prefersDark ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="./" aria-label="Smriti home">
+        <svg viewBox="0 0 320 100" role="img" aria-hidden="true">
+          <text class="wordmark" x="0" y="72" font-family="Bricolage Grotesque, serif" font-size="76" letter-spacing="-3">Smriti</text>
+        </svg>
+      </a>
+      <a class="btn btn--ghost" href="./#download">Download</a>
+    </div>
+
+    <p class="eyebrow">Large libraries on removable storage</p>
+    <h1>How to organise 100,000+ photos <em>on an external drive.</em></h1>
+
+    <p class="lead">
+      If your photo library lives on an external drive, most photo software is
+      fighting you. It wants to import your files into a library folder, or
+      upload them to a service, or build a database in your home directory that
+      holds paths to files it assumes will never move. Point it at four
+      terabytes and it either refuses, spends a day copying, or quietly
+      duplicates everything.
+    </p>
+    <p>
+      What you actually want is simpler: leave the files exactly where they are,
+      and build the knowledge about them — dates, places, albums, duplicates —
+      somewhere that does not evaporate when you unplug the disk.
+    </p>
+
+    <h2>The three things that go wrong</h2>
+    <p>
+      <strong>1. The tool wants to import.</strong> Import means copying.
+      Copying 100 GB takes hours and doubles your storage. The only reason most
+      applications do it is that they assume they own the filesystem — an
+      assumption inherited from phone-based photo apps. You are looking for
+      software that <em>indexes in place</em>: reads your files where they are
+      and writes down what it learned.
+    </p>
+    <p>
+      <strong>2. The database lives somewhere else.</strong> Even tools that
+      index in place usually write their catalog to your home directory —
+      <code>~/.local/share/something/library.db</code> — with absolute paths to
+      the drive. Move the drive, change its mount point, plug it into another
+      machine, and the library is orphaned. You get an empty timeline and a lot
+      of re-indexing.
+    </p>
+    <p>
+      <strong>3. Drive letters move.</strong> On Windows especially,
+      <code>E:\</code> becomes <code>F:\</code> and every stored path breaks. A
+      tool that keeps the catalog on the drive and refers to files relatively
+      does not have this problem at all.
+    </p>
+
+    <h2>What to look for</h2>
+    <table>
+      <thead><tr><th>Requirement</th><th>Why it matters</th></tr></thead>
+      <tbody>
+        <tr><td>Indexes in place</td><td>No copying, no duplicate storage, no waiting</td></tr>
+        <tr><td>Catalog stored on the photo drive</td><td>The library survives unplugging, moving and changing machines</td></tr>
+        <tr><td>Relative paths internally</td><td>Drive letters and mount points can change freely</td></tr>
+        <tr><td>Handles 100k+ photos</td><td>Most consumer tools fall over well before that</td></tr>
+        <tr><td>Works offline</td><td>An external drive is often used where there is no fast internet</td></tr>
+        <tr><td>Duplicate detection</td><td>A large pile accumulated over years always has them</td></tr>
+      </tbody>
+    </table>
+    <p>
+      The first two are the ones almost nobody does together, and they are the
+      two that decide whether your library is a durable thing or a fragile one.
+    </p>
+
+    <h2>A concrete walkthrough</h2>
+    <p>
+      <a href="https://github.com/ChivukulaVirinchi/photovault">Smriti</a> is
+      built around exactly this use case — free, Apache-2.0,
+      Linux/Windows/macOS — so it makes a useful worked example. It is tested at
+      250,000 photographs on a single drive.
+    </p>
+    <ol>
+      <li>
+        <strong>Install it.</strong> A <code>.deb</code>, <code>.rpm</code> or
+        AppImage on Linux; an installer on Windows and macOS.
+      </li>
+      <li>
+        <strong>Point it at the root of the drive</strong>, not at a subfolder.
+        The library is defined by the folder you choose.
+      </li>
+      <li>
+        <strong>Press "Scan now"</strong> on the timeline. Nothing happens
+        automatically — this catches everyone out. The scanner reads EXIF from
+        each file, generates thumbnails and records everything in the catalog.
+      </li>
+      <li>
+        <strong>Leave the drive alone afterwards.</strong> The catalog now lives
+        at <code>&lt;your drive&gt;/.photovault/photovault.db</code>. Do not
+        delete that folder unless you are happy to re-index — it holds the
+        albums, tags, face groupings and thumbnails. It is the library, not a
+        cache.
+      </li>
+      <li>
+        <strong>Try the portability test.</strong> Close the app, unplug the
+        drive, plug it into a different computer with Smriti installed, and open
+        the same folder. The timeline, albums and faces are all there, because
+        the knowledge about the photos was on the disk the whole time.
+      </li>
+    </ol>
+
+    <p>Rough timings for the first index, on a USB 3 drive with a mid-range CPU:</p>
+    <table>
+      <thead><tr><th>Photos</th><th>First index (estimate)</th></tr></thead>
+      <tbody>
+        <tr><td>10,000</td><td>5–20 minutes (documented)</td></tr>
+        <tr><td>100,000</td><td>a few hours</td></tr>
+        <tr><td>250,000</td><td>most of a night</td></tr>
+      </tbody>
+    </table>
+    <p>
+      It runs in the background while you use the app, and it is resumable if
+      you close it.
+    </p>
+
+    <h2>Cleaning up the mess</h2>
+    <p>
+      The genuinely useful part of indexing a large library is finding out what
+      is actually in it. Two things to run early:
+    </p>
+    <ul>
+      <li>
+        <strong>Duplicates.</strong> Fifteen years of imports and re-imports
+        produce a lot of identical files. Exact-duplicate detection is safe and
+        usually reclaims surprising amounts of space; perceptual detection finds
+        the same photo saved at different sizes.
+      </li>
+      <li>
+        <strong>Bursts.</strong> Photographs taken seconds apart are grouped so
+        you can keep the best frame instead of all eleven.
+      </li>
+    </ul>
+    <p>
+      Neither is possible until the library has been indexed, which is why the
+      index is worth the wait.
+    </p>
+
+    <h2>Practical notes for big drives</h2>
+    <ul>
+      <li>
+        <strong>Back up the drive, not just the photos.</strong> Because the
+        catalog sits with the files, a normal folder copy backs up your albums
+        and tags as well. Skip <code>.photovault</code> in your backup and you
+        keep the photographs but lose the work.
+      </li>
+      <li>
+        <strong>USB 3 or better.</strong> Indexing is I/O-bound; a slow
+        enclosure is the single biggest factor in how long the first scan takes.
+      </li>
+      <li>
+        <strong>Index once, then scan incrementally.</strong> Later scans only
+        look at what changed, so they take seconds to minutes.
+      </li>
+      <li>
+        <strong>One drive, one library.</strong> Several drives can each carry
+        their own library; you switch between them rather than merging them.
+      </li>
+    </ul>
+
+    <div class="callout">
+      <p>
+        For a large library on removable storage, the deciding question is not
+        how many features a tool has. It is where the catalog lives. If it lives
+        with the photos, your organising survives unplugging, moving and
+        changing computers. If it lives in your home directory, it does not.
+      </p>
+    </div>
+
+    <div class="cta">
+      <a class="btn btn--primary" href="./#download">Download Smriti</a>
+      <a class="btn btn--ghost" href="./photos-without-a-server.html">Server or no server?</a>
+    </div>
+
+    <p class="fineprint">Apache-2.0 · Free · No account, no server</p>
+  </div>
+</body>
+</html>

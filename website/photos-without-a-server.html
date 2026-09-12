@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-CL78S29HK5"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-CL78S29HK5');
+  </script>
+  <title>Self-hosted photos without a server — Smriti</title>
+  <meta name="description" content="Immich and PhotoPrism want a server. If your photos live on a drive, you want a desktop library whose catalog travels with the disk. An honest comparison of the three options." />
+  <link rel="canonical" href="https://chivukulavirinchi.github.io/photovault/photos-without-a-server.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="Self-hosted photos without a server" />
+  <meta property="og:description" content="Do you actually want to run a server? An honest comparison of cloud, self-hosted and desktop photo libraries." />
+  <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
+  <meta name="theme-color" content="#fafaf8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0f1015" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root, :root[data-theme="light"] {
+      --bg: #fafaf8; --bg-paper: #f4f5f3;
+      --ink: #15171c; --ink-soft: #3a3d44; --ink-muted: #797d85; --ink-faint: #adb0b8;
+      --line: #d2d4d2; --line-soft: #e1e3e0;
+      --accent: #466996; --accent-deep: #2f4f7a;
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1015; --bg-paper: #161821;
+      --ink: #e7eaf0; --ink-soft: #aeb3bf; --ink-muted: #80858f; --ink-faint: #4d525c;
+      --line: #2a2e38; --line-soft: #1e2129;
+      --accent: #9eb3d4; --accent-deep: #b8c7e0;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 1.02rem;
+      line-height: 1.68;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell { max-width: 760px; margin: 0 auto; padding: 1.4rem 1.5rem 5rem; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 2.5rem;
+    }
+    .brand { width: 118px; color: var(--ink); }
+    .brand svg { width: 100%; height: auto; display: block; }
+    .brand .wordmark { fill: currentColor; }
+    .eyebrow {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent-deep);
+      font-weight: 600;
+      margin: 0 0 0.9rem;
+    }
+    h1 {
+      font-weight: 400;
+      font-size: clamp(2rem, 5vw, 3rem);
+      line-height: 1.08;
+      letter-spacing: -0.028em;
+      margin: 0 0 1.1rem;
+    }
+    h1 em { font-family: "Fraunces", Georgia, serif; font-style: italic; color: var(--accent-deep); }
+    h2 {
+      font-weight: 500;
+      font-size: 1.32rem;
+      letter-spacing: -0.012em;
+      margin: 2.8rem 0 0.7rem;
+    }
+    h3 { font-weight: 500; font-size: 1.06rem; margin: 2rem 0 0.5rem; }
+    p { margin: 0 0 1.05rem; color: var(--ink-soft); }
+    .lead { font-size: 1.14rem; color: var(--ink); font-weight: 350; }
+    strong { color: var(--ink); font-weight: 600; }
+    a { color: var(--accent-deep); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+    ul { padding-left: 1.1rem; color: var(--ink-soft); }
+    li { margin-bottom: 0.4rem; }
+    code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.86em;
+      background: var(--bg-paper);
+      border: 1px solid var(--line-soft);
+      border-radius: 3px;
+      padding: 0.1em 0.35em;
+    }
+    pre {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.8rem;
+      background: var(--bg-paper);
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      overflow-x: auto;
+      color: var(--ink-soft);
+    }
+    pre code { background: none; border: 0; padding: 0; font-size: 1em; }
+    table { width: 100%; border-collapse: collapse; margin: 1.4rem 0; font-size: 0.93rem; }
+    th, td { text-align: left; padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    th { font-weight: 600; color: var(--ink); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; }
+    td { color: var(--ink-soft); }
+    td:first-child { color: var(--ink); }
+    .callout {
+      background: var(--bg-paper);
+      border: 1px solid var(--line-soft);
+      border-left: 2px solid var(--accent);
+      border-radius: 6px;
+      padding: 1rem 1.1rem;
+      margin: 1.6rem 0;
+    }
+    .callout p:last-child { margin-bottom: 0; }
+    .cta { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin: 2.6rem 0 0; }
+    .btn {
+      display: inline-flex; align-items: center;
+      padding: 0.68rem 1.3rem; border-radius: 999px;
+      font-size: 0.87rem; font-weight: 500; text-decoration: none;
+      border: 1px solid transparent;
+      transition: all 140ms cubic-bezier(0.32, 0.72, 0.24, 1);
+    }
+    .btn--primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .btn--primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); color: #fafaf8; }
+    .btn--ghost { color: var(--ink); border-color: var(--line); }
+    .btn--ghost:hover { border-color: var(--ink); }
+    .fineprint {
+      margin-top: 3.4rem; padding-top: 1.4rem;
+      border-top: 1px solid var(--line-soft);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+  </style>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("smriti-theme");
+      var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var theme = saved === "dark" || saved === "light" ? saved : (prefersDark ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="./" aria-label="Smriti home">
+        <svg viewBox="0 0 320 100" role="img" aria-hidden="true">
+          <text class="wordmark" x="0" y="72" font-family="Bricolage Grotesque, serif" font-size="76" letter-spacing="-3">Smriti</text>
+        </svg>
+      </a>
+      <a class="btn btn--ghost" href="./#download">Download</a>
+    </div>
+
+    <p class="eyebrow">Choosing a photo library</p>
+    <h1>Self-hosted photos <em>without a server.</em></h1>
+
+    <p class="lead">
+      There are three ways to get out of Google Photos, and they are usually
+      presented as if they were one choice. They are not, and picking the wrong
+      one is why so many people abandon the project halfway through.
+    </p>
+
+    <p>
+      <strong>Cloud</strong> — Google Photos, iCloud, Dropbox. Someone else's
+      computer, someone else's rules, and a bill that grows with your library.
+    </p>
+    <p>
+      <strong>Self-hosted</strong> — Immich, PhotoPrism, LibrePhotos and
+      friends. Your computer, your rules, and a server you now own and have to
+      operate. The software is excellent. The operational work is real: Docker,
+      an always-on machine, backups of the database as well as the photos, and
+      an upgrade that occasionally goes sideways at 11pm.
+    </p>
+    <p>
+      <strong>Desktop</strong> — digiKam, PhotoStructure, Smriti. No server, no
+      containers, no always-on machine. The library lives in a program on
+      whichever computer you happen to be using, pointed at drives you already
+      own.
+    </p>
+    <p>
+      Most "alternatives to Google Photos" articles cover the first two. This
+      page is about the third, and about the question underneath it: do you
+      actually want to run a server?
+    </p>
+
+    <h2>The honest question to ask yourself</h2>
+    <p>You want the self-hosted option if:</p>
+    <ul>
+      <li>You need photos on your phone automatically, without plugging anything in.</li>
+      <li>More than one person needs access, from more than one place.</li>
+      <li>You enjoy — or at least tolerate — maintaining a service.</li>
+    </ul>
+    <p>You want the desktop option if:</p>
+    <ul>
+      <li>Your library mostly lives on external drives and always has.</li>
+      <li>Your photos are already on the machine you browse them from.</li>
+      <li>You want the organising to work without the internet, without Docker, and without a machine that has to stay on.</li>
+      <li>You would rather not become the sysadmin for your family's photographs.</li>
+    </ul>
+    <p>
+      Neither answer is better. A desktop application cannot back up your camera
+      roll while you sleep, and a server cannot be carried to your parents'
+      house in a backpack.
+    </p>
+
+    <h2>What the desktop option actually looks like</h2>
+    <p>
+      Take <a href="https://github.com/ChivukulaVirinchi/photovault">Smriti</a>
+      as the example, since it is the one this project maintains. It is a
+      desktop application for Linux, Windows and macOS, free and Apache-2.0. It
+      indexes photographs where they already are, extracts the EXIF metadata,
+      generates thumbnails, and can recognise faces on-device. No account, no
+      cloud, no server.
+    </p>
+    <p>
+      The design decision that separates it from the server-based projects is
+      where the database goes. Smriti writes its catalog — paths, dates, albums,
+      tags, face groupings, thumbnails — to a folder <strong>on the photo drive
+      itself</strong>:
+    </p>
+    <pre><code>/media/you/MyPhotos/.photovault/photovault.db</code></pre>
+    <p>
+      Which means the library is not a service you keep running. It is a
+      property of the disk. Unplug the drive and the library leaves with it.
+      Plug it into another machine with Smriti installed, and the albums,
+      faces and tags are all still there — no sync, no export, no re-index.
+      Back up the photo folder and you have backed up your organising as well.
+    </p>
+    <div class="callout">
+      <p>
+        That is also the honest limitation: if you delete
+        <code>.photovault</code>, you lose the catalog and have to re-index.
+      </p>
+    </div>
+
+    <h2>The comparison, in one table</h2>
+    <table>
+      <thead>
+        <tr><th></th><th>Cloud</th><th>Self-hosted server</th><th>Desktop (Smriti)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Where the library lives</td><td>Their servers</td><td>Your server</td><td>Your drive, catalog included</td></tr>
+        <tr><td>Setup</td><td>Sign in</td><td>Docker, storage, backups</td><td>Install a package, pick a folder</td></tr>
+        <tr><td>Phone access</td><td>Native</td><td>Native or web</td><td>Not supported</td></tr>
+        <tr><td>Offline use</td><td>Limited</td><td>Depends on the network</td><td>Complete</td></tr>
+        <tr><td>Runs when your computer is off</td><td>n/a</td><td>Yes</td><td>No</td></tr>
+        <tr><td>Ongoing maintenance</td><td>None</td><td>Real</td><td>None</td></tr>
+        <tr><td>Multi-user</td><td>Yes</td><td>Yes</td><td>One machine at a time</td></tr>
+        <tr><td>Cost</td><td>Subscription</td><td>Hardware and electricity</td><td>Free</td></tr>
+      </tbody>
+    </table>
+    <p>
+      If the "phone access" row is the one that matters to you, use Immich or
+      Ente — genuinely, that is what they are for. If the "runs when your
+      computer is off" row matters, the same answer. Smriti is not trying to win
+      that comparison; it is trying to serve people whose photos are on drives,
+      not on a phone.
+    </p>
+
+    <h2>What "catalog on the drive" buys you</h2>
+    <p>
+      <strong>Portability.</strong> Hand someone a drive and they have the
+      entire organised library — not a folder of files. For family archives,
+      that is the difference between a usable collection and a pile.
+    </p>
+    <p>
+      <strong>Backups that mean something.</strong> Copying the photo folder
+      copies the albums, tags and face groupings along with the originals.
+      There is no separate database backup to forget.
+    </p>
+    <p>
+      <strong>No sync conflicts.</strong> There is one copy of the library and
+      it is on the disk. Nothing to reconcile.
+    </p>
+
+    <h2>A note on scale</h2>
+    <p>
+      Smriti is tested at 250,000 photographs per drive, and the 1.0 series
+      documents that as the current limit. If your library is larger than that,
+      a server-based project with a proper database server behind it is the more
+      sensible choice — it is a real architectural limit, not a marketing one.
+    </p>
+
+    <div class="cta">
+      <a class="btn btn--primary" href="./#download">Download Smriti</a>
+      <a class="btn btn--ghost" href="./docs/">Read the manual</a>
+    </div>
+
+    <p class="fineprint">Apache-2.0 · Free · No account, no server</p>
+  </div>
+</body>
+</html>

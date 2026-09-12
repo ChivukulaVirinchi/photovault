@@ -59,8 +59,10 @@ impl FaceEmbedding {
 
         let vector: Array1<f32> = Array1::from_iter(
             bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk)),
         );
 
         Some(Self { vector })
@@ -272,7 +274,7 @@ impl LocalEmbedder {
     }
 
     /// Run ONNX inference with a batch of faces [N, 3, 112, 112].
-    /// Returns a flat Vec<f32> of N * 512 floats.
+    /// Returns a flat `Vec<f32>` of N * 512 floats.
     fn run_inference_batch(
         &mut self,
         input_data: &[f32],

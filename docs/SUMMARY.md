@@ -5,6 +5,7 @@
 # User Guide
 
 - [Getting Started](user-guide/getting-started.md)
+- [Importing Google Photos](user-guide/google-photos-import.md)
 - [Indexing Photos](user-guide/indexing.md)
 - [Timeline](user-guide/timeline.md)
 - [People and Faces](user-guide/people.md)

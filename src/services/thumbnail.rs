@@ -549,9 +549,13 @@ impl ThumbnailService {
             .with_guessed_format()
             .map_err(|e| format!("Failed to guess image format: {}", e))?;
 
-        // Set memory limits to prevent OOM on corrupt/huge images (200MB decode limit)
+        // Memory limit for the decode. The old 200 MB cap silently rejected
+        // large panoramas (~80 Mpx needs ~240 MB as RGB8), and because a failed
+        // thumbnail leaves `thumbnailed = FALSE` the pending-thumbnail banner
+        // could never clear — it just re-ran a pass that failed identically.
+        // 384 MB admits those while still refusing genuinely pathological files.
         let mut limits = image::Limits::default();
-        limits.max_alloc = Some(200 * 1024 * 1024);
+        limits.max_alloc = Some(384 * 1024 * 1024);
 
         let mut reader = reader;
         reader.limits(limits);
@@ -756,10 +760,12 @@ impl ThumbnailService {
         &self,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> std::io::Result<()> {
-        let _accounting = self
-            .accounting
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        // The accounting lock is deliberately *not* held across the walk
+        // below. It is held for the duration of a publish, so holding it
+        // across a full directory scan of the cache (on a slow external
+        // drive, thousands of stats) stalled every thumbnail being written
+        // at the time — which is what made the app appear to freeze while
+        // thumbnails were being produced.
         let mut total_size = 0u64;
 
         for size in [
@@ -811,8 +817,14 @@ impl ThumbnailService {
             }
         }
 
-        if let Ok(mut current) = self.current_cache_bytes.write() {
-            *current = total_size;
+        {
+            let _accounting = self
+                .accounting
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Ok(mut current) = self.current_cache_bytes.write() {
+                *current = total_size;
+            }
         }
         self.evict_if_needed(None);
 

@@ -4,6 +4,8 @@
   import { settingsStore } from "./lib/stores/settings.svelte";
   import Welcome from "./routes/Welcome.svelte";
   import SmartSetupDialog from "./lib/components/SmartSetupDialog.svelte";
+  import ShareCardDialog from "./lib/components/ShareCardDialog.svelte";
+  import MilestoneMoment from "./lib/components/MilestoneMoment.svelte";
   import Timeline from "./routes/Timeline.svelte";
   import People from "./routes/People.svelte";
   import PersonDetail from "./routes/PersonDetail.svelte";
@@ -158,7 +160,7 @@
       <Sidebar current={route.path} />
       <div class="main">
         {#if route.path === "/photo" && positiveIntParam("id") != null}
-          <PhotoDetail id={positiveIntParam("id")!} />
+          <PhotoDetail id={positiveIntParam("id")!} info={route.params.info === "1"} />
         {:else if route.path === "/people"}
           <People />
         {:else if route.path === "/people/review"}
@@ -210,6 +212,8 @@
 <JobsIndicator />
 <Slideshow />
 <AssistantDrawer />
+<ShareCardDialog />
+<MilestoneMoment />
 
 <style>
   .shell {

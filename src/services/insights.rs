@@ -61,6 +61,10 @@ pub struct InsightsData {
     pub heatmap: HashMap<String, i64>,
     /// The year the heatmap covers.
     pub heatmap_year: i32,
+    /// Month-level counts for every year in the library: "YYYY-MM" -> count.
+    /// Not filtered by `year` — the share card shows the whole library, not
+    /// one year's days, so this is always all-time.
+    pub months_by_year: HashMap<String, i64>,
     /// Monthly photo counts (index 0 = January, 11 = December).
     pub monthly_counts: [i64; 12],
     pub top_people: Vec<PersonStat>,
@@ -365,6 +369,25 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         top_cameras.extend(cameras.into_iter().take(3));
     }
 
+    // 8b. Month counts for every year. One grouped scan; the card needs the
+    // whole library's shape, not a single year.
+    let mut months_by_year = HashMap::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT strftime('%Y-%m', {dt}) AS ym, COUNT(*) AS c
+             FROM photos
+             WHERE is_trashed = FALSE
+               AND date_taken IS NOT NULL
+             GROUP BY ym"
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for (month, count) in rows.flatten() {
+            months_by_year.insert(month, count);
+        }
+    }
+
     // 12. Available years (descending)
     let mut available_years = Vec::new();
     {
@@ -393,6 +416,7 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
         hero_thumbnail_path: None, // resolved by the loader
         heatmap,
         heatmap_year,
+        months_by_year,
         monthly_counts,
         top_people,
         top_locations,

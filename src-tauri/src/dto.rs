@@ -672,7 +672,6 @@ impl From<MemoryCard> for MemoryCardDto {
             smriti::services::memories::MemoryKind::SeasonalRecap => "seasonal_recap",
             smriti::services::memories::MemoryKind::PersonStory => "person_story",
             smriti::services::memories::MemoryKind::PlaceStory => "place_story",
-            smriti::services::memories::MemoryKind::VisualPattern => "visual_pattern",
             smriti::services::memories::MemoryKind::YearRecap => "year_recap",
         };
         Self {
@@ -956,6 +955,7 @@ pub struct InsightsDto {
     pub hero_thumbnail_path: Option<String>,
     pub heatmap: std::collections::HashMap<String, i64>,
     pub heatmap_year: i32,
+    pub months_by_year: std::collections::HashMap<String, i64>,
     pub monthly_counts: [i64; 12],
     pub top_people: Vec<PersonStatDto>,
     pub top_locations: Vec<LocationStatDto>,
@@ -979,6 +979,7 @@ impl From<InsightsData> for InsightsDto {
             hero_thumbnail_path: d.hero_thumbnail_path,
             heatmap: d.heatmap,
             heatmap_year: d.heatmap_year,
+            months_by_year: d.months_by_year,
             monthly_counts: d.monthly_counts,
             top_people: d.top_people.into_iter().map(Into::into).collect(),
             top_locations: d.top_locations.into_iter().map(Into::into).collect(),

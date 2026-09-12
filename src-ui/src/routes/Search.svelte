@@ -397,7 +397,6 @@
               class:selected={selection.has(p.photo_id)}
               data-photo-id={p.photo_id}
               href="#/photo?id={p.photo_id}"
-              title="#{p.photo_id}"
               onclick={(e) => onCellClick(e, p.photo_id)}
               use:thumbnailOnVisible={{
                 id: p.photo_id,
