@@ -85,6 +85,15 @@
     window.location.hash = `/timeline?photo=${id}`;
   }
 
+  /// Leaves the slideshow for the photo's own page with its info panel open.
+  /// Deferred while playing: the slide is about to change underneath it.
+  function showInfo() {
+    const id = currentId;
+    if (id == null) return;
+    slideshow.close();
+    window.location.hash = `/photo?id=${id}&info=1`;
+  }
+
   async function toggleFullscreen() {
     try {
       const w = getCurrentWindow();
@@ -150,6 +159,14 @@
           e.preventDefault();
           e.stopPropagation();
           void toggleFullscreen();
+        }
+        break;
+      case "i":
+      case "I":
+        if (!e.metaKey && !e.ctrlKey && !slideshow.playing) {
+          e.preventDefault();
+          e.stopPropagation();
+          showInfo();
         }
         break;
     }

@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-09-11
+
+0.3.2 is the release that makes the one-click smart-features setup actually
+work. Anyone who downloaded 0.3.1 and found that "Set up smart features"
+failed should upgrade.
+
+### Fixed
+- **Asset pack now contains a built `geonames.db`.** The 0.3.1 pack shipped
+  GeoNames *source text* instead, so the setup job finished with "known missing
+  files" and aborted before downloading the visual-search models. Setups that
+  already staged the 0.3.1 pack are repaired in place at install time.
+- **ONNX Runtime is found on macOS.** The 0.3.1 binary looked for
+  `libonnxruntime.so` on every non-Windows platform while macOS packaging ships
+  `libonnxruntime*.dylib`, so macOS could never load the runtime.
+- macOS, Linux and Windows runtime libraries are all present in the pack.
+- Release artifacts now publish `SHA256SUMS`, which the in-app updater requires.
+- Releases now also publish stable, human-readable installer names
+  (`Smriti-Windows-Setup.exe`, `Smriti-macOS-Apple-Silicon.dmg`,
+  `Smriti-Ubuntu-Debian-x64.deb`, `Smriti-Linux-x64.AppImage`,
+  `Smriti-Linux-x64.rpm`).
+
+### Added
+- **Google Photos Takeout import** — albums, favourites, corrected dates and
+  GPS preserved. Guide: `docs/user-guide/google-photos-import.md`.
+- **Surprise memory slideshow.**
+- **Onboarding pass**: the first-run smart-features dialog, clearer empty
+  states, and a friendlier first library open.
+
+### Changed
+- Personal memories and multi-stop trips reworked.
+- Browsing and large-library performance hardened.
+- Documentation corrected: the network disclosure now lists every host that
+  Smriti contacts (including Hugging Face for the optional visual-search
+  models), and the install matrix states the real artifact list, the
+  Apple-Silicon-only macOS build and the current lack of distro packages.
+
+## [0.3.1] — 2026-07-10
+
+### Added
+- **Visual search** — on-device semantic search over your library using
+  SigLIP2 models (text→photo and photo→photo), with a local vector index and
+  its own UI, filters and documentation.
+- **Assistant album planning** experiment (sign-in-free, provider-backed and
+  off by default).
+
+### Fixed
+- ONNX asset-pack runtime lookup on installed builds.
+- Semantic model download progress reporting.
+- Large-library thumbnail and detail navigation stalls.
+- `quinn-proto` advisory (cargo audit).
+
+### Removed
+- Stable library identity tracking.
+
 ## [0.3.0] — 2026-06-09
 
 Smriti 0.3.0 focuses on making larger real-world libraries feel live and

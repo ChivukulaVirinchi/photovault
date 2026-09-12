@@ -10,6 +10,18 @@
 
   <!-- 404 page is intentionally excluded -->
 
+  <!-- Long-form pages targeting the queries people search while choosing. -->
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/photos-without-a-server.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/organise-photos-external-drive.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+
   <!-- Manual entry point and the high-value user-guide pages.
        These are served by the docs site once GitHub Pages is
        configured to render docs/ as HTML. -->
@@ -22,6 +34,12 @@
     <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/getting-started.html</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
+  </url>
+  <!-- Highest-intent migration page: people actively leaving Google Photos. -->
+  <url>
+    <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/google-photos-import.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://chivukulavirinchi.github.io/photovault/docs/user-guide/indexing.html</loc>

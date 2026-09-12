@@ -3800,7 +3800,10 @@
                         account, no cloud, no server humming in a closet.
                     </p>
                     <div class="hero-cta">
-                        <a class="btn btn--primary" href="#download"
+                        <a
+                            class="btn btn--primary"
+                            id="hero-download-button"
+                            href="#download"
                             >Download free</a
                         >
                         <a class="btn btn--ghost" href="#features"
@@ -7563,7 +7566,11 @@
                 </div>
                 <p class="compare-foot">
                     Comparison reflects each project's default setup as of 2026.
-                    Smriti's row makes no claims it can't keep.
+                    Smriti's row makes no claims it can't keep. If you are
+                    weighing a server against a desktop library,
+                    <a href="./photos-without-a-server.html"
+                        >here is the longer version of that decision</a
+                    >.
                 </p>
             </section>
 
@@ -8406,6 +8413,12 @@
                                 >&nbsp;↗</span
                             ></a
                         >
+                        <a href="./photos-without-a-server.html"
+                            >Photos without a server</a
+                        >
+                        <a href="./organise-photos-external-drive.html"
+                            >Organising 100k+ photos</a
+                        >
                         <a
                             href="https://github.com/ChivukulaVirinchi/photovault/discussions"
                             >Discussions<span class="ext" aria-hidden="true"
@@ -8555,6 +8568,7 @@
                         linux: [/Smriti-Ubuntu-Debian-x64\.deb$/i, /_amd64\.deb$/i],
                     };
                     var primary = document.getElementById("download-primary-button");
+                    var hero = document.getElementById("hero-download-button");
                     var title = document.getElementById("download-primary-title");
                     var detail = document.getElementById("download-primary-detail");
                     if (os) {
@@ -8563,6 +8577,7 @@
                         title.textContent = "Download for " + labels[os][0];
                         detail.textContent = labels[os][1] + " · we'll choose the installer";
                         primary.textContent = "Download for " + labels[os][0];
+                        if (hero) hero.textContent = "Download for " + labels[os][0];
                     }
 
                     fetch("https://api.github.com/repos/ChivukulaVirinchi/photovault/releases/latest")
@@ -8580,12 +8595,43 @@
                                 if (!asset) return;
                                 var platformCard = document.querySelector('.download-card[data-os="' + platform + '"]');
                                 if (platformCard) platformCard.href = asset.browser_download_url;
-                                if (platform === os) primary.href = asset.browser_download_url;
+                                if (platform === os) {
+                                    primary.href = asset.browser_download_url;
+                                    // Upgrade the hero button from the in-page anchor to
+                                    // the installer itself, so the most prominent CTA on
+                                    // the page is a single click.
+                                    if (hero) hero.href = asset.browser_download_url;
+                                }
                             });
                         })
                         .catch(function () {
                             // The release page remains a safe fallback when GitHub's API is unavailable.
                         });
+
+                    // ============ Download conversion events ============
+                    // GA4 only records pageviews otherwise, which makes every
+                    // channel indistinguishable. One event per download click,
+                    // tagged with placement and resolved OS.
+                    function trackDownload(placement, element) {
+                        if (typeof window.gtag !== "function") return;
+                        window.gtag("event", "download", {
+                            placement: placement,
+                            platform: os || "unknown",
+                            direct: element ? /\.(exe|msi|dmg|deb|rpm|AppImage|tar\.gz)$/i.test(element.href) : false,
+                        });
+                    }
+                    [primary, hero].forEach(function (element) {
+                        if (element) {
+                            element.addEventListener("click", function () {
+                                trackDownload(element.id, element);
+                            });
+                        }
+                    });
+                    document.querySelectorAll(".download-card").forEach(function (card) {
+                        card.addEventListener("click", function () {
+                            trackDownload("card-" + (card.getAttribute("data-os") || "unknown"), card);
+                        });
+                    });
                 })();
 
                 // ============ Face clustering demo ============

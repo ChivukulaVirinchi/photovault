@@ -9,7 +9,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { library } from "../lib/api/library";
   import {
@@ -37,8 +37,8 @@
   import "maplibre-gl/dist/maplibre-gl.css";
   import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
 
-  interface Props { id: number }
-  let { id }: Props = $props();
+  interface Props { id: number; info?: boolean }
+  let { id, info = false }: Props = $props();
   installTileCache();
 
   let photo = $state<PhotoDto | null>(null);
@@ -52,8 +52,10 @@
   let detailEl = $state<HTMLElement | undefined>(undefined);
   let immersive = $state(false);
 
-  // Closed by default — info button reveals.
-  let metaOpen = $state(false);
+  // Closed by default — info button reveals. A caller can ask for it open
+  // (the slideshow's `i` key navigates here with `info=1`); only the value at
+  // mount matters, so the read is untracked.
+  let metaOpen = $state(untrack(() => info));
   let tint = $state<RGB | null>(null);
   let manualRotate = $state(0);
   let zoomApi = $state<ZoomApi | undefined>(undefined);

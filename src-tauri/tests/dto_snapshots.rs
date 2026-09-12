@@ -321,6 +321,7 @@ fn insights_dto() {
         hero_thumbnail_path: Some(".photovault/thumbnails/hero.jpg".into()),
         heatmap,
         heatmap_year: 2024,
+        months_by_year: Default::default(),
         monthly_counts: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         top_people: vec![PersonStat {
             cluster_id: 21,

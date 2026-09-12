@@ -30,17 +30,21 @@ standard headers any HTTP client sends (User-Agent, Accept).
 
 ### 2. Optional asset pack (one-time, opt-in)
 
-ONNX face-recognition models and the GeoNames geocoding database
-can be downloaded once from the project's GitHub releases if not
-already installed. You see a prompt on first run asking to install
-them; declining it doesn't block any core app functionality (face
-recognition and reverse-geocoding are the features that rely on
-them).
+ONNX face-recognition models, the ONNX Runtime library and the
+GeoNames geocoding database are downloaded once from this project's own
+GitHub releases (`github.com/ChivukulaVirinchi/photovault/releases`) if
+not already installed. The pack is about 285 MB. You see a prompt on
+first run asking to install them; declining it doesn't block any core app
+functionality (face recognition and reverse-geocoding are the features
+that rely on them).
 
 Re-triggered from **Settings → Advanced → Reinstall Assets**.
 
-Optional visual-search models are downloaded from Hugging Face.
-These downloads do not send library contents.
+The same opt-in setup also fetches the optional visual-search model
+(SigLIP2, about 1.5 GB across five files) from
+`huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli`. These are model
+weights only — the request is a plain file download and sends no library
+contents. Photo and text vectors are computed locally on your machine.
 
 ### 3. Update check (opt-in)
 

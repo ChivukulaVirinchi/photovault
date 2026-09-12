@@ -16,11 +16,13 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
+  import { Share2 } from "lucide-svelte";
   import { commandErrorMessage } from "../lib/api";
   import { insights } from "../lib/api/all";
   import { photos } from "../lib/api/photos";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
+  import { shareCard } from "../lib/stores/shareCard.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
@@ -56,6 +58,21 @@
       showAllCities,
       scrollTop: pageEl?.scrollTop ?? cachedInsights?.scrollTop ?? 0,
     };
+  }
+
+  /// The card is a library card, so it always shows all-time numbers whatever
+  /// the page is filtered to.
+  async function shareLibrary() {
+    if (!data) return;
+    if (year === null) {
+      shareCard.show(data);
+      return;
+    }
+    try {
+      shareCard.show(await insights.compute(null));
+    } catch (error) {
+      toasts.error(`Couldn't build the card: ${commandErrorMessage(error)}`);
+    }
   }
 
   async function load() {
@@ -223,6 +240,10 @@
         <option value={y}>{y}</option>
       {/each}
     </select>
+    <button class="ghost share" onclick={shareLibrary} title="Make a shareable card of this library">
+      <Share2 size={14} strokeWidth={1.8} />
+      Share your library
+    </button>
   {/if}
 </PageHeader>
 
@@ -402,6 +423,12 @@
 {/if}
 
 <style>
+  .share {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
 
   .stats {

@@ -114,23 +114,25 @@ The **[Smriti website](https://chivukulavirinchi.github.io/photovault/#download)
 
 ### Windows
 
-- `.msi` installer for Windows 10 / 11.
+- `.exe` installer (recommended) or `.msi` package — Windows 10 / 11, x64.
+- Windows builds ship **without HEIC support** for now.
 
 > Smriti's installer is not code-signed. Windows SmartScreen may warn on
 > first launch — click **More info** → **Run anyway**.
 
 ### macOS
 
-- `.dmg` or `.tar.gz` archives.
+- `.dmg` for **Apple Silicon only** (no Intel build yet).
 
-> Smriti is not notarized. Gatekeeper may warn on first launch — right-click
-> the app → **Open** → **Open anyway**.
+> Smriti is not notarized. Gatekeeper may warn on first launch — try to open
+> the app, then allow it under **System Settings → Privacy & Security →
+> "Open Anyway"**.
 
 ### Linux
 
-- `.deb` for Debian / Ubuntu, `.rpm` for Fedora, `.AppImage` for any other distro (`chmod +x` then run).
+- `.deb` for Debian / Ubuntu, `.rpm` for Fedora, `.AppImage` for any other distro (`chmod +x` then run). x64 only.
 
-Linux artifacts include `SHA256SUMS` for integrity verification. Tagged
+Every release publishes a `SHA256SUMS` file covering all artifacts. Tagged
 releases run build and package checks in CI before publishing.
 
 ### Optional smart features
@@ -147,9 +149,12 @@ Opt-in. Off by default. If enabled, Smriti queries `api.github.com` at most
 once every 24 hours. No photo data leaves your machine. See
 [PRIVACY.md](PRIVACY.md) for the full disclosure.
 
-If you installed via a system package manager (`apt`, `brew`, `winget`,
-`flatpak`), the update banner shows the matching upgrade command rather
-than self-replacing the binary.
+If Smriti detects it was installed through a package manager (`apt`, `brew`,
+`winget`, `flatpak`, `scoop`, `snap`, Microsoft Store), the update banner shows
+the matching upgrade command rather than self-replacing the binary.
+
+> Only GitHub release artifacts are published today — there are no distro
+> packages yet, so a normally installed copy will self-update.
 
 <details>
 <summary><strong>Build from source</strong></summary>
@@ -217,16 +222,23 @@ The official release flow is CI-driven from git tags (`v*`) via
 
 ## Privacy at a glance
 
-Smriti makes **exactly four kinds of HTTP request**. Three of them you can
-turn off. Nothing else leaves your machine — ever. No telemetry, no
-analytics, no "anonymous usage statistics."
+Smriti makes **six kinds of HTTP request, and you can turn off every one that
+is not a direct response to something you clicked**. Nothing else leaves your
+machine — ever. No telemetry, no analytics, no "anonymous usage statistics."
 
 1. **Map tiles** when you open the Map view (`tile.openstreetmap.org`). Cached locally.
-2. **Asset pack download** (`github.com/.../releases`), one-time, opt-in.
-3. **Update check** (`api.github.com`), opt-in — **off by default**.
-4. **Update install** (`github.com/.../releases/download/...`), only when you click Download.
+2. **Asset pack download** (`github.com/.../releases`, ~285 MB), one-time, opt-in.
+3. **Visual-search models** (`huggingface.co/immich-app/...`, ~1.5 GB), part of the
+   same opt-in smart-features setup. Text and photo vectors are computed on your
+   machine; only the model files are downloaded.
+4. **Update check** (`api.github.com`), opt-in — **off by default**.
+5. **Update install** (`github.com/.../releases/download/...`), only when you click Download.
+6. **Optional remote inference** — the GPU face-embedding bridge and the
+   provider-backed assistant, both off unless you configure an endpoint or a
+   provider key. These send photo-derived data (face crops) or conversation and
+   library context to a service *you* choose.
 
-Full disclosure: [PRIVACY.md](PRIVACY.md).
+Full disclosure, request by request: [PRIVACY.md](PRIVACY.md).
 
 ## Documentation
 
@@ -256,11 +268,14 @@ small contribution helps keep it maintained:
 &nbsp;
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L4L11ZM53F)
 
-> **Note on face-recognition models.** The face detection + recognition
-> models come from [InsightFace](https://github.com/deepinsight/insightface)
-> and are downloaded from the upstream project on first run, not bundled
-> in the installer. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
-> for attributions.
+> **Note on models.** The face detection + recognition models come from
+> [InsightFace](https://github.com/deepinsight/insightface). They are not
+> bundled in the installer: the opt-in one-click setup fetches
+> `Smriti-Assets.zip` (models, ONNX Runtime and the GeoNames database) from
+> this project's own GitHub releases, and the optional visual-search models
+> from the [`immich-app`](https://huggingface.co/immich-app) repository on
+> Hugging Face. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
+> attributions.
 
 ## Built with
 

@@ -397,7 +397,7 @@ impl BurstDetector {
         dot / (a_norm.sqrt() * b_norm.sqrt())
     }
 
-    /// Parse datetime string to DateTime<Utc>
+    /// Parse datetime string to `DateTime<Utc>`
     fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
         // Try common formats
         if let Ok(dt) = DateTime::parse_from_rfc3339(s) {

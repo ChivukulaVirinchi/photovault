@@ -509,6 +509,8 @@ export interface InsightsData {
   hero_thumbnail_path: string | null;
   heatmap: Record<string, number>;
   heatmap_year: number;
+  /// "YYYY-MM" -> count, across every year in the library.
+  months_by_year: Record<string, number>;
   monthly_counts: number[];
   top_people: Array<{
     cluster_id: number;
