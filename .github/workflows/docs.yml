@@ -31,10 +31,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # The rustdoc step only documents the engine crate (`-p smriti`),
-      # which is pure Rust with no webkit / gtk / frontend coupling.
-      # That lets us skip the Tauri apt deps + Node + frontend build
-      # that the CI workflow needs.
+      # Rustdoc only builds the engine crate, so it does not need the full
+      # Tauri/WebKit stack. Linux credential storage does compile the keyring
+      # DBus backend, however, and libdbus-sys requires these development files.
+      - name: Install Linux rustdoc dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Install mdBook
         uses: peaceiris/actions-mdbook@v2

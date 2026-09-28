@@ -76,10 +76,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix src-ui
 
-      # tauri-action runs `beforeBuildCommand` from the repo root, not from
-      # `src-tauri/`, so a relative `--prefix ../src-ui` would escape the
-      # checkout. Build the frontend explicitly here and let Tauri pick up
-      # the prebuilt `frontendDist`.
+      # Build once from the repository root. The release-only Tauri override
+      # below disables the normal hook because tauri-action also runs from
+      # here, while local Tauri commands run it relative to `src-tauri/`.
       - name: Build frontend
         run: npm run build --prefix src-ui
 
@@ -102,7 +101,7 @@ jobs:
             Download only from this GitHub release and verify against the attached `SHA256SUMS` file.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          args: --target ${{ matrix.target }} ${{ matrix.heic_flag }}
+          args: --config tauri.release.conf.json --target ${{ matrix.target }} ${{ matrix.heic_flag }}
 
   assets-pack:
     name: Build asset pack
@@ -112,6 +111,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install asset builder dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Download ONNX models + GeoNames + ORT
         run: |
           set -euo pipefail
@@ -194,6 +195,7 @@ jobs:
     needs: [build, assets-pack]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: smriti-assets
