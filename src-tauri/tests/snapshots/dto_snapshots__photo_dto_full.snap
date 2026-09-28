@@ -36,11 +36,6 @@ expression: dto
     "flash": "Off"
   },
   "thumbnail_path": ".photovault/thumbnails/medium/v2/de/deadbeef.jpg",
-  "content_category": "photo",
-  "ocr": {
-    "text": "Hello world",
-    "confidence": 0.92
-  },
   "faces_processed": true,
   "is_favorite": true,
   "is_trashed": false,

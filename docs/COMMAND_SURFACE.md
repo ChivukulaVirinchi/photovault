@@ -1,5 +1,18 @@
 # Smriti — Tauri Command Surface
 
+## Responsiveness follow-up (September 2026)
+
+- `people_unclustered_faces` accepts optional `recent: boolean` (default false).
+  Normal mode preserves ascending unclustered-face pagination. Recent mode
+  ignores the cursor and returns a bounded newest-first snapshot of visible,
+  non-rejected faces, including already-assigned faces; it has no further page.
+  The People live preview uses recent mode. Face crops retain their existing paths.
+- Face progress is sampled every 250 ms. `chunks_flushed` advances after each
+  photo's database commit and crop-write attempt, before streaming assignment.
+  Reset the counter observer on every job ID. Detected faces are not unique people.
+- Map uses `map_pins` on a background worker, with adaptive aggregation rather
+  than truncation when the requested marker budget is exceeded.
+
 > **Status:** active contract. The Tauri shell (`src-tauri/`) and the
 > Svelte frontend (`src-ui/`) both implement against this document.
 > The original iced UI was removed in 2026-05; this is now the only
@@ -54,7 +67,6 @@ smriti/
 │           ├── bursts.rs
 │           ├── stacks.rs
 │           ├── trash.rs
-│           ├── documents.rs
 │           ├── map.rs
 │           ├── insights.rs
 │           ├── health.rs
@@ -256,8 +268,6 @@ struct PhotoDto {
     location: Option<LocationDto>,
     camera: Option<CameraDto>,
     thumbnail_path: Option<String>,
-    content_category: ContentCategoryDto,
-    ocr: Option<OcrDto>,
     faces_processed: bool,
     is_trashed: bool,
     stack: Option<PhotoStackBadgeDto>,
@@ -271,11 +281,6 @@ struct CameraDto {
     iso: Option<u32>, aperture: Option<f32>, shutter_speed: Option<String>,
     focal_length: Option<f32>, flash: Option<bool>,
 }
-struct OcrDto { text: String, confidence: f32 }
-
-#[serde(rename_all = "snake_case")]
-enum ContentCategoryDto { Photo, BusinessCard, Document, Screenshot, Presentation, Whiteboard, Receipt }
-
 struct PhotoSummaryDto {              // light variant for grids
     id: i64,
     thumbnail_path: Option<String>,
@@ -657,12 +662,17 @@ key. The old local parser fallback is disabled for Assistant execution.
 
 | Command | Args | Returns |
 |---|---|---|
-| `search.query` | `{ q: String }` | `SearchResultsDto` |
+| `search.query` | `{ q: String, offset?: u32, limit?: u32 }` | `SearchResultsDto` |
 | `search.recent.list` | `{ limit: Option<u32> }` | `Vec<RecentSearchDto>` |
 | `search.recent.remove` | `{ q: String }` | `()` |
 | `search.recent.clear` | `{}` | `()` |
 
-`search.query` is the one-shot entry point. It returns small entity lists
+`search.query` is the unified entry point. `offset` defaults to `0` and `limit`
+defaults to `200` (maximum `1000`). `SearchResultsDto.photos` and
+`photo_ids` contain one stable page, and `has_more` tells the client to request
+the next page with `offset + returned_photo_count`. Clients should restart
+the sequence after a library data revision rather than silently reusing an
+old offset. It returns small entity lists
 (people/albums/places), interpreted filter chips, matching photo ids for
 viewer navigation, and the first bounded photo result set.
 
@@ -766,23 +776,6 @@ the stack tray.
 | `trash.restore` | `{ photo_ids: Vec<i64> }` | `{ restored: u32 }` |
 | `trash.permanent_delete` | `{ photo_ids: Vec<i64> }` | `{ deleted: u32, freed_bytes: u64 }` | hard delete; UI must confirm |
 | `trash.empty` | `{}` | `{ deleted: u32, freed_bytes: u64 }` |
-
-<!--
-### 11. `documents` — OCR'd text-bearing photos  [DEFERRED]
-
-The Documents tab is not exposed in the UI right now. The engine still
-classifies content categories silently for the timeline badge, and the
-IPC commands are still wired into the Tauri shell (so an embedder can
-call them), but no user-facing surface ships them today. Block kept
-for the day this returns.
-
-| Command | Args | Returns |
-|---|---|---|
-| `documents.list` | `{ categories: Option<Vec<ContentCategoryDto>>, cursor, limit }` | `Page<PhotoSummaryDto>` | `categories` None = "all non-Photo" |
-| `documents.search` | `{ q: String, cursor, limit }` | `Page<PhotoSummaryDto>` | FTS5 over ocr_text |
-| `documents.set_category` | `{ photo_id: i64, category: ContentCategoryDto }` | `()` | manual override |
--->
-
 
 ### 12. `map`
 

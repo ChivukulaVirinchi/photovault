@@ -20,8 +20,6 @@ expression: dto
   "location": null,
   "camera": null,
   "thumbnail_path": null,
-  "content_category": "photo",
-  "ocr": null,
   "faces_processed": false,
   "is_favorite": false,
   "is_trashed": false,

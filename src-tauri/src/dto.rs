@@ -21,7 +21,7 @@ use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::stack_repo::{PhotoStackMemberRecord, PhotoStackRecord};
 use smriti::db::trash_repo::TrashedPhotoRecord;
-use smriti::models::{ContentCategory, MediaType, Photo};
+use smriti::models::{MediaType, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
 use smriti::services::burst_detector::BurstGroup;
 use smriti::services::drive_detector::DriveInfo;
@@ -71,8 +71,6 @@ pub struct PhotoDto {
     pub location: Option<LocationDto>,
     pub camera: Option<CameraDto>,
     pub thumbnail_path: Option<String>,
-    pub content_category: ContentCategoryDto,
-    pub ocr: Option<OcrDto>,
     pub faces_processed: bool,
     pub is_favorite: bool,
     pub is_trashed: bool,
@@ -162,52 +160,6 @@ pub struct CameraDto {
     pub flash: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OcrDto {
-    pub text: String,
-    pub confidence: f32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentCategoryDto {
-    Photo,
-    BusinessCard,
-    Document,
-    Screenshot,
-    Presentation,
-    Whiteboard,
-    Receipt,
-}
-
-impl From<ContentCategory> for ContentCategoryDto {
-    fn from(c: ContentCategory) -> Self {
-        match c {
-            ContentCategory::Photo => Self::Photo,
-            ContentCategory::BusinessCard => Self::BusinessCard,
-            ContentCategory::Document => Self::Document,
-            ContentCategory::Screenshot => Self::Screenshot,
-            ContentCategory::Presentation => Self::Presentation,
-            ContentCategory::Whiteboard => Self::Whiteboard,
-            ContentCategory::Receipt => Self::Receipt,
-        }
-    }
-}
-
-impl From<ContentCategoryDto> for ContentCategory {
-    fn from(c: ContentCategoryDto) -> Self {
-        match c {
-            ContentCategoryDto::Photo => Self::Photo,
-            ContentCategoryDto::BusinessCard => Self::BusinessCard,
-            ContentCategoryDto::Document => Self::Document,
-            ContentCategoryDto::Screenshot => Self::Screenshot,
-            ContentCategoryDto::Presentation => Self::Presentation,
-            ContentCategoryDto::Whiteboard => Self::Whiteboard,
-            ContentCategoryDto::Receipt => Self::Receipt,
-        }
-    }
-}
-
 impl From<Photo> for PhotoDto {
     fn from(p: Photo) -> Self {
         let gps = p
@@ -252,10 +204,6 @@ impl From<Photo> for PhotoDto {
         } else {
             None
         };
-        let ocr = p.ocr_text.map(|text| OcrDto {
-            text,
-            confidence: p.ocr_confidence.unwrap_or(0.0),
-        });
         let video = if p.media_type == MediaType::Video {
             Some(VideoDto {
                 video_codec: p.video_codec,
@@ -286,8 +234,6 @@ impl From<Photo> for PhotoDto {
             location,
             camera,
             thumbnail_path: p.thumbnail_path,
-            content_category: p.content_category.into(),
-            ocr,
             faces_processed: p.faces_processed,
             is_favorite: p.is_favorite,
             is_trashed: p.is_trashed,
@@ -526,6 +472,10 @@ pub struct SearchResultsDto {
     pub places: Vec<PlaceHitDto>,
     pub photo_ids: Vec<i64>,
     pub photos: Vec<SearchPhotoDto>,
+    /// True when more photo pages exist beyond this response. `photos`
+    /// holds only the requested page; clients fetch further pages with
+    /// `search_query`'s `offset`/`limit` args.
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -630,6 +580,7 @@ impl From<UnifiedSearchResults> for SearchResultsDto {
             places: u.places.into_iter().map(Into::into).collect(),
             photo_ids: u.photo_ids,
             photos: u.photos.into_iter().map(Into::into).collect(),
+            has_more: u.has_more,
         }
     }
 }
@@ -990,6 +941,29 @@ impl From<InsightsData> for InsightsDto {
     }
 }
 
+/// Cheap milestone-threshold probe — see
+/// `services::insights::compute_milestone_probe`.
+#[derive(Debug, Serialize, Clone)]
+pub struct MilestoneProbeDto {
+    pub total_photos: i64,
+    pub first_year: Option<i64>,
+    pub last_year: Option<i64>,
+    pub people_count: i64,
+    pub city_count: i64,
+}
+
+impl From<smriti::services::insights::MilestoneProbe> for MilestoneProbeDto {
+    fn from(p: smriti::services::insights::MilestoneProbe) -> Self {
+        Self {
+            total_photos: p.total_photos,
+            first_year: p.first_year,
+            last_year: p.last_year,
+            people_count: p.people_count,
+            city_count: p.city_count,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PersonStatDto {
     pub cluster_id: i64,
@@ -1116,6 +1090,7 @@ pub struct LibraryHandleDto {
     pub photo_count: i64,
     pub read_only: bool,
     pub schema_too_new: Option<SchemaTooNewDto>,
+    pub library_session_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

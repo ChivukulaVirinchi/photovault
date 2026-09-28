@@ -346,7 +346,14 @@ pub async fn takeout_start_import(
         finish(&app_clone, &job_id).await;
 
         if !report.cancelled {
-            super::library::run_post_scan_pipeline(app_clone, drive_root, db, thumbnails).await;
+            super::library::run_post_scan_pipeline(
+                app_clone,
+                drive_root,
+                db,
+                thumbnails,
+                report.imported as u64,
+            )
+            .await;
         }
     });
 

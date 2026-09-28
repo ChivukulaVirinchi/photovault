@@ -4,6 +4,8 @@
   let cachedMemoriesRoute:
     | {
         driveRoot: string | null;
+        /// Library session this cache belongs to. See `currentMemoriesCache`.
+        session: number;
         cards: CachedMemoryCard[];
         scrollTop: number;
       }
@@ -21,8 +23,15 @@
   import type { MemoryCard } from "../lib/api/all";
 
   const currentDriveRoot = libraryStore.driveRoot;
+  const currentSession = libraryStore.session;
+  // Keyed on the session as well as the drive root. `session` increments on
+  // every open, so closing and reopening the same folder used to serve the
+  // previous session's memory cards.
   const currentMemoriesCache =
-    cachedMemoriesRoute?.driveRoot === currentDriveRoot ? cachedMemoriesRoute : null;
+    cachedMemoriesRoute?.driveRoot === currentDriveRoot &&
+    cachedMemoriesRoute.session === currentSession
+      ? cachedMemoriesRoute
+      : null;
 
   let cards = $state<MemoryCard[]>(currentMemoriesCache?.cards ?? []);
   let error = $state<string | null>(null);
@@ -34,6 +43,7 @@
   function saveMemoriesCache() {
     cachedMemoriesRoute = {
       driveRoot: currentDriveRoot,
+      session: currentSession,
       cards,
       scrollTop: pageEl?.scrollTop ?? cachedMemoriesRoute?.scrollTop ?? 0,
     };

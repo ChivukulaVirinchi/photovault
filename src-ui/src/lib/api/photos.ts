@@ -1,4 +1,5 @@
 import { call } from "./index";
+import { dataRevision } from "../stores/dataRevision.svelte";
 import type { Page, PhotoDto, PhotoSummaryDto } from "./types";
 
 export interface ExifExtras {
@@ -60,7 +61,10 @@ export const photos = {
   get: (id: number) => call<PhotoDto>("photos_get", { id }),
   getMany: (ids: number[]) => call<PhotoDto[]>("photos_get_many", { ids }),
   setFavorite: (id: number, isFavorite: boolean) =>
-    call<PhotoDto>("photos_set_favorite", { id, is_favorite: isFavorite }),
+    call<PhotoDto>("photos_set_favorite", { id, is_favorite: isFavorite }).then((photo) => {
+      dataRevision.bump();
+      return photo;
+    }),
   exifExtras: (id: number) => call<ExifExtras>("photos_exif_extras", { id }),
   timelineNeighbors: (id: number) =>
     call<TimelineNeighbors>("photos_timeline_neighbors", { id }),

@@ -20,6 +20,7 @@
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import SurpriseButton from "../lib/components/SurpriseButton.svelte";
+  import { createVirtualScroll } from "../lib/virtualizer.svelte";
 
   interface Props { id: number }
   let { id }: Props = $props();
@@ -42,10 +43,20 @@
   let loadSeq = 0;
   let mounted = true;
   let scrollRestored = false;
+  let galleryColumns = $state(1);
+  const GALLERY_ROW_HEIGHT = 190;
   const isSmartAlbum = $derived(album?.is_virtual ?? false);
   const scrollStorageKey = $derived(`smriti:album-scroll:${id}`);
   const selectedVisibleIds = $derived(selection.listIn(photos.map((p) => p.id)));
   const ALL_IDS_NAV_LIMIT = 5000;
+  const galleryRows = $derived.by(() =>
+    Array.from({ length: Math.ceil(photos.length / galleryColumns) }, () => ({ height: GALLERY_ROW_HEIGHT })),
+  );
+  const galleryVirtual = createVirtualScroll({
+    rows: () => galleryRows,
+    scrollEl: () => scrollEl,
+    overscan: 3,
+  });
 
   interface AlbumExportComplete {
     job_id: string;
@@ -73,6 +84,7 @@
     if (ids.length === 0) return;
     const seq = loadSeq;
     const albumId = id;
+    const session = libraryStore.session;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
@@ -82,7 +94,7 @@
       .filter((e) => dropSet.has(e.photoId));
     try {
       actionBusy = true;
-      const result = await trash.trashPhotos(ids);
+      const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== loadSeq || albumId !== id) return;
       if (result.count === 0) {
         toasts.info("No selected photos needed trashing");
@@ -96,7 +108,7 @@
       toasts.undoable(
         `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
-          await trash.restore(ids);
+          await trash.restore(ids, session);
           if (!mounted || albumId !== id) return;
           photoVisibility.markRestored(ids);
           const next = photos.slice();
@@ -198,21 +210,63 @@
 
   function readSavedScroll() {
     const raw = (() => { try { return sessionStorage.getItem(scrollStorageKey); } catch { return null; } })();
-    const y = raw ? Number(raw) : 0;
-    return Number.isFinite(y) && y > 0 ? y : 0;
+    if (!raw) return { y: 0, anchor: null as number | null };
+    try {
+      const parsed = JSON.parse(raw) as { y?: number; anchor?: number };
+      if (Number.isFinite(parsed.y) && (parsed.y ?? 0) > 0) return { y: parsed.y!, anchor: parsed.anchor ?? null };
+    } catch {
+      const y = Number(raw);
+      if (Number.isFinite(y) && y > 0) return { y, anchor: null };
+    }
+    return { y: 0, anchor: null as number | null };
   }
 
   function saveScroll() {
     if (!scrollEl) return;
-    try { sessionStorage.setItem(scrollStorageKey, String(scrollEl.scrollTop)); } catch {}
+    // Anchor on the first cell the user can actually SEE, not the first one
+    // the virtualizer rendered. The rendered window starts `overscan` rows
+    // above the viewport, so anchoring the first rendered cell restored the
+    // page a few rows too high every time.
+    const anchor = firstVisiblePhotoId(scrollEl);
+    try { sessionStorage.setItem(scrollStorageKey, JSON.stringify({ y: scrollEl.scrollTop, anchor })); } catch {}
+  }
+
+  /// Photo id of the first cell at or below the top edge of the scroller.
+  function firstVisiblePhotoId(el: HTMLElement): number | null {
+    const top = el.getBoundingClientRect().top;
+    for (const cell of el.querySelectorAll<HTMLElement>("[data-photo-id]")) {
+      if (cell.getBoundingClientRect().bottom > top) {
+        const id = Number(cell.dataset.photoId);
+        return Number.isFinite(id) ? id : null;
+      }
+    }
+    return null;
+  }
+
+  /// Scroll offset of `node` relative to the scroller's content box.
+  ///
+  /// `offsetTop` is relative to the nearest positioned ancestor, which here is
+  /// the absolutely-positioned `.virtual-row` — so it was ~0 for every cell and
+  /// restoration always snapped to the top. A rect difference is correct
+  /// regardless of how the rows are positioned.
+  function offsetWithin(el: HTMLElement, node: HTMLElement): number {
+    return node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
   }
 
   async function restoreSavedScroll() {
     if (scrollRestored || !scrollEl) return;
-    const target = readSavedScroll();
+    const saved = readSavedScroll();
+    const target = saved.y;
     scrollRestored = true;
     if (target <= 0) return;
     await tick();
+    if (saved.anchor != null) {
+      const node = scrollEl.querySelector<HTMLElement>(`[data-photo-id="${saved.anchor}"]`);
+      if (node) {
+        scrollEl.scrollTop = Math.max(0, offsetWithin(scrollEl, node) - 32);
+        return;
+      }
+    }
     for (let i = 0; mounted && scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight < target && hasMore && nextCursor && i < 30; i++) {
       const before = photos.length;
       await loadMorePhotos();
@@ -226,6 +280,13 @@
 
   onMount(() => {
     mounted = true;
+    const updateColumns = () => {
+      if (scrollEl) galleryColumns = Math.max(1, Math.floor((scrollEl.clientWidth - 8) / 180));
+    };
+    updateColumns();
+    const resizeObserver = scrollEl ? new ResizeObserver(updateColumns) : null;
+    if (scrollEl && resizeObserver) resizeObserver.observe(scrollEl);
+    const detachVirtual = galleryVirtual.attach();
     window.addEventListener("keydown", onGlobalKey);
     let unlisten: UnlistenFn | null = null;
     let disposed = false;
@@ -238,6 +299,8 @@
       else unlisten = fn;
     }).catch(() => {});
     return () => {
+      detachVirtual();
+      resizeObserver?.disconnect();
       saveScroll();
       mounted = false;
       loadSeq += 1;
@@ -279,18 +342,24 @@
         albums.photos(albumId, null, 500),
       ]);
       if (!mounted || seq !== loadSeq) return;
-      let allIds = page.items.map((p) => p.id);
-      if (nextAlbum.photo_count <= ALL_IDS_NAV_LIMIT) {
-        allIds = await albums.photoIds(albumId);
-        if (!mounted || seq !== loadSeq) return;
-      }
+      // Paint the first page before the optional navigation-ID request. The
+      // latter can be large and is not needed to show the album or its first
+      // cards.
+      const firstIds = page.items.map((p) => p.id);
       album = nextAlbum;
       editName = nextAlbum.name;
       photos = page.items;
-      albumPhotoIds = allIds;
+      albumPhotoIds = firstIds;
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
-      browseContext.set(`album:${albumId}`, allIds);
+      browseContext.set(`album:${albumId}`, firstIds);
+      if (nextAlbum.photo_count <= ALL_IDS_NAV_LIMIT) {
+        void albums.photoIds(albumId).then((allIds) => {
+          if (!mounted || seq !== loadSeq || albumId !== id) return;
+          albumPhotoIds = allIds;
+          browseContext.set(`album:${albumId}`, allIds);
+        }).catch(() => {});
+      }
       void restoreSavedScroll();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
@@ -453,8 +522,10 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page-scroll" bind:this={scrollEl} use:marqueeSelect={{ getAllIds: () => photos.map((p) => p.id) }}>
-  <div class="pv-photo-grid">
-    {#each photos as p (p.id)}
+  <div class="virtual-gallery" style={`height: ${galleryVirtual.totalHeight}px`}>
+    {#each Array.from({ length: Math.max(0, galleryVirtual.last - galleryVirtual.first) }, (_, i) => galleryVirtual.first + i) as row}
+      <div class="pv-photo-grid virtual-row" style={`top: ${galleryVirtual.offsets[row]}px`}>
+      {#each photos.slice(row * galleryColumns, (row + 1) * galleryColumns) as p (p.id)}
       <a
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
@@ -477,6 +548,8 @@
           </span>
         {/if}
       </a>
+    {/each}
+      </div>
     {/each}
   </div>
   {#if loadingMore}
@@ -558,6 +631,8 @@
     overflow-y: auto;
     padding: var(--s-4) var(--s-7) var(--s-7);
   }
+  .virtual-gallery { position: relative; min-height: 1px; }
+  .virtual-row { position: absolute; inset-inline: 0; height: 180px; }
   .pv-photo-cell .check {
     position: absolute;
     top: 6px;

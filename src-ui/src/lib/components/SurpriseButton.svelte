@@ -28,7 +28,7 @@
 </script>
 
 <button class="ghost icon-action" onclick={start} disabled={disabled || slideshow.starting}
-  title={slideshow.starting ? "Finding a memory…" : "Surprise me — a slow slideshow"}
+  title={slideshow.starting ? "Finding a memory…" : "Surprise me"}
   aria-label="Surprise me" aria-busy={slideshow.starting}>
   <Sparkles size={15} strokeWidth={1.8} />
 </button>

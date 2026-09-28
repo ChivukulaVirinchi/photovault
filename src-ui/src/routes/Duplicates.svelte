@@ -6,9 +6,11 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import { createVirtualScroll } from "../lib/virtualizer.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof duplicates.list>>>([]);
   let wasted = $state(0);
@@ -22,6 +24,22 @@
   let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let scrollRestored = false;
   const scrollStorageKey = $derived(`smriti:duplicates-scroll:${libraryStore.driveRoot ?? "closed"}`);
+  let galleryColumns = $state(1);
+  /// Measured height of a rendered gallery row, in px.
+  ///
+  /// Rows are absolutely positioned at a fixed pitch, so this has to match the
+  /// real card height or successive rows overlap. It is measured from the DOM
+  /// rather than assumed: the old code hard-coded 300px while the card's own
+  /// content (a square cover plus the match badge) came to roughly one column
+  /// width, so the pitch was wrong at every window size.
+  let galleryRowHeight = $state(300);
+  let galleryEl = $state<HTMLDivElement | undefined>(undefined);
+  const galleryRows = $derived.by(() =>
+    Array.from({ length: Math.ceil(groups.length / galleryColumns) }, () => ({
+      height: galleryRowHeight,
+    })),
+  );
+  const galleryVirtual = createVirtualScroll({ rows: () => galleryRows, scrollEl: () => pageEl, overscan: 3 });
 
   // Detection runs in tokio::spawn_blocking on the backend. Read state
   // from the global jobs store so it survives navigation.
@@ -38,10 +56,11 @@
     scrollRestored = false;
     loadingMore = false;
     try {
-      const [nextGroups, w] = await Promise.all([
-        duplicates.list(PAGE_SIZE, 0),
-        duplicates.wastedSpace(),
-      ]);
+      // Cached per library session; invalidated when a duplicates job
+      // completes or a group is resolved on this page.
+      const [nextGroups, w] = await routeCache.get("duplicates:page", () =>
+        Promise.all([duplicates.list(PAGE_SIZE, 0), duplicates.wastedSpace()]),
+      );
       if (!mounted || seq !== loadSeq) return;
       groups = nextGroups;
       hasMore = nextGroups.length === PAGE_SIZE;
@@ -130,6 +149,38 @@
 
   onMount(() => {
     mounted = true;
+    // Derive the column count from the *grid's* own width, not the scroll
+    // container's, and mirror the CSS track definition exactly
+    // (`repeat(auto-fill, minmax(220px, 1fr))` with a `--s-3` = 12px gap).
+    //
+    // The previous version used `pageEl.clientWidth`: the scroll container is
+    // wider than the grid by the page padding (48px each side), and it
+    // subtracted a flat 8px and divided by 220 — so it computed one column
+    // MORE than CSS laid out at many widths. The extra card then wrapped onto
+    // a second grid line inside a row pinned to a single-row pitch, so rows
+    // drew on top of each other.
+    const GRID_MIN_COLUMN_PX = 220;
+    const GRID_GAP_PX = 12;
+    const updateColumns = () => {
+      const root = galleryEl;
+      if (!root) return;
+      const width = root.clientWidth;
+      if (width <= 0) return;
+      galleryColumns = Math.max(
+        1,
+        Math.floor((width + GRID_GAP_PX) / (GRID_MIN_COLUMN_PX + GRID_GAP_PX)),
+      );
+      // Match the real row height so the virtual pitch cannot drift from the
+      // rendered card. One row is enough — they are all identical.
+      const firstRow = root.querySelector<HTMLElement>(".virtual-row");
+      const measured = firstRow?.getBoundingClientRect().height ?? 0;
+      if (measured > 1) galleryRowHeight = Math.ceil(measured);
+    };
+    updateColumns();
+    const ro = pageEl ? new ResizeObserver(updateColumns) : null;
+    if (pageEl && ro) ro.observe(pageEl);
+    if (galleryEl && ro) ro.observe(galleryEl);
+    const detachVirtual = galleryVirtual.attach();
     load();
     const unlisten = listen<{ stage?: string; message?: string | null }>("duplicates:progress", (e) => {
       if (!mounted) return;
@@ -141,6 +192,8 @@
       }
     });
     return () => {
+      detachVirtual();
+      ro?.disconnect();
       saveScroll();
       mounted = false;
       loadSeq += 1;
@@ -174,8 +227,13 @@
       </button>
     </div>
   {:else}
-    <ul class="grid">
-      {#each groups as g (g.id)}
+    <div class="virtual-gallery" bind:this={galleryEl} style={`height: ${galleryVirtual.totalHeight}px`}>
+    {#each Array.from({ length: Math.max(0, galleryVirtual.last - galleryVirtual.first) }, (_, i) => galleryVirtual.first + i) as row}
+    <ul
+      class="grid virtual-row"
+      style={`top: ${galleryVirtual.offsets[row]}px; height: ${galleryRowHeight}px`}
+    >
+      {#each groups.slice(row * galleryColumns, (row + 1) * galleryColumns) as g (g.id)}
         <li>
           <!--
             Single click target — straight to the side-by-side compare
@@ -211,6 +269,8 @@
         </li>
       {/each}
     </ul>
+    {/each}
+    </div>
     {#if hasMore}
       <div class="more-row">
         <button class="ghost" onclick={loadMore} disabled={loadingMore}>
@@ -223,6 +283,8 @@
 
 <style>
   .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .virtual-gallery { position: relative; min-height: 1px; }
+  .virtual-row { position: absolute; inset-inline: 0; }
   .waste {
     font-size: var(--t-sm);
     color: var(--ink);
@@ -250,7 +312,10 @@
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: var(--s-3);
   }
-  .grid li { display: contents; }
+  /* Rows are measured from the DOM (see galleryRowHeight), so no
+     contain-intrinsic-size hint here — it is the row's own height that sets
+     the virtual pitch, and a wrong hint would only skew scrollbar estimates. */
+  .grid li { display: block; }
   .card-link {
     position: relative;
     display: block;

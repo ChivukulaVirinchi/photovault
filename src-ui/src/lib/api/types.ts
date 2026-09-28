@@ -22,6 +22,7 @@ export interface LibraryHandleDto {
   photo_count: number;
   read_only: boolean;
   schema_too_new: SchemaTooNewInfo | null;
+  library_session_id: number | null;
 }
 
 export interface LibraryOpenResult {
@@ -30,6 +31,10 @@ export interface LibraryOpenResult {
   first_run: boolean;
   read_only: boolean;
   schema_too_new: SchemaTooNewInfo | null;
+  /// Set when the catalog's recorded root differs from the drive being
+  /// opened — the index was created for another drive.
+  catalog_mismatch: string | null;
+  library_session_id: number;
 }
 
 export interface SchemaTooNewInfo {
@@ -93,8 +98,6 @@ export interface PhotoDto extends PhotoSummaryDto {
     bitrate: number | null;
     has_audio: boolean;
   } | null;
-  content_category: string;
-  ocr: { text: string; confidence: number } | null;
   faces_processed: boolean;
   indexed_at: string;
 }

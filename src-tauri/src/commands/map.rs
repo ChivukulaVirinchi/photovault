@@ -208,6 +208,36 @@ fn collect_pins(
     if !clustered {
         return Ok(singles);
     }
+    // Coarsen dense viewports instead of truncating locations or returning
+    // thousands of DOM markers at high zoom. Counts and sample IDs survive.
+    let mut merge_cell = cell;
+    while cells.len() > max_pins {
+        merge_cell *= 2.0;
+        let mut merged: HashMap<(i64, i64), MapPinDto> = HashMap::new();
+        for pin in cells.into_values() {
+            let key = (
+                (pin.lat / merge_cell).floor() as i64,
+                (pin.lng / merge_cell).floor() as i64,
+            );
+            match merged.entry(key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(pin);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let group = entry.get_mut();
+                    let total = group.count.saturating_add(pin.count);
+                    group.lat = (group.lat * group.count as f64 + pin.lat * pin.count as f64)
+                        / total as f64;
+                    group.lng = (group.lng * group.count as f64 + pin.lng * pin.count as f64)
+                        / total as f64;
+                    group.count = total;
+                    let room = 500usize.saturating_sub(group.photo_ids.len());
+                    group.photo_ids.extend(pin.photo_ids.into_iter().take(room));
+                }
+            }
+        }
+        cells = merged;
+    }
     Ok(cells
         .into_values()
         .map(|mut pin| {
@@ -331,6 +361,32 @@ mod tests {
         assert_eq!(cluster.count, 50001);
         assert_eq!(cluster.photo_ids.len(), 500);
         assert_eq!(cluster.photo_id, 50001);
+    }
+
+    #[test]
+    fn dense_high_zoom_is_bounded_without_losing_counts() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE photos(id INTEGER PRIMARY KEY, gps_latitude REAL,
+             gps_longitude REAL, thumbnail_path TEXT, is_trashed INTEGER, date_taken TEXT);
+             WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<2000)
+             INSERT INTO photos SELECT id, (id % 40)*0.001, (id / 40)*0.001, NULL, 0, '2026' FROM n;"
+        ).unwrap();
+        let pins = collect_pins(
+            &conn,
+            QueryBounds {
+                north: 1.0,
+                south: 0.0,
+                east: 1.0,
+                west: 0.0,
+            },
+            20,
+            Some(100),
+        )
+        .unwrap();
+        assert!(pins.len() <= 100);
+        assert_eq!(pins.iter().map(|p| p.count).sum::<u32>(), 2000);
+        assert!(pins.iter().all(|p| p.photo_ids.len() <= 500));
     }
 
     #[test]

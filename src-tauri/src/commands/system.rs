@@ -194,12 +194,6 @@ fn build_asset_inventory() -> AssetInventoryDto {
         true,
         "Offline city and country lookup for GPS photos.",
     ));
-    assets.push(planned_asset(
-        "ocr.model",
-        "OCR model",
-        "model",
-        "Not installed in this build.",
-    ));
     assets.push(asset_file(
         "vision.semantic.visual",
         "Semantic visual encoder",
@@ -339,22 +333,6 @@ fn asset_file(
         removable: false,
         size_bytes: path.as_deref().and_then(file_size),
         path: path.map(display_path),
-        note: Some(note.to_string()),
-    }
-}
-
-fn planned_asset(id: &str, label: &str, kind: &str, note: &str) -> AssetItemDto {
-    AssetItemDto {
-        id: id.to_string(),
-        label: label.to_string(),
-        kind: kind.to_string(),
-        status: "planned".to_string(),
-        required: false,
-        active: false,
-        installable: false,
-        removable: false,
-        size_bytes: None,
-        path: None,
         note: Some(note.to_string()),
     }
 }

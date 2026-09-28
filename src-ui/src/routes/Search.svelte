@@ -1,22 +1,34 @@
 <script module lang="ts">
   import type { SearchResults as CachedSearchResults } from "../lib/api/all";
 
-  let cachedSearch:
-    | {
-        driveRoot: string | null;
-        q: string;
-        results: CachedSearchResults | null;
-        visiblePhotoLimit: number;
-        scrollTop: number;
-      }
-    | null = null;
+  /**
+   * Saved search answer. Keyed by library session + data revision +
+   * query: a reopened library is a new session, and any data change
+   * (trash/restore, scan, faces…) moves the revision, so a stale
+   * answer is shown immediately but re-run in the background instead
+   * of being trusted.
+   */
+  interface SearchCache {
+    driveRoot: string | null;
+    session: number;
+    revision: number;
+    q: string;
+    results: CachedSearchResults | null;
+  }
+  let cachedSearch: SearchCache | null = null;
+
+  /// Scroll positions, kept separately from result data (keyed by
+  /// library session; the value belongs to the query last shown).
+  const searchScrollTops = new Map<string, number>();
 </script>
 
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
   import { search, trash } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { dataRevision } from "../lib/stores/dataRevision.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
@@ -24,6 +36,9 @@
   import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
+  import { nextSearchPage, SEARCH_MAX_RESULTS } from "../lib/searchWindow";
+  import { drainSearchPages } from "../lib/searchPaging";
+  import VirtualGrid from "../lib/components/VirtualGrid.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
@@ -38,13 +53,38 @@
   let { initialQuery = "" }: Props = $props();
 
   const currentDriveRoot = libraryStore.driveRoot;
-  const currentSearchCache = cachedSearch?.driveRoot === currentDriveRoot ? cachedSearch : null;
+  const currentSession = libraryStore.session;
+  const sessionKey = `${currentDriveRoot ?? "closed"}:${currentSession}`;
+  const sameSession =
+    cachedSearch &&
+    cachedSearch.session === currentSession &&
+    cachedSearch.driveRoot === currentDriveRoot;
+  const currentSearchCache = sameSession ? cachedSearch : null;
   // svelte-ignore state_referenced_locally
   const useSearchCache = currentSearchCache != null && (!initialQuery || currentSearchCache.q === initialQuery);
 
+  /// Drop ids we already know are trashed so a restored answer never
+  /// shows them, even before the re-run lands.
+  function dropKnownTrashed(r: SearchResults): SearchResults {
+    const trashed = photoVisibility.trashedIds;
+    if (trashed.size === 0) return r;
+    const drop = new Set(r.photo_ids.filter((id) => trashed.has(id)));
+    if (drop.size === 0) return r;
+    return {
+      ...r,
+      photo_ids: r.photo_ids.filter((id) => !drop.has(id)),
+      photos: r.photos.filter((p) => !drop.has(p.photo_id)),
+    };
+  }
+
+  // svelte-ignore state_referenced_locally
+  const restoredResults = useSearchCache && currentSearchCache?.results
+    ? dropKnownTrashed(currentSearchCache.results)
+    : null;
+
   // svelte-ignore state_referenced_locally
   let q = $state(initialQuery || currentSearchCache?.q || "");
-  let results = $state<SearchResults | null>(useSearchCache ? currentSearchCache?.results ?? null : null);
+  let results = $state<SearchResults | null>(restoredResults);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
@@ -53,49 +93,79 @@
   let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let actionBusy = $state(false);
   let runSeq = 0;
+  let pageSeq = 0;
   let mounted = true;
   let lastInitialQuery = $state<string | null>(null);
-  let visiblePhotoLimit = $state(useSearchCache ? currentSearchCache?.visiblePhotoLimit ?? 200 : 200);
-  const visiblePhotos = $derived(results?.photos.slice(0, visiblePhotoLimit) ?? []);
+  // The query and data revision the on-screen results describe.
+  let loadedQuery = $state<string | null>(
+    // svelte-ignore state_referenced_locally
+    restoredResults ? currentSearchCache?.q ?? null : null,
+  );
+  // svelte-ignore state_referenced_locally
+  let loadedRevision = $state<number | null>(
+    restoredResults ? currentSearchCache?.revision ?? null : null,
+  );
+  const MAX_SEARCH_RESULTS = SEARCH_MAX_RESULTS;
+  let loadingMore = $state(false);
+  const visiblePhotos = $derived(results?.photos ?? []);
   const visiblePhotoIds = $derived(visiblePhotos.map((p) => p.photo_id));
   const selectedResultIds = $derived(selection.listIn(results?.photo_ids ?? []));
 
   function saveSearchCache() {
     cachedSearch = {
       driveRoot: currentDriveRoot,
-      q,
+      session: currentSession,
+      revision: loadedRevision ?? dataRevision.version,
+      // Record the query the results actually answer, so restoring this
+      // cache can never pair a query with another query's results.
+      q: results ? (loadedQuery ?? q) : q,
       results,
-      visiblePhotoLimit,
-      scrollTop: pageEl?.scrollTop ?? cachedSearch?.scrollTop ?? 0,
     };
   }
 
+  let composing = false;
+  let pagingError = $state(false);
+
   async function run() {
+    if (debounceId) window.clearTimeout(debounceId);
+    debounceId = undefined;
+    if (composing) return;
+    pagingError = false;
     const seq = ++runSeq;
+    pageSeq += 1;
+    loadingMore = false;
     const query = q.trim();
     error = null;
     showAddDialog = false;
     actionBusy = false;
     if (!query) {
       results = null;
+      loadedQuery = null;
+      loadedRevision = null;
       loading = false;
       selection.clear();
       saveSearchCache();
       return;
     }
     loading = true;
+    const atRevision = dataRevision.version;
     try {
-      const nextResults = await search.query(query);
-      if (!mounted || seq !== runSeq) return;
-      results = nextResults;
-      visiblePhotoLimit = 200;
+      const nextResults = await search.query(query, 0, 200);
+      if (!mounted || seq !== runSeq || query !== q.trim() || atRevision !== dataRevision.version || libraryStore.session !== currentSession) return;
+      results = dropKnownTrashed(nextResults);
+      loadedQuery = query;
+      loadedRevision = atRevision;
+
       if (results) browseContext.set(`search:${query}`, results.photo_ids);
       selection.clear();
       saveSearchCache();
+      void loadRemaining(query, atRevision, seq);
     } catch (e) {
       if (mounted && seq === runSeq) {
         results = null;
-        visiblePhotoLimit = 200;
+        loadedQuery = null;
+        loadedRevision = null;
+
         selection.clear();
         if (browseContext.source?.startsWith("search:")) browseContext.clear();
         error = commandErrorMessage(e);
@@ -108,16 +178,30 @@
   }
 
   function onInput() {
+    // Invalidate old responses immediately; only the replacement request waits.
+    runSeq += 1;
+    pageSeq += 1;
+    loading = false;
+    loadingMore = false;
+    results = null;
+    loadedQuery = null;
+    loadedRevision = null;
+    selection.clear();
     if (debounceId) window.clearTimeout(debounceId);
-    debounceId = window.setTimeout(run, 250);
+    debounceId = undefined;
+    if (!composing) debounceId = window.setTimeout(run, 300);
   }
 
   function clearSearch() {
     if (debounceId) window.clearTimeout(debounceId);
     debounceId = undefined;
     q = "";
+    runSeq += 1;
+    pageSeq += 1;
     results = null;
-    visiblePhotoLimit = 200;
+    loadedQuery = null;
+    loadedRevision = null;
+
     error = null;
     loading = false;
     selection.clear();
@@ -163,9 +247,60 @@
     }
   }
 
-  function showMorePhotos() {
-    visiblePhotoLimit += 200;
-    saveSearchCache();
+  async function showMorePhotos(): Promise<boolean> {
+    if (!results || loadingMore || !results.has_more || results.photos.length >= MAX_SEARCH_RESULTS) return false;
+    const query = loadedQuery;
+    const revision = loadedRevision;
+    if (!query || query !== q.trim() || revision !== dataRevision.version) return false;
+    const seq = runSeq;
+    const pageToken = ++pageSeq;
+    const resultAtStart = results;
+    loadingMore = true;
+    try {
+      const page = nextSearchPage(resultAtStart.photos.length, 200);
+      if (!page) return false;
+      const next = await search.query(query, page.offset, page.limit);
+      if (
+        !mounted ||
+        seq !== runSeq ||
+        pageToken !== pageSeq ||
+        query !== loadedQuery ||
+        query !== q.trim() ||
+        revision !== loadedRevision ||
+        revision !== dataRevision.version
+      ) return false;
+      const existingIds = new Set(results.photo_ids);
+      const freshPhotos = next.photos.filter((photo) => !existingIds.has(photo.photo_id));
+      const freshIds = next.photo_ids.filter((photoId) => !existingIds.has(photoId));
+      results = {
+        ...results,
+        photos: [...results.photos, ...freshPhotos],
+        photo_ids: [...results.photo_ids, ...freshIds],
+        has_more: next.has_more,
+      };
+
+      browseContext.set(`search:${query}`, results.photo_ids);
+      saveSearchCache();
+      const advanced = results.photos.length > resultAtStart.photos.length;
+      if (!advanced && results.has_more) pagingError = true;
+      return advanced;
+    } catch (e) {
+      if (mounted && seq === runSeq) pagingError = true;
+      if (mounted && seq === runSeq) toasts.error(`Couldn't load more results: ${commandErrorMessage(e)}`);
+      return false;
+    } finally {
+      if (mounted && seq === runSeq && pageToken === pageSeq) loadingMore = false;
+    }
+  }
+
+  async function loadRemaining(query: string, revision: number, seq: number) {
+    await drainSearchPages(
+      () => mounted && seq === runSeq && query === q.trim() && query === loadedQuery
+        && libraryStore.session === currentSession && revision === loadedRevision
+        && revision === dataRevision.version && !!results?.has_more
+        && results.photos.length < MAX_SEARCH_RESULTS,
+      showMorePhotos,
+    );
   }
 
   async function bulkTrash() {
@@ -174,6 +309,7 @@
     if (ids.length === 0) return;
     const seq = runSeq;
     const query = q.trim();
+    const session = libraryStore.session;
     const drop = new Set(ids);
     const snapshot = results.photos
       .map((photo, idx) => ({ photo, idx }))
@@ -183,7 +319,7 @@
       .filter((entry) => drop.has(entry.photoId));
     try {
       actionBusy = true;
-      const result = await trash.trashPhotos(ids);
+      const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== runSeq || query !== q.trim() || !results) return;
       if (result.count === 0) {
         toasts.info("No selected photos needed trashing");
@@ -201,7 +337,7 @@
       toasts.undoable(
         `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
-          await trash.restore(ids);
+          await trash.restore(ids, session);
           if (!mounted || query !== q.trim() || !results) return;
           photoVisibility.markRestored(ids);
           const nextPhotos = results.photos.slice();
@@ -242,20 +378,36 @@
 
   onMount(() => {
     mounted = true;
+    let unlistenSemantic: UnlistenFn | undefined;
+    let cancelled = false;
+    listen("semantic:ready", () => {
+      if (mounted && q.trim()) void run();
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else unlistenSemantic = unlisten;
+    }).catch(() => {});
     if (results) {
+      if (loadedQuery && loadedRevision !== null) void loadRemaining(loadedQuery, loadedRevision, runSeq);
       browseContext.set(`search:${q.trim()}`, results.photo_ids);
       requestAnimationFrame(() => {
-        if (mounted && pageEl && currentSearchCache) pageEl.scrollTop = currentSearchCache.scrollTop;
+        if (mounted && pageEl && useSearchCache) {
+          pageEl.scrollTop = searchScrollTops.get(sessionKey) ?? 0;
+        }
       });
     } else {
       inputEl?.focus();
       if (q.trim()) run();
     }
     const el = pageEl;
-    const onScroll = () => saveSearchCache();
+    const onScroll = () => {
+      if (el) searchScrollTops.set(sessionKey, el.scrollTop);
+    };
     el?.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("keydown", onGlobalKey);
     return () => {
+      cancelled = true;
+      unlistenSemantic?.();
+      if (el) searchScrollTops.set(sessionKey, el.scrollTop);
       saveSearchCache();
       mounted = false;
       runSeq += 1;
@@ -263,6 +415,34 @@
       el?.removeEventListener("scroll", onScroll);
       window.removeEventListener("keydown", onGlobalKey);
     };
+  });
+
+  /// Keep on-screen results honest: the moment the library's data
+  /// revision moves (trash/restore here or on another route, a
+  /// completed scan/faces job…), reconcile immediately with the known
+  /// trashed ids and re-run the query in the background so additions
+  /// and metadata changes appear too. The runSeq guard inside `run`
+  /// still guarantees a newer query always wins.
+  $effect(() => {
+    void photoVisibility.version;
+    void dataRevision.version;
+    if (!results) return;
+    const trashed = photoVisibility.trashedIds;
+    if (results.photo_ids.some((id) => trashed.has(id))) {
+      results = dropKnownTrashed(results);
+      if (browseContext.source?.startsWith("search:")) {
+        browseContext.set(`search:${q.trim()}`, results.photo_ids);
+      }
+    }
+    const query = q.trim();
+    if (
+      query &&
+      loadedQuery === query &&
+      loadedRevision !== dataRevision.version &&
+      !loading
+    ) {
+      void run();
+    }
   });
 
   $effect(() => {
@@ -274,7 +454,9 @@
     lastInitialQuery = initialQuery;
     q = initialQuery;
     results = null;
-    visiblePhotoLimit = 200;
+    loadedQuery = null;
+    loadedRevision = null;
+
     saveSearchCache();
     if (debounceId) window.clearTimeout(debounceId);
     void run();
@@ -293,7 +475,10 @@
       bind:this={inputEl}
       bind:value={q}
       oninput={onInput}
-      placeholder='Try a name, place, "Goa 2023", or "beach sunset"'
+      oncompositionstart={() => { composing = true; onInput(); }}
+      oncompositionend={() => { composing = false; onInput(); }}
+      onkeydown={(event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); void run(); } }}
+      placeholder="Search photos, people, places, and albums"
     />
     {#if loading}<span class="loading mono">…</span>{/if}
     {#if q}
@@ -382,16 +567,19 @@
       <section>
         <div class="section-heading-row">
           <h3 class="section-title">
-            Photos · {Math.min(visiblePhotoLimit, results.photos.length)} / {results.photos.length}
+            Photos · {results.photos.length}{results.has_more ? "+" : ""}
           </h3>
-          {#if visiblePhotoLimit < results.photos.length}
-            <button class="ghost small-action" onclick={showMorePhotos}>
-              Show more
-            </button>
+          {#if pagingError}
+            <button class="ghost" onclick={() => run()}>Retry search</button>
+          {:else if results.photos.length >= MAX_SEARCH_RESULTS}
+            <span class="muted small">20,000-result limit reached</span>
+          {:else if results.has_more}
+            <span class="muted small">{loadingMore ? "Loading…" : "Continuing automatically…"}</span>
           {/if}
         </div>
-        <div class="pv-photo-grid">
-          {#each visiblePhotos as p (p.photo_id)}
+        <VirtualGrid count={visiblePhotos.length} scrollEl={pageEl}>
+          {#snippet children(start, end)}
+          {#each visiblePhotos.slice(start, end) as p (p.photo_id)}
             <a
               class="pv-photo-cell"
               class:selected={selection.has(p.photo_id)}
@@ -418,7 +606,8 @@
               {/if}
             </a>
           {/each}
-        </div>
+          {/snippet}
+        </VirtualGrid>
       </section>
     {/if}
     {#if results.people.length === 0 && results.albums.length === 0 && results.places.length === 0 && results.photos.length === 0}
@@ -428,7 +617,7 @@
     {/if}
   {:else if !loading}
     <div class="empty">
-      <p>Type to search across people, dates, albums, places, favourites, filenames, camera names, and visual meaning.</p>
+      <p>Search your library.</p>
     </div>
   {/if}
 </div>
@@ -548,12 +737,6 @@
     letter-spacing: 0.1em;
     margin: 0;
   }
-  .small-action {
-    min-height: 28px;
-    padding: 4px 9px;
-    font-size: var(--t-xs);
-  }
-
   .row {
     list-style: none;
     padding: 0;

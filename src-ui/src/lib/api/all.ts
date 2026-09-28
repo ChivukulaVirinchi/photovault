@@ -4,6 +4,8 @@
 // without 13 tiny files.
 
 import { call } from "./index";
+import { dataRevision } from "../stores/dataRevision.svelte";
+import { libraryStore } from "../stores/library.svelte";
 import type { AssetHealthDto } from "./types";
 import type {
   AlbumDto,
@@ -13,6 +15,12 @@ import type {
   Page,
   JobIdDto,
 } from "./types";
+
+const mutate = async <T>(request: Promise<T>): Promise<T> => {
+  const value = await request;
+  dataRevision.bump();
+  return value;
+};
 
 // ---------- people ----------
 export const people = {
@@ -24,37 +32,37 @@ export const people = {
   get: (id: number) => call<PersonDto>("people_get", { id }),
   photoIds: (id: number) => call<number[]>("people_photo_ids", { id }),
   rename: (id: number, name: string | null) =>
-    call<PersonDto>("people_rename", { id, name }),
+    mutate(call<PersonDto>("people_rename", { id, name })),
   merge: (sourceId: number, targetId: number) =>
-    call<PersonDto>("people_merge", {
+    mutate(call<PersonDto>("people_merge", {
       source_id: sourceId,
       target_id: targetId,
-    }),
+    })),
   /// Delete a cluster — "not a real person." Faces become unclustered.
-  delete: (id: number) => call<null>("people_delete", { id }),
+  delete: (id: number) => mutate(call<null>("people_delete", { id })),
   reviewQueue: (limit = 20) =>
     call<ReviewItem[]>("people_review_queue", { limit }),
   reviewSame: (queueId: number) =>
-    call<null>("people_review_same", { queue_id: queueId }),
+    mutate(call<null>("people_review_same", { queue_id: queueId })),
   reviewDifferent: (queueId: number) =>
-    call<null>("people_review_different", { queue_id: queueId }),
+    mutate(call<null>("people_review_different", { queue_id: queueId })),
   reviewSkip: (queueId: number) =>
-    call<null>("people_review_skip", { queue_id: queueId }),
+    mutate(call<null>("people_review_skip", { queue_id: queueId })),
   startProcessing: () => call<JobIdDto>("people_start_processing"),
   cancelProcessing: (jobId: string) =>
     call<null>("people_cancel_processing", { job_id: jobId }),
   resetAll: () =>
-    call<{
+    mutate(call<{
       photos_reflagged: number;
       clusters_dropped: number;
       faces_dropped: number;
-    }>("people_reset_all"),
+    }>("people_reset_all")),
   resetClusters: () =>
-    call<{
+    mutate(call<{
       photos_reflagged: number;
       clusters_dropped: number;
       faces_dropped: number;
-    }>("people_reset_clusters"),
+    }>("people_reset_clusters")),
   photosByPerson: (personId: number, cursor: string | null = null, limit = 200) =>
     call<Page<PhotoSummaryDto>>("photos_list_by_person", {
       person_id: personId,
@@ -76,30 +84,31 @@ export const people = {
       cursor: cursor ?? null,
       limit: limit ?? 100,
     }),
-  unclusteredFaces: (cursor?: string | null, limit?: number) =>
+  unclusteredFaces: (cursor?: string | null, limit?: number, recent = false) =>
     call<Page<FaceDetailDto>>("people_unclustered_faces", {
+      recent,
       cursor: cursor ?? null,
       limit: limit ?? 24,
     }),
   faceConfirm: (faceId: number) =>
-    call<null>("people_face_confirm", { face_id: faceId }),
+    mutate(call<null>("people_face_confirm", { face_id: faceId })),
   faceConfirmToCluster: (faceId: number, clusterId: number) =>
-    call<null>("people_face_confirm_to_cluster", {
+    mutate(call<null>("people_face_confirm_to_cluster", {
       face_id: faceId,
       cluster_id: clusterId,
-    }),
+    })),
   faceReject: (faceId: number, notClusterId?: number) =>
-    call<null>("people_face_reject", {
+    mutate(call<null>("people_face_reject", {
       face_id: faceId,
       not_cluster_id: notClusterId ?? null,
-    }),
+    })),
   faceHide: (faceId: number) =>
-    call<null>("people_face_hide", { face_id: faceId }),
+    mutate(call<null>("people_face_hide", { face_id: faceId })),
   faceReassign: (faceId: number, targetClusterId: number) =>
-    call<null>("people_face_reassign", {
+    mutate(call<null>("people_face_reassign", {
       face_id: faceId,
       target_cluster_id: targetClusterId,
-    }),
+    })),
   faceSuggestClusters: (faceId: number, topK?: number) =>
     call<ClusterSuggestionDto[]>("people_face_suggest_clusters", {
       face_id: faceId,
@@ -160,20 +169,20 @@ export const albums = {
   get: (id: number) => call<AlbumDto>("albums_get", { id }),
   photoIds: (id: number) => call<number[]>("albums_photo_ids", { id }),
   create: (name: string, photoIds: number[] = []) =>
-    call<AlbumDto>("albums_create", { name, photo_ids: photoIds }),
+    mutate(call<AlbumDto>("albums_create", { name, photo_ids: photoIds })),
   rename: (id: number, name: string) =>
-    call<AlbumDto>("albums_rename", { id, name }),
-  delete: (id: number) => call<null>("albums_delete", { id }),
+    mutate(call<AlbumDto>("albums_rename", { id, name })),
+  delete: (id: number) => mutate(call<null>("albums_delete", { id })),
   addPhotos: (id: number, photoIds: number[]) =>
-    call<{ count: number }>("albums_add_photos", {
+    mutate(call<{ count: number }>("albums_add_photos", {
       id,
       photo_ids: photoIds,
-    }),
+    })),
   removePhotos: (id: number, photoIds: number[]) =>
-    call<{ count: number }>("albums_remove_photos", {
+    mutate(call<{ count: number }>("albums_remove_photos", {
       id,
       photo_ids: photoIds,
-    }),
+    })),
   export: (albumId: number, destinationDir: string | null = null, folderName: string | null = null) =>
     call<JobIdDto>("albums_export", {
       album_id: albumId,
@@ -196,14 +205,14 @@ export const albums = {
     preview: (id: number, limit = 60) =>
       call<PhotoSummaryDto[]>("albums_suggestions_preview", { id, limit }),
     accept: (id: number, name?: string) =>
-      call<AlbumDto>("albums_suggestions_accept", {
+      mutate(call<AlbumDto>("albums_suggestions_accept", {
         id,
         name: name ?? null,
-      }),
+      })),
     dismiss: (id: number) =>
-      call<null>("albums_suggestions_dismiss", { id }),
+      mutate(call<null>("albums_suggestions_dismiss", { id })),
     resetAll: () =>
-      call<{ dropped: number }>("albums_suggestions_reset_all"),
+      mutate(call<{ dropped: number }>("albums_suggestions_reset_all")),
   },
 };
 
@@ -298,10 +307,12 @@ export interface SearchResults {
     location_country: string | null;
     thumbnail_path: string | null;
   }>;
+  has_more: boolean;
 }
 
 export const search = {
-  query: (q: string) => call<SearchResults>("search_query", { q }),
+  query: (q: string, offset = 0, limit = 200) =>
+    call<SearchResults>("search_query", { q, offset, limit }),
   recentList: (limit = 10) =>
     call<Array<{ query: string; last_used: string; use_count: number }>>(
       "search_recent_list",
@@ -387,15 +398,16 @@ export const duplicates = {
   getGroup: (id: number) =>
     call<{ id: number; members: DupMember[] }>("duplicates_get_group", { id }),
   wastedSpace: () => call<{ bytes: number }>("duplicates_wasted_space"),
-  setKeep: (groupId: number, photoId: number) =>
+  setKeep: (groupId: number, photoId: number, librarySessionId: number) =>
     call<{ id: number; members: DupMember[] }>("duplicates_set_keep", {
       group_id: groupId,
       photo_id: photoId,
+      library_session_id: librarySessionId,
     }),
-  trashOthers: (groupId: number) =>
-    call<{ count: number }>("duplicates_trash_others", { group_id: groupId }),
-  dismiss: (groupId: number) =>
-    call<null>("duplicates_dismiss", { group_id: groupId }),
+  trashOthers: (groupId: number, librarySessionId: number) =>
+    call<{ count: number }>("duplicates_trash_others", { group_id: groupId, library_session_id: librarySessionId }),
+  dismiss: (groupId: number, librarySessionId: number) =>
+    call<null>("duplicates_dismiss", { group_id: groupId, library_session_id: librarySessionId }),
   run: (includePerceptual = true) =>
     call<JobIdDto>("duplicates_run", {
       include_perceptual: includePerceptual,
@@ -423,15 +435,16 @@ export const bursts = {
     call<BurstGroupSummary[]>("bursts_list", { limit, offset }),
   getGroup: (id: number) =>
     call<{ id: number; members: BurstMember[] }>("bursts_get_group", { id }),
-  setBest: (groupId: number, photoId: number) =>
+  setBest: (groupId: number, photoId: number, librarySessionId: number) =>
     call<{ id: number; members: BurstMember[] }>("bursts_set_best", {
       group_id: groupId,
       photo_id: photoId,
+      library_session_id: librarySessionId,
     }),
-  trashNonBest: (groupId: number) =>
-    call<{ count: number }>("bursts_trash_non_best", { group_id: groupId }),
-  dismiss: (groupId: number) =>
-    call<null>("bursts_dismiss", { group_id: groupId }),
+  trashNonBest: (groupId: number, librarySessionId: number) =>
+    call<{ count: number }>("bursts_trash_non_best", { group_id: groupId, library_session_id: librarySessionId }),
+  dismiss: (groupId: number, librarySessionId: number) =>
+    call<null>("bursts_dismiss", { group_id: groupId, library_session_id: librarySessionId }),
   run: () => call<JobIdDto>("bursts_run"),
 };
 
@@ -480,18 +493,19 @@ export const trash = {
     >("trash_list", { cursor, limit }),
   stats: () =>
     call<{ count: number; total_size: number }>("trash_stats"),
-  trashPhotos: (photoIds: number[]) =>
-    call<{ count: number }>("trash_trash_photos", { photo_ids: photoIds }),
-  restore: (photoIds: number[]) =>
-    call<{ count: number }>("trash_restore", { photo_ids: photoIds }),
-  permanentDelete: (photoIds: number[]) =>
-    call<{ files_deleted: number; db_records_deleted: number; errors: string[] }>(
+  trashPhotos: (photoIds: number[], librarySessionId: number) =>
+    call<{ count: number }>("trash_trash_photos", { photo_ids: photoIds, library_session_id: librarySessionId }),
+  restore: (photoIds: number[], librarySessionId: number) =>
+    call<{ count: number }>("trash_restore", { photo_ids: photoIds, library_session_id: librarySessionId }),
+  permanentDelete: (photoIds: number[], librarySessionId?: number) =>
+    call<{ files_deleted: number; db_records_deleted: number; errors: string[]; committed_with_recovery_errors: boolean }>(
       "trash_permanent_delete",
-      { photo_ids: photoIds },
+      { photo_ids: photoIds, library_session_id: librarySessionId ?? null },
     ),
-  empty: () =>
-    call<{ files_deleted: number; db_records_deleted: number; errors: string[] }>(
+  empty: (librarySessionId?: number) =>
+    call<{ files_deleted: number; db_records_deleted: number; errors: string[]; committed_with_recovery_errors: boolean }>(
       "trash_empty",
+      { library_session_id: librarySessionId ?? null },
     ),
 };
 
@@ -527,7 +541,18 @@ export interface InsightsData {
 export const insights = {
   compute: (year: number | null = null) =>
     call<InsightsData>("insights_compute", { year }),
+  /// Cheap threshold probe — see lib/stores/milestones.svelte.ts.
+  milestoneProbe: () => call<MilestoneProbe>("insights_milestone_probe"),
 };
+
+/// The handful of counters the milestone thresholds read.
+export interface MilestoneProbe {
+  total_photos: number;
+  first_year: number | null;
+  last_year: number | null;
+  people_count: number;
+  city_count: number;
+}
 
 // ---------- library health ----------
 export interface LibraryHealthData {

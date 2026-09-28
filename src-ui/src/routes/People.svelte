@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { people, settings, type FaceDetailDto } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
@@ -35,6 +36,7 @@
   let loadSeq = 0;
   let liveSeq = 0;
   let pendingSeq = 0;
+  let chunkRefreshRaf = 0;
   const scrollStorageKey = $derived(`smriti:people-scroll:${libraryStore.driveRoot ?? "closed"}`);
 
   function saveScroll() {
@@ -95,6 +97,9 @@
   // page reloaded against and refetch whenever it advances — that's how
   // newly-found faces stream into the grid mid-run.
   let lastSeenChunks = $state(0);
+  let lastSeenJob = $state<string | null>(null);
+  let refreshInFlight = false;
+  let refreshDirty = false;
   // Track last seen faces_found for the "new faces" toast
   let lastFacesFound = $state(0);
 
@@ -109,14 +114,26 @@
     return Math.min(100, Math.round((j.processed / j.total) * 100));
   });
 
-  async function load() {
+  async function load(background = false) {
     const seq = ++loadSeq;
     error = null;
-    loading = true;
+    // Stale-while-revalidate: paint the cached grid instantly on a repeat
+    // visit, then always refetch — clusters change while a face job runs
+    // (the chunks_flushed watcher above reloads), so the cache is an
+    // accelerator, never a source of truth. The faces-job completion
+    // hook invalidates it outright.
+    const cached = routeCache.peek<typeof clusters>("people:clusters");
+    if (cached) {
+      clusters = cached;
+      restoreScroll();
+    } else if (!background) {
+      loading = true;
+    }
     try {
       const next = await people.list({});
       if (!mounted || seq !== loadSeq) return;
       clusters = next;
+      routeCache.put("people:clusters", next);
       restoreScroll();
     } catch (e) {
       if (!mounted || seq !== loadSeq) return;
@@ -128,9 +145,10 @@
 
   async function loadLiveFaces() {
     const seq = ++liveSeq;
+    const job = facesJob?.id;
     try {
-      const page = await people.unclusteredFaces(null, 24);
-      if (!mounted || seq !== liveSeq) return;
+      const page = await people.unclusteredFaces(null, 24, true);
+      if (!mounted || seq !== liveSeq || facesJob?.id !== job || !running) return;
       liveFaces = page.items;
     } catch {
       // Non-critical: the canonical People grid still loads normally.
@@ -180,12 +198,39 @@
     }
   }
 
+  async function refreshLive() {
+    if (refreshInFlight) { refreshDirty = true; return; }
+    refreshInFlight = true;
+    try {
+      do {
+        refreshDirty = false;
+        await Promise.all([load(true), loadLiveFaces()]);
+      } while (refreshDirty && mounted && running);
+    } finally { refreshInFlight = false; }
+  }
+
   $effect(() => {
+    const job = facesJob?.id ?? null;
+    if (job !== lastSeenJob) {
+      lastSeenJob = job;
+      lastSeenChunks = 0;
+      liveSeq++;
+      liveFaces = [];
+      if (chunkRefreshRaf !== 0) cancelAnimationFrame(chunkRefreshRaf);
+      chunkRefreshRaf = 0;
+    }
     const c = facesJob?.chunks_flushed ?? 0;
     if (c > lastSeenChunks) {
       lastSeenChunks = c;
-      load();
-      loadLiveFaces();
+      // Coalesce writer notifications to a paint; refreshLive serializes
+      // any additional work that arrives while the request is running.
+      if (chunkRefreshRaf === 0) {
+        chunkRefreshRaf = requestAnimationFrame(() => {
+          chunkRefreshRaf = 0;
+          if (!mounted) return;
+          void refreshLive();
+        });
+      }
     }
   });
 
@@ -233,6 +278,10 @@
       loadSeq += 1;
       liveSeq += 1;
       pendingSeq += 1;
+      if (chunkRefreshRaf !== 0) {
+        cancelAnimationFrame(chunkRefreshRaf);
+        chunkRefreshRaf = 0;
+      }
     };
   });
 
@@ -307,6 +356,31 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page" bind:this={pageEl} onscroll={saveScroll}>
+    {#if running && liveFaces.length > 0}
+      <section class="live-faces">
+        <header class="live-head">
+          <h3 class="live-title">
+            Faces just detected
+            <span class="singletons-count mono">{liveFaces.length}</span>
+          </h3>
+        </header>
+        <div class="singletons-grid">
+          {#each liveFaces as f (f.face_id)}
+            <a class="singleton-card" href="#/photo?id={f.photo_id}">
+              <div class="singleton-frame">
+                {#if f.thumbnail_path}
+                  <img src={thumbUrl(libraryStore.driveRoot, f.thumbnail_path) ?? ""} alt="" />
+                {:else}
+                  <span class="placeholder small">Â·</span>
+                {/if}
+              </div>
+            </a>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+
   {#if loading}
     <div class="empty">
       <p class="working">Loading people...</p>
@@ -339,30 +413,6 @@
           </a>
         {/each}
       </div>
-    {/if}
-
-    {#if running && liveFaces.length > 0}
-      <section class="live-faces">
-        <header class="live-head">
-          <h3 class="live-title">
-            Faces just detected
-            <span class="singletons-count mono">{liveFaces.length}</span>
-          </h3>
-        </header>
-        <div class="singletons-grid">
-          {#each liveFaces as f (f.face_id)}
-            <a class="singleton-card" href="#/photo?id={f.photo_id}">
-              <div class="singleton-frame">
-                {#if f.thumbnail_path}
-                  <img src={thumbUrl(libraryStore.driveRoot, f.thumbnail_path) ?? ""} alt="" />
-                {:else}
-                  <span class="placeholder small">Â·</span>
-                {/if}
-              </div>
-            </a>
-          {/each}
-        </div>
-      </section>
     {/if}
 
     {#if singletons.length > 0}
@@ -484,6 +534,8 @@
     gap: var(--s-2);
     text-align: center;
     text-decoration: none;
+    content-visibility: auto;
+    contain-intrinsic-size: 180px 220px;
   }
   .frame {
     aspect-ratio: 1;
@@ -604,6 +656,8 @@
     gap: 4px;
     text-align: center;
     text-decoration: none;
+    content-visibility: auto;
+    contain-intrinsic-size: 92px 120px;
     color: inherit;
     opacity: 0.78;
     transition: opacity var(--t-fast) var(--ease);

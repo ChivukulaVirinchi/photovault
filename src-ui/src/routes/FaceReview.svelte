@@ -17,7 +17,7 @@
   let error = $state<string | null>(null);
   let mounted = true;
   let loadSeq = 0;
-  let skippedFaceIds = new Set<number>();
+  let skippedFaceIds = $state(new Set<number>());
 
   const current = $derived(faces[cursor] ?? null);
   const remaining = $derived(Math.max(0, faces.length - cursor));

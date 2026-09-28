@@ -7,7 +7,6 @@
 pub mod albums;
 pub mod assistant;
 pub mod bursts;
-pub mod documents;
 pub mod duplicates;
 pub mod geocoding;
 pub mod health;

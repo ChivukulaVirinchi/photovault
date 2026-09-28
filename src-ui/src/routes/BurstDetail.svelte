@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { bursts } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -46,9 +47,11 @@
     if (actionBusy) return;
     const seq = loadSeq;
     const groupId = id;
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      const nextGroup = await bursts.setBest(groupId, photoId);
+      const nextGroup = await bursts.setBest(groupId, photoId, session);
+      routeCache.invalidate("bursts");
       if (!mounted || seq !== loadSeq || groupId !== id) return;
       group = nextGroup;
     }
@@ -72,9 +75,12 @@
     const trashedIds = group.members
       .filter((m) => !m.is_suggested_best)
       .map((m) => m.photo_id);
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      await bursts.trashNonBest(groupId);
+      await bursts.trashNonBest(groupId, session);
+      if (session !== libraryStore.session) return;
+      routeCache.invalidate("bursts");
       if (!mounted || seq !== loadSeq || groupId !== id) return;
       photoVisibility.markTrashed(trashedIds);
       browseContext.remove(trashedIds);

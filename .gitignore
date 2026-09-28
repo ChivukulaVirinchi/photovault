@@ -36,3 +36,6 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Coding-agent session scratch
+/.zcode/

@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
 
-use crate::models::{ContentCategory, MediaType, Photo};
+use crate::models::{MediaType, Photo};
 
 /// A discovered file ready for database insertion
 #[derive(Debug, Clone)]
@@ -268,7 +268,6 @@ impl<'a> PhotoRepo<'a> {
                 media_type, duration_ms, video_codec, audio_codec,
                 frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
-                content_category, ocr_text, ocr_processed, ocr_confidence,
                 is_favorite,
                 is_trashed, trashed_at,
                 indexed_at, updated_at
@@ -315,7 +314,6 @@ impl<'a> PhotoRepo<'a> {
                     media_type, duration_ms, video_codec, audio_codec,
                     frame_rate, bitrate, has_audio,
                     thumbnail_path, faces_processed,
-                    content_category, ocr_text, ocr_processed, ocr_confidence,
                     is_favorite,
                     is_trashed, trashed_at,
                     indexed_at, updated_at
@@ -355,7 +353,6 @@ impl<'a> PhotoRepo<'a> {
                 media_type, duration_ms, video_codec, audio_codec,
                 frame_rate, bitrate, has_audio,
                 thumbnail_path, faces_processed,
-                content_category, ocr_text, ocr_processed, ocr_confidence,
                 is_favorite,
                 is_trashed, trashed_at,
                 indexed_at, updated_at
@@ -749,7 +746,7 @@ mod tests {
 
 /// Convert a database row to a Photo struct.
 ///
-/// The selected columns must match the ordering used by `PhotoRepo` and document queries.
+/// The selected columns must match the ordering used by `PhotoRepo`.
 pub(crate) fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
     Ok(Photo {
         id: row.get(0)?,
@@ -790,27 +787,20 @@ pub(crate) fn row_to_photo(row: &rusqlite::Row) -> SqliteResult<Photo> {
         has_audio: row.get::<_, Option<bool>>(29)?.unwrap_or(false),
         thumbnail_path: row.get(30)?,
         faces_processed: row.get(31)?,
-        content_category: row
-            .get::<_, Option<String>>(32)?
-            .map(|s| ContentCategory::from_db(&s))
-            .unwrap_or(ContentCategory::Photo),
-        ocr_text: row.get(33)?,
-        ocr_processed: row.get::<_, Option<bool>>(34)?.unwrap_or(false),
-        ocr_confidence: row.get(35)?,
-        is_favorite: row.get::<_, Option<bool>>(36)?.unwrap_or(false),
-        is_trashed: row.get(37)?,
+        is_favorite: row.get::<_, Option<bool>>(32)?.unwrap_or(false),
+        is_trashed: row.get(33)?,
         trashed_at: row
-            .get::<_, Option<String>>(38)?
+            .get::<_, Option<String>>(34)?
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|d| d.with_timezone(&Utc)),
         indexed_at: row
-            .get::<_, String>(39)?
+            .get::<_, String>(35)?
             .parse::<DateTime<Utc>>()
-            .unwrap_or_else(|_| Utc::now()),
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH),
         updated_at: row
-            .get::<_, String>(40)?
+            .get::<_, String>(36)?
             .parse::<DateTime<Utc>>()
-            .unwrap_or_else(|_| Utc::now()),
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH),
     })
 }
 

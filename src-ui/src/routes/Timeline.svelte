@@ -1,5 +1,4 @@
 <script module lang="ts">
-  import type { MemoryCard as CachedMemoryCard } from "../lib/api/all";
   import type { PhotoSummaryDto as CachedPhotoSummaryDto } from "../lib/api/types";
 
   type ZoomLevel = "day" | "month" | "year";
@@ -15,11 +14,9 @@
         zoom: ZoomLevel;
         windowStartIndex: number;
         scrollTop: number;
-        memoryCards: CachedMemoryCard[];
       }
     | null = null;
   const cachedTimelineScrollTops = new Map<string, number>();
-  const cachedTimelineThumbImages = new Map<string, HTMLImageElement>();
 </script>
 
 <script lang="ts">
@@ -27,7 +24,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
   import { photos } from "../lib/api/photos";
-  import { memories, trash, type MemoryCard } from "../lib/api/all";
+  import { trash } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { library } from "../lib/api/library";
@@ -36,12 +33,13 @@
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection, handleCellClick } from "../lib/stores/selection.svelte";
   import { thumbUrl } from "../lib/thumbnail";
-  import { thumbnailOnVisible } from "../lib/thumbnailRequest";
+  import { pausePooledImages, pooledImage } from "../lib/assetImage";
+  import { pauseThumbnailRequests, thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { createVirtualScroll } from "../lib/virtualizer.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Layers, Play, X } from "lucide-svelte";
+  import { Check, Image as ImageIcon, Layers, Play, X } from "lucide-svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import SurpriseButton from "../lib/components/SurpriseButton.svelte";
@@ -168,9 +166,6 @@
       toasts.error(`Couldn't resume thumbnails: ${msg}`);
     }
   }
-  // Today's memories — surfaced as a horizontal strip above the
-  // timeline. Hidden when the library has no qualifying memories.
-  let memoryCards = $state<MemoryCard[]>(currentTimelineCache?.memoryCards ?? []);
 
   // Scrubber state
   let scrubHover = $state(false);
@@ -197,7 +192,6 @@
       zoom,
       windowStartIndex,
       scrollTop,
-      memoryCards,
     };
   }
 
@@ -210,10 +204,12 @@
     return currentTimelineCache?.scrollTop ?? 0;
   }
 
-  function rememberTimelineScrollTop(top: number) {
+  function rememberTimelineScrollTop(top: number, persist = true) {
     const next = Math.max(0, top);
     cachedTimelineScrollTops.set(scrollStorageKey, next);
-    try { sessionStorage.setItem(scrollStorageKey, String(next)); } catch {}
+    if (persist) {
+      try { sessionStorage.setItem(scrollStorageKey, String(next)); } catch {}
+    }
   }
 
   function currentElementScrollTop(el = scrollEl) {
@@ -221,31 +217,9 @@
     return domTop <= 0 && scrollTop > 0 ? scrollTop : domTop;
   }
 
-  function keepVisibleTimelineThumbsWarm() {
-    if (typeof Image === "undefined") return;
-    const visibleRows = rows.slice(v.first, v.last);
-    for (const row of visibleRows) {
-      if (row.kind !== "photos") continue;
-      for (const photo of row.photos) {
-        const url = thumbUrl(libraryStore.driveRoot, photo.thumbnail_path);
-        if (!url || cachedTimelineThumbImages.has(url)) continue;
-        const img = new Image();
-        img.decoding = "async";
-        img.src = url;
-        cachedTimelineThumbImages.set(url, img);
-      }
-    }
-    while (cachedTimelineThumbImages.size > 500) {
-      const oldest = cachedTimelineThumbImages.keys().next().value;
-      if (oldest == null) break;
-      cachedTimelineThumbImages.delete(oldest);
-    }
-  }
-
   function snapshotTimelineScroll(el = scrollEl) {
     scrollTop = currentElementScrollTop(el);
     v.setScrollTop(scrollTop);
-    keepVisibleTimelineThumbsWarm();
     saveTimelineCache();
     rememberTimelineScrollTop(scrollTop);
   }
@@ -261,6 +235,35 @@
 
   const pendingThumbnailPatches = new Map<number, string>();
   let thumbnailPatchRaf = 0;
+  let scrolling = false;
+  let resumeImageLoads: (() => void) | null = null;
+  let resumeThumbnailRequests: (() => void) | null = null;
+
+  function beginScrolling() {
+    scrolling = true;
+    if (!resumeImageLoads) resumeImageLoads = pausePooledImages();
+    if (!resumeThumbnailRequests) resumeThumbnailRequests = pauseThumbnailRequests();
+    if (thumbnailPatchRaf !== 0) {
+      cancelAnimationFrame(thumbnailPatchRaf);
+      thumbnailPatchRaf = 0;
+    }
+  }
+
+  function finishScrolling() {
+    if (!scrolling) return;
+    scrolling = false;
+    const resume = resumeImageLoads;
+    resumeImageLoads = null;
+    resume?.();
+    const resumeThumbnails = resumeThumbnailRequests;
+    resumeThumbnailRequests = null;
+    resumeThumbnails?.();
+    rememberTimelineScrollTop(scrollTop);
+    hydrateScrolledWindow();
+    if (pendingThumbnailPatches.size > 0 && thumbnailPatchRaf === 0) {
+      thumbnailPatchRaf = requestAnimationFrame(flushThumbnailPatches);
+    }
+  }
 
   function flushThumbnailPatches() {
     thumbnailPatchRaf = 0;
@@ -335,7 +338,7 @@
 
   function patchThumbnail(photoId: number, thumbnailPath: string) {
     pendingThumbnailPatches.set(photoId, thumbnailPath);
-    if (thumbnailPatchRaf === 0) {
+    if (!scrolling && thumbnailPatchRaf === 0) {
       thumbnailPatchRaf = requestAnimationFrame(flushThumbnailPatches);
     }
   }
@@ -458,8 +461,36 @@
       if (mounted && seq === pageSeq) error = commandErrorMessage(e);
       return false;
     } finally {
-      if (mounted && seq === pageSeq) loading = false;
+      if (mounted && seq === pageSeq) {
+        loading = false;
+        releaseLoadWaiters();
+      }
     }
+  }
+
+  /// Refresh the first page *while* a scan is streaming.
+  ///
+  /// This was removed because refetching on every `scan:progress` tick re-pulled
+  /// 2000 rows and re-sorted the whole grid continuously. But dropping it
+  /// entirely meant the opposite failure: during a first scan (which can run
+  /// for many minutes) the Timeline showed nothing until the very end, even
+  /// though a resume banner invited the user to keep browsing.
+  ///
+  /// Refreshes are coalesced to the next paint and only run when the user is
+  /// parked at the top of the list — the only place new arrivals are visible
+  /// and the only position where replacing the first page cannot yank the
+  /// viewport out from under someone mid-scroll.
+  const SCAN_REFRESH_TOP_THRESHOLD_PX = 240;
+
+  let scanRefreshRaf = 0;
+  function scheduleScanRefresh() {
+    if (scanRefreshRaf !== 0) return;
+    scanRefreshRaf = requestAnimationFrame(() => {
+      scanRefreshRaf = 0;
+      if (!mounted || loading) return;
+      if (scrollTop > SCAN_REFRESH_TOP_THRESHOLD_PX) return;
+      void refreshFirstPage();
+    });
   }
 
   async function refreshFirstPage() {
@@ -480,7 +511,10 @@
     } catch (e: unknown) {
       if (mounted && seq === pageSeq) error = commandErrorMessage(e);
     } finally {
-      if (mounted && seq === pageSeq) loading = false;
+      if (mounted && seq === pageSeq) {
+        loading = false;
+        releaseLoadWaiters();
+      }
     }
   }
 
@@ -512,6 +546,7 @@
       lastScanCompleteId = scanJob.id;
       pageSeq += 1;
       loading = false;
+      releaseLoadWaiters();
       windowStartIndex = 0;
       items = [];
       nextCursor = null;
@@ -544,15 +579,9 @@
     }
   }
 
-  // Build rows: optional label rows interleaved with photo rows.
-  // Total height of the memories strip when shown. Plumbed into the
-  // virtualizer as the first virtual row so it scrolls away with the
-  // rest of the content.
-  const MEMORIES_STRIP_HEIGHT = 340;
-
+  // Build label and photo rows for the virtualized timeline.
   type Row =
     | { kind: "spacer"; height: number }
-    | { kind: "memories"; height: number; cards: MemoryCard[] }
     | { kind: "label"; height: number; label: string; firstIso: string | null }
     | { kind: "photos"; height: number; photos: PhotoSummaryDto[]; firstIso: string | null };
 
@@ -569,8 +598,6 @@
     const out: Row[] = [];
     if (windowStartIndex > 0) {
       out.push({ kind: "spacer", height: topSpacerHeight });
-    } else if (memoryCards.length > 0) {
-      out.push({ kind: "memories", height: MEMORIES_STRIP_HEIGHT, cards: memoryCards });
     }
     const C = cols;
     const RH = rowH;
@@ -668,7 +695,10 @@
       if (mounted && seq === pageSeq) error = commandErrorMessage(e);
       return false;
     } finally {
-      if (mounted && seq === pageSeq) loading = false;
+      if (mounted && seq === pageSeq) {
+        loading = false;
+        releaseLoadWaiters();
+      }
       if (mounted && seq === pageSeq) jumpLoading = false;
     }
   }
@@ -729,6 +759,7 @@
     containerH = r.height;
     let scrollRaf = 0;
     const onScroll = () => {
+      beginScrolling();
       if (scrollRaf !== 0) return;
       scrollRaf = requestAnimationFrame(() => {
         scrollRaf = 0;
@@ -738,18 +769,24 @@
           queueMarqueeUpdate();
         }
         saveTimelineCache();
-        // Persist so that returning from PhotoDetail lands the user back
-        // at the same row instead of the top of the timeline.
-        rememberTimelineScrollTop(scrollTop);
-        hydrateScrolledWindow();
+        // Keep the hot position in memory. Synchronous storage and window
+        // hydration wait until scrolling settles so neither can steal a frame.
+        rememberTimelineScrollTop(scrollTop, false);
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scrollend", finishScrolling, { passive: true });
     return () => {
       snapshotTimelineScroll(el);
       if (scrollRaf !== 0) cancelAnimationFrame(scrollRaf);
+      scrolling = false;
+      resumeImageLoads?.();
+      resumeImageLoads = null;
+      resumeThumbnailRequests?.();
+      resumeThumbnailRequests = null;
       ro.disconnect();
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scrollend", finishScrolling);
     };
   });
 
@@ -808,13 +845,6 @@
         if (mounted && !ok && items.length === 0) loadMore();
       });
     }
-    if (memoryCards.length === 0) {
-      memories.today().then((c) => {
-        if (!mounted) return;
-        memoryCards = c;
-        saveTimelineCache();
-      }).catch(() => {});
-    }
     refreshPendingCounts();
     window.addEventListener("keydown", onGlobalKey);
 
@@ -850,44 +880,36 @@
         }
       }),
     );
-    let throttle: ReturnType<typeof setTimeout> | null = null;
+    let metadataRefreshRaf = 0;
     unlistens.push(
       listen("metadata:progress", () => {
-        // Throttle to once per second; we only need to refresh the
-        // pending count, not re-fetch photo rows.
-        if (throttle != null) return;
-        throttle = setTimeout(() => {
-          throttle = null;
+        if (metadataRefreshRaf !== 0) return;
+        metadataRefreshRaf = requestAnimationFrame(() => {
+          metadataRefreshRaf = 0;
           if (mounted) refreshPendingCounts();
-        }, 1000);
+        });
       }),
     );
     unlistens.push(listen("metadata:complete", () => refreshPendingCounts()));
     unlistens.push(listen("thumbnails:complete", () => refreshPendingCounts()));
-    let scanRefresh: ReturnType<typeof setTimeout> | null = null;
-    unlistens.push(
-      listen<{ files_processed?: number }>("scan:progress", () => {
-        if (scanRefresh != null) return;
-        scanRefresh = setTimeout(() => {
-          scanRefresh = null;
-          if (mounted) refreshFirstPage();
-        }, 1200);
-      }),
-    );
+    // Stream new arrivals into the top of the Timeline while a scan runs.
+    // Coalesced and top-of-list-only; see scheduleScanRefresh.
+    unlistens.push(listen("scan:progress", () => scheduleScanRefresh()));
     unlistens.push(listen("scan:complete", () => {
       refreshPendingCounts();
-      refreshFirstPage();
+      void refreshFirstPage();
     }));
 
     return () => {
       snapshotTimelineScroll();
       mounted = false;
+      releaseLoadWaiters();
       pageSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
       if (thumbnailPatchRaf !== 0) cancelAnimationFrame(thumbnailPatchRaf);
-      if (throttle != null) clearTimeout(throttle);
-      if (scanRefresh != null) clearTimeout(scanRefresh);
+      if (metadataRefreshRaf !== 0) cancelAnimationFrame(metadataRefreshRaf);
       if (zoomTimer != null) clearTimeout(zoomTimer);
+      if (scanRefreshRaf !== 0) cancelAnimationFrame(scanRefreshRaf);
       cancelMarqueeDrag();
       Promise.allSettled(unlistens).then((results) => {
         for (const result of results) {
@@ -1071,6 +1093,7 @@
     if (actionBusy) return;
     const ids = selection.listIn(items.map((p) => p.id));
     if (ids.length === 0) return;
+    const session = libraryStore.session;
     // Snapshot the rows we're about to drop so undo can splice them
     // back in their original positions.
     const dropSet = new Set(ids);
@@ -1079,7 +1102,7 @@
       .filter((e) => dropSet.has(e.photo.id));
     try {
       actionBusy = true;
-      const result = await trash.trashPhotos(ids);
+      const result = await trash.trashPhotos(ids, session);
       if (!mounted) return;
       if (result.count === 0) {
         toasts.info("No selected photos needed trashing");
@@ -1092,7 +1115,7 @@
       toasts.undoable(
         `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
-          await trash.restore(trashedIds);
+          await trash.restore(trashedIds, session);
           photoVisibility.markRestored(trashedIds);
           if (mounted) restoreIntoTimeline(snapshot);
         },
@@ -1106,6 +1129,15 @@
 
   function onGlobalKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    // Ctrl/Cmd+A: select every loaded photo. (Ctrl+Shift+A is the
+    // assistant, handled in App.svelte.)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "a" || e.key === "A")) {
+      if (items.length > 0) {
+        selection.replace(new Set(items.map((p) => p.id)));
+        e.preventDefault();
+      }
+      return;
+    }
     if (selection.active()) {
       if (e.key === "Escape") { selection.clear(); e.preventDefault(); return; }
       else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); return; }
@@ -1241,7 +1273,13 @@
   }
 
   let revealingId = $state<number | null>(null);
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let loadWaiters: Array<() => void> = [];
+  const waitForCurrentLoad = () => new Promise<void>((resolve) => loadWaiters.push(resolve));
+  function releaseLoadWaiters() {
+    const waiters = loadWaiters;
+    loadWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
 
   async function revealPhotoInTimeline(photoId: number) {
     if (!mounted || !Number.isFinite(photoId) || photoId <= 0 || revealingId === photoId) return;
@@ -1249,7 +1287,7 @@
     try {
       while (mounted && items.findIndex((p) => p.id === photoId) < 0 && hasMore) {
         if (loading) {
-          await sleep(80);
+          await waitForCurrentLoad();
           continue;
         }
         const advanced = await loadMore();
@@ -1334,7 +1372,6 @@
     const head = rows[0];
     if (!head) return "";
     if (head.kind === "spacer") return "";
-    if (head.kind === "memories") return "";
     return bucketLabel(head.firstIso, zoom);
   }
   const draggedBucket = $derived.by(() => {
@@ -1362,6 +1399,22 @@
   function onScrubUp(e: PointerEvent) {
     scrubDragging = false;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+  }
+  /// Keyboard seeking on the scrubber (role="slider").
+  function onScrubKey(e: KeyboardEvent) {
+    if (!scrollEl) return;
+    const step = Math.max(100, containerH / 8);
+    const page = Math.max(200, containerH * 0.8);
+    switch (e.key) {
+      case "ArrowUp":    scrollEl.scrollTop -= step; break;
+      case "ArrowDown":  scrollEl.scrollTop += step; break;
+      case "PageUp":     scrollEl.scrollTop -= page; break;
+      case "PageDown":   scrollEl.scrollTop += page; break;
+      case "Home":       scrollEl.scrollTop = 0; break;
+      case "End":        scrollEl.scrollTop = scrollableMax; break;
+      default: return;
+    }
+    e.preventDefault();
   }
 </script>
 
@@ -1433,28 +1486,10 @@
         <div
           class="row"
           class:row-label={row.kind === "label"}
-          class:row-memories={row.kind === "memories"}
           style="transform: translateY({v.offsets[i]}px); height: {row.height}px;"
         >
           {#if row.kind === "label"}
             <span class="label">{row.label}</span>
-          {:else if row.kind === "memories"}
-            <section class="memories-strip" aria-label="Memories" data-no-marquee="true">
-              <h3 class="strip-title">From your library</h3>
-              <div class="strip-row">
-                {#each row.cards as c (c.id)}
-                  <a class="memory-card" href="#/memory?id={c.id}" data-no-marquee="true">
-                    {#if c.hero_thumbnail_path}
-                      <img src={thumbUrl(libraryStore.driveRoot, c.hero_thumbnail_path) ?? ""} alt="" loading="lazy" />
-                    {/if}
-                    <div class="memory-overlay">
-                      <strong class="memory-title">{c.title}</strong>
-                      <span class="memory-count mono">{c.photo_count} photos</span>
-                    </div>
-                  </a>
-                {/each}
-              </div>
-            </section>
           {:else if row.kind === "photos"}
             <div
               class="photos"
@@ -1475,9 +1510,19 @@
                   }}
                   onclick={(e) => onCellClick(e, photo)}
                 >
+                  <span class="thumb-placeholder" aria-hidden="true"><ImageIcon size={16} /></span>
                   {#if photo.thumbnail_path}
                     <img
-                      src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""}
+                      use:pooledImage={{
+                        src: thumbUrl(libraryStore.driveRoot, photo.thumbnail_path),
+                        // The pool admits 5 loads at a time, so without a
+                        // priority it is FIFO in mount order — and the
+                        // virtualizer mounts overscan rows *above* the
+                        // viewport first, so tiles the user cannot see were
+                        // loaded before the ones in front of them. Higher wins;
+                        // rows nearer the viewport get higher values.
+                        priority: -Math.abs(i - v.first),
+                      }}
                       alt=""
                       loading="eager"
                       decoding="async"
@@ -1531,12 +1576,13 @@
     onpointerdown={onScrubDown}
     onpointerup={onScrubUp}
     onpointercancel={onScrubUp}
+    onkeydown={onScrubKey}
     role="slider"
     aria-label="Scroll position"
     aria-valuemin={0}
     aria-valuemax={100}
     aria-valuenow={scrollableMax > 0 ? Math.round((scrollTop / scrollableMax) * 100) : 0}
-    tabindex="-1"
+    tabindex="0"
   >
     <div class="track"></div>
     <div class="thumb" style="top: {thumbY}px"></div>
@@ -1564,97 +1610,15 @@
 {/if}
 
 <style>
+  .thumb-placeholder { position: absolute; top: 8px; left: 8px; color: var(--ink-muted); pointer-events: none; }
+  .cell:has(:global(img[data-image-state="ready"])) .thumb-placeholder { display: none; }
+  .cell:has(:global(img[data-image-state="error"])) .thumb-placeholder { opacity: 0.5; }
+
   .timeline-host {
     flex: 1;
     position: relative;
     overflow: hidden;
     min-height: 0;
-  }
-
-  /* ----- memories strip ----- */
-  .memories-strip {
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    /* No horizontal padding — the .scroll container already provides
-       --s-7 on each side, so the first card's left edge lines up with
-       the first photo column below. */
-    padding: var(--s-2) 0 var(--s-3);
-    border-bottom: 1px solid var(--line-soft);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    overflow: hidden;
-  }
-  .strip-title {
-    font-size: var(--t-xs);
-    font-weight: 600;
-    color: var(--ink-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin: 0;
-    flex-shrink: 0;
-  }
-  .strip-row {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    gap: var(--s-3);
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-  }
-  .memory-card {
-    flex: 0 0 auto;
-    width: 280px;
-    height: 100%;
-    background: var(--bg-card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    overflow: hidden;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    color: inherit;
-    text-decoration: none;
-    transition: transform var(--t-fast) var(--ease),
-                box-shadow var(--t-fast) var(--ease),
-                border-color var(--t-fast) var(--ease);
-  }
-  .memory-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 22px rgba(0,0,0,0.35);
-    border-color: var(--accent);
-  }
-  .memory-card img {
-    width: 100%;
-    flex: 1;
-    min-height: 0;
-    object-fit: cover;
-    display: block;
-  }
-  .memory-overlay {
-    flex-shrink: 0;
-    padding: var(--s-2) var(--s-3) var(--s-3);
-    background: var(--bg-paper);
-    border-top: 1px solid var(--line-soft);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .memory-title {
-    font-family: var(--font-display);
-    font-size: var(--t-sm);
-    font-weight: 600;
-    line-height: 1.2;
-    color: var(--ink);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .memory-count {
-    font-size: var(--t-xs);
-    color: var(--ink-muted);
   }
 
   .scroll {
@@ -1688,6 +1652,12 @@
     right: 0;
     contain: layout style paint;
     will-change: transform;
+    /* No transform transition during plain scrolling — animating every
+       row 220ms behind the scroll position read as rubber-banding. The
+       transition only applies while a zoom animation is in flight. */
+  }
+  .scroll.zoom-in .row,
+  .scroll.zoom-out .row {
     transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
                 height 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
   }

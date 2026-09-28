@@ -426,6 +426,62 @@ pub fn compute(conn: &Connection, year: Option<i32>) -> SqliteResult<InsightsDat
     })
 }
 
+/// Cheap threshold probe for milestone checks.
+///
+/// `compute` runs roughly a dozen grouped scans; milestones only need
+/// five counters, so the store can probe first and pay for the full
+/// aggregation only when a threshold is actually crossed.
+#[derive(Debug, Clone)]
+pub struct MilestoneProbe {
+    pub total_photos: i64,
+    pub first_year: Option<i64>,
+    pub last_year: Option<i64>,
+    pub people_count: i64,
+    pub city_count: i64,
+}
+
+pub fn compute_milestone_probe(conn: &Connection) -> SqliteResult<MilestoneProbe> {
+    let total_photos: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
+        [],
+        |row| row.get(0),
+    )?;
+    let (first_date, last_date): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT MIN(date_taken), MAX(date_taken)
+         FROM photos
+         WHERE is_trashed = FALSE AND date_taken IS NOT NULL",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let year_of =
+        |value: Option<String>| -> Option<i64> { value.and_then(|s| s.get(0..4)?.parse().ok()) };
+    let people_count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT fc.id)
+         FROM face_clusters fc
+         JOIN faces f ON f.cluster_id = fc.id
+         JOIN photos p ON p.id = f.photo_id
+         WHERE fc.name IS NOT NULL
+           AND p.is_trashed = FALSE",
+        [],
+        |row| row.get(0),
+    )?;
+    let city_count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT CASE WHEN location_city IS NOT NULL AND location_city != ''
+                    THEN location_city || char(31) || COALESCE(location_country, '') END)
+         FROM photos
+         WHERE is_trashed = FALSE",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(MilestoneProbe {
+        total_photos,
+        first_year: year_of(first_date),
+        last_year: year_of(last_date),
+        people_count,
+        city_count,
+    })
+}
+
 use chrono::Datelike;
 
 #[cfg(test)]

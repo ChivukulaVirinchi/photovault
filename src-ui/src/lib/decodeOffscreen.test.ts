@@ -38,6 +38,25 @@ afterEach(() => {
 });
 
 describe("decodeOffscreen", () => {
+  it("keeps the deadline active after load while decode is hung", async () => {
+    class HungDecodeImage extends FakeImage {
+      decode() { return new Promise<void>(() => {}); }
+    }
+    const p = decodeOffscreen("blob:hung", HungDecodeImage as unknown as typeof Image, { timeoutMs: 50 });
+    const expectation = expect(p).rejects.toThrow("readiness timed out");
+    await vi.advanceTimersByTimeAsync(51);
+    await expectation;
+  });
+
+  it("catches a synchronous decode failure", async () => {
+    class BrokenDecodeImage extends FakeImage {
+      decode(): Promise<void> { throw new Error("broken decoder"); }
+    }
+    const p = decodeOffscreen("blob:broken", BrokenDecodeImage as unknown as typeof Image);
+    const expectation = expect(p).rejects.toThrow("broken decoder");
+    await vi.runAllTimersAsync();
+    await expectation;
+  });
   it("resolves when the fake Image fires onload", async () => {
     FakeImage.behaviour = "load";
     const p = decodeOffscreen("blob:fake", FakeImage as unknown as typeof Image);
@@ -58,7 +77,7 @@ describe("decodeOffscreen", () => {
   });
 
   it(
-    "does NOT hang when the Image stays silent — resolves after the timeout " +
+    "does NOT hang when the Image stays silent — rejects after the timeout " +
       "elapses (regression for the Tauri/WebView2 decode hang)",
     async () => {
       // The exact failure mode the production code defends against:
@@ -67,20 +86,19 @@ describe("decodeOffscreen", () => {
       // would await forever and the slideshow would dead-lock.
       FakeImage.behaviour = "silent";
       const timeoutMs = 8000;
-      const p = decodeOffscreen("blob:fake", FakeImage as unknown as typeof Image, timeoutMs);
+      const p = decodeOffscreen("blob:fake", FakeImage as unknown as typeof Image, { timeoutMs });
+      const expectation = expect(p).rejects.toThrow("readiness timed out");
 
       // Advance time up to but not including the timeout — the
       // promise must still be pending.
       let resolved = false;
-      p.then(() => (resolved = true));
+      p.then(() => (resolved = true), () => undefined);
       await vi.advanceTimersByTimeAsync(timeoutMs - 1);
       expect(resolved).toBe(false);
 
-      // Crossing the timeout boundary must resolve, not reject —
-      // the slideshow can recover by trusting the visible <img>'s
-      // own decoding="async" rather than blocking.
+      // An unready image must reject, never be promoted as ready.
       await vi.advanceTimersByTimeAsync(2);
-      await expect(p).resolves.toBeUndefined();
+      await expectation;
     },
   );
 
@@ -95,5 +113,45 @@ describe("decodeOffscreen", () => {
     await p;
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------
+  // non-strict mode: the slide being displayed, not a preload.
+  //
+  // The image HAS loaded; only decode() failed to settle. Rejecting here
+  // showed "Couldn't load this photo" for a bitmap the browser was perfectly
+  // willing to paint — strictly worse than showing the photo.
+  // ---------------------------------------------------------------------
+
+  it("non-strict: resolves when load succeeded but decode stays hung", async () => {
+    class HungDecodeImage extends FakeImage {
+      decode() { return new Promise<void>(() => {}); }
+    }
+    const p = decodeOffscreen("blob:hung", HungDecodeImage as unknown as typeof Image, {
+      timeoutMs: 50,
+      strict: false,
+    });
+    await vi.advanceTimersByTimeAsync(51);
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it("non-strict: still rejects when the image never loads at all", async () => {
+    // There is no bitmap to fall back to, so this must remain an error.
+    FakeImage.behaviour = "error";
+    const p = decodeOffscreen("blob:fake", FakeImage as unknown as typeof Image, { strict: false });
+    const expectation = expect(p).rejects.toThrow("decode failed");
+    await vi.runAllTimersAsync();
+    await expectation;
+  });
+
+  it("non-strict: still rejects when the Image stays silent forever", async () => {
+    FakeImage.behaviour = "silent";
+    const p = decodeOffscreen("blob:fake", FakeImage as unknown as typeof Image, {
+      timeoutMs: 50,
+      strict: false,
+    });
+    const expectation = expect(p).rejects.toThrow("readiness timed out");
+    await vi.advanceTimersByTimeAsync(51);
+    await expectation;
   });
 });

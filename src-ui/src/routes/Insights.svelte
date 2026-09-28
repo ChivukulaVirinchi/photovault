@@ -1,17 +1,32 @@
 <script module lang="ts">
   import type { InsightsData as CachedInsightsData } from "../lib/api/all";
 
-  let cachedInsights:
-    | {
-        driveRoot: string | null;
-        data: CachedInsightsData | null;
-        year: number | null;
-        showAllPeople: boolean;
-        showAllCountries: boolean;
-        showAllCities: boolean;
-        scrollTop: number;
-      }
-    | null = null;
+  /**
+   * Saved dashboard answer. Keyed by library session + selected year +
+   * the shared data revision, so a reopened library or any data change
+   * (scan, trash, restore, face/geocoding jobs…) can never serve a
+   * prior run's totals as fresh. View preferences (scroll position,
+   * "show all" toggles) live in their own session-keyed maps below so
+   * they survive data refreshes.
+   */
+  interface InsightsCache {
+    driveRoot: string | null;
+    session: number;
+    revision: number;
+    year: number | null;
+    data: CachedInsightsData | null;
+  }
+  let cachedInsights: InsightsCache | null = null;
+
+  const insightsViewPrefs = new Map<
+    string,
+    { showAllPeople: boolean; showAllCountries: boolean; showAllCities: boolean }
+  >();
+  const insightsScrollTops = new Map<string, number>();
+
+  function insightsSessionKey(driveRoot: string | null, session: number): string {
+    return `${driveRoot ?? "closed"}:${session}`;
+  }
 </script>
 
 <script lang="ts">
@@ -21,6 +36,7 @@
   import { insights } from "../lib/api/all";
   import { photos } from "../lib/api/photos";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { dataRevision } from "../lib/stores/dataRevision.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { shareCard } from "../lib/stores/shareCard.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
@@ -29,10 +45,23 @@
   import type { InsightsData } from "../lib/api/all";
 
   const currentDriveRoot = libraryStore.driveRoot;
-  const currentInsightsCache = cachedInsights?.driveRoot === currentDriveRoot ? cachedInsights : null;
+  const currentSession = libraryStore.session;
+  const sessionKey = insightsSessionKey(currentDriveRoot, currentSession);
+  // Same session only: a reopened library is a new session and must not
+  // inherit the previous run's answer.
+  const currentInsightsCache =
+    cachedInsights && cachedInsights.session === currentSession && cachedInsights.driveRoot === currentDriveRoot
+      ? cachedInsights
+      : null;
+  const viewPrefs = insightsViewPrefs.get(sessionKey);
 
   let data = $state<InsightsData | null>(currentInsightsCache?.data ?? null);
   let year = $state<number | null>(currentInsightsCache?.year ?? null);
+  // The revision the currently shown data describes. A restored cache
+  // records the revision it was computed at; if the library has changed
+  // since, the load effect below refreshes while still showing the
+  // (stale) cached data immediately.
+  let loadedRevision = $state<number | null>(currentInsightsCache?.revision ?? null);
   let loadedYear = $state<number | null | undefined>(currentInsightsCache?.data ? currentInsightsCache.year : undefined);
   let error = $state<string | null>(null);
   let pageEl = $state<HTMLDivElement | undefined>(undefined);
@@ -41,23 +70,32 @@
 
   /// Show the first N entries of long lists; "Show all" reveals the rest.
   const PEEK = 10;
-  let showAllPeople    = $state(currentInsightsCache?.showAllPeople ?? false);
-  let showAllCountries = $state(currentInsightsCache?.showAllCountries ?? false);
-  let showAllCities    = $state(currentInsightsCache?.showAllCities ?? false);
+  let showAllPeople    = $state(viewPrefs?.showAllPeople ?? false);
+  let showAllCountries = $state(viewPrefs?.showAllCountries ?? false);
+  let showAllCities    = $state(viewPrefs?.showAllCities ?? false);
 
   /// Tooltip state for the monthly bars.
   let tip = $state<{ x: number; y: number; label: string } | null>(null);
 
   function saveInsightsCache() {
+    if (!data) return;
     cachedInsights = {
       driveRoot: currentDriveRoot,
+      session: currentSession,
+      revision: loadedRevision ?? dataRevision.version,
+      // The year the on-screen data was computed for (not whichever
+      // year the selector has moved to since).
+      year: loadedYear ?? null,
       data,
-      year,
+    };
+  }
+
+  function saveViewPrefs() {
+    insightsViewPrefs.set(sessionKey, {
       showAllPeople,
       showAllCountries,
       showAllCities,
-      scrollTop: pageEl?.scrollTop ?? cachedInsights?.scrollTop ?? 0,
-    };
+    });
   }
 
   /// The card is a library card, so it always shows all-time numbers whatever
@@ -78,12 +116,17 @@
   async function load() {
     const seq = ++loadSeq;
     const selectedYear = year;
+    const atRevision = dataRevision.version;
     error = null;
     try {
       const nextData = await insights.compute(selectedYear);
       if (mounted && seq === loadSeq) {
         data = nextData;
         loadedYear = selectedYear;
+        // The revision this answer was computed against. If the library
+        // changed while it was in flight, the effect below immediately
+        // re-runs for the newer revision.
+        loadedRevision = atRevision;
         saveInsightsCache();
       }
     } catch (e) {
@@ -94,12 +137,15 @@
   onMount(() => {
     mounted = true;
     requestAnimationFrame(() => {
-      if (mounted && pageEl && currentInsightsCache) pageEl.scrollTop = currentInsightsCache.scrollTop;
+      if (mounted && pageEl) pageEl.scrollTop = insightsScrollTops.get(sessionKey) ?? 0;
     });
     const el = pageEl;
-    const onScroll = () => saveInsightsCache();
+    const onScroll = () => {
+      if (el) insightsScrollTops.set(sessionKey, el.scrollTop);
+    };
     el?.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      if (el) insightsScrollTops.set(sessionKey, el.scrollTop);
       saveInsightsCache();
       mounted = false;
       loadSeq += 1;
@@ -109,8 +155,11 @@
 
   $effect(() => {
     void year;
-    if (data && loadedYear === year) {
-      saveInsightsCache();
+    void dataRevision.version;
+    // Fresh answer already on screen for this year and revision — keep
+    // it. A stale cached answer is kept visible while `load()` runs in
+    // the background (stale-while-revalidate).
+    if (data && loadedYear === year && loadedRevision === dataRevision.version) {
       return;
     }
     load();
@@ -120,7 +169,7 @@
     showAllPeople;
     showAllCountries;
     showAllCities;
-    saveInsightsCache();
+    saveViewPrefs();
   });
 
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

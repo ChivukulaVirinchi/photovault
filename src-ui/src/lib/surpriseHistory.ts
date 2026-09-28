@@ -1,4 +1,4 @@
-const LIMIT = 200;
+const LIMIT = 1000;
 const key = (library: string) => `smriti:surprise:${library}`;
 
 export function recentMemories(library: string): number[] {
@@ -15,6 +15,16 @@ export function rememberPhoto(library: string, id: number) {
     const ids = [...recentMemories(library).filter((other) => other !== id), id].slice(-LIMIT);
     localStorage.setItem(key(library), JSON.stringify(ids));
   } catch { /* Browsing still works if local storage is unavailable. */ }
+}
+
+/// Drop the seen-history for a library — used when a surprise session has
+/// genuinely shown everything and the user starts a deliberate fresh pass.
+export function clearHistory(library: string) {
+  try {
+    localStorage.removeItem(key(library));
+  } catch {
+    /* Browsing still works if local storage is unavailable. */
+  }
 }
 
 export function memoryContext(photo: {

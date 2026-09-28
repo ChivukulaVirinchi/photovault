@@ -21,6 +21,8 @@
   import { thumbUrl } from "../thumbnail";
   import { libraryStore } from "../stores/library.svelte";
   import { decodeOffscreen } from "../decodeOffscreen";
+  import { pooledImage } from "../assetImage";
+  import { finishSlotTransition } from "../slideTransition";
   import { memoryContext } from "../surpriseHistory";
   import type { PhotoDto } from "../api/types";
 
@@ -30,10 +32,10 @@
   // flipping `frontIdx`. The previous front then becomes the back,
   // ready for the next slide. Elements never unmount mid-slideshow,
   // which eliminates the "loading..." flash users were seeing.
-  type Slot = { photo: PhotoDto | null; url: string | null };
+  type Slot = { photo: PhotoDto | null; url: string | null; ready: boolean };
   let slots = $state<[Slot, Slot]>([
-    { photo: null, url: null },
-    { photo: null, url: null },
+    { photo: null, url: null, ready: false },
+    { photo: null, url: null, ready: false },
   ]);
   let frontIdx = $state(0);
   let loadError = $state<string | null>(null);
@@ -53,7 +55,7 @@
   const URL_CACHE_CAP = 200;
   const urlCache = new Map<number, string>();
   const preloadedMedia = new Set<number>();
-  const preloadInFlight = new Set<number>();
+  const preloadInFlight = new Map<number, number>();
 
   const currentId = $derived(slideshow.currentId());
   const position = $derived(slideshow.position());
@@ -62,11 +64,6 @@
   const frontUrl = $derived(slots[frontIdx].url);
   const backPhoto = $derived(slots[1 - frontIdx].photo);
   const backUrl = $derived(slots[1 - frontIdx].url);
-  const thumb = $derived(
-    frontPhoto?.thumbnail_path
-      ? thumbUrl(libraryStore.driveRoot, frontPhoto.thumbnail_path)
-      : null,
-  );
 
   function bumpChrome() {
     chromeActive = true;
@@ -102,12 +99,16 @@
   }
 
   async function goNext() {
+    if (loading) return;
     clearAdvanceTimer();
+    // Keep the outgoing frame stable while the incoming slide prepares.
+    // Hidden videos are reset by syncVideos after the slot is no longer visible.
     pauseVideos();
     await slideshow.next();
   }
 
   function goPrev() {
+    if (loading) return;
     clearAdvanceTimer();
     pauseVideos();
     slideshow.prev();
@@ -173,6 +174,8 @@
   }
 
   async function resolveUrl(id: number): Promise<string> {
+    const session = libraryStore.session;
+    const driveRoot = libraryStore.driveRoot;
     const cached = urlCache.get(id);
     if (cached) {
       urlCache.delete(id);
@@ -180,6 +183,9 @@
       return cached;
     }
     const { absolute_path } = await library.resolvePath(id, true);
+    if (session !== libraryStore.session || driveRoot !== libraryStore.driveRoot) {
+      throw new Error("Open library changed");
+    }
     const url = convertFileSrc(absolute_path);
     urlCache.set(id, url);
     while (urlCache.size > URL_CACHE_CAP) {
@@ -191,6 +197,37 @@
     return url;
   }
 
+  async function waitForSlotReady(idx: number): Promise<void> {
+    await tick();
+    const node = stageEl?.querySelector<HTMLElement>(`[data-slide-slot="${idx}"]`);
+    if (!node) throw new Error("slide slot was not mounted");
+    const media = node as HTMLImageElement & HTMLVideoElement;
+    if (node instanceof HTMLImageElement && node.complete && node.naturalWidth > 0) return;
+    // DOM shims (including jsdom) do not implement image decoding or native
+    // load events. There is no readiness signal to await in that environment;
+    // decodeOffscreen already provided the strongest available preparation.
+    if (node instanceof HTMLImageElement && typeof node.decode !== "function") return;
+    if (node instanceof HTMLVideoElement && node.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        media.removeEventListener("load", onReady);
+        media.removeEventListener("loadeddata", onReady);
+        media.removeEventListener("error", onError);
+        ok ? resolve() : reject(new Error("visible slide failed to load"));
+      };
+      const onReady = () => finish(true);
+      const onError = () => finish(false);
+      const timer = setTimeout(() => finish(false), 8_000);
+      media.addEventListener("load", onReady, { once: true });
+      media.addEventListener("loadeddata", onReady, { once: true });
+      media.addEventListener("error", onError, { once: true });
+    });
+  }
+
   async function loadSlide(id: number) {
     const seq = ++loadSeq;
     loading = true;
@@ -199,7 +236,11 @@
       const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
       if (seq !== loadSeq) return;
       if (p.media_type !== "video" && !preloadedMedia.has(id)) {
-        await decodeOffscreen(url);
+        // Non-strict: this is the slide about to be shown, so a decode
+        // timeout must not become an error card. The image has loaded; only
+        // decode() failed to settle (a known WebView2 ICC-JPEG hang), and
+        // showing the bitmap beats refusing to show the photo at all.
+        await decodeOffscreen(url, Image, { strict: false });
         if (seq !== loadSeq) return;
       }
       preloadedMedia.add(id);
@@ -207,7 +248,17 @@
       // front pointer. Svelte's reactivity drives the crossfade via
       // class:ready bound to whether this slot is currently in front.
       const backSlot = 1 - frontIdx;
-      slots[backSlot] = { photo: p, url };
+      await Promise.all([
+        finishSlotTransition(stageEl?.querySelector(`[data-slide-slot="${backSlot}"]`) ?? null),
+        finishSlotTransition(stageEl?.querySelector(`[data-backdrop-slot="${backSlot}"]`) ?? null),
+      ]);
+      if (seq !== loadSeq) return;
+      slots[backSlot] = { photo: p, url, ready: false };
+      await waitForSlotReady(backSlot);
+      if (seq !== loadSeq) return;
+      // The offscreen decode is the admission check; exposing the slot only
+      // after a paint opportunity prevents a one-frame blank/resize flash.
+      slots[backSlot].ready = true;
       frontIdx = backSlot;
       booted = true;
       loading = false;
@@ -228,7 +279,6 @@
   function pauseVideos() {
     stageEl?.querySelectorAll("video").forEach((video) => {
       video.pause();
-      video.currentTime = 0;
     });
   }
 
@@ -239,7 +289,6 @@
       const visible = video.classList.contains("visible");
       if (!visible) {
         video.pause();
-        video.currentTime = 0;
       } else if (slideshow.playing) {
         void video.play().catch(() => {});
       } else {
@@ -252,13 +301,20 @@
     const seq = loadSeq;
     const ids = slideshow.ids;
     const i = slideshow.index;
-    const candidates = [ids[i + 1], ids[i - 1], ids[i + 2]].filter(
-      (id): id is number => id != null,
-    );
+    // Surprise preloads ONLY the next slide: every preload is a full
+    // original decode (plus a backend rendition for HEIC/RAW), and three
+    // of those in flight starve the current slide on a USB drive — the
+    // lag that made the slideshow stall between slides.
+    const candidates = (
+      slideshow.kind === "surprise"
+        ? [ids[i + 1]]
+        : [ids[i + 1], ids[i - 1], ids[i + 2]]
+    ).filter((id): id is number => id != null);
     await Promise.all(
       candidates.map(async (id) => {
         if (preloadedMedia.has(id) || preloadInFlight.has(id)) return;
-        preloadInFlight.add(id);
+        const token = loadSeq;
+        preloadInFlight.set(id, token);
         try {
           const [p, url] = await Promise.all([photos.get(id), resolveUrl(id)]);
           if (p.media_type !== "video") await decodeOffscreen(url);
@@ -266,7 +322,7 @@
           preloadedMedia.add(id);
         } catch {}
         finally {
-          preloadInFlight.delete(id);
+          if (preloadInFlight.get(id) === token) preloadInFlight.delete(id);
         }
       }),
     );
@@ -289,8 +345,8 @@
       loadError = null;
       pauseVideos();
       slots = [
-        { photo: null, url: null },
-        { photo: null, url: null },
+        { photo: null, url: null, ready: false },
+        { photo: null, url: null, ready: false },
       ];
       urlCache.clear();
       preloadedMedia.clear();
@@ -356,9 +412,29 @@
     aria-label={surprise ? "Surprise me slideshow" : "Slideshow"}
   >
     <div class="stage" bind:this={stageEl}>
-      {#if thumb}
-        <img class="backdrop" src={thumb} alt="" aria-hidden="true" />
-      {/if}
+      <!-- The blurred backdrop gets the SAME two-slot crossfade as the
+           slides. A single backdrop that swaps src mid-fade hard-cuts
+           while the foreground is still blending — the "double image". -->
+      {#each slots as slot, idx (idx)}
+        {#if slot.photo?.thumbnail_path}
+          <img
+            class="backdrop"
+            data-backdrop-slot={idx}
+            class:visible={idx === frontIdx && slot.ready && !loadError}
+            use:pooledImage={{
+              src: thumbUrl(libraryStore.driveRoot, slot.photo.thumbnail_path),
+              // These coordinate visibility through `.visible` (opacity 0 ->
+              // 0.75), so the pool must not drive their opacity: its inline
+              // style beat the stylesheet, which both disabled the dimming and
+              // left the later DOM slot permanently visible — so slot 0's
+              // crossfade showed slot 1's photo.
+              ownOpacity: true,
+            }}
+            alt=""
+            aria-hidden="true"
+          />
+        {/if}
+      {/each}
 
       {#if loadError}
         <div class="slide-error">
@@ -376,7 +452,8 @@
             <!-- svelte-ignore a11y_media_has_caption -->
             <video
               class="slide-image"
-              class:visible={idx === frontIdx && !loadError}
+              data-slide-slot={idx}
+              class:visible={idx === frontIdx && slot.ready && !loadError}
               src={slot.url}
               poster={slot.photo.thumbnail_path ? thumbUrl(libraryStore.driveRoot, slot.photo.thumbnail_path) ?? undefined : undefined}
               controls={idx === frontIdx}
@@ -388,7 +465,8 @@
           {:else}
             <img
               class="slide-image"
-              class:visible={idx === frontIdx && !loadError}
+              data-slide-slot={idx}
+              class:visible={idx === frontIdx && slot.ready && !loadError}
               src={slot.url}
               alt={slot.photo.file_name}
               decoding="async"
@@ -486,9 +564,14 @@
 {/if}
 
 <style>
+  /* Crossfade duration is shared by slides AND backdrops so the blur
+     track never cuts while the foreground is still blending. Surprise
+     uses a slightly longer, calmer fade. */
+  .slideshow { --crossfade: 420ms; }
+  .slideshow.slowshow { --crossfade: 500ms; }
   .slowshow .slide-image {
     transform: translate(-50%, -50%);
-    transition: opacity 900ms var(--ease);
+    transition: opacity var(--crossfade) var(--ease);
   }
   .slowshow .slide-image.visible { transform: translate(-50%, -50%); }
   .memory-context {
@@ -507,6 +590,7 @@
   @media (prefers-reduced-motion: reduce) {
     .slide-image, .slowshow .slide-image { transition: none; transform: translate(-50%, -50%); }
     .slide-image.visible { transform: translate(-50%, -50%); }
+    .backdrop { transition: none; }
     .memory-context { animation-timing-function: steps(1, end); }
   }
   .slideshow {
@@ -534,6 +618,10 @@
     object-fit: cover;
     filter: blur(34px) saturate(1.15) brightness(0.38);
     transform: scale(1.03);
+    opacity: 0;
+    transition: opacity var(--crossfade) var(--ease);
+  }
+  .backdrop.visible {
     opacity: 0.75;
   }
   .stage::after {
@@ -554,6 +642,10 @@
     top: 50%;
     left: 50%;
     z-index: 1;
+    /* Give both slots a stable viewport-sized box. The bitmap is fitted
+       inside it, so late intrinsic dimensions cannot move a visible slide. */
+    width: 100vw;
+    height: 100vh;
     max-width: 100vw;
     max-height: 100vh;
     object-fit: contain;

@@ -23,6 +23,9 @@ pub struct AppState {
     pub unsupported_library: RwLock<Option<UnsupportedLibrary>>,
     pub jobs: Mutex<JobRegistry>,
     pub assistant: Mutex<AssistantRuntime>,
+    /// Application-wide text model. Model assets do not belong to a photo
+    /// library, so opening or switching drives must never load them again.
+    pub semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             unsupported_library: RwLock::new(None),
             jobs: Mutex::new(JobRegistry::default()),
             assistant: Mutex::new(AssistantRuntime::default()),
+            semantic_runner: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -54,6 +58,74 @@ pub struct OpenLibrary {
     pub thumbnails: Arc<ThumbnailService>,
     pub semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
     pub semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
+    /// Semantic IDs for the query currently being paged by Search. The first
+    /// page computes them once; later pages must reuse the same snapshot so a
+    /// 20,000-photo result does not run ONNX inference for every batch.
+    pub semantic_queries: Arc<std::sync::Mutex<SemanticQueryPageCache>>,
+}
+
+/// Snapshot of the semantic candidate list for a query, keyed by query text
+/// and index revision.
+///
+/// Search pages through results by offset, so every page must be ranked
+/// against the *same* candidate list. Recomputing per page would mean running
+/// the text embedding for every batch; worse, if the ranking changed between
+/// pages the user would see duplicated and skipped photos while scrolling.
+///
+/// Access order is tracked explicitly so eviction is least-recently-used. A
+/// plain `HashMap` with `keys().next()` eviction picks an *arbitrary* entry —
+/// which could evict the query the user is actively scrolling, forcing a
+/// recompute mid-scroll and, before this was fixed, silently changing the
+/// result ordering.
+#[derive(Debug, Default)]
+pub struct SemanticQueryPageCache {
+    entries: HashMap<String, (i64, Vec<i64>)>,
+    /// Monotonic access counter; higher means used more recently.
+    last_used: HashMap<String, u64>,
+    clock: u64,
+}
+
+impl SemanticQueryPageCache {
+    const MAX_ENTRIES: usize = 8;
+
+    pub fn get(&mut self, query: &str, revision: i64) -> Option<Vec<i64>> {
+        let matches_revision = self
+            .entries
+            .get(query)
+            .is_some_and(|(cached_revision, _)| *cached_revision == revision);
+        if !matches_revision {
+            // A revision bump means the vectors changed under us; drop the
+            // stale entry rather than leaving it to occupy a slot.
+            if self.entries.contains_key(query) {
+                self.entries.remove(query);
+                self.last_used.remove(query);
+            }
+            return None;
+        }
+        self.touch(query);
+        self.entries.get(query).map(|(_, ids)| ids.clone())
+    }
+
+    pub fn remember(&mut self, query: String, revision: i64, photo_ids: Vec<i64>) {
+        if self.entries.len() >= Self::MAX_ENTRIES && !self.entries.contains_key(&query) {
+            if let Some(lru) = self
+                .last_used
+                .iter()
+                .min_by_key(|(_, used)| **used)
+                .map(|(key, _)| key.clone())
+            {
+                self.entries.remove(&lru);
+                self.last_used.remove(&lru);
+            }
+        }
+        self.entries.insert(query.clone(), (revision, photo_ids));
+        self.touch(&query);
+    }
+
+    fn touch(&mut self, query: &str) {
+        self.clock = self.clock.wrapping_add(1);
+        self.last_used.insert(query.to_owned(), self.clock);
+    }
 }
 
 pub struct UnsupportedLibrary {
@@ -76,7 +148,11 @@ impl OpenLibrary {
             db: Arc::new(Mutex::new(database)),
             thumbnails,
             semantic_index: Arc::new(std::sync::Mutex::new(SemanticIndexCache::default())),
+            // Replaced with AppState's application-wide runner by
+            // `library_open`. Keeping a private default here makes this
+            // constructor usable by isolated command tests.
             semantic_runner: Arc::new(std::sync::Mutex::new(None)),
+            semantic_queries: Arc::new(std::sync::Mutex::new(SemanticQueryPageCache::default())),
         })
     }
 
@@ -95,6 +171,72 @@ impl Drop for OpenLibrary {
     fn drop(&mut self) {
         self.maintenance_cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod semantic_query_cache_tests {
+    use super::SemanticQueryPageCache;
+
+    #[test]
+    fn reuses_only_the_same_query_and_index_revision() {
+        let mut cache = SemanticQueryPageCache::default();
+        cache.remember("sunset".into(), 4, vec![7, 9]);
+
+        assert_eq!(cache.get("sunset", 4), Some(vec![7, 9]));
+        assert_eq!(cache.get("beach", 4), None);
+        assert_eq!(cache.get("sunset", 5), None);
+    }
+
+    #[test]
+    fn stays_bounded_during_fast_typing() {
+        let mut cache = SemanticQueryPageCache::default();
+        for n in 0..20 {
+            cache.remember(format!("query-{n}"), 1, vec![n]);
+        }
+
+        assert_eq!(cache.entries.len(), SemanticQueryPageCache::MAX_ENTRIES);
+    }
+
+    /// Eviction must be least-recently-used, not arbitrary.
+    ///
+    /// Search pages by offset, so the query being scrolled has to survive
+    /// while the user types other things. HashMap-iteration eviction (the
+    /// previous behaviour) could drop exactly that entry, which forced a
+    /// mid-scroll recompute and — before the paging fix — silently reordered
+    /// the results.
+    #[test]
+    fn evicts_least_recently_used_and_keeps_the_active_query() {
+        let mut cache = SemanticQueryPageCache::default();
+        // The query the user is paging through.
+        cache.remember("active".into(), 1, vec![1]);
+        // Fill the rest of the cache.
+        for n in 0..(SemanticQueryPageCache::MAX_ENTRIES - 1) {
+            cache.remember(format!("filler-{n}"), 1, vec![n as i64]);
+        }
+        // Paging the active query touches it, so it is now the most recent.
+        assert_eq!(cache.get("active", 1), Some(vec![1]));
+        // A new query must evict something, but never the active one.
+        cache.remember("newcomer".into(), 1, vec![99]);
+
+        assert_eq!(
+            cache.get("active", 1),
+            Some(vec![1]),
+            "the actively-paged query was evicted"
+        );
+        assert!(cache.entries.len() <= SemanticQueryPageCache::MAX_ENTRIES);
+        assert_eq!(cache.last_used.len(), cache.entries.len());
+    }
+
+    /// A revision bump invalidates cached vectors rather than leaving stale
+    /// ids to be served as if they were current.
+    #[test]
+    fn revision_change_drops_the_entry() {
+        let mut cache = SemanticQueryPageCache::default();
+        cache.remember("sunset".into(), 1, vec![5]);
+        assert_eq!(cache.get("sunset", 2), None);
+        assert!(!cache.entries.contains_key("sunset"));
+        assert!(!cache.last_used.contains_key("sunset"));
     }
 }
 

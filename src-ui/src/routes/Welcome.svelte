@@ -10,7 +10,6 @@
   import { thumbUrl } from "../lib/thumbnail";
 
   let dragOver = $state(false);
-  let droppedPath = $state<string | null>(null);
   let pickError = $state<string | null>(null);
   let compatPhotos = $state<PhotoSummaryDto[]>([]);
   let compatTotal = $state<number | null>(null);
@@ -37,11 +36,9 @@
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
       if (!mounted) return;
-      droppedPath = shortRoot(path);
       try {
         await libraryStore.open(path);
       } catch {}
-      finally { if (mounted) droppedPath = null; }
     } catch {
       if (!mounted) return;
       pickError =
@@ -72,7 +69,6 @@
         ? selectedDestination[0]
         : selectedDestination;
       if (!destination) return;
-      droppedPath = "Preparing Google Photos";
       await libraryStore.open(destination);
       const placeholderId = `pending-takeout-${Date.now()}`;
       jobs.register(placeholderId, "takeout");
@@ -86,8 +82,6 @@
       }
     } catch (error) {
       if (mounted) pickError = commandErrorMessage(error);
-    } finally {
-      if (mounted) droppedPath = null;
     }
   }
 
@@ -99,9 +93,7 @@
     }
     const first = paths[0];
     if (!mounted) return;
-    droppedPath = shortRoot(first);
     try { await libraryStore.open(first); } catch {}
-    finally { if (mounted) droppedPath = null; }
   }
 
   const extraRemembered = $derived(
@@ -305,12 +297,6 @@
     </div>
   </div>
 
-  {#if droppedPath}
-    <div class="opening-overlay">
-      <strong class="drop-title display">{droppedPath}</strong>
-      <span class="drop-sub">Opening</span>
-    </div>
-  {/if}
 </main>
 
 <style>
@@ -508,7 +494,7 @@
   }
 
   /* ===== Drag-drop overlay ===== */
-  .drop-overlay, .opening-overlay {
+  .drop-overlay {
     position: fixed;
     inset: 0;
     display: flex;
@@ -524,12 +510,6 @@
     opacity: 1;
     background: color-mix(in oklab, var(--accent) 12%, transparent);
     backdrop-filter: blur(2px);
-  }
-  .opening-overlay {
-    opacity: 1;
-    background: var(--bg);
-    flex-direction: column;
-    gap: var(--s-2);
   }
   .drop-stamp {
     display: flex;

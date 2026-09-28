@@ -13,7 +13,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [package]
 name = "smriti"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "Smriti contributors"]
@@ -122,6 +122,9 @@ image_hasher = "3"
 # Place the ONNX Runtime 1.23.x shared library in libs/onnxruntime/ or set ORT_DYLIB_PATH.
 # default-features = false is critical: the default features include download-binaries.
 ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic", "cuda", "directml", "coreml", "openvino", "onednn", "xnnpack"] }
+
+# Keep the selected Windows runtime's dependencies loaded from its own directory.
+libloading = "0.9"
 
 # Linear algebra for face embeddings
 ndarray = "0.16"

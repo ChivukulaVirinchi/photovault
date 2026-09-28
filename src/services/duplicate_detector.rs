@@ -60,6 +60,16 @@ struct PendingHashPhoto {
     thumbnail_path: Option<String>,
 }
 
+/// One candidate row for exact-duplicate grouping, straight from the
+/// size-bucket query.
+struct CandidateRow {
+    id: i64,
+    path: String,
+    date_taken: Option<String>,
+    file_size: i64,
+    stored_hash: Option<String>,
+}
+
 fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel
         .map(|flag| flag.load(Ordering::Relaxed))
@@ -84,8 +94,9 @@ impl DuplicateDetector {
     ) -> rusqlite::Result<Vec<DuplicateGroup>> {
         // Fast scanner hashes include file metadata, so byte-identical
         // copies with different mtimes may not share photos.file_hash.
-        // Use file_size only to narrow candidates, then compute the
-        // true full-file SHA-256 for exact duplicate grouping.
+        // Use file_size only to narrow candidates, then group by the true
+        // full-file SHA-256. That hash is computed once per file and cached
+        // in photos.content_hash, so repeat passes never re-read files.
         let mut stmt = conn.prepare(
             r#"
             SELECT file_size, COUNT(*) as count
@@ -102,6 +113,7 @@ impl DuplicateDetector {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut groups = Vec::new();
+        let mut newly_hashed: Vec<(i64, String)> = Vec::new();
 
         for size in sizes {
             if is_cancelled(cancel) {
@@ -109,16 +121,22 @@ impl DuplicateDetector {
             }
             let mut photo_stmt = conn.prepare(
                 r#"
-                SELECT id, file_path, date_taken, file_size
+                SELECT id, file_path, date_taken, file_size, content_hash
                 FROM photos
                 WHERE file_size = ?1 AND is_trashed = FALSE
                 ORDER BY date_taken ASC, file_path ASC
                 "#,
             )?;
 
-            let photos: Vec<ExactCandidate> = photo_stmt
+            let photos: Vec<CandidateRow> = photo_stmt
                 .query_map([size], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    Ok(CandidateRow {
+                        id: row.get(0)?,
+                        path: row.get(1)?,
+                        date_taken: row.get(2)?,
+                        file_size: row.get(3)?,
+                        stored_hash: row.get(4)?,
+                    })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
@@ -128,19 +146,32 @@ impl DuplicateDetector {
 
             let mut by_full_hash: std::collections::HashMap<String, Vec<ExactCandidate>> =
                 std::collections::HashMap::new();
-            for photo in photos {
-                if is_cancelled(cancel) {
-                    return Ok(Vec::new());
-                }
-                let Ok(path) = safe_join_relative(drive_root, &photo.1) else {
-                    continue;
+            for CandidateRow {
+                id,
+                path,
+                date_taken,
+                file_size,
+                stored_hash,
+            } in photos
+            {
+                let full_hash = if let Some(hash) = stored_hash {
+                    hash
+                } else {
+                    let Ok(abs) = safe_join_relative(drive_root, &path) else {
+                        continue;
+                    };
+                    let Ok(full_hash) =
+                        crate::services::scanner::calculate_hash_cancellable(&abs, cancel)
+                    else {
+                        continue;
+                    };
+                    newly_hashed.push((id, full_hash.clone()));
+                    full_hash
                 };
-                let Ok(full_hash) =
-                    crate::services::scanner::calculate_hash_cancellable(&path, cancel)
-                else {
-                    continue;
-                };
-                by_full_hash.entry(full_hash).or_default().push(photo);
+                by_full_hash
+                    .entry(full_hash)
+                    .or_default()
+                    .push((id, path, date_taken, file_size));
             }
 
             for (hash, photos) in by_full_hash {
@@ -157,6 +188,20 @@ impl DuplicateDetector {
                     duplicate_type: "exact",
                 });
             }
+        }
+
+        // Persist freshly computed hashes so future passes skip the reads.
+        if !newly_hashed.is_empty() && !is_cancelled(cancel) {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut update = tx.prepare(
+                    "UPDATE photos SET content_hash = ?2 WHERE id = ?1 AND content_hash IS NULL",
+                )?;
+                for (id, hash) in &newly_hashed {
+                    update.execute(rusqlite::params![id, hash])?;
+                }
+            }
+            tx.commit()?;
         }
 
         if is_cancelled(cancel) {
@@ -486,6 +531,7 @@ impl DuplicateDetector {
     ///
     /// Priority:
     /// 1. Prefer paths NOT containing "backup", "copy", "old", "duplicate"
+    ///    (as whole words — see `has_bad_token`)
     /// 2. Prefer larger file size
     /// 3. Prefer shortest path (better organized)
     /// 4. Prefer oldest by date_taken (stable tie-break via query order)
@@ -500,12 +546,11 @@ impl DuplicateDetector {
         let mut scored: Vec<(i64, i32, i64, usize)> = photos
             .iter()
             .map(|(id, path, _date, size)| {
-                let path_lower = path.to_lowercase();
                 let mut bad_score = 0i32;
 
                 // Penalize bad folder names
                 for pattern in &bad_folder_patterns {
-                    if path_lower.contains(pattern) {
+                    if Self::has_bad_token(path, pattern) {
                         bad_score += 100;
                     }
                 }
@@ -522,6 +567,16 @@ impl DuplicateDetector {
         });
 
         scored.first().map(|(id, _, _, _)| *id)
+    }
+
+    /// True when `pattern` appears in `path` as a whole token (case-
+    /// insensitive, split on non-alphanumeric characters). Substring
+    /// matching penalized "golden" and "Gold Coast" for containing "old",
+    /// which pushed the keep-suggestion toward the wrong copy.
+    fn has_bad_token(path: &str, pattern: &str) -> bool {
+        path.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| token == pattern)
     }
 
     /// Wasted bytes across the duplicate listing.
@@ -598,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn test_suggest_keep_penalties_match_whole_tokens_only() {
+        // "golden" must not trip the "old" penalty.
+        let photos = vec![
+            (1, "/Photos/golden/image.jpg".to_string(), None, 1000),
+            (2, "/Photos/old/image.jpg".to_string(), None, 1000),
+        ];
+        assert_eq!(DuplicateDetector::suggest_keep(&photos), Some(1));
+
+        // Hyphenated, underscored and dotted tokens still match.
+        let photos = vec![
+            (1, "/Photos/old-copies/image.jpg".to_string(), None, 1000),
+            (2, "/Photos/2019/image.jpg".to_string(), None, 1000),
+        ];
+        assert_eq!(DuplicateDetector::suggest_keep(&photos), Some(2));
+
+        let photos = vec![
+            (1, "/Photos/vacation.old/photo.jpg".to_string(), None, 1000),
+            (2, "/Photos/vacation/photo.jpg".to_string(), None, 1000),
+        ];
+        assert_eq!(DuplicateDetector::suggest_keep(&photos), Some(2));
+    }
+
+    #[test]
     fn exact_duplicates_use_full_file_hash_not_scanner_fast_hash() {
         let temp = tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
@@ -622,6 +700,28 @@ mod tests {
         let mut ids = groups[0].photo_ids.clone();
         ids.sort_unstable();
         assert_eq!(ids, vec![1, 2]);
+
+        // The pass must cache the full hash so later runs skip re-reading.
+        let content_hashed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE content_hash IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_hashed, 2);
+        assert_eq!(groups[0].hash, {
+            let mut hashes: Vec<String> = conn
+                .prepare("SELECT content_hash FROM photos ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            hashes.sort();
+            hashes.dedup();
+            hashes[0].clone()
+        });
     }
 
     #[test]

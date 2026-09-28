@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-27
+
+### Changed
+- Startup now opens directly into a responsive native shell; installed visual
+  search warms silently after library open without sitting on the open path.
+- Large photo grids, search results and route data are virtualized and cached
+  with bounded memory use.
+- Scan, metadata, thumbnail, duplicate, burst and face-processing work now
+  streams useful progress without timer-based polling.
+
+### Fixed
+- Removed the startup/loading shell and automatic setup modal that could cover
+  the app, and restored direct, reliable navigation between library screens.
+- Restored tested route-level code splitting without eagerly parsing MapLibre
+  during startup, while keeping the Search and Map route shells immediate.
+- Primary library tabs now remain mounted after their first visit, preserving
+  map instances, loaded data, filters and scroll positions between tabs.
+- Libraries with an existing semantic index now warm ONNX silently in the
+  background; the application-wide text runner starts with the native shell,
+  uses a low-priority fast-start CPU session instead of compiling a DirectML
+  graph, survives library switches, and refreshes active searches when ready.
+- Map tiles remain in the bounded persistent cache until eviction, pin payloads
+  are route-cached, and the live map instance survives tab navigation.
+- Semantic search now caches raw normalized vectors and performs an exact
+  cosine scan, removing the long HNSW graph build that delayed the first query.
+- The photo viewer now computes fit-to-screen from the incoming image dimensions
+  directly, instead of briefly reusing a stale 1:1 scale from the prior frame.
+- Timeline scrolling now takes priority over thumbnail generation, browser image
+  decoding, reactive thumbnail patches and synchronous position persistence.
+- Removed the redundant late-loading Memories strip from Timeline and stale
+  “previous results while you type” search copy.
+- Excluded MapLibre from Vite dependency optimization so its worker module is
+  resolved correctly during development.
+- Surprise Me now uses a five-second slide interval by default.
+- AppImage startup no longer aborts while parsing the Windows UNC asset glob;
+  packaged asset scope is platform-neutral and selected libraries are granted
+  access dynamically.
+- Hardened library lifecycle, SQLite concurrency, cache invalidation, image
+  loading, search paging, trash recovery and cross-platform ONNX loading.
+- Removed the unfinished Documents/OCR surface and its unused database state.
+- Added regression coverage for startup, runtime initialization and the main
+  library workflows.
+
 ## [0.3.2] — 2026-09-11
 
 0.3.2 is the release that makes the one-click smart-features setup actually

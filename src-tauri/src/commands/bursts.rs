@@ -1,5 +1,6 @@
 //! Burst groups (read-only listing).
 
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -85,6 +86,7 @@ pub async fn bursts_get_group(
 pub struct BurstsSetBestArgs {
     pub group_id: i64,
     pub photo_id: i64,
+    pub library_session_id: u64,
 }
 
 #[tauri::command]
@@ -92,6 +94,15 @@ pub async fn bursts_set_best(
     state: State<'_, AppState>,
     args: BurstsSetBestArgs,
 ) -> CommandResult<BurstGroupDto> {
+    if state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire)
+        != args.library_session_id
+    {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -116,6 +127,7 @@ pub async fn bursts_set_best(
 #[derive(Debug, Deserialize)]
 pub struct BurstsGroupActionArgs {
     pub group_id: i64,
+    pub library_session_id: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -128,6 +140,14 @@ pub async fn bursts_trash_non_best(
     state: State<'_, AppState>,
     args: BurstsGroupActionArgs,
 ) -> CommandResult<BurstsCountResultDto> {
+    let actual = state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire);
+    if actual != args.library_session_id {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -142,8 +162,13 @@ pub async fn bursts_trash_non_best(
             reason: "burst group has no non-best photos to trash".into(),
         });
     }
-    let trashed = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
-    repo.delete_group(args.group_id)?;
+    let tx = db.conn.unchecked_transaction()?;
+    let trashed = smriti::services::trash::TrashService::trash_photos_tx(&tx, &to_trash)? as u64;
+    tx.execute(
+        "DELETE FROM burst_groups WHERE id = ?1",
+        params![args.group_id],
+    )?;
+    tx.commit()?;
     Ok(BurstsCountResultDto { count: trashed })
 }
 
@@ -152,6 +177,14 @@ pub async fn bursts_dismiss(
     state: State<'_, AppState>,
     args: BurstsGroupActionArgs,
 ) -> CommandResult<()> {
+    let actual = state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire);
+    if actual != args.library_session_id {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;

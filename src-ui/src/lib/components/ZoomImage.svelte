@@ -75,25 +75,37 @@
   let dragStart = { x: 0, y: 0, tx: 0, ty: 0 };
 
   /// Scale at which the image fits within the container with rotation applied.
-  const fitScale = $derived.by(() => {
-    if (!naturalW || !naturalH || !containerW || !containerH) return 1;
-    // Treat 90/270 rotations as effectively swapping dimensions.
+  function calculateFitScale(
+    imageW = naturalW,
+    imageH = naturalH,
+    viewportW = containerW,
+    viewportH = containerH,
+  ): number {
+    if (!imageW || !imageH || !viewportW || !viewportH) return 1;
     const rotated = rotate % 180 !== 0;
-    const w = rotated ? naturalH : naturalW;
-    const h = rotated ? naturalW : naturalH;
-    return Math.min(containerW / w, containerH / h, 1);
+    const w = rotated ? imageH : imageW;
+    const h = rotated ? imageW : imageH;
+    return Math.min(viewportW / w, viewportH / h, 1);
+  }
+
+  const fitScale = $derived.by(() => {
+    return calculateFitScale();
   });
 
   const MIN_SCALE_FACTOR = 1;     // can't go below fit
   const MAX_SCALE = 16;           // 16x is the 1:1-equivalent ceiling
 
   function clampScale(s: number): number {
-    const min = fitScale * MIN_SCALE_FACTOR;
-    return Math.min(Math.max(s, min), Math.max(MAX_SCALE, fitScale));
+    const fit = calculateFitScale();
+    const min = fit * MIN_SCALE_FACTOR;
+    return Math.min(Math.max(s, min), Math.max(MAX_SCALE, fit));
   }
 
   function reset() {
-    scale = fitScale;
+    // Read the source dimensions directly. A $derived value can still contain
+    // the previous image's fit during the same synchronous state batch in
+    // which naturalW/naturalH change, which used to open every photo at 1:1.
+    scale = calculateFitScale();
     tx = 0;
     ty = 0;
   }
@@ -211,13 +223,16 @@
     const seq = ++loadSeq;
     const probe = new Image();
     probe.decoding = "async";
-    let swapped = false;
+    let committed = false;
     const swap = (force = false) => {
-      if (swapped || !mounted || seq !== loadSeq) return;
+      if (committed || !mounted || seq !== loadSeq) return;
       const w = probe.naturalWidth || hintedWidth();
       const h = probe.naturalHeight || hintedHeight();
       if (!force && (w <= 0 || h <= 0)) return;
-      swapped = true;
+      // A metadata-hint swap paints immediately, but remains provisional:
+      // once the browser decodes the file, use its authoritative oriented
+      // dimensions and correct the fit without waiting for another render.
+      committed = probe.naturalWidth > 0 && probe.naturalHeight > 0;
       // Mutating these state vars in a single synchronous block lets
       // Svelte batch them — the DOM updates once, with all four
       // changes applied together.

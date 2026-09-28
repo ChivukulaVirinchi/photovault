@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { duplicates } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -37,9 +38,11 @@
     if (actionBusy) return;
     const seq = loadSeq;
     const groupId = id;
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      const nextGroup = await duplicates.setKeep(groupId, photoId);
+      const nextGroup = await duplicates.setKeep(groupId, photoId, session);
+      routeCache.invalidate("duplicates");
       if (!mounted || seq !== loadSeq || groupId !== id) return;
       group = nextGroup;
     }
@@ -65,9 +68,12 @@
     const trashedIds = group.members
       .filter((m) => !m.is_suggested_keep)
       .map((m) => m.photo_id);
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      await duplicates.trashOthers(groupId);
+      await duplicates.trashOthers(groupId, session);
+      if (session !== libraryStore.session) return;
+      routeCache.invalidate("duplicates");
       if (!mounted || seq !== loadSeq || groupId !== id) return;
       photoVisibility.markTrashed(trashedIds);
       browseContext.remove(trashedIds);
@@ -83,9 +89,12 @@
     if (actionBusy) return;
     const seq = loadSeq;
     const groupId = id;
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      await duplicates.dismiss(groupId);
+      await duplicates.dismiss(groupId, session);
+      if (session !== libraryStore.session) return;
+      routeCache.invalidate("duplicates");
       if (!mounted || seq !== loadSeq || groupId !== id) return;
       window.location.hash = "/duplicates";
     } catch (e) {

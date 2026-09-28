@@ -184,7 +184,9 @@ impl FaceEmbedder {
 
 /// Local ArcFace Face Embedder using ONNX Runtime.
 pub struct LocalEmbedder {
-    session: Session,
+    session: Option<Session>,
+    model_path: PathBuf,
+    cpu_fallback_attempted: bool,
 }
 
 impl LocalEmbedder {
@@ -194,9 +196,15 @@ impl LocalEmbedder {
         model_path: P,
         intra_threads: usize,
     ) -> ort::Result<Self> {
-        let session = runtime.load_model_with_threads(model_path, intra_threads)?;
+        let model_path = model_path.as_ref().to_path_buf();
+        let _ = runtime;
+        let session = OnnxRuntime::load_cpu_model_with_threads(&model_path, intra_threads)?;
 
-        Ok(Self { session })
+        Ok(Self {
+            session: Some(session),
+            model_path,
+            cpu_fallback_attempted: false,
+        })
     }
 
     /// Generate embedding for an aligned face image (112x112)
@@ -280,10 +288,28 @@ impl LocalEmbedder {
         input_data: &[f32],
         batch_size: i64,
     ) -> ort::Result<Vec<f32>> {
+        match self.run_inference_once(input_data, batch_size) {
+            Ok(output) => Ok(output),
+            Err(error) if !self.cpu_fallback_attempted => {
+                tracing::warn!(%error, "Embedding inference failed; retrying once on CPU");
+                self.cpu_fallback_attempted = true;
+                self.session = None;
+                self.session = Some(OnnxRuntime::load_cpu_model(&self.model_path)?);
+                self.run_inference_once(input_data, batch_size)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_inference_once(&mut self, input_data: &[f32], batch_size: i64) -> ort::Result<Vec<f32>> {
         let input_tensor =
             TensorRef::<f32>::from_array_view((vec![batch_size, 3, 112, 112], input_data))?;
 
-        let outputs = self.session.run(ort::inputs![input_tensor])?;
+        let outputs = self
+            .session
+            .as_mut()
+            .ok_or_else(|| ort::Error::new("Embedder session unavailable"))?
+            .run(ort::inputs![input_tensor])?;
 
         let (_name, output) = outputs
             .iter()

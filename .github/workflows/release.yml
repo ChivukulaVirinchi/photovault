@@ -149,13 +149,9 @@ jobs:
           cp /tmp/ort-linux/onnxruntime-linux-x64-${ORT_VER}/lib/libonnxruntime.so* \
              assets-pack/libs/onnxruntime/linux/
 
-          # ONNX Runtime — Windows x64 .dll
-          curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
-            -o /tmp/ort-win.zip \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-win-x64-${ORT_VER}.zip"
-          unzip -o /tmp/ort-win.zip -d /tmp/ort-win
-          cp /tmp/ort-win/onnxruntime-win-x64-${ORT_VER}/lib/onnxruntime.dll \
-             assets-pack/libs/onnxruntime/windows/
+          # GPU-capable Windows package, including DirectML and license files.
+          pwsh -NoProfile -File scripts/setup_ort_windows.ps1 \
+            -OutputDir assets-pack/libs/onnxruntime/windows
 
           # ONNX Runtime — macOS arm64 (the architecture shipped above)
           curl -fsSL --retry 6 --retry-delay 2 --retry-all-errors \
@@ -171,6 +167,8 @@ jobs:
           test -s assets-pack/models/adaface_ir101_webface12m.onnx
           test -s assets-pack/libs/onnxruntime/linux/libonnxruntime.so
           test -s assets-pack/libs/onnxruntime/windows/onnxruntime.dll
+          test -s assets-pack/libs/onnxruntime/windows/DirectML.dll
+          test -s assets-pack/libs/onnxruntime/windows/onnxruntime_providers_shared.dll
           test -n "$(find assets-pack/libs/onnxruntime/macos -name 'libonnxruntime*.dylib' -print -quit)"
 
       - name: Zip pack

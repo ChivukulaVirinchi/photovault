@@ -7,6 +7,8 @@
   let cachedAlbumsRoute:
     | {
         driveRoot: string | null;
+        /// Library session this cache belongs to. See `currentAlbumsCache`.
+        session: number;
         filter: string;
         previewSugg: CachedAlbumSuggestionDto | null;
         previewPhotos: CachedPhotoSummaryDto[];
@@ -30,7 +32,15 @@
   import type { PhotoSummaryDto } from "../lib/api/types";
 
   const currentDriveRoot = libraryStore.driveRoot;
-  const currentAlbumsCache = cachedAlbumsRoute?.driveRoot === currentDriveRoot ? cachedAlbumsRoute : null;
+  const currentSession = libraryStore.session;
+  // Keyed on the session as well as the drive root. `session` increments on
+  // every open, so closing and reopening the same folder used to serve the
+  // previous session's albums — including any created or deleted since.
+  const currentAlbumsCache =
+    cachedAlbumsRoute?.driveRoot === currentDriveRoot &&
+    cachedAlbumsRoute.session === currentSession
+      ? cachedAlbumsRoute
+      : null;
 
   let list = $state<AlbumDto[]>([]);
   let suggestions = $state<AlbumSuggestionDto[]>([]);
@@ -72,6 +82,7 @@
   function saveAlbumsRouteCache() {
     cachedAlbumsRoute = {
       driveRoot: currentDriveRoot,
+      session: currentSession,
       filter,
       previewSugg,
       previewPhotos,
@@ -676,6 +687,8 @@
     flex-direction: column;
     gap: 6px;
     text-decoration: none;
+    content-visibility: auto;
+    contain-intrinsic-size: 220px 250px;
   }
   .cover {
     aspect-ratio: 4 / 5;

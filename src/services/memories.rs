@@ -28,7 +28,6 @@ pub fn surprise_photos(
                  COALESCE(substr(p.date_taken, 1, 10), 'undated:' || p.id) AS day
           FROM photos p
           WHERE p.is_trashed = FALSE AND p.media_type = 'photo'
-            AND COALESCE(p.content_category, 'photo') = 'photo'
             AND lower(p.file_name) NOT LIKE 'screenshot%'
             AND (p.date_taken IS NULL OR substr(p.date_taken, 1, 10) <= date('now'))
             AND (?1 IS NULL OR (?1 = -1 AND p.is_favorite = TRUE)
@@ -302,7 +301,6 @@ fn on_this_day(
                    ) AS rn
             FROM photos
             WHERE is_trashed = FALSE
-              AND content_category = 'photo'
               AND date_taken IS NOT NULL
               AND strftime('%m-%d', date_taken) = ?1
               AND date_taken < ?2
@@ -372,7 +370,6 @@ fn fallback_window(
                    ) AS rn
             FROM photos
             WHERE is_trashed = FALSE
-              AND content_category = 'photo'
               AND date_taken IS NOT NULL
               AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
               AND date_taken < ?8
@@ -449,7 +446,6 @@ fn seasonal_recap(
                    ) AS rn
             FROM photos
             WHERE is_trashed = FALSE
-              AND content_category = 'photo'
               AND date_taken IS NOT NULL
               AND strftime('%m', date_taken) = ?1
               AND date_taken < ?2
@@ -513,7 +509,6 @@ fn person_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memo
             LEFT JOIN memory_blocks mb
               ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
             WHERE p.is_trashed = FALSE
-              AND p.content_category = 'photo'
               AND p.date_taken IS NOT NULL
               AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
               AND mb.id IS NULL
@@ -595,7 +590,6 @@ fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memor
                    ) AS rn
             FROM photos
             WHERE is_trashed = FALSE
-              AND content_category = 'photo'
               AND date_taken IS NOT NULL
               AND location_city IS NOT NULL AND location_city != ''
               AND (?1 IS NULL OR location_city != ?1)
@@ -668,7 +662,6 @@ fn year_recap(
                    ) AS rn
             FROM photos
             WHERE is_trashed = FALSE
-              AND content_category = 'photo'
               AND date_taken IS NOT NULL
               AND date_taken < ?1
         )
@@ -996,7 +989,7 @@ mod tests {
             "UPDATE photos SET file_hash = CAST(id AS TEXT);
              UPDATE photos SET is_trashed=TRUE WHERE id=2;
              UPDATE photos SET media_type='video' WHERE id=3;
-             UPDATE photos SET content_category='screenshot' WHERE id=4;
+             UPDATE photos SET file_name='Screenshot_2017-11-12.jpg' WHERE id=4;
              INSERT INTO albums(id,name) VALUES(1,'Trip');
              INSERT INTO album_photos(album_id,photo_id) VALUES(1,1),(1,2),(1,3),(1,4),(1,5);
              UPDATE photos SET is_favorite=TRUE WHERE id=1;
@@ -1245,5 +1238,4 @@ mod tests {
             .unwrap();
         assert_eq!(story.title, "Back to Goa, through the years");
     }
-
 }

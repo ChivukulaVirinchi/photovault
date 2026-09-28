@@ -30,6 +30,12 @@ use crate::services::image_utils::apply_exif_orientation;
 /// Maximum time allowed for a single thumbnail generation before giving up.
 const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(10);
 
+// A timed-out native decoder cannot be force-killed safely. Keep the real
+// decoder slot owned by the spawned thread so repeated timeouts cannot create
+// an unbounded pile of abandoned workers. The slot is released only when the
+// decoder thread actually exits.
+static DECODER_LIMITER: std::sync::OnceLock<Arc<ConcurrencyLimiter>> = std::sync::OnceLock::new();
+
 /// Thumbnail size variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThumbnailSize {
@@ -155,6 +161,61 @@ impl ConcurrencyLimiter {
         }
     }
 
+    /// Deadline-aware admission for foreground requests. A stuck native
+    /// decoder must not make every later visible request wait forever.
+    fn acquire_for(
+        self: &Arc<Self>,
+        priority: GenerationPriority,
+        timeout: Duration,
+    ) -> Option<ConcurrencyPermit> {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(priority, GenerationPriority::Foreground) {
+            state.foreground_waiting += 1;
+        }
+        loop {
+            let active = state.foreground_active + state.background_active;
+            let can_acquire = match priority {
+                GenerationPriority::Foreground => active < self.max,
+                GenerationPriority::Background => {
+                    active < self.max
+                        && state.background_active < self.max_background
+                        && state.foreground_waiting == 0
+                }
+            };
+            if can_acquire {
+                if matches!(priority, GenerationPriority::Foreground) {
+                    state.foreground_waiting = state.foreground_waiting.saturating_sub(1);
+                    state.foreground_active += 1;
+                } else {
+                    state.background_active += 1;
+                }
+                return Some(ConcurrencyPermit {
+                    limiter: self.clone(),
+                    priority,
+                });
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                if matches!(priority, GenerationPriority::Foreground) {
+                    state.foreground_waiting = state.foreground_waiting.saturating_sub(1);
+                }
+                return None;
+            }
+            let (next, timed_out) = self
+                .cv
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|e| e.into_inner());
+            state = next;
+            if timed_out.timed_out() {
+                if matches!(priority, GenerationPriority::Foreground) {
+                    state.foreground_waiting = state.foreground_waiting.saturating_sub(1);
+                }
+                return None;
+            }
+        }
+    }
+
     /// Release a permit and wake one waiter.
     fn release(&self, priority: GenerationPriority) {
         {
@@ -250,6 +311,9 @@ pub struct ThumbnailService {
     current_cache_bytes: Arc<RwLock<u64>>,
     // Serialize inventory with publication, not with image decoding or cache hits.
     accounting: Mutex<()>,
+    /// Serialize directory sweeps so concurrent generators cannot evict from
+    /// stale byte snapshots or race one another's removals.
+    eviction: Mutex<()>,
 
     /// Concurrency limiter for generation (std::sync for blocking context)
     generation_limiter: Arc<ConcurrencyLimiter>,
@@ -287,6 +351,7 @@ impl ThumbnailService {
             max_cache_bytes,
             current_cache_bytes: Arc::new(RwLock::new(0)),
             accounting: Mutex::new(()),
+            eviction: Mutex::new(()),
             // Cap concurrent decodes at 4. Each large JPEG holds ~50–80 MB
             // of decoded RGB while resizing — at 8-wide we saw OOM on
             // mid-spec laptops. 4 keeps the working set under ~320 MB.
@@ -352,6 +417,7 @@ impl ThumbnailService {
             orientation,
             size,
             GenerationPriority::Foreground,
+            false,
         )
     }
 
@@ -368,6 +434,27 @@ impl ThumbnailService {
             orientation,
             size,
             GenerationPriority::Background,
+            false,
+        )
+    }
+
+    /// Background generation that ignores an existing adequate thumbnail —
+    /// used by "regenerate thumbnails" so quality upgrades actually happen
+    /// even though the old (adequate) rendition is still on disk.
+    pub fn generate_thumbnail_background_forced(
+        &self,
+        photo_path: &Path,
+        file_hash: &str,
+        orientation: i32,
+        size: ThumbnailSize,
+    ) -> Result<PathBuf, String> {
+        self.generate_thumbnail_with_priority(
+            photo_path,
+            file_hash,
+            orientation,
+            size,
+            GenerationPriority::Background,
+            true,
         )
     }
 
@@ -378,21 +465,22 @@ impl ThumbnailService {
         orientation: i32,
         size: ThumbnailSize,
         priority: GenerationPriority,
+        force: bool,
     ) -> Result<PathBuf, String> {
         let thumb_path = self.thumbnail_path(file_hash, size);
-        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+        if !force && self.try_existing_thumbnail(file_hash, size, &thumb_path) {
             return Ok(thumb_path);
         }
 
         let key = format!("{}:{file_hash}", size.dir_name());
         let _generation = self.generating.enter(key);
-        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+        if !force && self.try_existing_thumbnail(file_hash, size, &thumb_path) {
             return Ok(thumb_path);
         }
 
         let _permit = self.generation_limiter.acquire(priority);
         let start = Instant::now();
-        self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start)
+        self.generate_thumbnail_inner(photo_path, file_hash, orientation, size, start, force)
     }
 
     /// Inner thumbnail generation (separated for clean permit release)
@@ -403,10 +491,11 @@ impl ThumbnailService {
         orientation: i32,
         size: ThumbnailSize,
         start: Instant,
+        force: bool,
     ) -> Result<PathBuf, String> {
         // Check if existing thumbnail is adequate quality (not a tiny EXIF extract)
         let thumb_path = self.thumbnail_path(file_hash, size);
-        if self.try_existing_thumbnail(file_hash, size, &thumb_path) {
+        if !force && self.try_existing_thumbnail(file_hash, size, &thumb_path) {
             return Ok(thumb_path);
         }
 
@@ -423,8 +512,14 @@ impl ThumbnailService {
             return Err("Thumbnail generation timed out before decode".to_string());
         }
 
-        // Strategy 2: Decode with downscale hint for large JPEGs
-        let img = Self::decode_image_fast(photo_path, size)?;
+        // Strategy 2: Decode with downscale hint for large JPEGs.
+        // The decode runs on a worker thread with a hard timeout: a
+        // `decode()` stuck on a disconnected USB drive would otherwise
+        // hold the limiter permit and the dedupe entry forever, hanging
+        // every requester of that thumbnail. The abandoned thread is
+        // bounded (one per timeout, distinct keys only — the deduper
+        // serializes same-key requests) and its result is dropped.
+        let img = Self::decode_with_timeout(photo_path, size)?;
         let img = apply_exif_orientation(img, orientation);
 
         // Check timeout after decode
@@ -438,6 +533,12 @@ impl ThumbnailService {
         } else {
             self.create_thumbnail(&img, size)
         };
+
+        // Lanczos3 on a huge source can outlive the budget on its own;
+        // fail before paying for the encode as well.
+        if start.elapsed() > THUMBNAIL_TIMEOUT {
+            return Err("Thumbnail generation timed out after resize".to_string());
+        }
 
         // Save as JPEG. Lower quality at the small end where artifacts
         // are invisible to the eye anyway, kept high for the viewer-size
@@ -455,16 +556,20 @@ impl ThumbnailService {
         encoder
             .encode_image(&thumb)
             .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
-        let _accounting = self
-            .accounting
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let replaced_bytes = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
-        out.persist(&thumb_path)
-            .map_err(|e| format!("Failed to publish thumbnail: {e}"))?;
-
-        if let Ok(mut current) = self.current_cache_bytes.write() {
-            *current = current.saturating_sub(replaced_bytes);
+        {
+            // Keep the publication/accounting critical section short. Disk
+            // inventory and eviction can be expensive and must not hold
+            // other generators behind this lock.
+            let _accounting = self
+                .accounting
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let replaced_bytes = std::fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0);
+            out.persist(&thumb_path)
+                .map_err(|e| format!("Failed to publish thumbnail: {e}"))?;
+            if let Ok(mut current) = self.current_cache_bytes.write() {
+                *current = current.saturating_sub(replaced_bytes);
+            }
         }
         self.add_to_cache(file_hash, size, &thumb_path);
         self.track_cache_size(&thumb_path);
@@ -567,6 +672,35 @@ impl ThumbnailService {
         Ok(img)
     }
 
+    /// Decode on a worker thread, giving up after the thumbnail timeout.
+    ///
+    /// A blocked read (network drive gone, yanked USB) has no async
+    /// cancellation path in std, so the abandoned thread may finish the
+    /// decode into the void later — that is accepted: it holds no permit
+    /// and no dedupe entry, and the receiver ignores the late result.
+    fn decode_with_timeout(
+        photo_path: &Path,
+        target_size: ThumbnailSize,
+    ) -> Result<DynamicImage, String> {
+        let decoder_permit = DECODER_LIMITER
+            .get_or_init(|| Arc::new(ConcurrencyLimiter::new(8, 8)))
+            .acquire_for(GenerationPriority::Foreground, THUMBNAIL_TIMEOUT)
+            .ok_or_else(|| "thumbnail decoder admission timed out; retry shortly".to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel::<Result<DynamicImage, String>>();
+        let path = photo_path.to_path_buf();
+        std::thread::spawn(move || {
+            let _decoder_permit = decoder_permit;
+            let _ = tx.send(Self::decode_image_fast(&path, target_size));
+        });
+        match rx.recv_timeout(THUMBNAIL_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "decode timed out after {}s (source unreadable?)",
+                THUMBNAIL_TIMEOUT.as_secs()
+            )),
+        }
+    }
+
     fn decode_embedded_jpeg_thumbnail(
         photo_path: &Path,
         target_size: ThumbnailSize,
@@ -661,6 +795,10 @@ impl ThumbnailService {
     /// oldest entry, vs. the previous O(n log n) sort of every
     /// thumbnail by timestamp.
     fn evict_if_needed(&self, protected: Option<&Path>) {
+        let _eviction_guard = match self.eviction.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
         let current = match self.current_cache_bytes.read() {
             Ok(v) => *v,
             Err(_) => return,
@@ -1014,10 +1152,18 @@ mod tests {
             tx_foreground.send("foreground").unwrap();
         });
 
-        thread::sleep(Duration::from_millis(20));
-        {
-            let state = limiter.state.lock().unwrap();
-            assert_eq!(state.foreground_waiting, 1);
+        // Synchronize on the admission state itself instead of guessing how
+        // long the spawned waiter needs to reach the condition variable.
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if limiter.state.lock().unwrap().foreground_waiting == 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "foreground waiter did not enter admission"
+            );
+            thread::yield_now();
         }
 
         let l = limiter.clone();
@@ -1026,7 +1172,6 @@ mod tests {
             tx.send("background").unwrap();
         });
 
-        thread::sleep(Duration::from_millis(20));
         assert!(rx.try_recv().is_err());
 
         drop(permit);

@@ -137,52 +137,41 @@ pub struct SemanticSearchService {
 #[derive(Default)]
 pub struct SemanticIndexCache {
     revision: i64,
-    #[cfg(feature = "hnsw_clustering")]
-    index: Option<SemanticHnswIndex>,
+    index: Option<SemanticVectorIndex>,
 }
 
-#[cfg(feature = "hnsw_clustering")]
-struct SemanticHnswIndex {
+struct SemanticVectorIndex {
     photo_ids: Vec<i64>,
-    exact_vectors: Option<Vec<Vec<f32>>>,
-    hnsw: hnsw_rs::prelude::Hnsw<'static, f32, hnsw_rs::prelude::DistCosine>,
+    vectors: Vec<Vec<f32>>,
 }
 
-#[cfg(feature = "hnsw_clustering")]
-impl SemanticHnswIndex {
+impl SemanticVectorIndex {
     fn search(&self, query: &[f32], limit: usize) -> Vec<SemanticCandidate> {
         if self.photo_ids.is_empty() || limit == 0 {
             return Vec::new();
         }
-        if let Some(vectors) = &self.exact_vectors {
-            let mut candidates: Vec<_> = vectors
-                .iter()
-                .zip(&self.photo_ids)
-                .map(|(vector, photo_id)| SemanticCandidate {
-                    photo_id: *photo_id,
-                    score: cosine(query, vector).clamp(-1.0, 1.0),
-                })
-                .collect();
-            candidates.sort_by(|a, b| {
-                b.score
-                    .total_cmp(&a.score)
-                    .then_with(|| a.photo_id.cmp(&b.photo_id))
-            });
-            candidates.truncate(limit);
-            return candidates;
-        }
-        self.hnsw
-            .search(query, limit.min(self.photo_ids.len()).max(1), 200)
-            .into_iter()
-            .filter_map(|nb| {
-                self.photo_ids
-                    .get(nb.d_id)
-                    .map(|photo_id| SemanticCandidate {
-                        photo_id: *photo_id,
-                        score: (1.0 - nb.distance).clamp(-1.0, 1.0),
-                    })
+        let mut candidates: Vec<_> = self
+            .vectors
+            .iter()
+            .zip(&self.photo_ids)
+            .map(|(vector, photo_id)| SemanticCandidate {
+                photo_id: *photo_id,
+                score: cosine(query, vector).clamp(-1.0, 1.0),
             })
-            .collect()
+            .collect();
+        let keep = limit.min(candidates.len());
+        candidates.select_nth_unstable_by(keep - 1, |a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.photo_id.cmp(&b.photo_id))
+        });
+        candidates.truncate(keep);
+        candidates.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.photo_id.cmp(&b.photo_id))
+        });
+        candidates
     }
 }
 
@@ -489,34 +478,25 @@ impl SemanticSearchService {
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticCandidate>, String> {
-        #[cfg(not(feature = "hnsw_clustering"))]
-        {
-            let _ = (conn, cache, query, limit);
-            return Err("HNSW semantic search requires the hnsw_clustering feature".into());
+        if query.len() != SEMANTIC_DIM {
+            return Ok(Vec::new());
         }
-
-        #[cfg(feature = "hnsw_clustering")]
-        {
-            if query.len() != SEMANTIC_DIM {
-                return Ok(Vec::new());
-            }
-            let revision = conn
-                .query_row(
-                    "SELECT revision FROM semantic_revision WHERE id = 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if cache.index.is_none() || cache.revision != revision {
-                cache.index = Some(self.build_hnsw_index(conn)?);
-                cache.revision = revision;
-            }
-            Ok(cache
-                .index
-                .as_ref()
-                .map(|idx| idx.search(query, limit))
-                .unwrap_or_default())
+        let revision = conn
+            .query_row(
+                "SELECT revision FROM semantic_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if cache.index.is_none() || cache.revision != revision {
+            cache.index = Some(self.build_vector_index(conn)?);
+            cache.revision = revision;
         }
+        Ok(cache
+            .index
+            .as_ref()
+            .map(|idx| idx.search(query, limit))
+            .unwrap_or_default())
     }
 
     pub fn search_vector(
@@ -525,56 +505,25 @@ impl SemanticSearchService {
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticCandidate>, String> {
-        #[cfg(not(feature = "hnsw_clustering"))]
-        {
-            let _ = (conn, query, limit);
-            return Err("HNSW semantic search requires the hnsw_clustering feature".into());
+        if query.len() != SEMANTIC_DIM {
+            return Ok(Vec::new());
         }
-
-        #[cfg(feature = "hnsw_clustering")]
-        {
-            if query.len() != SEMANTIC_DIM {
-                return Ok(Vec::new());
-            }
-            let index = self.build_hnsw_index(conn)?;
-            Ok(index.search(query, limit))
-        }
+        let index = self.build_vector_index(conn)?;
+        Ok(index.search(query, limit))
     }
 
-    #[cfg(feature = "hnsw_clustering")]
-    fn build_hnsw_index(&self, conn: &Connection) -> Result<SemanticHnswIndex, String> {
-        use hnsw_rs::prelude::*;
-
+    fn build_vector_index(&self, conn: &Connection) -> Result<SemanticVectorIndex, String> {
+        // Keep normalized vectors directly. Building an approximate graph on
+        // every library open cost tens of seconds for only a few thousand
+        // photos; a flat cosine scan is exact and immediately usable.
         let rows = self.load_index_rows(conn).map_err(|e| e.to_string())?;
-        if rows.is_empty() {
-            return Ok(SemanticHnswIndex {
-                photo_ids: Vec::new(),
-                exact_vectors: None,
-                hnsw: Hnsw::new(16, 1, 1, 200, DistCosine {}),
-            });
+        let mut photo_ids = Vec::with_capacity(rows.len());
+        let mut vectors = Vec::with_capacity(rows.len());
+        for row in rows {
+            photo_ids.push(row.photo_id);
+            vectors.push(row.vector);
         }
-
-        let hnsw: Hnsw<f32, DistCosine> = Hnsw::new(
-            16,
-            rows.len(),
-            16.min(rows.len().max(1)),
-            200,
-            DistCosine {},
-        );
-        let data: Vec<(&[f32], usize)> = rows
-            .iter()
-            .enumerate()
-            .map(|(idx, row)| (row.vector.as_slice(), idx))
-            .collect();
-        hnsw.parallel_insert_slice(&data);
-        let exact_vectors =
-            (rows.len() <= 256).then(|| rows.iter().map(|row| row.vector.clone()).collect());
-        let photo_ids = rows.into_iter().map(|row| row.photo_id).collect();
-        Ok(SemanticHnswIndex {
-            photo_ids,
-            exact_vectors,
-            hnsw,
-        })
+        Ok(SemanticVectorIndex { photo_ids, vectors })
     }
 
     fn vector_for_photo(
@@ -758,9 +707,13 @@ pub struct SemanticModelRunner {
 }
 
 impl SemanticModelRunner {
-    fn new(rt: &OnnxRuntime, paths: SemanticAssetPaths) -> Result<Self, String> {
-        let textual = rt
-            .load_model_with_threads(&paths.textual_model, 1)
+    fn new(_rt: &OnnxRuntime, paths: SemanticAssetPaths) -> Result<Self, String> {
+        // Text search is a latency-sensitive, single-input workload.  Trying
+        // DirectML first made Windows compile a ~1.1 GB graph every launch;
+        // on ordinary machines that kept Search metadata-only for close to a
+        // minute and also competed with the UI.  CPU session creation is much
+        // cheaper here and one query does not benefit from GPU setup.
+        let textual = OnnxRuntime::load_cpu_model_for_interactive(&paths.textual_model)
             .map_err(|e| format!("text model load failed: {e}"))?;
         let tokenizer = Tokenizer::from_file(&paths.tokenizer)
             .map_err(|e| format!("tokenizer load failed: {e}"))?;

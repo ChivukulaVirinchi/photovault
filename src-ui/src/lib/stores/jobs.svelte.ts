@@ -1,4 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { routeCache } from "./routeCache.svelte";
+import { dataRevision } from "./dataRevision.svelte";
 
 /// One running long-task. The same struct is rebuilt as progress
 /// events arrive; the store keeps a Map keyed by `id` so navigating
@@ -28,6 +30,8 @@ export interface Job {
   /// Drives the small status chip in JobsIndicator so the user can
   /// confirm at a glance which path is being used.
   embedder_route?: "local" | "bridge";
+  error_count?: number;
+  error_details?: string[];
 }
 
 export type JobKind =
@@ -91,6 +95,8 @@ type WireJobEvent = {
   total_photos?: number | null;
   faces_detected?: number;
   groups_found?: number;
+  error_count?: number;
+  error_details?: string[];
 };
 
 class JobsStore {
@@ -99,6 +105,9 @@ class JobsStore {
   private installPromise: Promise<void> | null = null;
   private unlisten: UnlistenFn[] = [];
   private suppressedLibraryJobIds = new Set<string>();
+  /// Pending "linger then evict" timers, so clearing the library can cancel
+  /// them instead of letting them fire against a reset registry.
+  private lingerTimers = new Set<ReturnType<typeof setTimeout>>();
 
   /// Active (still-running) jobs in stable insertion order. Completed
   /// entries linger for ~3s so the user sees the success flash.
@@ -134,6 +143,7 @@ class JobsStore {
     const message =
       p.message ??
       p.current_file ??
+      (p.error_count ? `${p.error_count} file${p.error_count === 1 ? "" : "s"} could not be indexed` : null) ??
       (complete && p.groups_found != null
         ? `${p.groups_found} group${p.groups_found === 1 ? "" : "s"}`
         : null);
@@ -163,14 +173,36 @@ class JobsStore {
       chunks_flushed: p.chunks_flushed ?? prev?.chunks_flushed ?? 0,
       faces_found: facesFound > 0 ? facesFound : (prev?.faces_found ?? 0),
       embedder_route: route,
+      error_count: p.error_count ?? prev?.error_count ?? 0,
+      error_details: p.error_details ?? prev?.error_details ?? [],
     };
     next.set(id, job);
     this.jobs = next;
+    // A finished job is the main way route data changes without a user
+    // mutation — hand the change to the route cache's invalidation matrix.
+    if (complete && !isError) {
+      routeCache.invalidateForJob(kind);
+      // Jobs that can change library totals (insights) or search
+      // results also move the shared data revision.
+      if (
+        kind === "scan" ||
+        kind === "metadata" ||
+        kind === "takeout" ||
+        kind === "faces" ||
+        kind === "geocoding"
+      ) {
+        dataRevision.bump();
+      }
+    }
     if (complete || isError) {
-      // Linger briefly so the user sees the run finish, then evict.
-      setTimeout(() => {
+      // Linger briefly so the user sees the run finish, then evict. Tracked
+      // so clearing the library can cancel it — an untracked timer could
+      // otherwise fire against a job registry that has already been reset.
+      const timer = setTimeout(() => {
+        this.lingerTimers.delete(timer);
         if (this.jobs.get(id) === job) this.dismiss(id);
       }, isError ? 8000 : 2500);
+      this.lingerTimers.add(timer);
     }
   }
 
@@ -202,6 +234,8 @@ class JobsStore {
       faces_detected?: number;
       // bursts/duplicates complete payload
       groups_found?: number;
+      error_count?: number;
+      error_details?: string[];
     };
     const handle = (kind: JobKind, complete: boolean) => (e: { payload: Wire }) => {
       this.applyWire(kind, complete, e.payload);
@@ -312,6 +346,11 @@ class JobsStore {
   }
 
   clearLibraryScoped() {
+    // Cancel pending eviction timers: they capture the job they were created
+    // for and would otherwise fire against the registry we are about to
+    // replace, dismissing an unrelated job that happens to reuse an id.
+    for (const timer of this.lingerTimers) clearTimeout(timer);
+    this.lingerTimers.clear();
     for (const job of this.jobs.values()) {
       if (isLibraryScopedJob(job)) this.suppressedLibraryJobIds.add(job.id);
     }

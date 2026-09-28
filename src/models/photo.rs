@@ -27,45 +27,6 @@ impl MediaType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentCategory {
-    #[default]
-    Photo,
-    BusinessCard,
-    Document,
-    Screenshot,
-    Presentation,
-    Whiteboard,
-    Receipt,
-}
-
-impl ContentCategory {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Photo => "photo",
-            Self::BusinessCard => "business_card",
-            Self::Document => "document",
-            Self::Screenshot => "screenshot",
-            Self::Presentation => "presentation",
-            Self::Whiteboard => "whiteboard",
-            Self::Receipt => "receipt",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Self {
-        match value {
-            "document" => Self::Document,
-            "business_card" => Self::BusinessCard,
-            "screenshot" => Self::Screenshot,
-            "presentation" => Self::Presentation,
-            "whiteboard" => Self::Whiteboard,
-            "receipt" => Self::Receipt,
-            _ => Self::Photo,
-        }
-    }
-}
-
 /// Represents a photo in the library
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
@@ -109,10 +70,6 @@ pub struct Photo {
     // Processing state
     pub thumbnail_path: Option<String>,
     pub faces_processed: bool,
-    pub content_category: ContentCategory,
-    pub ocr_text: Option<String>,
-    pub ocr_processed: bool,
-    pub ocr_confidence: Option<f32>,
 
     // User flags
     pub is_favorite: bool,

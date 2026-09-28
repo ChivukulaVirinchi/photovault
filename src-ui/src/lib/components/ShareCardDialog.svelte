@@ -5,11 +5,20 @@
   import { burstConfetti } from "../confetti";
   import { shareCard } from "../stores/shareCard.svelte";
   import { toasts } from "../stores/toast.svelte";
-  import { ensureCardFonts, readCardTheme, renderShareCard } from "../shareCard";
+  import { CARD_WIDTH, CARD_HEIGHT, type CardMonthCell, ensureCardFonts, readCardTheme, renderShareCard } from "../shareCard";
 
   let dialog = $state<HTMLDialogElement | undefined>();
   let canvas = $state<HTMLCanvasElement | undefined>();
   let busy = $state(false);
+  let ready = $state(false);
+  let cells = $state<CardMonthCell[]>([]);
+  let tooltip = $state<string | null>(null);
+  let outsidePointer: number | null = null;
+  function outside(event: PointerEvent) {
+    if (!dialog) return false;
+    const r = dialog.getBoundingClientRect();
+    return event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
+  }
   let flash = $state<string | null>(null);
   let flashTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -32,11 +41,15 @@
     const data = shareCard.data;
     const open = shareCard.open;
     const element = canvas;
+    ready = false;
+    cells = [];
+    tooltip = null;
     if (!open || !data || !element) return;
     let cancelled = false;
     void ensureCardFonts().then(() => {
       if (cancelled) return;
-      renderShareCard(element, data, readCardTheme());
+      cells = renderShareCard(element, data, readCardTheme());
+      ready = true;
     });
     return () => { cancelled = true; };
   });
@@ -75,7 +88,7 @@
   }
 
   async function copyCard() {
-    if (busy) return;
+    if (busy || !ready) return;
     busy = true;
     try {
       if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
@@ -97,6 +110,9 @@
 <dialog
   bind:this={dialog}
   aria-labelledby="share-card-title"
+  onpointerdown={(event) => { outsidePointer = outside(event) ? event.pointerId : null; }}
+  onpointerup={(event) => { if (outsidePointer === event.pointerId && outside(event)) close(); outsidePointer = null; }}
+  onpointercancel={() => { outsidePointer = null; }}
   onclose={close}
   onkeydown={(event) => event.stopPropagation()}
 >
@@ -111,7 +127,18 @@
   </header>
 
   <div class="preview">
-    <canvas bind:this={canvas} width="1080" height="1350" aria-label="Preview of your library card"></canvas>
+    <div class="card-preview">
+      <canvas bind:this={canvas} width="1080" height="1350" aria-label="Preview of your library card"></canvas>
+      {#each cells as cell}
+        <button type="button" class="month-cell" aria-label={cell.label}
+          style:left={cell.x / CARD_WIDTH * 100 + "%"} style:top={cell.y / CARD_HEIGHT * 100 + "%"}
+          style:width={cell.width / CARD_WIDTH * 100 + "%"} style:height={cell.height / CARD_HEIGHT * 100 + "%"}
+          onpointerenter={() => tooltip = cell.label} onpointerleave={() => tooltip = null}
+          onfocus={() => tooltip = cell.label} onblur={() => tooltip = null}
+          onclick={() => tooltip = cell.label}></button>
+      {/each}
+    </div>
+    <div class="month-tooltip" role="status">{tooltip ?? "Hover or focus a month to see its photo count."}</div>
   </div>
 
   <div class="flash" aria-live="polite">
@@ -121,7 +148,7 @@
   </div>
 
   <div class="actions">
-    <button class="primary" onclick={copyCard} disabled={busy}>
+    <button class="primary" onclick={copyCard} disabled={busy || !ready}>
       <Copy size={15} strokeWidth={1.8} />
       Copy card
     </button>
@@ -129,6 +156,11 @@
 </dialog>
 
 <style>
+  .card-preview { position: relative; line-height: 0; }
+  .month-cell { position: absolute; padding: 0; min-width: 0; min-height: 0; border: 0; border-radius: 2px; background: transparent; }
+  .month-cell:focus-visible { outline: 2px solid var(--ink); }
+  .month-tooltip { line-height: 1.5; min-height: 1.5em; text-align: center; font-size: 12px; color: var(--ink-muted); margin-top: 8px; }
+
   dialog {
     position: relative;
     margin: auto;

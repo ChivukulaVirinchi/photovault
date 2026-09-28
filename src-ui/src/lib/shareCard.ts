@@ -26,6 +26,9 @@ const SCALE = 2;
 const MARGIN = 56;
 const MONTH_LETTERS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 
+export interface CardMonthCell {
+  x: number; y: number; width: number; height: number; label: string;
+}
 export interface CardTheme {
   paper: string;
   ink: string;
@@ -155,9 +158,10 @@ function drawYearGrid(
   available: number,
   left: number,
   width: number,
-): void {
+): CardMonthCell[] {
+  const cells: CardMonthCell[] = [];
   const years = [...data.available_years].sort((a, b) => a - b);
-  if (years.length === 0) return;
+  if (years.length === 0) return cells;
 
   const counts = data.months_by_year ?? {};
   const max = Math.max(1, ...Object.values(counts));
@@ -196,12 +200,16 @@ function drawYearGrid(
       const key = `${year}-${String(month).padStart(2, "0")}`;
       const count = counts[key] ?? 0;
       const x = left + gutter + (month - 1) * (cellWidth + gapX);
+      const monthName = new Intl.DateTimeFormat("en", { month: "long" }).format(new Date(2000, month - 1, 1));
+      cells.push({ x, y, width: cellWidth, height: cellHeight,
+        label: `${monthName} ${year} — ${count.toLocaleString()} ${count === 1 ? "photo" : "photos"}` });
       ctx.fillStyle = theme.heat[heatLevel(count, max)];
       ctx.beginPath();
       ctx.roundRect(x, y, cellWidth, cellHeight, Math.min(3, cellHeight / 4));
       ctx.fill();
     }
   });
+  return cells;
 }
 
 /** Fallback for a backend that predates `months_by_year`: one year, by day. */
@@ -255,11 +263,12 @@ export function renderShareCard(
   canvas: HTMLCanvasElement,
   data: InsightsData,
   theme: CardTheme,
-): void {
+): CardMonthCell[] {
+  let cells: CardMonthCell[] = [];
   canvas.width = CARD_WIDTH * SCALE;
   canvas.height = CARD_HEIGHT * SCALE;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  if (!ctx) return cells;
 
   ctx.save();
   ctx.scale(SCALE, SCALE);
@@ -380,7 +389,7 @@ export function renderShareCard(
 
   if (gridHeight > 24) {
     if (hasMonths) {
-      drawYearGrid(ctx, data, theme, gridTop, gridHeight, MARGIN, innerWidth);
+      cells = drawYearGrid(ctx, data, theme, gridTop, gridHeight, MARGIN, innerWidth);
     } else {
       drawYearDays(ctx, data, theme, gridTop, gridHeight, MARGIN, innerWidth);
     }
@@ -396,4 +405,5 @@ export function renderShareCard(
   drawTracked(ctx, "chivukulavirinchi.github.io/photovault", MARGIN, footerTop + 36, 1.6);
 
   ctx.restore();
+  return cells;
 }

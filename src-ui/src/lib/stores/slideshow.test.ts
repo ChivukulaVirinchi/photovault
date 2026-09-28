@@ -100,6 +100,17 @@ describe("slideshow store — navigation", () => {
     expect(slideshow.currentId()).toBe(2);
     expect(slideshow.playing).toBe(false);
   });
+
+  it("does not let delayed next override a later previous", async () => {
+    let resolve!: (value: { items: Array<{ id: number }>; next_cursor: string | null; has_more: boolean; total: number }) => void;
+    const loadMore = vi.fn(() => new Promise((r) => { resolve = r; }));
+    slideshow.start({ kind: "timeline", label: "Timeline", ids: [1, 2], startId: 2, hasMore: true, loadMore: loadMore as never });
+    const pending = slideshow.next();
+    slideshow.prev();
+    resolve({ items: [{ id: 3 }], next_cursor: null, has_more: false, total: 3 });
+    await pending;
+    expect(slideshow.currentId()).toBe(1);
+  });
 });
 
 describe("slideshow store — interval clamping", () => {

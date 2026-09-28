@@ -11,12 +11,19 @@ use smriti::services::semantic::{
 };
 
 use crate::dto::{RecentSearchDto, SearchResultsDto};
-use crate::state::AppState;
+use crate::state::{AppState, SemanticQueryPageCache};
 use crate::{CommandError, CommandResult};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQueryArgs {
     pub q: String,
+    /// Offset into the stable (date/rank-ordered) photo result list.
+    /// Combined with `limit` this pages through matches that exceed a
+    /// single response.
+    pub offset: Option<u32>,
+    /// Page size. Defaults to 200, capped at the service's 20,000-row
+    /// product ceiling; the frontend requests small batches.
+    pub limit: Option<u32>,
 }
 
 #[tauri::command]
@@ -24,7 +31,7 @@ pub async fn search_query(
     state: State<'_, AppState>,
     args: SearchQueryArgs,
 ) -> CommandResult<SearchResultsDto> {
-    let (db_path, drive_root, semantic_index, semantic_runner) = {
+    let (db_path, drive_root, semantic_index, semantic_runner, semantic_query) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         (
@@ -32,24 +39,39 @@ pub async fn search_query(
             lib.drive_root.clone(),
             lib.semantic_index.clone(),
             lib.semantic_runner.clone(),
+            lib.semantic_queries.clone(),
         )
     };
     let q = args.q;
+    let offset = args.offset.unwrap_or(0) as usize;
+    let limit = args
+        .limit
+        .map(|l| l as usize)
+        .unwrap_or(200)
+        .clamp(1, SearchService::UNIFIED_SEARCH_MAX_PHOTOS);
     let unified = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
-        let semantic_ids =
-            semantic_photo_ids(&conn, &drive_root, &semantic_index, &semantic_runner, &q)?;
-        Ok::<_, CommandError>(SearchService::search_unified_with_semantic(
+        let semantic_ids = semantic_photo_ids(
+            &conn,
+            &drive_root,
+            &semantic_index,
+            &semantic_runner,
+            &semantic_query,
+            &q,
+        )?;
+        Ok::<_, CommandError>(SearchService::search_unified_page(
             &conn,
             &q,
             semantic_ids,
+            offset,
+            limit,
         )?)
     })
     .await
     .map_err(|e| CommandError::Internal {
         message: format!("search worker failed: {e}"),
     })??;
-    Ok(unified.into())
+    Ok(unified.results.into())
 }
 
 fn should_try_semantic(q: &str) -> bool {
@@ -66,11 +88,47 @@ fn semantic_photo_ids(
     semantic_runner: &std::sync::Arc<
         std::sync::Mutex<Option<smriti::services::semantic::SemanticModelRunner>>,
     >,
+    semantic_query: &std::sync::Arc<std::sync::Mutex<SemanticQueryPageCache>>,
     q: &str,
 ) -> Result<Vec<i64>, CommandError> {
     if !should_try_semantic(q) {
         return Ok(Vec::new());
     }
+
+    let revision = conn
+        .query_row(
+            "SELECT revision FROM semantic_revision WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+
+    // Every page must use the SAME semantic candidate list, or the photo
+    // ordering changes between pages and the user sees duplicates and gaps
+    // while scrolling. So: reuse the snapshot whenever it is available, and
+    // when it is not, recompute it here rather than falling back to an empty
+    // list.
+    //
+    // Returning `unwrap_or_default()` on a cache miss was actively wrong.
+    // An empty candidate list makes `has_structured_filters()` false for the
+    // semantic branch, so page 2+ silently switched to date ordering while
+    // page 1 had been semantically ranked — a different result set, not a
+    // slower one. A miss is normal: the cache holds 8 entries, and the
+    // warmup thread holds the runner mutex for the first seconds after
+    // startup.
+    if let Ok(mut cache) = semantic_query.try_lock() {
+        if let Some(cached) = cache.get(q, revision) {
+            return Ok(cached);
+        }
+    }
+
+    // Only a *successful* computation is worth remembering. Caching the
+    // transient failures below would permanently pin a metadata-only result
+    // to a query the user typed while the model was still loading.
+    //
+    // The cost of recomputing when the snapshot is unavailable is one text
+    // embedding plus a vector search — acceptable, and it only happens on a
+    // cache miss.
 
     let svc = SemanticSearchService::new(drive_root);
     let ready = matches!(
@@ -81,24 +139,18 @@ fn semantic_photo_ids(
                 && status.indexed_photos > 0
     );
     if !ready {
+        // Not an error: semantic search is unavailable, so the caller falls
+        // back to metadata/text. Do not cache — readiness can change.
         return Ok(Vec::new());
     }
 
     let vector = {
-        let mut runner_guard = semantic_runner
-            .lock()
-            .map_err(|_| CommandError::internal("semantic model cache poisoned"))?;
-        if runner_guard.is_none() {
-            match SemanticSearchService::model_runner() {
-                Ok(runner) => *runner_guard = Some(runner),
-                Err(err) => {
-                    tracing::debug!("semantic model unavailable: {}", err);
-                    return Ok(Vec::new());
-                }
-            }
-        }
+        // The startup warmup owns this mutex while loading ONNX. Search must
+        // remain instant during that work and fall back to metadata/text.
+        let Ok(mut runner_guard) = semantic_runner.try_lock() else {
+            return Ok(Vec::new());
+        };
         let Some(runner) = runner_guard.as_mut() else {
-            tracing::debug!("semantic runner missing after initialization");
             return Ok(Vec::new());
         };
         match runner.embed_text(q) {
@@ -111,9 +163,9 @@ fn semantic_photo_ids(
     };
 
     let candidates = {
-        let mut cache = semantic_index
-            .lock()
-            .map_err(|_| CommandError::internal("semantic index cache poisoned"))?;
+        let Ok(mut cache) = semantic_index.try_lock() else {
+            return Ok(Vec::new());
+        };
         match svc.search_vector_cached(conn, &mut cache, &vector, SEMANTIC_TEXT_SEARCH_LIMIT) {
             Ok(candidates) => candidates,
             Err(err) => {
@@ -123,10 +175,15 @@ fn semantic_photo_ids(
         }
     };
 
-    Ok(relevant_text_search_candidates(candidates)
+    let photo_ids = relevant_text_search_candidates(candidates)
         .into_iter()
         .map(|c| c.photo_id)
-        .collect())
+        .collect::<Vec<_>>();
+
+    if let Ok(mut cache) = semantic_query.try_lock() {
+        cache.remember(q.to_owned(), revision, photo_ids.clone());
+    }
+    Ok(photo_ids)
 }
 
 #[derive(Debug, Default, Deserialize)]

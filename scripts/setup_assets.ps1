@@ -128,7 +128,10 @@ $LibsDir = Join-Path $RootDir "libs\onnxruntime"
 if (-not (Test-Path $LibsDir)) { New-Item -ItemType Directory -Path $LibsDir -Force | Out-Null }
 
 $OrtDll = Join-Path $LibsDir "onnxruntime.dll"
-if ((Test-Path $OrtDll) -and (Get-Item $OrtDll).Length -ge 1MB) {
+if (-not $env:ORT_URL) {
+    # Install the GPU-capable runtime and its native dependencies together.
+    & (Join-Path $PSScriptRoot "setup_ort_windows.ps1") -OutputDir $LibsDir
+} elseif ((Test-Path $OrtDll) -and (Get-Item $OrtDll).Length -ge 1MB) {
     Write-Host "Using existing ONNX Runtime in $LibsDir"
 } else {
     Remove-Item -LiteralPath $OrtDll -Force -ErrorAction SilentlyContinue

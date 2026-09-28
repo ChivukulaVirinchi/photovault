@@ -1,6 +1,6 @@
 import type { Page, PhotoSummaryDto } from "../api/types";
 import { call } from "../api";
-import { recentMemories, rememberPhoto } from "../surpriseHistory";
+import { clearHistory, recentMemories, rememberPhoto } from "../surpriseHistory";
 import {
   moveIndex,
   resolveStartIndex,
@@ -37,14 +37,18 @@ export class SlideshowStore {
   loadingMore = $state(false);
   private loader: ((cursor: string | null) => Promise<Page<PhotoSummaryDto>>) | null = null;
   private session = 0;
+  // Invalidates navigation intents that are waiting on a page fetch. A
+  // completed request must never apply movement from an obsolete click.
+  private navigation = 0;
   private pendingLoad: Promise<number> | null = null;
 
   start(opts: SlideshowStart) {
     this.session += 1;
+    this.navigation += 1;
     this.pendingLoad = null;
     this.starting = false;
     this.memoryLibrary = null;
-    this.intervalMs = opts.kind === "surprise" ? 12000 : this.normalIntervalMs;
+    this.intervalMs = this.normalIntervalMs;
     const ids = uniquePhotoIds(opts.ids);
     this.ids = ids;
     this.index = resolveStartIndex(ids, opts.startId);
@@ -60,6 +64,7 @@ export class SlideshowStore {
 
   close() {
     this.session += 1;
+    this.navigation += 1;
     this.pendingLoad = null;
     this.active = false;
     this.playing = false;
@@ -77,9 +82,26 @@ export class SlideshowStore {
     this.close();
     const session = this.session;
     this.starting = true;
+    this.memoryLibrary = null;
     const fetchBatch = async () => {
-      const exclude = [...recentMemories(libraryKey), ...this.ids].slice(-256);
-      return call<PhotoSummaryDto[]>("memories_surprise", { album_id: albumId, exclude_ids: exclude });
+      // The FULL seen-set goes back to the backend — capping it here is
+      // what made long sessions recycle photos that had already played.
+      const exclude = [...recentMemories(libraryKey), ...this.ids];
+      const items = await call<PhotoSummaryDto[]>("memories_surprise", {
+        album_id: albumId,
+        exclude_ids: exclude,
+      });
+      if (items.length === 0 && recentMemories(libraryKey).length > 0) {
+        // Every photo has been shown. Start a fresh pass deliberately
+        // (history cleared, queue still excluded) instead of letting the
+        // backend silently re-serve recent slides.
+        clearHistory(libraryKey);
+        return call<PhotoSummaryDto[]>("memories_surprise", {
+          album_id: albumId,
+          exclude_ids: [...this.ids],
+        });
+      }
+      return items;
     };
     try {
       const items = await fetchBatch();
@@ -134,13 +156,14 @@ export class SlideshowStore {
   async next() {
     if (!this.active) return;
     const session = this.session;
+    const navigation = ++this.navigation;
     let appended = 0;
     if (this.index >= this.ids.length - 1 && this.hasMore) {
       appended = await this.loadMoreNow();
     } else {
       void this.ensureMoreAhead();
     }
-    if (session !== this.session || !this.active) return;
+    if (session !== this.session || navigation !== this.navigation || !this.active) return;
     if (this.index >= this.ids.length - 1 && this.hasMore && appended === 0) {
       this.playing = false;
       return;
@@ -160,6 +183,7 @@ export class SlideshowStore {
 
   prev() {
     if (!this.active) return;
+    this.navigation += 1;
     this.index = moveIndex(this.index, this.ids.length, "prev", this.kind === "surprise" ? false : this.loop);
   }
 
@@ -186,7 +210,12 @@ export class SlideshowStore {
       const page = await loader(cursor);
       if (session !== this.session || !this.active) return 0;
       const existing = new Set(this.ids);
-      const fresh = page.items.map((p) => p.id).filter((id) => this.kind === "surprise" || !existing.has(id));
+      // Dedupe for every kind — surprise included. Appending a photo that
+      // is already queued is what produced "same photo twice" sessions.
+      // has_more stays untouched: for paginated kinds the next page can
+      // still carry fresh ids, and next() already stops when a page
+      // yields nothing new.
+      const fresh = page.items.map((p) => p.id).filter((id) => !existing.has(id));
       if (fresh.length > 0) this.ids = [...this.ids, ...fresh];
       this.nextCursor = page.next_cursor;
       this.hasMore = page.has_more;

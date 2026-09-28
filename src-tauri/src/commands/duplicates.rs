@@ -1,5 +1,6 @@
 //! Duplicate groups (read-only listing).
 
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -112,6 +113,7 @@ pub async fn duplicates_wasted_space(state: State<'_, AppState>) -> CommandResul
 pub struct DuplicatesSetKeepArgs {
     pub group_id: i64,
     pub photo_id: i64,
+    pub library_session_id: u64,
 }
 
 #[tauri::command]
@@ -119,6 +121,15 @@ pub async fn duplicates_set_keep(
     state: State<'_, AppState>,
     args: DuplicatesSetKeepArgs,
 ) -> CommandResult<DuplicateGroupDto> {
+    if state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire)
+        != args.library_session_id
+    {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -146,6 +157,7 @@ pub async fn duplicates_set_keep(
 #[derive(Debug, Deserialize)]
 pub struct DuplicatesGroupActionArgs {
     pub group_id: i64,
+    pub library_session_id: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -158,6 +170,14 @@ pub async fn duplicates_trash_others(
     state: State<'_, AppState>,
     args: DuplicatesGroupActionArgs,
 ) -> CommandResult<CountResultDto> {
+    let actual = state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire);
+    if actual != args.library_session_id {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
@@ -171,8 +191,13 @@ pub async fn duplicates_trash_others(
             reason: "duplicate group has no non-keep photos to trash".into(),
         });
     }
-    let trashed = smriti::services::trash::TrashService::trash_photos(&db.conn, &to_trash)? as u64;
-    repo.delete_group(args.group_id)?;
+    let tx = db.conn.unchecked_transaction()?;
+    let trashed = smriti::services::trash::TrashService::trash_photos_tx(&tx, &to_trash)? as u64;
+    tx.execute(
+        "DELETE FROM duplicate_groups WHERE id = ?1",
+        params![args.group_id],
+    )?;
+    tx.commit()?;
     Ok(CountResultDto { count: trashed })
 }
 
@@ -181,6 +206,14 @@ pub async fn duplicates_dismiss(
     state: State<'_, AppState>,
     args: DuplicatesGroupActionArgs,
 ) -> CommandResult<()> {
+    let actual = state
+        .active_session
+        .load(std::sync::atomic::Ordering::Acquire);
+    if actual != args.library_session_id {
+        return Err(CommandError::Conflict {
+            reason: "library changed; retry the operation on the current library".into(),
+        });
+    }
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;

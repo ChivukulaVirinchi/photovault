@@ -48,7 +48,17 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (30);
+INSERT INTO schema_version (version) VALUES (32);
+
+-- ============================================================
+-- LIBRARY META — key/value store for library-level bookkeeping
+-- (e.g. the thumbnail-repair cursor)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS library_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 -- ============================================================
 -- PHOTOS TABLE
@@ -101,10 +111,7 @@ CREATE TABLE IF NOT EXISTS photos (
     thumbnailed BOOLEAN DEFAULT FALSE,
     brightness REAL,                   -- Average luma in [0,1], cached from face pipeline
     phash INTEGER,                     -- 64-bit DCT perceptual hash for near-duplicate detection
-    content_category TEXT DEFAULT 'photo', -- 'photo' | 'document' | 'screenshot' | 'presentation' | 'whiteboard' | 'receipt'
-    ocr_text TEXT,
-    ocr_processed BOOLEAN DEFAULT FALSE,
-    ocr_confidence REAL,
+    content_hash TEXT,                 -- cached full-file SHA-256 for exact duplicate grouping
 
     -- Soft delete
     is_favorite BOOLEAN DEFAULT FALSE,
@@ -437,30 +444,6 @@ CREATE TABLE IF NOT EXISTS trash (
 );
 
 -- ============================================================
--- OCR SEARCH INDEX
--- FTS5 index over extracted OCR text
--- ============================================================
-
-CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
-    ocr_text,
-    content='photos',
-    content_rowid='id'
-);
-
-CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
-    INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
-END;
-
-CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
-    INSERT INTO photos_fts(photos_fts, rowid, ocr_text) VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
-    INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
-END;
-
-CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
-    INSERT INTO photos_fts(photos_fts, rowid, ocr_text) VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
-END;
-
--- ============================================================
 -- RECENT SEARCHES
 -- Per-library search history (last N queries)
 -- ============================================================
@@ -515,14 +498,12 @@ CREATE INDEX IF NOT EXISTS idx_photos_gps_bounds
     WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
 CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
-CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
 CREATE INDEX IF NOT EXISTS idx_photos_media_type ON photos(media_type);
 CREATE INDEX IF NOT EXISTS idx_photos_favorite
     ON photos(is_favorite, date_taken DESC) WHERE is_favorite = TRUE;
 CREATE INDEX IF NOT EXISTS idx_photos_favorite_order
     ON photos(is_favorite, is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)
     WHERE is_favorite = TRUE;
-CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
 CREATE INDEX IF NOT EXISTS idx_photos_metadata_extracted
     ON photos(metadata_extracted) WHERE metadata_extracted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_photos_thumbnailed

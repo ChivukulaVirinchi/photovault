@@ -48,11 +48,21 @@ const SKIP_DIRECTORIES: &[&str] = &[
     "@eaDir", // Synology thumbnails
 ];
 
-/// Minimum file size to consider (10KB)
-const MIN_FILE_SIZE: u64 = 10 * 1024;
+/// Minimum file size to consider (1 KB). Skips thumbnails and junk
+/// without excluding legitimate small images — compressed screenshots
+/// and heavily-compressed JPEGs land well under 10 KB.
+const MIN_FILE_SIZE: u64 = 1024;
 
 /// Batch size for database inserts
 const DB_BATCH_SIZE: usize = 100;
+
+/// Cap on the number of error *details* carried in scan progress.
+///
+/// This bounds the payload, not the count: `error_count` is tracked
+/// separately as a real total (see `flush_stub_batch`). Truncating the detail
+/// list must never truncate the count, or a large scan reports "1000 errors"
+/// no matter how many actually failed.
+const MAX_ERROR_DETAILS: usize = 1000;
 
 /// How many file paths we buffer between the walker and the stub-writer.
 /// 1000 keeps memory under ~200 KB even on libraries that average 200-byte paths.
@@ -75,6 +85,7 @@ pub struct ScanProgress {
     pub current_directory: String,
     pub current_file: String,
     pub errors: Vec<String>,
+    pub error_count: u64,
     pub is_complete: bool,
     pub elapsed_seconds: f64,
 }
@@ -88,6 +99,7 @@ impl Default for ScanProgress {
             current_directory: String::new(),
             current_file: "Preparing...".to_string(),
             errors: Vec::new(),
+            error_count: 0,
             is_complete: false,
             elapsed_seconds: 0.0,
         }
@@ -104,6 +116,7 @@ pub struct ScanResult {
 pub struct ScanReport {
     pub files_inserted: u64,
     pub errors: Vec<String>,
+    pub error_count: u64,
     pub elapsed_seconds: f64,
 }
 
@@ -136,6 +149,7 @@ pub fn start_scan(
         result.unwrap_or_else(|e| ScanReport {
             files_inserted: 0,
             errors: vec![format!("scan failed: {e}")],
+            error_count: 1,
             elapsed_seconds: 0.0,
         })
     });
@@ -169,7 +183,15 @@ pub(crate) fn calculate_fast_hash<P: AsRef<Path>>(
 
     let mut file = std::fs::File::open(&path)?;
     let mut buf = vec![0u8; FAST_HASH_PREFIX_BYTES];
-    let n = file.read(&mut buf)?;
+    // `read` may return fewer bytes than requested even for regular
+    // files; a short read here would change the hash between runs.
+    let mut n = 0usize;
+    while n < buf.len() {
+        match file.read(&mut buf[n..])? {
+            0 => break,
+            read => n += read,
+        }
+    }
 
     let mut hasher = Sha256::new();
     hasher.update(file_size.to_le_bytes());
@@ -189,17 +211,17 @@ async fn run_scan_streaming(
     let (paths_tx, paths_rx) = bounded::<FileCandidate>(WALKER_CHANNEL_DEPTH);
     let exclusions = {
         let guard = db.lock().await;
-        ExclusionMatcher::from_db(&guard.conn).unwrap_or_else(|e| {
-            tracing::warn!("scan: failed to load folder exclusions: {e}");
-            ExclusionMatcher::empty()
-        })
+        ExclusionMatcher::from_db(&guard.conn)
+            .map_err(|e| format!("failed to load folder exclusions; scan aborted: {e}"))?
     };
 
     // ----- Producer: walker thread -----
     let walker_cancel = cancel.clone();
     let walker_root = root_path.clone();
-    let walker = tokio::task::spawn_blocking(move || -> u64 {
+    let walker = tokio::task::spawn_blocking(move || -> (u64, Vec<String>, u64) {
         let mut count: u64 = 0;
+        let mut errors = Vec::new();
+        let mut error_count = 0;
         let walker = WalkDir::new(&walker_root)
             .follow_links(false)
             .into_iter()
@@ -210,7 +232,16 @@ async fn run_scan_streaming(
                 tracing::info!("Scan cancelled during walk");
                 break;
             }
-            let Ok(entry) = entry else { continue };
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    error_count += 1;
+                    if errors.len() < MAX_ERROR_DETAILS {
+                        errors.push(format!("walk {}: {error}", walker_root.display()));
+                    }
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -218,8 +249,15 @@ async fn run_scan_streaming(
                 continue;
             }
             let media_type = media_type_for_path(entry.path()).unwrap_or_default();
-            let Ok(metadata) = entry.metadata() else {
-                continue;
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    error_count += 1;
+                    if errors.len() < MAX_ERROR_DETAILS {
+                        errors.push(format!("metadata {}: {error}", entry.path().display()));
+                    }
+                    continue;
+                }
             };
             if metadata.len() < MIN_FILE_SIZE {
                 continue;
@@ -255,7 +293,7 @@ async fn run_scan_streaming(
             count += 1;
         }
         drop(paths_tx);
-        count
+        (count, errors, error_count)
     });
 
     // ----- Consumer: stub-row writer + fast-hash batcher -----
@@ -264,6 +302,7 @@ async fn run_scan_streaming(
     let writer_progress = progress_tx.clone();
     let writer = tokio::task::spawn(async move {
         let mut errors: Vec<String> = Vec::new();
+        let mut error_count: u64 = 0;
         let mut buf: Vec<PhotoInsert> = Vec::with_capacity(DB_BATCH_SIZE);
         let mut files_inserted: u64 = 0;
 
@@ -282,14 +321,27 @@ async fn run_scan_streaming(
             // Fast-hash on this async task is fine — it's tiny I/O (64 KB).
             // Doing it on a tokio worker thread would be marginally faster
             // but adds spawn overhead.
-            let hash = match calculate_fast_hash(
-                &candidate.path,
-                candidate.file_size as u64,
-                candidate.mtime,
-            ) {
-                Ok(h) => h,
+            let hash_path = candidate.path.clone();
+            let hash_size = candidate.file_size as u64;
+            let hash_mtime = candidate.mtime;
+            let hash_result = tokio::task::spawn_blocking(move || {
+                calculate_fast_hash(&hash_path, hash_size, hash_mtime)
+            })
+            .await;
+            let hash = match hash_result {
+                Ok(Ok(h)) => h,
+                Ok(Err(e)) => {
+                    error_count += 1;
+                    if errors.len() < MAX_ERROR_DETAILS {
+                        errors.push(format!("fast-hash {}: {e}", candidate.path.display()));
+                    }
+                    continue;
+                }
                 Err(e) => {
-                    errors.push(format!("fast-hash {}: {e}", candidate.path.display()));
+                    error_count += 1;
+                    if errors.len() < MAX_ERROR_DETAILS {
+                        errors.push(format!("hash worker {}: {e}", candidate.path.display()));
+                    }
                     continue;
                 }
             };
@@ -329,8 +381,10 @@ async fn run_scan_streaming(
             });
 
             if buf.len() >= DB_BATCH_SIZE {
-                let inserted = flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
+                let (inserted, encountered) =
+                    flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
                 files_inserted += inserted;
+                error_count += encountered;
 
                 if files_inserted.is_multiple_of(STUB_PROGRESS_EVERY) {
                     let _ = writer_progress.try_send(ScanProgress {
@@ -340,6 +394,7 @@ async fn run_scan_streaming(
                         current_directory: String::new(),
                         current_file: format!("Indexed {files_inserted} files…"),
                         errors: errors.clone(),
+                        error_count,
                         is_complete: false,
                         elapsed_seconds: start.elapsed().as_secs_f64(),
                     });
@@ -349,18 +404,25 @@ async fn run_scan_streaming(
 
         // Drain final batch.
         if !buf.is_empty() {
-            files_inserted += flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
+            let (inserted, encountered) = flush_stub_batch(&writer_db, &mut buf, &mut errors).await;
+            files_inserted += inserted;
+            error_count += encountered;
         }
-        (files_inserted, errors)
+        (files_inserted, errors, error_count)
     });
 
-    let total_walked = walker.await.map_err(|e| format!("walker join: {e}"))?;
-    let (files_inserted, errors) = writer.await.map_err(|e| format!("writer join: {e}"))?;
+    let (total_walked, walker_errors, walker_error_count) =
+        walker.await.map_err(|e| format!("walker join: {e}"))?;
+    let (files_inserted, mut errors, writer_error_count) =
+        writer.await.map_err(|e| format!("writer join: {e}"))?;
+    errors.extend(walker_errors);
+    let error_count = walker_error_count + writer_error_count;
     tracing::info!("Phase 1 done: walked {total_walked}, inserted {files_inserted}");
 
     let report = ScanReport {
         files_inserted,
         errors,
+        error_count,
         elapsed_seconds: start.elapsed().as_secs_f64(),
     };
 
@@ -373,6 +435,7 @@ async fn run_scan_streaming(
             current_directory: String::new(),
             current_file: format!("Indexed {} files", report.files_inserted),
             errors: report.errors.clone(),
+            error_count: report.error_count,
             is_complete: true,
             elapsed_seconds: report.elapsed_seconds,
         })
@@ -381,22 +444,34 @@ async fn run_scan_streaming(
     Ok(report)
 }
 
+/// Flush a batch of stub rows. Returns `(rows_inserted, errors_encountered)`.
+///
+/// The error count is returned explicitly rather than inferred by the caller
+/// from `errors.len()`. Callers used to compute
+/// `error_count += errors.len() - before`, which was wrong in two ways:
+/// `errors` is capped at 1000 entries so the count silently stopped growing on
+/// a large scan, and a batch failure past that cap counted as zero. The details
+/// vector may be truncated for display; the count must not be.
 async fn flush_stub_batch(
     db: &Arc<tokio::sync::Mutex<Database>>,
     buf: &mut Vec<PhotoInsert>,
     errors: &mut Vec<String>,
-) -> u64 {
+) -> (u64, u64) {
     let guard = db.lock().await;
     let repo = PhotoRepo::new(&guard.conn);
+    let mut encountered = 0u64;
     let inserted = match repo.insert_batch_stub(buf) {
         Ok(n) => n as u64,
         Err(e) => {
-            errors.push(format!("stub batch insert: {e}"));
+            encountered = 1;
+            if errors.len() < MAX_ERROR_DETAILS {
+                errors.push(format!("stub batch insert: {e}"));
+            }
             0
         }
     };
     buf.clear();
-    inserted
+    (inserted, encountered)
 }
 
 /// Check if a directory entry should be skipped
@@ -599,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_min_file_size_filter() {
-        const _: () = assert!(MIN_FILE_SIZE == 10 * 1024);
+        const _: () = assert!(MIN_FILE_SIZE == 1024);
     }
 
     #[test]
