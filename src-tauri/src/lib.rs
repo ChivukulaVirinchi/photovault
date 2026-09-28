@@ -11,6 +11,7 @@ pub mod error;
 pub mod events;
 pub mod jobs;
 pub mod pagination;
+pub mod platform_share;
 pub mod state;
 pub mod thumbnail_upgrade;
 
@@ -230,6 +231,7 @@ pub fn run() {
             commands::system::system_app_version,
             commands::system::system_inference_provider,
             commands::system::system_open_in_explorer,
+            commands::system::system_share_photo,
             commands::system::system_open_path,
             commands::system::system_copy_path_to_clipboard,
             commands::system::system_updates_check,

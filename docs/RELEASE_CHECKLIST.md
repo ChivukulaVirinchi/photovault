@@ -156,6 +156,8 @@ While the workflow runs (~15–30 minutes):
 - [ ] Once drafted, open **Releases → vX.Y.Z (Draft)** and confirm:
   - All expected artifacts attached (matrix output × 3 OSes + assets pack).
   - `SHA256SUMS` file is attached and lists every artifact.
+  - Release notes state that Windows/macOS builds are currently unsigned and
+    give the exact **More info → Run anyway** / **Open Anyway** install path.
 
 #### For release-candidate (`-rc.N`) tags
 

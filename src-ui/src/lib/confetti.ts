@@ -22,6 +22,12 @@ export interface ConfettiOptions {
    * milestone wants — a point burst in the middle reads as a small puff.
    */
   spreadWidth?: number;
+  /**
+   * Seed particles throughout a centred field instead of launching them from
+   * a line. `width` is a fraction of the target; the field is reduced as
+   * needed to preserve `aspectRatio` inside short windows.
+   */
+  field?: { width: number; aspectRatio: number };
 }
 
 interface Particle {
@@ -107,20 +113,39 @@ export function burstConfetti(target: HTMLElement, options: ConfettiOptions = {}
   const originX = (options.origin?.x ?? 0.5) * width;
   const originY = (options.origin?.y ?? 0.42) * height;
   const band = (options.spreadWidth ?? 0) * width;
+  let fieldWidth = Math.max(0, Math.min(1, options.field?.width ?? 0)) * width;
+  let fieldHeight = options.field ? fieldWidth / Math.max(0.1, options.field.aspectRatio) : 0;
+  const maxFieldHeight = height * 0.82;
+  if (fieldHeight > maxFieldHeight && options.field) {
+    fieldHeight = maxFieldHeight;
+    fieldWidth = fieldHeight * options.field.aspectRatio;
+  }
+  const fieldMode = fieldWidth > 0 && fieldHeight > 0;
 
   const particles: Particle[] = Array.from({ length: count }, (_, index) => {
     /// Fan the pieces evenly across the spread with a little jitter, so the
     /// burst reads as one gesture rather than a random blob.
     const ratio = count === 1 ? 0.5 : index / (count - 1);
-    const spawnX = originX + (ratio - 0.5) * band;
+    const fieldX = (index * 0.61803398875) % 1;
+    const fieldY = (index * 0.75487766625) % 1;
+    const spawnX = fieldMode
+      ? originX + (fieldX - 0.5) * fieldWidth
+      : originX + (ratio - 0.5) * band;
+    const spawnY = fieldMode
+      ? originY + (fieldY - 0.5) * fieldHeight
+      : originY;
     /// Pieces launched further from the centre lean outward, which is what
     /// turns a point puff into a screen-wide fan.
-    const lean = band > 0 ? ((spawnX - originX) / (band / 2)) * 0.55 : 0;
-    const angle = -Math.PI / 2 + (ratio - 0.5) * spread * (band > 0 ? 0.25 : 1) + lean + (Math.random() - 0.5) * 0.22;
-    const velocity = speed * (0.55 + Math.random() * 0.65);
+    const lean = !fieldMode && band > 0 ? ((spawnX - originX) / (band / 2)) * 0.55 : 0;
+    const angle = fieldMode
+      ? -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.15
+      : -Math.PI / 2 + (ratio - 0.5) * spread * (band > 0 ? 0.25 : 1) + lean + (Math.random() - 0.5) * 0.22;
+    const velocity = fieldMode
+      ? speed * (0.18 + Math.random() * 0.34)
+      : speed * (0.55 + Math.random() * 0.65);
     return {
       x: spawnX + (Math.random() - 0.5) * 10,
-      y: originY + (Math.random() - 0.5) * 14,
+      y: spawnY + (Math.random() - 0.5) * 14,
       vx: Math.cos(angle) * velocity,
       vy: Math.sin(angle) * velocity,
       size: 6 + Math.random() * 6,

@@ -1435,7 +1435,7 @@
     </span>
   {:else}
     <span class="count mono">
-      {(total ?? items.length).toLocaleString()}<span class="muted"> photos</span>
+      {(total ?? items.length).toLocaleString()}{" "}<span class="muted">photos</span>
     </span>
     <button class="primary" onclick={startScan}>Scan now</button>
   {/if}

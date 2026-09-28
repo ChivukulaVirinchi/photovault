@@ -2,7 +2,7 @@
 /// for prev/next navigation.
 ///
 /// When a "source" view (Timeline, Album, Person, Memory, Search,
-/// Documents, Trash, etc.) loads its photos, it `set()`s the ordered
+/// Trash, etc.) loads its photos, it `set()`s the ordered
 /// IDs here. PhotoDetail then reads `prev(id)` / `next(id)` to know
 /// which photo comes before/after the one currently open.
 ///

@@ -5,11 +5,17 @@ All notable changes to Smriti will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — Unreleased
 
-## [0.4.0] — 2026-09-27
+### Added
+- The photo and video viewer can now send the original file through the native
+  Windows or macOS share picker; Linux copies a pasteable file URI and falls
+  back to the default mail client when no clipboard helper is installed.
 
 ### Changed
+- Share-card celebrations now fill a centred 19:16 field instead of rising
+  from a single line at the bottom of the window.
+
 - Startup now opens directly into a responsive native shell; installed visual
   search warms silently after library open without sitting on the open path.
 - Large photo grids, search results and route data are virtualized and cached
@@ -36,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly, instead of briefly reusing a stale 1:1 scale from the prior frame.
 - Timeline scrolling now takes priority over thumbnail generation, browser image
   decoding, reactive thumbnail patches and synchronous position persistence.
+- Packaged builds suppress the browser context menu while development builds
+  retain it for inspection.
+- The live face-detection section now reports the cumulative detected count
+  instead of the intentionally capped 24-card preview length.
 - Removed the redundant late-loading Memories strip from Timeline and stale
   “previous results while you type” search copy.
 - Excluded MapLibre from Vite dependency optimization so its worker module is
@@ -47,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardened library lifecycle, SQLite concurrency, cache invalidation, image
   loading, search paging, trash recovery and cross-platform ONNX loading.
 - Removed the unfinished Documents/OCR surface and its unused database state.
+- Removed benchmark machinery, unused image codecs and execution providers,
+  dead map code, stale command fields and the one-call updater dependency.
 - Added regression coverage for startup, runtime initialization and the main
   library workflows.
 

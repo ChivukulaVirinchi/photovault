@@ -10,6 +10,12 @@ import "@fontsource/cormorant-garamond/500-italic.css";
 import App from "./App.svelte";
 import "./app.css";
 
+// A packaged desktop app should not expose the browser/WebView menu. Keep it
+// in development because "Inspect" is useful while working on the Svelte UI.
+if (import.meta.env.PROD) {
+  document.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
 const target = document.getElementById("app");
 if (!target) throw new Error("missing #app");
 

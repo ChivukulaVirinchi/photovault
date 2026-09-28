@@ -8,7 +8,6 @@
 //! Field names use snake_case to match the smriti backend; the
 //! Svelte client treats them as opaque keys.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use smriti::config::AppConfig;
@@ -1317,10 +1316,4 @@ pub struct ThumbnailReadyDto {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PendingCountDto {
     pub pending_photos: i64,
-}
-
-// ---------- helper: parse date_taken column ----------
-#[allow(dead_code)]
-pub(crate) fn rfc3339(d: DateTime<Utc>) -> String {
-    d.to_rfc3339()
 }

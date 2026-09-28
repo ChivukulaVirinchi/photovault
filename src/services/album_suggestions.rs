@@ -978,17 +978,6 @@ pub fn detect_gatherings(
 // Top-level pipeline
 // ---------------------------------------------------------------------------
 
-/// Run the full suggestion detection pipeline: trips then events.
-/// Newly detected suggestions that don't match existing fingerprints are
-/// persisted to the database.
-#[allow(dead_code)]
-pub fn detect_suggestions(
-    conn: &Connection,
-    home_city_override: Option<&str>,
-) -> Vec<DetectedSuggestion> {
-    detect_suggestions_with_diagnostics(conn, home_city_override).0
-}
-
 pub fn detect_suggestions_with_diagnostics(
     conn: &Connection,
     home_city_override: Option<&str>,

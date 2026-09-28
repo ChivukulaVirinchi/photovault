@@ -361,7 +361,7 @@
         <header class="live-head">
           <h3 class="live-title">
             Faces just detected
-            <span class="singletons-count mono">{liveFaces.length}</span>
+            <span class="singletons-count mono">{(facesJob?.faces_found ?? 0).toLocaleString()}</span>
           </h3>
         </header>
         <div class="singletons-grid">

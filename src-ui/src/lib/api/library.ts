@@ -57,11 +57,9 @@ export const library = {
   /// the thumbnail pass over the whole library. Used to upgrade
   /// legacy small thumbnails to the current size after the default
   /// changed. Long-running on big libraries — surfaces a thumbnail
-  /// job in the global indicator. The `args` payload is required by
-  /// Tauri (the command takes a struct param even though every field
-  /// in it is optional).
+  /// job in the global indicator.
   regenerateThumbnails: () =>
-    call<JobIdDto>("library_regenerate_thumbnails", { photo_ids: null }),
+    call<JobIdDto>("library_regenerate_thumbnails"),
   importGoogleTakeout: (archivePaths: string[]) =>
     call<JobIdDto>("takeout_start_import", { archive_paths: archivePaths }),
 };

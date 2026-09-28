@@ -305,7 +305,6 @@ pub struct JobHandle {
     pub kind: JobKind,
 }
 
-#[allow(dead_code)] // variants used in M2
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobKind {
     Scan,
@@ -313,7 +312,6 @@ pub enum JobKind {
     FaceProcessing,
     Duplicates,
     Bursts,
-    Documents,
     Geocoding,
     Thumbnails,
     AssetInstall,

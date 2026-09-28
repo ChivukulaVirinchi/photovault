@@ -186,7 +186,7 @@ function drawYearGrid(
   for (let month = 0; month < 12; month++) {
     const x = left + gutter + month * (cellWidth + gapX) + cellWidth / 2;
     ctx.textAlign = "center";
-    ctx.fillText(MONTH_LETTERS[month], x, top - 10);
+    ctx.fillText(MONTH_LETTERS[month], x, top - 18);
     ctx.textAlign = "left";
   }
 
@@ -288,9 +288,20 @@ export function renderShareCard(
   ctx.fillStyle = wash;
   ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
 
+  /// Quiet accent light gives the card depth without competing with its data.
+  const upperGlow = ctx.createRadialGradient(CARD_WIDTH - 90, 90, 0, CARD_WIDTH - 90, 90, 430);
+  upperGlow.addColorStop(0, tint(theme.accent, theme.paper, 14));
+  upperGlow.addColorStop(1, theme.paper);
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = upperGlow;
+  ctx.fillRect(CARD_WIDTH - 520, 0, 520, 520);
+  ctx.globalAlpha = 1;
+
   ctx.strokeStyle = theme.line;
   ctx.lineWidth = 1;
-  ctx.strokeRect(MARGIN / 2, MARGIN / 2, CARD_WIDTH - MARGIN, CARD_HEIGHT - MARGIN);
+  ctx.beginPath();
+  ctx.roundRect(MARGIN / 2, MARGIN / 2, CARD_WIDTH - MARGIN, CARD_HEIGHT - MARGIN, 24);
+  ctx.stroke();
 
   // ---- wordmark ----------------------------------------------------------
   ctx.font = MONO(22, 500);
@@ -300,6 +311,12 @@ export function renderShareCard(
   ctx.beginPath();
   ctx.arc(MARGIN + markWidth + 15, 105, 4, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.font = MONO(16, 500);
+  ctx.fillStyle = theme.inkFaint;
+  ctx.textAlign = "right";
+  ctx.fillText("PRIVATE · OFFLINE", right, 110);
+  ctx.textAlign = "left";
 
   // ---- year span ---------------------------------------------------------
   const span = yearSpan(data);
@@ -363,35 +380,63 @@ export function renderShareCard(
 
   let nextTop = 570;
   if (counters.length > 0) {
-    const columnWidth = innerWidth / counters.length;
+    const gap = 12;
+    const columnWidth = (innerWidth - gap * (counters.length - 1)) / counters.length;
     counters.forEach(([value, label], index) => {
-      const x = MARGIN + columnWidth * index;
-      ctx.font = DISPLAY(52, 500);
+      const x = MARGIN + (columnWidth + gap) * index;
+      ctx.fillStyle = tint(theme.accent, theme.paper, 7);
+      ctx.beginPath();
+      ctx.roundRect(x, 536, columnWidth, 92, 12);
+      ctx.fill();
+      ctx.strokeStyle = tint(theme.accent, theme.line, 28);
+      ctx.stroke();
+
+      ctx.font = DISPLAY(46, 500);
       ctx.fillStyle = theme.ink;
-      ctx.fillText(value.toLocaleString(), x, 570);
-      ctx.font = MONO(20, 400);
+      ctx.fillText(value.toLocaleString(), x + 16, 580);
+      ctx.font = MONO(17, 400);
       ctx.fillStyle = theme.inkMuted;
-      drawTracked(ctx, label.toUpperCase(), x, 604, 3.2);
+      drawTracked(ctx, label.toUpperCase(), x + 16, 610, 2.5);
     });
-    nextTop = 664;
+    nextTop = 680;
   }
 
   // ---- the whole library, year by year -----------------------------------
   const counts = data.months_by_year ?? {};
   const hasMonths = Object.keys(counts).length > 0;
   const footerTop = CARD_HEIGHT - MARGIN - 74;
-  const gridTop = nextTop + 34;
-  const gridHeight = footerTop - 96 - gridTop;
+  const panelTop = nextTop - 22;
+  const panelBottom = footerTop - 54;
+  const gridTop = nextTop + 78;
+  const gridHeight = panelBottom - gridTop - 24;
+
+  ctx.fillStyle = tint(theme.accent, theme.paper, 4);
+  ctx.beginPath();
+  ctx.roundRect(MARGIN, panelTop, innerWidth, panelBottom - panelTop, 16);
+  ctx.fill();
+  ctx.strokeStyle = theme.line;
+  ctx.stroke();
+
+  ctx.fillStyle = theme.accent;
+  ctx.beginPath();
+  ctx.roundRect(MARGIN + 20, nextTop - 2, 32, 3, 2);
+  ctx.fill();
 
   ctx.font = MONO(19, 400);
   ctx.fillStyle = theme.inkMuted;
-  drawTracked(ctx, hasMonths ? "EVERY YEAR, EVERY MONTH" : `${data.heatmap_year}, DAY BY DAY`, MARGIN, nextTop + 12, 3);
+  drawTracked(
+    ctx,
+    hasMonths ? "EVERY YEAR, EVERY MONTH" : `${data.heatmap_year}, DAY BY DAY`,
+    MARGIN + 20,
+    nextTop + 30,
+    3,
+  );
 
   if (gridHeight > 24) {
     if (hasMonths) {
-      cells = drawYearGrid(ctx, data, theme, gridTop, gridHeight, MARGIN, innerWidth);
+      cells = drawYearGrid(ctx, data, theme, gridTop, gridHeight, MARGIN + 20, innerWidth - 40);
     } else {
-      drawYearDays(ctx, data, theme, gridTop, gridHeight, MARGIN, innerWidth);
+      drawYearDays(ctx, data, theme, gridTop, gridHeight, MARGIN + 20, innerWidth - 40);
     }
   }
 

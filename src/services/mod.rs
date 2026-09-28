@@ -15,7 +15,6 @@ pub mod image_utils;
 pub mod insights;
 pub mod install_method;
 pub mod library_health;
-pub mod map_math;
 pub mod memories;
 pub mod metadata_processor;
 pub mod path_util;

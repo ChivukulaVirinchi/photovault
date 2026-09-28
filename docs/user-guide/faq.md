@@ -22,6 +22,14 @@ Yes, after the optional assets are installed. Once the asset pack
 is in place, everything — scanning, face recognition, clustering,
 search, map (for previously-cached tiles), insights — works offline.
 
+## Why does Windows or macOS warn during installation?
+
+Smriti does not have paid platform signing certificates yet. On Windows,
+click **More info** → **Run anyway**, then approve **Install anyway** or UAC
+if prompted. On macOS, try opening Smriti once and then choose **Open Anyway**
+under **System Settings → Privacy & Security**. Download only from the Smriti
+website or GitHub releases; every release includes `SHA256SUMS`.
+
 ## How do updates work?
 
 Smriti can check for new releases automatically, but the check

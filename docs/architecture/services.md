@@ -33,7 +33,6 @@ it. Services are the unit of integration testing in `tests/`.
 | `reindexer` | Detects moves, deletions, and changed files. |
 | `camera_names` | Normalises EXIF make/model into human-readable names. |
 | `image_utils` | Misc image-processing helpers (rotation, resize). |
-| `map_math` | Cluster math for the map view. |
 | `drive_detector` | Identifies the indexed drive's filesystem ID. |
 | `install_method` | Detects how Smriti was installed (apt, brew, msi, ...). |
 
