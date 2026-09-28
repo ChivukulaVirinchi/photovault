@@ -453,7 +453,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.exclusions.preview` | `{ path: String }` | `ExcludedFolderPreviewDto` | validates selected folder and counts indexed items under it |
 | `library.exclusions.add` | `{ path: String }` | `ExcludedFolderDto` | recursively excludes the folder and removes matching indexed rows; files stay on disk |
 | `library.exclusions.remove` | `{ relative_path: String }` | `()` | future scans can index the folder again |
-| `library.regenerate_thumbnails` | `{ photo_ids: Option<Vec<i64>> }` | `{ job_id: String }` | None = all; emits `thumbnails:progress` |
+| `library.regenerate_thumbnails` | `{}` | `{ job_id: String }` | regenerates all thumbnails; emits `thumbnails:progress` |
 | `library.refresh_photo_dates` | `{}` | `{ job_id: String }` | clears stored capture dates for non-trashed photos/videos and emits metadata progress while re-reading embedded metadata, strict filename dates, and mtime fallback |
 | `library.resolve_path` | `{ photo_id: i64, for_display?: bool }` | `{ absolute_path: String, library_session_id: u64, file_hash: String }` | validates containment; display mode converts unsupported browser formats to a cached JPEG |
 
@@ -849,6 +849,7 @@ struct SettingsDto {
 | `system.test_gpu_bridge` | `{ url: String }` | `BridgeTestResult` | tests the optional user-owned GPU bridge |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |
 | `system.open_in_explorer` | `{ photo_id: i64 }` | `()` | reveals file in OS file manager |
+| `system.share_photo` | `{ photo_id: i64 }` | `{ method: "native" | "clipboard" | "email" }` | opens the native share picker on Windows/macOS; copies a file URI on Linux, falling back to an email attachment |
 | `system.open_path` | `{ path: String }` | `()` | opens an existing folder in the OS file manager |
 | `system.copy_path_to_clipboard` | `{ photo_id: i64 }` | `()` |
 | `system.app_version` | `{}` | `{ version: String, build: String, channel: String }` |

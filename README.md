@@ -117,8 +117,11 @@ The **[Smriti website](https://chivukulavirinchi.github.io/photovault/#download)
 - `.exe` installer (recommended) or `.msi` package — Windows 10 / 11, x64.
 - Windows builds ship **without HEIC support** for now.
 
-> Smriti's installer is not code-signed. Windows SmartScreen may warn on
-> first launch — click **More info** → **Run anyway**.
+> Smriti does not have a code-signing certificate yet. On the first install,
+> Windows may show **Windows protected your PC**: click **More info** →
+> **Run anyway**, then approve **Install anyway** or the UAC prompt if shown.
+> Finish the installer and launch Smriti from the Start menu. Download only
+> from this website/GitHub; `SHA256SUMS` is published with every release.
 
 ### macOS
 

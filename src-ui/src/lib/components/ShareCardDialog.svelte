@@ -8,6 +8,7 @@
   import { CARD_WIDTH, CARD_HEIGHT, type CardMonthCell, ensureCardFonts, readCardTheme, renderShareCard } from "../shareCard";
 
   let dialog = $state<HTMLDialogElement | undefined>();
+  let celebrationLayer = $state<HTMLDivElement | undefined>();
   let canvas = $state<HTMLCanvasElement | undefined>();
   let busy = $state(false);
   let ready = $state(false);
@@ -98,7 +99,14 @@
       }
       await navigator.clipboard.write([new ClipboardItem({ "image/png": await toBlob() })]);
       showFlash("Card copied — paste it anywhere");
-      if (dialog) burstConfetti(dialog, { count: 38, origin: { x: 0.5, y: 0.38 } });
+      if (celebrationLayer) {
+        burstConfetti(celebrationLayer, {
+          count: 180,
+          speed: 330,
+          field: { width: 0.82, aspectRatio: 19 / 16 },
+          origin: { x: 0.5, y: 0.5 },
+        });
+      }
     } catch (error) {
       toasts.error(commandErrorMessage(error));
     } finally {
@@ -116,8 +124,10 @@
   onclose={close}
   onkeydown={(event) => event.stopPropagation()}
 >
+  <div class="celebration-layer" bind:this={celebrationLayer} aria-hidden="true"></div>
   <header class="head">
     <div>
+      <p class="eyebrow">Made by your library</p>
       <h2 id="share-card-title" class="display">Your library card</h2>
       <p class="sub">Counts only — no photos, no faces, no names.</p>
     </div>
@@ -176,6 +186,13 @@
     animation: dialog-in var(--t-base-d) var(--ease-out);
   }
   dialog::backdrop { background: rgb(0 0 0 / 55%); }
+  .celebration-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    overflow: hidden;
+    pointer-events: none;
+  }
 
   .head {
     display: flex;
@@ -185,6 +202,15 @@
     margin-bottom: var(--s-4);
   }
   h2 { margin: 0; font-size: var(--t-xl); }
+  .eyebrow {
+    margin: 0 0 4px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
   .sub {
     margin: 4px 0 0;
     font-size: var(--t-xs);

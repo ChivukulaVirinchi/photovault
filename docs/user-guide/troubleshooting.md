@@ -107,12 +107,14 @@ See [BUILD.md](../BUILD.md) for the full list.
 
 ## Windows SmartScreen warned me before launching Smriti
 
-Smriti's installer isn't code-signed (code-signing certs are paid).
-SmartScreen warns on any unsigned executable.
+Smriti does not have a code-signing certificate yet, so Windows cannot show a
+verified publisher and SmartScreen may stop the installer on first use.
 
-**Workaround:** Click **More info** → **Run anyway**. The
-`SHA256SUMS` file alongside the release verifies the download is
-genuine.
+**Installation path:** On **Windows protected your PC**, click **More info**
+→ **Run anyway**. Approve **Install anyway** or the UAC prompt if it follows,
+complete the installer, and launch Smriti from the Start menu. Download Smriti
+only from its website or GitHub release page; the `SHA256SUMS` file alongside
+each release lets you verify the downloaded file.
 
 ## macOS Gatekeeper warned me before launching Smriti
 

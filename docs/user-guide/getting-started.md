@@ -14,6 +14,25 @@ alongside the photos.
 There's no cloud upload, no account, no server. Open the app, browse,
 close it.
 
+## Install Smriti
+
+Download the installer from the [Smriti website](https://chivukulavirinchi.github.io/photovault/#download)
+or the [latest GitHub release](https://github.com/ChivukulaVirinchi/photovault/releases/latest).
+
+- **Windows:** Smriti does not have a code-signing certificate yet. If
+  SmartScreen shows **Windows protected your PC**, click **More info** →
+  **Run anyway**. Approve **Install anyway** or the UAC prompt if Windows
+  shows one, finish the installer, then open Smriti from the Start menu.
+- **macOS:** Smriti is not notarized yet. Open the `.dmg` and drag Smriti to
+  Applications. Try to open it once, then go to **System Settings → Privacy
+  & Security** and click **Open Anyway** if Gatekeeper blocks it.
+- **Linux:** install the `.deb`/`.rpm`, or mark the AppImage executable with
+  `chmod +x` and run it.
+
+Official releases include `SHA256SUMS` beside the installers. These warnings
+are a consequence of the missing signing certificates, not an additional
+installer or download that you need to find.
+
 ## First run
 
 1. **Launch Smriti.** The Welcome screen invites you to pick or drop a

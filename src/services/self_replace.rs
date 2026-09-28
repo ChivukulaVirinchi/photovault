@@ -12,7 +12,9 @@
 //! check `InstallMethod` before calling `install_update`, but the
 //! function defensively short-circuits on those variants anyway.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
@@ -347,6 +349,7 @@ fn build_client() -> Result<reqwest::Client, UpdateError> {
 
 // --- Binary swap / installer spawn ------------------------------------
 
+#[cfg(target_os = "linux")]
 async fn replace_running_binary(new_binary: &Path) -> Result<(), UpdateError> {
     let current = std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
@@ -356,24 +359,40 @@ async fn replace_running_binary(new_binary: &Path) -> Result<(), UpdateError> {
     let current_clone = current.clone();
 
     tokio::task::spawn_blocking(move || -> Result<(), UpdateError> {
-        // On Linux we also need the executable bit set on the
-        // downloaded AppImage before the move.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&new_binary)?.permissions();
-            perms.set_mode(perms.mode() | 0o755);
-            std::fs::set_permissions(&new_binary, perms)?;
-        }
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
 
-        self_update::Move::from_source(&new_binary)
-            .to_dest(&current_clone)
-            .map_err(|e| UpdateError::Replace(e.to_string()))
+        let parent = current_clone.parent().ok_or_else(|| {
+            UpdateError::Replace("AppImage installation directory is unavailable".into())
+        })?;
+        // The download usually lives on another filesystem. Copy into the
+        // destination directory first, fsync it, then atomically rename over
+        // the running AppImage. Linux permits replacing an executing inode.
+        let mut source = std::fs::File::open(&new_binary)?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::copy(&mut source, &mut staged)?;
+        staged.flush()?;
+        let mut permissions = staged.as_file().metadata()?.permissions();
+        permissions.set_mode(permissions.mode() | 0o755);
+        staged.as_file().set_permissions(permissions)?;
+        staged.as_file().sync_all()?;
+        staged
+            .persist(&current_clone)
+            .map_err(|error| UpdateError::Io(error.error))?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
     })
     .await
     .map_err(|e| UpdateError::Replace(format!("spawn_blocking panicked: {}", e)))??;
 
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn replace_running_binary(_new_binary: &Path) -> Result<(), UpdateError> {
+    Err(UpdateError::Replace(
+        "in-place replacement is only supported for Linux AppImages".into(),
+    ))
 }
 
 #[cfg(target_os = "windows")]

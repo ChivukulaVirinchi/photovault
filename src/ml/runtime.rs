@@ -381,10 +381,6 @@ impl OnnxRuntime {
     ///    integrated GPUs. Only the provider-selecting path (semantic search)
     ///    still probes for a GPU, so the log says so instead of implying faces
     ///    are GPU-bound.
-    /// 2. That OneDNN/XNNPACK will be tried. They are not in the provider
-    ///    list in `load_model_with_threads`; listing them as "available"
-    ///    previously made the log describe a fallback chain that did not
-    ///    exist. They are reported as present-but-unused.
     fn probe_and_log_providers() {
         let mut accelerated: Vec<&'static str> = Vec::new();
 
@@ -417,23 +413,8 @@ impl OnnxRuntime {
             }
         }
 
-        let mut present_unused: Vec<&'static str> = Vec::new();
-        {
-            let ep = ort::execution_providers::OneDNN::default();
-            if ep.is_available().unwrap_or(false) {
-                present_unused.push("OneDNN");
-            }
-        }
-        {
-            let ep = ort::execution_providers::XNNPACK::default();
-            if ep.is_available().unwrap_or(false) {
-                present_unused.push("XNNPACK");
-            }
-        }
-
         tracing::info!(
             accelerated = %if accelerated.is_empty() { "none".to_string() } else { accelerated.join(", ") },
-            available_but_unused = %if present_unused.is_empty() { "none".to_string() } else { present_unused.join(", ") },
             "Execution providers present. Face detection/embedding always run on CPU; \
              the provider-selecting path (semantic search) tries accelerated providers first, \
              then CPU."

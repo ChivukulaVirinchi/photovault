@@ -355,32 +355,49 @@ pub struct SystemPhotoIdArgs {
     pub photo_id: i64,
 }
 
+async fn photo_absolute_path(state: &State<'_, AppState>, photo_id: i64) -> CommandResult<PathBuf> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let repo = smriti::db::PhotoRepo::new(&db.conn);
+    let photo = repo
+        .get_by_id(photo_id)?
+        .ok_or_else(|| CommandError::not_found("photo", photo_id))?;
+    smriti::services::path_util::safe_existing_path_under_root(&lib.drive_root, &photo.file_path)
+        .map_err(|reason| CommandError::Validation {
+            field: "photo.file_path".into(),
+            reason,
+        })
+}
+
 #[tauri::command]
 pub async fn system_open_in_explorer(
     state: State<'_, AppState>,
     args: SystemPhotoIdArgs,
 ) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let abs = {
-        let db = lib.db.lock().await;
-        let repo = smriti::db::PhotoRepo::new(&db.conn);
-        let photo = repo
-            .get_by_id(args.photo_id)?
-            .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-        smriti::services::path_util::safe_existing_path_under_root(
-            &lib.drive_root,
-            &photo.file_path,
-        )
-        .map_err(|e| CommandError::Validation {
-            field: "photo.file_path".into(),
-            reason: e,
-        })?
-    };
+    let abs = photo_absolute_path(&state, args.photo_id).await?;
     select_in_file_manager(&abs).map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShareResultDto {
+    pub method: &'static str,
+}
+
+#[tauri::command]
+pub async fn system_share_photo(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    args: SystemPhotoIdArgs,
+) -> CommandResult<ShareResultDto> {
+    let path = photo_absolute_path(&state, args.photo_id).await?;
+    let method = crate::platform_share::share_file(app, path)
+        .await
+        .map_err(|message| CommandError::Io { message })?;
+    Ok(ShareResultDto { method })
 }
 
 /// Reveal a file in the platform's file manager — selecting the file
@@ -631,21 +648,7 @@ pub async fn system_copy_path_to_clipboard(
     // write — this command resolves the absolute path and returns it,
     // and the plugin handles the OS clipboard. Keeps clipboard-permission
     // surface narrowly scoped to the frontend layer.
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = smriti::db::PhotoRepo::new(&db.conn);
-    let photo = repo
-        .get_by_id(args.photo_id)?
-        .ok_or_else(|| CommandError::not_found("photo", args.photo_id))?;
-    let abs = smriti::services::path_util::safe_existing_path_under_root(
-        &lib.drive_root,
-        &photo.file_path,
-    )
-    .map_err(|e| CommandError::Validation {
-        field: "photo.file_path".into(),
-        reason: e,
-    })?;
+    let abs = photo_absolute_path(&state, args.photo_id).await?;
     Ok(CopiedPathDto {
         path: abs.display().to_string(),
     })

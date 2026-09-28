@@ -14,7 +14,7 @@
   import { library } from "../lib/api/library";
   import {
     ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Fullscreen,
-    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Star, Trash2, X,
+    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Share2, Star, Trash2, X,
   } from "lucide-svelte";
   import { photos, type ExifExtras, type TimelineNeighbors } from "../lib/api/photos";
   import { system } from "../lib/api/system";
@@ -438,6 +438,23 @@
     }
   }
 
+  async function shareCurrent() {
+    if (!photo || actionBusy) return;
+    try {
+      actionBusy = true;
+      const result = await system.sharePhoto(photo.id);
+      if (result.method === "clipboard") {
+        toasts.success("File copied — paste it into another app");
+      } else if (result.method === "email") {
+        toasts.success("Opened your email app with this file attached");
+      }
+    } catch (e) {
+      toasts.error(`Couldn't share this ${isVideo ? "video" : "photo"}: ${commandErrorMessage(e)}`);
+    } finally {
+      if (mounted) actionBusy = false;
+    }
+  }
+
   async function toggleFullscreen() {
     const next = !immersive;
     immersive = next;
@@ -843,6 +860,9 @@
         </button>
         <button class="tool" onclick={startSlideshow} title="Start slideshow" aria-label="Start slideshow">
           <Play size={16} strokeWidth={1.75} />
+        </button>
+        <button class="tool" onclick={shareCurrent} disabled={actionBusy} title="Share" aria-label="Share">
+          <Share2 size={16} strokeWidth={1.75} />
         </button>
         <button class="tool" onclick={revealInFolder} title="Show in folder" aria-label="Show in folder">
           <FolderOpen size={16} strokeWidth={1.75} />

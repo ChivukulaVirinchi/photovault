@@ -41,23 +41,17 @@ struct GithubRelease {
     #[serde(default)]
     body: String,
     #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
     assets: Vec<ReleaseAsset>,
 }
 
 /// Normalized latest-release descriptor the rest of the app talks to.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // `version` and `is_prerelease` aren't displayed
-                    // yet but are part of the public shape for
-                    // release-channel selection (Phase 3+) and tests.
 pub struct LatestRelease {
     pub version: Version,
     pub tag_name: String,
     pub html_url: String,
     pub body: String,
     pub assets: Vec<ReleaseAsset>,
-    pub is_prerelease: bool,
 }
 
 /// Result of a single update check: the running version, the latest
@@ -146,7 +140,6 @@ pub async fn check_for_updates() -> Result<UpdateStatus, UpdateCheckError> {
             html_url: payload.html_url,
             body: payload.body,
             assets: payload.assets,
-            is_prerelease: payload.prerelease,
         },
     })
 }

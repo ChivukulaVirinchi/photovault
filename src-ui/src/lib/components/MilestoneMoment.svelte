@@ -76,10 +76,10 @@
     const timer = setTimeout(
       () =>
         burstConfetti(target, {
-          count: 130,
-          speed: 760,
-          spreadWidth: 0.92,
-          origin: { x: 0.5, y: 0.92 },
+          count: 180,
+          speed: 330,
+          field: { width: 0.82, aspectRatio: 19 / 16 },
+          origin: { x: 0.5, y: 0.5 },
         }),
       430,
     );

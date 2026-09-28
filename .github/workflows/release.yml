@@ -91,6 +91,15 @@ jobs:
           projectPath: src-tauri
           tagName: ${{ github.ref_name }}
           releaseName: "Smriti ${{ github.ref_name }}"
+          releaseBody: |
+            ## Installing unsigned builds
+
+            Smriti does not have Windows/macOS signing certificates yet.
+
+            - **Windows:** if SmartScreen shows “Windows protected your PC”, click **More info → Run anyway**, then approve **Install anyway** or UAC if prompted.
+            - **macOS:** try opening Smriti once, then use **System Settings → Privacy & Security → Open Anyway** if Gatekeeper blocks it.
+
+            Download only from this GitHub release and verify against the attached `SHA256SUMS` file.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: --target ${{ matrix.target }} ${{ matrix.heic_flag }}

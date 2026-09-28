@@ -1016,18 +1016,10 @@ pub async fn jobs_cancel(state: State<'_, AppState>, args: CancelJobArgs) -> Com
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct LibraryRegenerateThumbnailsArgs {
-    #[allow(dead_code)] // photo_ids targeted regen lands in M3 — for now we
-    // always regenerate everything missing.
-    pub photo_ids: Option<Vec<i64>>,
-}
-
 #[tauri::command]
 pub async fn library_regenerate_thumbnails(
     app: AppHandle,
     state: State<'_, AppState>,
-    _args: LibraryRegenerateThumbnailsArgs,
 ) -> CommandResult<JobIdDto> {
     let _lifecycle = state.library_lifecycle.lock().await;
     let (drive_root, db, thumbnails) = {
