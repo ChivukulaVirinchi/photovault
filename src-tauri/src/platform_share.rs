@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use tauri::Manager;
 
 /// Open the platform sharing surface. Linux has no desktop-wide share sheet,
 /// so copy a standard file URI to its desktop clipboard, with the default mail
