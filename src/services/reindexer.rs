@@ -353,33 +353,44 @@ impl Reindexer {
                         "new files require an on-disk library database".into(),
                     )
                 })?;
+            // SQLite may report a canonical path even when the library was
+            // opened through an OS alias (notably /var -> /private/var on
+            // macOS). Compare canonical paths so valid additions remain under
+            // the same physical library root on every platform.
+            let root = fs::canonicalize(root)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
             let mut insert = tx.prepare(
                 "INSERT INTO photos(file_path,file_name,file_hash,file_size,file_mtime,media_type)
                 VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(file_path) DO NOTHING",
             )?;
             for path in &changes.added {
-                let relative = path
-                    .strip_prefix(root)
+                let canonical_path = fs::canonicalize(path)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                let relative = canonical_path
+                    .strip_prefix(&root)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
                 let relative = crate::services::path_util::relative_path_for_storage(relative);
-                crate::services::path_util::safe_existing_path_under_root(root, &relative)
+                crate::services::path_util::safe_existing_path_under_root(&root, &relative)
                     .map_err(rusqlite::Error::InvalidParameterName)?;
-                let metadata = fs::metadata(path)
+                let metadata = fs::metadata(&canonical_path)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
                 let mtime = metadata
                     .modified()
                     .ok()
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|time| time.as_secs() as i64);
-                let hash = calculate_fast_hash(path, metadata.len(), mtime)
+                let hash = calculate_fast_hash(&canonical_path, metadata.len(), mtime)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-                let media_type =
-                    crate::services::scanner::media_type_for_path(path).ok_or_else(|| {
+                let media_type = crate::services::scanner::media_type_for_path(&canonical_path)
+                    .ok_or_else(|| {
                         rusqlite::Error::InvalidParameterName("unsupported media file".into())
                     })?;
                 result.new_files += insert.execute(params![
                     relative,
-                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    canonical_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
                     hash,
                     metadata.len() as i64,
                     mtime,
