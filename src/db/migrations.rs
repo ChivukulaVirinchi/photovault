@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 30;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 32;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -151,30 +151,80 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
         tx.execute("INSERT INTO schema_version(version) VALUES (30)", [])?;
         tx.commit()?;
     }
+    if current_version < 31 {
+        migrate_v30_to_v31(conn)?;
+    }
+    if current_version < 32 {
+        migrate_v31_to_v32(conn)?;
+    }
     ensure_performance_indexes(conn)?;
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
     Ok(())
 }
 
-fn migrate_v28_to_v29(conn: &Connection) -> SqliteResult<()> {
+fn migrate_v31_to_v32(conn: &Connection) -> SqliteResult<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
-        "DROP TRIGGER IF EXISTS photos_fts_update;
-         DROP TRIGGER IF EXISTS photos_fts_delete;
-         CREATE TRIGGER photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
-             INSERT INTO photos_fts(photos_fts, rowid, ocr_text)
-                 VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
-             INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
-         END;
-         CREATE TRIGGER photos_fts_delete AFTER DELETE ON photos BEGIN
-             INSERT INTO photos_fts(photos_fts, rowid, ocr_text)
-                 VALUES ('delete', old.id, COALESCE(old.ocr_text, ''));
-         END;
-         INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');
-         INSERT INTO schema_version(version) VALUES (29);",
+        r#"
+        DROP TRIGGER IF EXISTS photos_fts_insert;
+        DROP TRIGGER IF EXISTS photos_fts_update;
+        DROP TRIGGER IF EXISTS photos_fts_delete;
+        DROP TABLE IF EXISTS photos_fts;
+        DROP INDEX IF EXISTS idx_photos_content_category;
+        DROP INDEX IF EXISTS idx_photos_ocr_processed;
+        "#,
     )?;
-    tx.commit()
+    for column in [
+        "content_category",
+        "ocr_text",
+        "ocr_processed",
+        "ocr_confidence",
+    ] {
+        let exists = tx
+            .prepare("SELECT 1 FROM pragma_table_info('photos') WHERE name = ?1")?
+            .exists([column])?;
+        if exists {
+            tx.execute_batch(&format!("ALTER TABLE photos DROP COLUMN {column};"))?;
+        }
+    }
+    tx.execute("INSERT INTO schema_version (version) VALUES (32)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 32 (removed unused OCR state)");
+    Ok(())
+}
+
+fn migrate_v30_to_v31(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    // SQLite has no ADD COLUMN IF NOT EXISTS; guard the ALTER so the
+    // migration also tolerates databases whose photos table was created
+    // by a create_schema that already carries the column (tests).
+    let has_content_hash = tx
+        .prepare("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'content_hash'")?
+        .exists([])?;
+    if !has_content_hash {
+        tx.execute_batch("ALTER TABLE photos ADD COLUMN content_hash TEXT;")?;
+    }
+    tx.execute_batch(
+        r#"
+        -- Small key/value store for library-level bookkeeping (e.g. the
+        -- thumbnail-repair cursor).
+        CREATE TABLE IF NOT EXISTS library_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        INSERT INTO schema_version (version) VALUES (31);
+        "#,
+    )?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 31 (content hash cache, library_meta)");
+    Ok(())
+}
+
+fn migrate_v28_to_v29(conn: &Connection) -> SqliteResult<()> {
+    conn.execute("INSERT INTO schema_version(version) VALUES (29)", [])?;
+    Ok(())
 }
 
 fn migrate_v27_to_v28(conn: &Connection) -> SqliteResult<()> {
@@ -208,22 +258,70 @@ fn migrate_v27_to_v28(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Add the indexes the hot queries depend on.
+///
+/// Each statement runs independently and a failure is logged rather than
+/// propagated. These are performance hints, not correctness requirements, and
+/// they reference columns introduced by different migrations — so on a catalog
+/// that predates one of those columns, `execute_batch` would stop at the first
+/// failing statement and silently skip every index after it. Running them
+/// separately means one unavailable column cannot cost us the other indexes,
+/// and cannot fail an open.
 fn ensure_performance_indexes(conn: &Connection) -> SqliteResult<()> {
-    conn.execute_batch(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_photos_timeline_order
-            ON photos(is_trashed, (date_taken IS NULL), date_taken DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_photos_favorite_order
-            ON photos(is_favorite, is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)
-            WHERE is_favorite = TRUE;
-        CREATE INDEX IF NOT EXISTS idx_photos_gps_bounds
-            ON photos(is_trashed, gps_latitude, gps_longitude)
-            WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_faces_review_pending
-            ON faces(user_confirmed, cluster_id, id)
-            WHERE user_confirmed = 0 AND cluster_id IS NOT NULL;
-        "#,
-    )
+    const INDEXES: &[(&str, &str)] = &[
+        (
+            "idx_photos_timeline_order",
+            "CREATE INDEX IF NOT EXISTS idx_photos_timeline_order
+                ON photos(is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)",
+        ),
+        (
+            "idx_photos_content_hash",
+            "CREATE INDEX IF NOT EXISTS idx_photos_content_hash
+                ON photos(content_hash) WHERE content_hash IS NOT NULL",
+        ),
+        (
+            "idx_photos_file_size",
+            "CREATE INDEX IF NOT EXISTS idx_photos_file_size ON photos(file_size)",
+        ),
+        (
+            "idx_photos_favorite_order",
+            "CREATE INDEX IF NOT EXISTS idx_photos_favorite_order
+                ON photos(is_favorite, is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)
+                WHERE is_favorite = TRUE",
+        ),
+        (
+            "idx_photos_gps_bounds",
+            "CREATE INDEX IF NOT EXISTS idx_photos_gps_bounds
+                ON photos(is_trashed, gps_latitude, gps_longitude)
+                WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL",
+        ),
+        // Place filters for search. `resolve_countries` and `resolve_cities`
+        // both aggregate the location columns over every non-trashed row, and
+        // ran on every search *and every page* of one. The pre-existing
+        // idx_photos_location(country, city) cannot serve them because
+        // is_trashed is not a prefix column. This is a covering index: both
+        // statements read location columns and is_trashed and nothing else.
+        // Stored as a normal (not partial) index so a future reader that omits
+        // the IS NOT NULL guard still uses it.
+        (
+            "idx_photos_place",
+            "CREATE INDEX IF NOT EXISTS idx_photos_place
+                ON photos(is_trashed, location_country, location_city)",
+        ),
+        (
+            "idx_faces_review_pending",
+            "CREATE INDEX IF NOT EXISTS idx_faces_review_pending
+                ON faces(user_confirmed, cluster_id, id)
+                WHERE user_confirmed = 0 AND cluster_id IS NOT NULL",
+        ),
+    ];
+
+    for (name, sql) in INDEXES {
+        if let Err(error) = conn.execute(sql, []) {
+            tracing::debug!("performance index {name} not created: {error}");
+        }
+    }
+    Ok(())
 }
 
 fn migrate_v26_to_v27(conn: &Connection) -> SqliteResult<()> {
@@ -730,60 +828,7 @@ fn migrate_v3_to_v4(conn: &Connection) -> SqliteResult<()> {
 }
 
 fn migrate_v5_to_v6(conn: &Connection) -> SqliteResult<()> {
-    // Atomic: ALTER loop + FTS table + triggers + version bump all in
-    // one transaction. Without this, a kill mid-ALTER could land us
-    // with new columns but no FTS index — confusing on next launch.
-    let tx = conn.unchecked_transaction()?;
-
-    let columns = [
-        ("content_category", "TEXT DEFAULT 'photo'"),
-        ("ocr_text", "TEXT"),
-        ("ocr_processed", "BOOLEAN DEFAULT FALSE"),
-        ("ocr_confidence", "REAL"),
-    ];
-
-    for (col, col_type) in &columns {
-        let sql = format!("ALTER TABLE photos ADD COLUMN {} {}", col, col_type);
-        match tx.execute(&sql, []) {
-            Ok(_) => {}
-            Err(e) => {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column") {
-                    return Err(e);
-                }
-            }
-        }
-    }
-
-    tx.execute_batch(
-        r#"
-        CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
-            ocr_text,
-            content='photos',
-            content_rowid='id'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
-            INSERT INTO photos_fts(rowid, ocr_text) VALUES (new.id, COALESCE(new.ocr_text, ''));
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
-            UPDATE photos_fts SET ocr_text = COALESCE(new.ocr_text, '') WHERE rowid = new.id;
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
-            DELETE FROM photos_fts WHERE rowid = old.id;
-        END;
-
-        CREATE INDEX IF NOT EXISTS idx_photos_content_category ON photos(content_category);
-        CREATE INDEX IF NOT EXISTS idx_photos_ocr_processed ON photos(ocr_processed);
-
-        INSERT INTO schema_version (version) VALUES (6);
-        "#,
-    )?;
-    tx.commit()?;
-
-    tracing::info!("Migrated database to schema version 6 (documents + OCR fields)");
+    conn.execute("INSERT INTO schema_version (version) VALUES (6)", [])?;
     Ok(())
 }
 
@@ -1053,15 +1098,15 @@ mod tests {
              DROP TABLE semantic_revision;
              DELETE FROM schema_version;
              INSERT INTO schema_version(version) VALUES(28);
-             INSERT INTO photos(file_path,file_name,file_hash,file_size,ocr_text)
-                VALUES('one.jpg','one.jpg','abcd',1,'before');",
+             INSERT INTO photos(file_path,file_name,file_hash,file_size)
+                VALUES('one.jpg','one.jpg','abcd',1);",
         )
         .unwrap();
         conn
     }
 
     #[test]
-    fn latest_migrations_match_fresh_objects_and_preserve_search_data() {
+    fn latest_migrations_match_fresh_objects() {
         let migrated = revision_28_fixture();
         run_migrations(&migrated).unwrap();
         run_migrations(&migrated).unwrap();
@@ -1077,17 +1122,6 @@ mod tests {
                 .unwrap()
         }
         assert_eq!(objects(&migrated), objects(&fresh));
-        migrated
-            .execute("UPDATE photos SET ocr_text='after' WHERE id=1", [])
-            .unwrap();
-        let matches: i64 = migrated
-            .query_row(
-                "SELECT count(*) FROM photos_fts WHERE photos_fts MATCH 'after'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(matches, 1);
         assert_eq!(
             get_schema_version(&migrated).unwrap(),
             MAX_KNOWN_SCHEMA_VERSION
@@ -1103,36 +1137,6 @@ mod tests {
             .unwrap()
             .exists([])
             .unwrap());
-    }
-
-    #[test]
-    fn failed_fts_migration_rolls_back_and_can_retry() {
-        let conn = revision_28_fixture();
-        let before: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE name='photos_fts_update'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        conn.execute_batch(
-            "CREATE TRIGGER reject_version BEFORE INSERT ON schema_version
-            WHEN new.version=29 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
-        )
-        .unwrap();
-        assert!(run_migrations(&conn).is_err());
-        assert_eq!(get_schema_version(&conn).unwrap(), 28);
-        let after: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE name='photos_fts_update'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(before, after);
-        conn.execute_batch("DROP TRIGGER reject_version").unwrap();
-        run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), MAX_KNOWN_SCHEMA_VERSION);
     }
 
     #[test]
@@ -1198,6 +1202,7 @@ mod tests {
             CREATE TABLE photos (
                 id INTEGER PRIMARY KEY,
                 date_taken DATETIME,
+                file_size INTEGER NOT NULL DEFAULT 0,
                 gps_latitude REAL,
                 gps_longitude REAL,
                 is_favorite BOOLEAN DEFAULT FALSE,
@@ -1320,10 +1325,6 @@ mod tests {
                 orientation INTEGER DEFAULT 1,
                 thumbnail_path TEXT,
                 faces_processed BOOLEAN DEFAULT FALSE,
-                content_category TEXT DEFAULT 'photo',
-                ocr_text TEXT,
-                ocr_processed BOOLEAN DEFAULT FALSE,
-                ocr_confidence REAL,
                 brightness REAL,
                 phash INTEGER,
                 is_trashed BOOLEAN DEFAULT FALSE,

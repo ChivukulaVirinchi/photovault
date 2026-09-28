@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { insights, type InsightsData } from "../api/all";
-import { crossedMilestones, milestones } from "./milestones.svelte";
+import { insights, type InsightsData, type MilestoneProbe } from "../api/all";
+import { crossedMilestones, crossedMilestonesByProbe, milestones } from "./milestones.svelte";
 
-vi.mock("../api/all", () => ({ insights: { compute: vi.fn() } }));
+vi.mock("../api/all", () => ({
+  insights: { compute: vi.fn(), milestoneProbe: vi.fn() },
+}));
 
 function insightsData(overrides: Partial<InsightsData> = {}): InsightsData {
   return {
@@ -31,9 +33,20 @@ function insightsData(overrides: Partial<InsightsData> = {}): InsightsData {
   };
 }
 
-/// Point the mocked command at a library with this many photos.
+/// Point the mocked commands at a library with this many photos. The
+/// probe mirrors the counters the store reads before paying for a full
+/// insights compute.
 function libraryWith(overrides: Partial<InsightsData>) {
-  vi.mocked(insights.compute).mockResolvedValue(insightsData(overrides));
+  const data = insightsData(overrides);
+  const probe: MilestoneProbe = {
+    total_photos: data.total_photos,
+    first_year: data.date_range_start ? Number(data.date_range_start.slice(0, 4)) : null,
+    last_year: data.date_range_end ? Number(data.date_range_end.slice(0, 4)) : null,
+    people_count: data.people_count,
+    city_count: data.city_count,
+  };
+  vi.mocked(insights.compute).mockResolvedValue(data);
+  vi.mocked(insights.milestoneProbe).mockResolvedValue(probe);
 }
 
 describe("milestone selection", () => {
@@ -79,6 +92,24 @@ describe("milestone selection", () => {
     const places = insightsData({ total_photos: 400, city_count: 25 });
     expect(crossedMilestones(places, []).map((m) => m.id)).toEqual(["cities-25"]);
   });
+
+  it("probe rules mirror the full-data rules", () => {
+    const probe: MilestoneProbe = {
+      total_photos: 12_000,
+      first_year: 2013,
+      last_year: 2026,
+      people_count: 0,
+      city_count: 0,
+    };
+    expect(crossedMilestonesByProbe(probe, []).map((m) => m.id)).toEqual([
+      "photos-10k",
+      "photos-1k",
+      "span-10",
+    ]);
+
+    const undated: MilestoneProbe = { ...probe, first_year: null, last_year: null };
+    expect(crossedMilestonesByProbe(undated, []).map((m) => m.id)).not.toContain("span-10");
+  });
 });
 
 describe("milestone evaluation", () => {
@@ -86,6 +117,7 @@ describe("milestone evaluation", () => {
     localStorage.clear();
     milestones.current = null;
     vi.mocked(insights.compute).mockReset();
+    vi.mocked(insights.milestoneProbe).mockReset();
   });
 
   it("stays quiet for a library that already passed the thresholds", async () => {

@@ -64,6 +64,14 @@
         skipped += 1;
       }
       cursor += 1;
+      // Retain only a small answer window. Answered rows are persisted by the
+      // backend, so keeping thousands of historical objects only grows the
+      // DOM/state and slows refill deduplication.
+      if (cursor > 20) {
+        const drop = cursor - 20;
+        queue = queue.slice(drop);
+        cursor -= drop;
+      }
       // Refill when we're getting low — keeps the user reviewing.
       if (cursor >= queue.length - 5) {
         try {

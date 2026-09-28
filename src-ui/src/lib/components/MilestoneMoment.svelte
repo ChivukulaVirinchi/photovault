@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import { burstConfetti } from "../confetti";
   import { milestones } from "../stores/milestones.svelte";
   import { shareCard } from "../stores/shareCard.svelte";
@@ -15,26 +14,13 @@
 
   let shown = $state(0);
   let scrim = $state<HTMLDivElement | undefined>();
-  let scheduled: ReturnType<typeof setTimeout> | null = null;
-
-  function schedule(delay: number) {
-    if (scheduled) clearTimeout(scheduled);
-    scheduled = setTimeout(() => {
-      scheduled = null;
-      const root = libraryStore.driveRoot;
-      if (root) void milestones.evaluate(root);
-    }, delay);
-  }
-
-  onDestroy(() => {
-    if (scheduled) clearTimeout(scheduled);
-  });
-
+  let primaryBtn = $state<HTMLButtonElement | undefined>();
+  let lastFocused: HTMLElement | null = null;
   /// Opening a library is the first chance to notice a crossed threshold.
   $effect(() => {
     const root = libraryStore.driveRoot;
     if (!root) return;
-    schedule(4000);
+    void milestones.evaluate(root);
   });
 
   /// Indexing finishes — the usual way a library crosses a threshold.
@@ -49,7 +35,8 @@
     }
     if (!wasIndexing) return;
     wasIndexing = false;
-    schedule(2500);
+    const root = libraryStore.driveRoot;
+    if (root) void milestones.evaluate(root);
   });
 
   /// Count the number up rather than dropping it on screen — this is the part
@@ -103,15 +90,61 @@
     shareCard.show(milestones.snapshot);
     milestones.dismiss();
   }
+
+  /// Keyboard support for the modal: Escape closes, Tab stays inside the
+  /// dialog, focus enters on open and returns to where it was on close.
+  /// (App.svelte's global Escape handler deliberately skips open modals.)
+  $effect(() => {
+    if (!milestones.current) {
+      if (lastFocused) {
+        lastFocused.focus?.();
+        lastFocused = null;
+      }
+      return;
+    }
+    lastFocused = document.activeElement as HTMLElement | null;
+    primaryBtn?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") milestones.dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  function trapTab(e: KeyboardEvent) {
+    if (e.key !== "Tab" || !scrim) return;
+    const focusables = Array.from(scrim.querySelectorAll<HTMLElement>("button"));
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      last.focus();
+      e.preventDefault();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      first.focus();
+      e.preventDefault();
+    }
+  }
 </script>
 
 {#if milestones.current}
-  <div class="scrim" class:reduced={reducedMotion} bind:this={scrim} role="presentation">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="scrim"
+    class:reduced={reducedMotion}
+    bind:this={scrim}
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) milestones.dismiss();
+    }}
+  >
     <div
       class="moment"
       role="dialog"
       aria-modal="true"
       aria-labelledby="milestone-headline"
+      tabindex="-1"
+      onkeydown={trapTab}
     >
       <div class="glow" aria-hidden="true"></div>
 
@@ -127,7 +160,7 @@
       <p class="line">{milestones.current.line}</p>
 
       <div class="actions">
-        <button class="primary" onclick={makeCard}>Make a card</button>
+        <button class="primary" bind:this={primaryBtn} onclick={makeCard}>Make a card</button>
         <button class="ghost" onclick={() => milestones.dismiss()}>Not now</button>
       </div>
     </div>

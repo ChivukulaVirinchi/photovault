@@ -237,7 +237,6 @@ pub fn detect_trips(
                WHERE p.location_city IS NOT NULL AND p.location_city != ''
                  AND p.date_taken IS NOT NULL
                  AND p.is_trashed = FALSE
-                 AND COALESCE(p.content_category, 'photo') = 'photo'
                ORDER BY p.date_taken, p.id"#,
         ) {
             Ok(s) => s,
@@ -437,7 +436,6 @@ fn photos_in_date_envelope(conn: &Connection, start: NaiveDate, end: NaiveDate) 
         r#"SELECT id
            FROM photos
            WHERE is_trashed = FALSE
-             AND COALESCE(content_category, 'photo') = 'photo'
              AND date_taken >= ?1 AND date_taken < ?2
            ORDER BY date_taken, id"#,
     ) {
@@ -566,7 +564,6 @@ fn curate_story_photos(conn: &Connection, photo_ids: &[i64]) -> Vec<i64> {
                FROM photos p
                WHERE p.id IN ({placeholders})
                  AND p.is_trashed = FALSE
-                 AND COALESCE(p.content_category, 'photo') = 'photo'
                  AND NOT EXISTS (
                      SELECT 1
                      FROM photo_stack_members psm

@@ -270,6 +270,21 @@ describe("thumbnailQueue batching", () => {
 });
 
 describe("thumbnailQueue cancellation", () => {
+  it("holds queued work until interaction releases it", async () => {
+    const started: number[] = [];
+    const queue = createThumbnailQueue(async (id) => {
+      started.push(id);
+      return `thumb-${id}`;
+    });
+    const resume = queue.pause();
+    queue.enqueue(1, () => {});
+    await flush();
+    expect(started).toEqual([]);
+    resume();
+    await flush();
+    expect(started).toEqual([1]);
+  });
+
   it("does not start or report a canceled queued item", async () => {
     const gate = deferred<string | null>();
     const started: number[] = [];

@@ -66,3 +66,25 @@ pub async fn insights_invalidate(_state: State<'_, AppState>) -> CommandResult<(
     // signal cache-stale events; future caching layer can hook here.
     Ok(())
 }
+
+/// Cheap threshold probe so milestone checks don't run the full
+/// insights aggregation on every library open.
+#[tauri::command]
+pub async fn insights_milestone_probe(
+    state: State<'_, AppState>,
+) -> CommandResult<crate::dto::MilestoneProbeDto> {
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        smriti::db::db_path_for(&lib.drive_root)
+    };
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        Ok::<_, CommandError>(smriti::services::insights::compute_milestone_probe(&conn)?.into())
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("milestone probe worker failed: {e}"),
+    })??;
+    Ok(probe)
+}

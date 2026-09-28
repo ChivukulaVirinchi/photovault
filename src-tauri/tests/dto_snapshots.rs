@@ -52,7 +52,7 @@ use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecor
 use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
 use smriti::db::recent_search_repo::RecentSearch;
 use smriti::db::trash_repo::TrashedPhotoRecord;
-use smriti::models::{ContentCategory, MediaType, Photo};
+use smriti::models::{MediaType, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
 use smriti::services::burst_detector::BurstGroup;
 use smriti::services::drive_detector::DriveInfo;
@@ -68,12 +68,12 @@ use smriti::services::trash::TrashStats;
 
 use smriti_tauri_lib::dto::{
     AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto,
-    BurstGroupSummaryDto, BurstMemberDto, CameraStatDto, ContentCategoryDto, CountryStatDto,
-    DetectedBurstGroupDto, DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto,
-    DuplicateGroupSummaryDto, DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto,
-    LocationDto, LocationStatDto, MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto,
-    PhotoSummaryDto, PlaceHitDto, RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto,
-    SettingsDto, TrashStatsDto, TrashedPhotoDto,
+    BurstGroupSummaryDto, BurstMemberDto, CameraStatDto, CountryStatDto, DetectedBurstGroupDto,
+    DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto, DuplicateGroupSummaryDto,
+    DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto, LocationDto, LocationStatDto,
+    MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto, PhotoSummaryDto, PlaceHitDto,
+    RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto, SettingsDto, TrashStatsDto,
+    TrashedPhotoDto,
 };
 
 /// Fixed timestamp so date_taken / indexed_at / updated_at don't
@@ -121,10 +121,6 @@ fn make_photo_full() -> Photo {
         has_audio: false,
         thumbnail_path: Some(".photovault/thumbnails/medium/v2/de/deadbeef.jpg".into()),
         faces_processed: true,
-        content_category: ContentCategory::Photo,
-        ocr_text: Some("Hello world".into()),
-        ocr_processed: true,
-        ocr_confidence: Some(0.92),
         is_favorite: true,
         is_trashed: false,
         trashed_at: None,
@@ -170,10 +166,6 @@ fn make_photo_minimal() -> Photo {
         has_audio: false,
         thumbnail_path: None,
         faces_processed: false,
-        content_category: ContentCategory::Photo,
-        ocr_text: None,
-        ocr_processed: false,
-        ocr_confidence: None,
         is_favorite: false,
         is_trashed: false,
         trashed_at: None,
@@ -220,42 +212,6 @@ fn location_dto_from_geocoding_result() {
     };
     let dto: LocationDto = result.into();
     assert_json_snapshot!(dto);
-}
-
-// ---------- Content category enum ----------
-
-#[test]
-fn content_category_dto_all_variants() {
-    let dto: Vec<ContentCategoryDto> = [
-        ContentCategory::Photo,
-        ContentCategory::BusinessCard,
-        ContentCategory::Document,
-        ContentCategory::Screenshot,
-        ContentCategory::Presentation,
-        ContentCategory::Whiteboard,
-        ContentCategory::Receipt,
-    ]
-    .into_iter()
-    .map(Into::into)
-    .collect();
-    assert_json_snapshot!(dto);
-}
-
-#[test]
-fn content_category_from_dto_all_variants() {
-    let categories: Vec<ContentCategory> = [
-        ContentCategoryDto::Photo,
-        ContentCategoryDto::BusinessCard,
-        ContentCategoryDto::Document,
-        ContentCategoryDto::Screenshot,
-        ContentCategoryDto::Presentation,
-        ContentCategoryDto::Whiteboard,
-        ContentCategoryDto::Receipt,
-    ]
-    .into_iter()
-    .map(Into::into)
-    .collect();
-    assert_json_snapshot!(categories);
 }
 
 // ---------- Insights stats ----------
@@ -529,6 +485,7 @@ fn search_results_dto() {
         }],
         photo_ids: vec![7],
         photos_grouped: Vec::new(),
+        has_more: false,
     };
     let dto: SearchResultsDto = results.into();
     assert_json_snapshot!(dto);
@@ -718,34 +675,19 @@ fn asset_inventory_dto() {
             "C:/Program Files/Smriti".into(),
         ],
         total_size_bytes: 42_000,
-        assets: vec![
-            AssetItemDto {
-                id: "runtime.onnx".into(),
-                label: "ONNX Runtime".into(),
-                kind: "runtime".into(),
-                status: "active".into(),
-                required: true,
-                active: true,
-                installable: false,
-                removable: false,
-                size_bytes: Some(24_000),
-                path: Some("C:/Program Files/Smriti/libs/onnxruntime/onnxruntime.dll".into()),
-                note: Some("Required for local models.".into()),
-            },
-            AssetItemDto {
-                id: "ocr.model".into(),
-                label: "OCR model".into(),
-                kind: "model".into(),
-                status: "planned".into(),
-                required: false,
-                active: false,
-                installable: false,
-                removable: false,
-                size_bytes: None,
-                path: None,
-                note: Some("Not installed in this build.".into()),
-            },
-        ],
+        assets: vec![AssetItemDto {
+            id: "runtime.onnx".into(),
+            label: "ONNX Runtime".into(),
+            kind: "runtime".into(),
+            status: "active".into(),
+            required: true,
+            active: true,
+            installable: false,
+            removable: false,
+            size_bytes: Some(24_000),
+            path: Some("C:/Program Files/Smriti/libs/onnxruntime/onnxruntime.dll".into()),
+            note: Some("Required for local models.".into()),
+        }],
     };
     assert_json_snapshot!(dto);
 }

@@ -130,6 +130,81 @@ fn test_v15_composite_indexes_present_and_used() {
     );
 }
 
+/// Place filters for search must not full-scan the library.
+///
+/// `resolve_countries` and `resolve_cities` aggregate the location columns
+/// over every non-trashed row, and they ran on every search *and on every
+/// page* of one. `idx_photos_location(country, city)` cannot serve them
+/// because `is_trashed` is not a prefix column, so the planner fell back to
+/// a full table scan of `photos`. `idx_photos_place` is a covering index for
+/// exactly these two statements.
+#[test]
+fn place_filter_queries_use_a_covering_index() {
+    let (_temp, db) = setup_db();
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
+
+    // Seed rows so the planner has statistics to reason about; an empty table
+    // makes SQLite choose a scan regardless of available indexes. Uses the
+    // repo insert path so NOT NULL / column defaults stay in one place.
+    {
+        let repo = smriti::db::PhotoRepo::new(&db.conn);
+        let photos: Vec<_> = (1..=4000i64)
+            .map(|id| {
+                let mut photo = sample_photo(&format!("p/{id}.jpg"), &format!("h{id}"));
+                photo.location_country = match id % 5 {
+                    0 => Some("India".to_string()),
+                    1 => Some("Japan".to_string()),
+                    2 => Some("France".to_string()),
+                    3 => None,
+                    _ => Some("Peru".to_string()),
+                };
+                photo.location_city = match id % 3 {
+                    0 => Some("Mumbai".to_string()),
+                    1 => Some("Kyoto".to_string()),
+                    _ => None,
+                };
+                photo
+            })
+            .collect();
+        repo.insert_batch(&photos).unwrap();
+    }
+    db.conn.execute_batch("ANALYZE;").unwrap();
+
+    for (label, sql) in [
+        (
+            "resolve_countries",
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT location_country FROM photos
+              WHERE is_trashed = FALSE AND location_country IS NOT NULL",
+        ),
+        (
+            "resolve_cities",
+            "EXPLAIN QUERY PLAN
+             SELECT location_city, location_country, COUNT(*) AS cnt FROM photos
+              WHERE is_trashed = FALSE AND location_city IS NOT NULL
+              GROUP BY location_city, location_country ORDER BY cnt DESC LIMIT 1000",
+        ),
+    ] {
+        let plan = db
+            .conn
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            plan.contains("idx_photos_place"),
+            "{label} should use idx_photos_place, got: {plan}"
+        );
+        assert!(
+            !plan.contains("SCAN photos"),
+            "{label} still full-scans photos: {plan}"
+        );
+    }
+}
+
 #[test]
 fn test_v14_to_latest_migration_creates_v15_composite_indexes() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -168,16 +243,11 @@ fn test_v14_to_latest_migration_creates_v15_composite_indexes() {
             orientation INTEGER DEFAULT 1,
             thumbnail_path TEXT,
             faces_processed BOOLEAN DEFAULT FALSE,
-            content_category TEXT DEFAULT 'photo',
-            ocr_text TEXT,
-            ocr_processed BOOLEAN DEFAULT FALSE,
-            ocr_confidence REAL,
             is_trashed BOOLEAN DEFAULT FALSE,
             trashed_at DATETIME,
             indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE VIRTUAL TABLE photos_fts USING fts5(ocr_text, content='photos', content_rowid='id');
         CREATE TABLE face_clusters (
             id INTEGER PRIMARY KEY,
             name TEXT,
@@ -713,4 +783,67 @@ fn unclustered_faces_are_read_for_live_face_stream() {
     assert_eq!(faces.len(), 1);
     assert_eq!(faces[0].photo_id, photo_id);
     assert!(faces[0].cluster_id.is_none());
+}
+
+#[test]
+fn recent_face_preview_includes_assigned_faces_and_excludes_trash() {
+    let (_temp, db) = setup_db();
+    PhotoRepo::new(&db.conn)
+        .insert_batch(&[
+            sample_photo("visible.jpg", "recent-visible"),
+            sample_photo("trashed.jpg", "recent-trashed"),
+        ])
+        .unwrap();
+    let visible: i64 = db
+        .conn
+        .query_row(
+            "SELECT id FROM photos WHERE file_name = 'visible.jpg'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let trashed: i64 = db
+        .conn
+        .query_row(
+            "SELECT id FROM photos WHERE file_name = 'trashed.jpg'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "UPDATE photos SET is_trashed = TRUE WHERE id = ?1",
+            [trashed],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO face_clusters (id, name) VALUES (900, 'Existing person')",
+            [],
+        )
+        .unwrap();
+    for (id, photo, cluster) in [
+        (1, visible, None),
+        (2, visible, Some(900)),
+        (3, trashed, None),
+    ] {
+        db.conn.execute("INSERT INTO faces (id, photo_id, cluster_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, embedding) VALUES (?1, ?2, ?3, 0, 0, 1, 1, 0.9, zeroblob(2048))", rusqlite::params![id, photo, cluster]).unwrap();
+    }
+    let repo = FaceRepo::new(&db.conn);
+    let faces = repo.get_recent_faces(24).unwrap();
+    assert_eq!(
+        faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    assert_eq!(faces[0].cluster_id, Some(900));
+    assert_eq!(repo.get_recent_faces(1).unwrap().len(), 1);
+    assert!(repo.get_recent_faces(0).unwrap().is_empty());
+    assert_eq!(
+        repo.get_unclustered_faces(None, 24)
+            .unwrap()
+            .iter()
+            .map(|f| f.face_id)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
 }

@@ -3,40 +3,45 @@
   import { libraryStore } from "./lib/stores/library.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
   import Welcome from "./routes/Welcome.svelte";
-  import SmartSetupDialog from "./lib/components/SmartSetupDialog.svelte";
-  import ShareCardDialog from "./lib/components/ShareCardDialog.svelte";
-  import MilestoneMoment from "./lib/components/MilestoneMoment.svelte";
   import Timeline from "./routes/Timeline.svelte";
-  import People from "./routes/People.svelte";
-  import PersonDetail from "./routes/PersonDetail.svelte";
-  import PersonReview from "./routes/PersonReview.svelte";
-  import FaceReview from "./routes/FaceReview.svelte";
-  import Albums from "./routes/Albums.svelte";
-  import AlbumDetail from "./routes/AlbumDetail.svelte";
   import Search from "./routes/Search.svelte";
-  import Memories from "./routes/Memories.svelte";
-  import MemoryDetail from "./routes/MemoryDetail.svelte";
-  import PhotoDetail from "./routes/PhotoDetail.svelte";
-  import Duplicates from "./routes/Duplicates.svelte";
-  import DuplicateDetail from "./routes/DuplicateDetail.svelte";
-  import Bursts from "./routes/Bursts.svelte";
-  import BurstDetail from "./routes/BurstDetail.svelte";
   import MapView from "./routes/Map.svelte";
-  import Trash from "./routes/Trash.svelte";
-  import Insights from "./routes/Insights.svelte";
-  import Settings from "./routes/Settings.svelte";
-  import Shortcuts from "./routes/Shortcuts.svelte";
+  import Lazy from "./lib/components/Lazy.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
-  import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
   import ToastHost from "./lib/components/ToastHost.svelte";
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
+  import ShareCardDialog from "./lib/components/ShareCardDialog.svelte";
+  import MilestoneMoment from "./lib/components/MilestoneMoment.svelte";
+  import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
   import Slideshow from "./lib/components/Slideshow.svelte";
+  import Shortcuts from "./routes/Shortcuts.svelte";
   import { jobs } from "./lib/stores/jobs.svelte";
   import { browseContext } from "./lib/stores/browseContext.svelte";
   import { selection } from "./lib/stores/selection.svelte";
   import { photoVisibility } from "./lib/stores/photoVisibility.svelte";
   import { slideshow } from "./lib/stores/slideshow.svelte";
   import { assistantStore } from "./lib/stores/assistant.svelte";
+
+  const loadPeople = () => import("./routes/People.svelte");
+  const loadPersonDetail = () => import("./routes/PersonDetail.svelte");
+  const loadPersonReview = () => import("./routes/PersonReview.svelte");
+  const loadFaceReview = () => import("./routes/FaceReview.svelte");
+  const loadAlbums = () => import("./routes/Albums.svelte");
+  const loadAlbumDetail = () => import("./routes/AlbumDetail.svelte");
+  const loadMemories = () => import("./routes/Memories.svelte");
+  const loadMemoryDetail = () => import("./routes/MemoryDetail.svelte");
+  const loadPhotoDetail = () => import("./routes/PhotoDetail.svelte");
+  const loadDuplicates = () => import("./routes/Duplicates.svelte");
+  const loadDuplicateDetail = () => import("./routes/DuplicateDetail.svelte");
+  const loadBursts = () => import("./routes/Bursts.svelte");
+  const loadBurstDetail = () => import("./routes/BurstDetail.svelte");
+  const loadTrash = () => import("./routes/Trash.svelte");
+  const loadInsights = () => import("./routes/Insights.svelte");
+  const loadSettings = () => import("./routes/Settings.svelte");
+  const PRIMARY_TABS = new Set([
+    "/timeline", "/people", "/albums", "/memories", "/search", "/map",
+    "/duplicates", "/bursts", "/insights", "/trash", "/settings",
+  ]);
 
   let route = $state<{ path: string; params: Record<string, string> }>({
     path: "/timeline",
@@ -47,6 +52,7 @@
   let lastDriveRoot = $state<string | null | undefined>(undefined);
   let lastSession = $state(-1);
   let lastRouteKey: string | null = null;
+  let visitedTabs = $state<Set<string>>(new Set());
 
   function safeDecode(value: string): string {
     try {
@@ -136,12 +142,29 @@
       slideshow.close();
       assistantStore.resetForLibrary();
       jobs.clearLibraryScoped();
-      if (previousRoot !== null && root !== null && libraryStore.isOpen && route.path !== "/timeline") {
-        window.location.hash = "/timeline";
-      }
+      visitedTabs = new Set(PRIMARY_TABS.has(route.path) ? [route.path] : ["/timeline"]);
+      // Deliberately no route redirect here.
+      //
+      // This effect also fires on the *first* hydration: libraryStore goes
+      // from the initial `driveRoot: null, session: 0` to whatever
+      // `library_current` reports, which is a "change" by this comparison.
+      // It used to force `#/timeline` in that case, so any deep link —
+      // `#/map`, `#/photo?id=…`, an album permalink — was silently thrown
+      // away a few hundred milliseconds after load. Opening a library is a
+      // route-preserving action; the `{#key}` block below already remounts
+      // the shell against the new driveRoot/session.
+      //
+      // Closing a library needs no redirect either: `isOpen` flips false and
+      // the `{#if}` below swaps to Welcome regardless of the current path.
     }
     lastDriveRoot = root;
     lastSession = libraryStore.session;
+  });
+
+  $effect(() => {
+    const path = route.path;
+    if (!libraryStore.isOpen || !PRIMARY_TABS.has(path) || visitedTabs.has(path)) return;
+    visitedTabs = new Set([...visitedTabs, path]);
   });
 
 </script>
@@ -149,7 +172,7 @@
 {#if !libraryStore.isOpen}
   {#if route.path === "/settings"}
     <div class="main no-library-main">
-      <Settings />
+      <Lazy load={loadSettings} title="Settings" />
     </div>
   {:else}
     <Welcome />
@@ -159,44 +182,58 @@
     <div class="shell">
       <Sidebar current={route.path} />
       <div class="main">
+        {#if visitedTabs.has("/timeline")}
+          <div class="route-panel" class:active={route.path === "/timeline"} inert={route.path !== "/timeline"}>
+            <Timeline revealId={route.path === "/timeline" ? positiveIntParam("photo") : null} />
+          </div>
+        {/if}
+        {#if visitedTabs.has("/people")}
+          <div class="route-panel" class:active={route.path === "/people"} inert={route.path !== "/people"}><Lazy load={loadPeople} title="People" /></div>
+        {/if}
+        {#if visitedTabs.has("/albums")}
+          <div class="route-panel" class:active={route.path === "/albums"} inert={route.path !== "/albums"}><Lazy load={loadAlbums} title="Albums" /></div>
+        {/if}
+        {#if visitedTabs.has("/memories")}
+          <div class="route-panel" class:active={route.path === "/memories"} inert={route.path !== "/memories"}><Lazy load={loadMemories} title="Memories" /></div>
+        {/if}
+        {#if visitedTabs.has("/search")}
+          <div class="route-panel" class:active={route.path === "/search"} inert={route.path !== "/search"}><Search initialQuery={route.params.q ?? ""} /></div>
+        {/if}
+        {#if visitedTabs.has("/map")}
+          <div class="route-panel" class:active={route.path === "/map"} inert={route.path !== "/map"}><MapView active={route.path === "/map"} /></div>
+        {/if}
+        {#if visitedTabs.has("/duplicates")}
+          <div class="route-panel" class:active={route.path === "/duplicates"} inert={route.path !== "/duplicates"}><Lazy load={loadDuplicates} title="Duplicates" /></div>
+        {/if}
+        {#if visitedTabs.has("/bursts")}
+          <div class="route-panel" class:active={route.path === "/bursts"} inert={route.path !== "/bursts"}><Lazy load={loadBursts} title="Bursts" /></div>
+        {/if}
+        {#if visitedTabs.has("/insights")}
+          <div class="route-panel" class:active={route.path === "/insights"} inert={route.path !== "/insights"}><Lazy load={loadInsights} title="Insights" /></div>
+        {/if}
+        {#if visitedTabs.has("/trash")}
+          <div class="route-panel" class:active={route.path === "/trash"} inert={route.path !== "/trash"}><Lazy load={loadTrash} title="Trash" /></div>
+        {/if}
+        {#if visitedTabs.has("/settings")}
+          <div class="route-panel" class:active={route.path === "/settings"} inert={route.path !== "/settings"}><Lazy load={loadSettings} title="Settings" /></div>
+        {/if}
+
         {#if route.path === "/photo" && positiveIntParam("id") != null}
-          <PhotoDetail id={positiveIntParam("id")!} info={route.params.info === "1"} />
-        {:else if route.path === "/people"}
-          <People />
+          <Lazy load={loadPhotoDetail} title="Photo" props={{ id: positiveIntParam("id")!, info: route.params.info === "1" }} />
         {:else if route.path === "/people/review"}
-          <PersonReview />
+          <Lazy load={loadPersonReview} title="Review people" />
         {:else if route.path === "/review-faces"}
-          <FaceReview />
+          <Lazy load={loadFaceReview} title="Review faces" />
         {:else if route.path === "/person" && positiveIntParam("id") != null}
-          <PersonDetail id={positiveIntParam("id")!} />
-        {:else if route.path === "/albums"}
-          <Albums />
+          <Lazy load={loadPersonDetail} title="Person" props={{ id: positiveIntParam("id")! }} />
         {:else if route.path === "/album" && intParam("id") != null}
-          <AlbumDetail id={intParam("id")!} />
-        {:else if route.path === "/search"}
-          <Search initialQuery={route.params.q ?? ""} />
-        {:else if route.path === "/memories"}
-          <Memories />
+          <Lazy load={loadAlbumDetail} title="Album" props={{ id: intParam("id")! }} />
         {:else if route.path === "/memory" && route.params.id}
-          <MemoryDetail id={route.params.id} />
-        {:else if route.path === "/duplicates"}
-          <Duplicates />
+          <Lazy load={loadMemoryDetail} title="Memory" props={{ id: route.params.id }} />
         {:else if route.path === "/duplicate" && positiveIntParam("id") != null}
-          <DuplicateDetail id={positiveIntParam("id")!} />
-        {:else if route.path === "/bursts"}
-          <Bursts />
+          <Lazy load={loadDuplicateDetail} title="Duplicate group" props={{ id: positiveIntParam("id")! }} />
         {:else if route.path === "/burst" && positiveIntParam("id") != null}
-          <BurstDetail id={positiveIntParam("id")!} />
-        {:else if route.path === "/trash"}
-          <Trash />
-        {:else if route.path === "/insights"}
-          <Insights />
-        {:else if route.path === "/settings"}
-          <Settings />
-        {:else if route.path === "/map"}
-          <MapView />
-        {:else}
-          <Timeline revealId={positiveIntParam("photo")} />
+          <Lazy load={loadBurstDetail} title="Burst" props={{ id: positiveIntParam("id")! }} />
         {/if}
       </div>
     </div>
@@ -208,7 +245,6 @@
 {/if}
 
 <ToastHost />
-<SmartSetupDialog />
 <JobsIndicator />
 <Slideshow />
 <AssistantDrawer />
@@ -226,6 +262,14 @@
     flex-direction: column;
     overflow: hidden;
   }
+  .route-panel {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    flex-direction: column;
+  }
+  .route-panel.active { display: flex; }
   .no-library-main {
     height: 100vh;
     background: var(--bg);

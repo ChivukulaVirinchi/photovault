@@ -318,6 +318,9 @@ pub async fn people_face_list(
 
 #[derive(Debug, Deserialize)]
 pub struct UnclusteredFaceListArgs {
+    /// Bounded newest-face preview, including already assigned faces.
+    #[serde(default)]
+    pub recent: bool,
     pub cursor: Option<i64>,
     pub limit: Option<u32>,
 }
@@ -332,7 +335,11 @@ pub async fn people_unclustered_faces(
     let db = lib.db.lock().await;
     let repo = FaceRepo::new(&db.conn);
     let limit = args.limit.unwrap_or(24).clamp(1, 100) as usize;
-    let faces = repo.get_unclustered_faces(args.cursor, limit + 1)?;
+    let faces = if args.recent {
+        repo.get_recent_faces(limit)?
+    } else {
+        repo.get_unclustered_faces(args.cursor, limit + 1)?
+    };
     let (faces, has_more) = take_page_probe(faces, limit);
     let next_cursor = faces.last().map(|f| f.face_id);
     let items: Vec<FaceDetailDto> = faces.into_iter().map(FaceDetailDto::from).collect();

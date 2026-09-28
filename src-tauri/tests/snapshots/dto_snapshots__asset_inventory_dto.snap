@@ -22,19 +22,6 @@ expression: dto
       "size_bytes": 24000,
       "path": "C:/Program Files/Smriti/libs/onnxruntime/onnxruntime.dll",
       "note": "Required for local models."
-    },
-    {
-      "id": "ocr.model",
-      "label": "OCR model",
-      "kind": "model",
-      "status": "planned",
-      "required": false,
-      "active": false,
-      "installable": false,
-      "removable": false,
-      "size_bytes": null,
-      "path": null,
-      "note": "Not installed in this build."
     }
   ]
 }

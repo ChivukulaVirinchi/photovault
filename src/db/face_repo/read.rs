@@ -16,6 +16,26 @@ type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
 type UnprocessedPhotoRow = (i64, String, i32, Option<i64>, String);
 
 impl<'a> FaceRepo<'a> {
+    /// A live preview is a newest-first snapshot, not the oldest review page.
+    pub fn get_recent_faces(&self, limit: usize) -> SqliteResult<Vec<FaceDetail>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.photo_id, f.cluster_id, f.confidence, f.user_confirmed
+             FROM faces f JOIN photos p ON p.id = f.photo_id
+             WHERE p.is_trashed = FALSE AND f.user_confirmed >= 0
+             ORDER BY f.id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit.min(100) as i64], |row| {
+            Ok(FaceDetail {
+                face_id: row.get(0)?,
+                photo_id: row.get(1)?,
+                cluster_id: row.get(2)?,
+                confidence: row.get(3)?,
+                user_confirmed: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Count of photos that haven't yet had face detection run. Drives
     /// the "Resume face detection" banner on the People page.
     pub fn count_pending_face_processing(&self) -> SqliteResult<i64> {
@@ -30,16 +50,24 @@ impl<'a> FaceRepo<'a> {
     pub fn get_unclustered_faces_with_photo_embeddings(
         &self,
     ) -> SqliteResult<Vec<(i64, i64, FaceEmbedding)>> {
+        self.get_unclustered_embeddings_after(0)
+    }
+
+    /// Streaming assignment considers only newly committed faces.
+    pub fn get_unclustered_embeddings_after(
+        &self,
+        after_id: i64,
+    ) -> SqliteResult<Vec<(i64, i64, FaceEmbedding)>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.id, f.photo_id, f.embedding
                  FROM faces f
                  JOIN photos p ON p.id = f.photo_id
                  WHERE f.cluster_id IS NULL
                    AND f.user_confirmed >= 0
-                   AND p.is_trashed = FALSE",
+                   AND p.is_trashed = FALSE AND f.id > ?1",
         )?;
 
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([after_id], |row| {
             let id: i64 = row.get(0)?;
             let photo_id: i64 = row.get(1)?;
             let bytes: Vec<u8> = row.get(2)?;

@@ -7,21 +7,29 @@
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
   import { selection } from "../lib/stores/selection.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { marqueeSelect } from "../lib/actions/marqueeSelect";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import { createVirtualScroll } from "../lib/virtualizer.svelte";
 
   let items = $state<Awaited<ReturnType<typeof trash.list>>["items"]>([]);
   let stats = $state<{ count: number; total_size: number } | null>(null);
   let error = $state<string | null>(null);
   let actionBusy = $state(false);
+  let deleteErrors = $state<string[]>([]);
   let nextCursor = $state<string | null>(null);
   let hasMore = $state(false);
   let loadingMore = $state(false);
   let scrollEl = $state<HTMLDivElement | undefined>(undefined);
   let mounted = true;
   let loadSeq = 0;
+  let galleryColumns = $state(1);
+  const galleryRows = $derived.by(() =>
+    Array.from({ length: Math.ceil(items.length / galleryColumns) }, () => ({ height: 190 })),
+  );
+  const galleryVirtual = createVirtualScroll({ rows: () => galleryRows, scrollEl: () => scrollEl, overscan: 3 });
 
   const visibleIds = $derived(items.map((t) => t.photo_id));
   const selectedTrashIds = $derived.by(() => {
@@ -35,15 +43,19 @@
     error = null;
     loadingMore = false;
     try {
-      const page = await trash.list(null, 500);
+      // Cached per library session; mutations invalidate via
+      // photoVisibility, so this only skips the IPC on repeat visits.
+      const { page, nextStats } = await routeCache.get("trash:page", async () => {
+        const page = await trash.list(null, 500);
+        const nextStats = await trash.stats();
+        return { page, nextStats };
+      });
       if (!mounted || seq !== loadSeq) return;
       const nextVisibleIds = page.items.map((t) => t.photo_id);
       items = page.items;
       nextCursor = page.next_cursor;
       hasMore = page.has_more;
       browseContext.set("trash", nextVisibleIds);
-      const nextStats = await trash.stats();
-      if (!mounted || seq !== loadSeq) return;
       stats = nextStats;
       const visible = new Set(nextVisibleIds);
       if (selection.list().some((id) => !visible.has(id))) {
@@ -95,9 +107,10 @@
     if (selectedTrashCount === 0 || actionBusy) return;
     const seq = loadSeq;
     const ids = selectedTrashIds;
+    const session = libraryStore.session;
     try {
       actionBusy = true;
-      await trash.restore(ids);
+      await trash.restore(ids, session);
       if (!mounted || seq !== loadSeq) return;
       photoVisibility.markRestored(ids);
       selection.clear();
@@ -116,11 +129,19 @@
     const seq = loadSeq;
     try {
       actionBusy = true;
-      await trash.permanentDelete(ids);
+      const result = await trash.permanentDelete(ids, libraryStore.session);
       if (!mounted || seq !== loadSeq) return;
       photoVisibility.markTrashed(ids);
+      deleteErrors = result.errors;
       browseContext.remove(ids);
       selection.clear();
+      if (result.committed_with_recovery_errors) {
+        toasts.error("Deletion was committed, but cleanup is pending recovery. Keep this library available and retry after recovery.");
+      } else if (result.errors.length > 0) {
+        toasts.error(`${result.errors.length} file${result.errors.length === 1 ? "" : "s"} could not be deleted. The affected items remain available for retry.`);
+      } else {
+        toasts.success(`${result.db_records_deleted} photo${result.db_records_deleted === 1 ? "" : "s"} permanently deleted.`);
+      }
       await load();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
@@ -136,11 +157,19 @@
     const ids = visibleIds;
     try {
       actionBusy = true;
-      await trash.empty();
+      const result = await trash.empty(libraryStore.session);
       if (!mounted || seq !== loadSeq) return;
       photoVisibility.markTrashed(ids);
+      deleteErrors = result.errors;
       browseContext.remove(ids);
       selection.clear();
+      if (result.committed_with_recovery_errors) {
+        toasts.error("Deletion was committed, but cleanup is pending recovery. Keep this library available and retry after recovery.");
+      } else if (result.errors.length > 0) {
+        toasts.error(`${result.errors.length} file${result.errors.length === 1 ? "" : "s"} could not be deleted. Review the remaining trash items and retry.`);
+      } else {
+        toasts.success(`${result.db_records_deleted} photo${result.db_records_deleted === 1 ? "" : "s"} permanently deleted.`);
+      }
       await load();
     } catch (e) {
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
@@ -151,8 +180,17 @@
 
   onMount(() => {
     mounted = true;
+    const updateColumns = () => {
+      if (scrollEl) galleryColumns = Math.max(1, Math.floor((scrollEl.clientWidth - 8) / 180));
+    };
+    updateColumns();
+    const ro = scrollEl ? new ResizeObserver(updateColumns) : null;
+    if (scrollEl && ro) ro.observe(scrollEl);
+    const detachVirtual = galleryVirtual.attach();
     load();
     return () => {
+      detachVirtual();
+      ro?.disconnect();
       mounted = false;
       loadSeq += 1;
     };
@@ -173,6 +211,12 @@
 </PageHeader>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
+{#if deleteErrors.length > 0}
+  <details class="delete-errors">
+    <summary>{deleteErrors.length} deletion issue{deleteErrors.length === 1 ? "" : "s"} — show details</summary>
+    <ul>{#each deleteErrors as detail}<li class="mono">{detail}</li>{/each}</ul>
+  </details>
+{/if}
 
 <div class="page" bind:this={scrollEl} onscroll={onTrashScroll} use:marqueeSelect={{ getAllIds: () => visibleIds }}>
   {#if items.length === 0}
@@ -180,8 +224,10 @@
       <p>Nothing in trash. A clean shelf.</p>
     </div>
   {:else}
-    <div class="pv-photo-grid">
-      {#each items as t (t.photo_id)}
+    <div class="virtual-gallery" style={`height: ${galleryVirtual.totalHeight}px`}>
+      {#each Array.from({ length: Math.max(0, galleryVirtual.last - galleryVirtual.first) }, (_, i) => galleryVirtual.first + i) as row}
+      <div class="pv-photo-grid virtual-row" style={`top: ${galleryVirtual.offsets[row]}px`}>
+      {#each items.slice(row * galleryColumns, (row + 1) * galleryColumns) as t (t.photo_id)}
         <button
           class="pv-photo-cell trash-cell"
           class:sel={selection.has(t.photo_id)}
@@ -203,6 +249,8 @@
           </span>
         </button>
       {/each}
+      </div>
+      {/each}
     </div>
     {#if loadingMore}
       <p class="loading-more mono">Loading more…</p>
@@ -212,6 +260,8 @@
 
 <style>
   .page { padding: var(--s-4) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .virtual-gallery { position: relative; min-height: 1px; }
+  .virtual-row { position: absolute; inset-inline: 0; height: 180px; }
   .count { font-size: var(--t-sm); color: var(--ink); }
   .empty {
     padding: var(--s-9) var(--s-5);

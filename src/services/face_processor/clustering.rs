@@ -680,6 +680,7 @@ impl FaceProcessor {
     /// for end-of-run clustering to handle.
     pub(crate) fn stream_assign_existing_clusters(
         face_repo: &FaceRepo,
+        after_id: i64,
         clustering_threshold: f32,
         resolver_weights: crate::ml::ResolverWeights,
     ) -> Result<usize, String> {
@@ -719,7 +720,7 @@ impl FaceProcessor {
 
         let banding = crate::ml::BandingConfig::default();
         let unclustered = face_repo
-            .get_unclustered_faces_with_photo_embeddings()
+            .get_unclustered_embeddings_after(after_id)
             .map_err(|e| format!("stream Stage A: get unclustered: {}", e))?;
 
         let mut assigned = 0usize;

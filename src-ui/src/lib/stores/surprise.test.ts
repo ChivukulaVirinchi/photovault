@@ -12,6 +12,7 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
   });
 });
 
@@ -21,7 +22,7 @@ it("opens a slowshow in the selected album and records only displayed photos", a
   const store = new SlideshowStore();
   await store.surprise("library", 42, "Trip", () => true);
   expect(call).toHaveBeenCalledWith("memories_surprise", { album_id: 42, exclude_ids: [9] });
-  expect(store.intervalMs).toBe(12000);
+  expect(store.intervalMs).toBe(5000);
   expect(store.playing).toBe(true);
   expect(recentMemories("library")).toEqual([9]);
   store.presented(1);
@@ -77,13 +78,28 @@ it("keeps a bounded back-history while continuously refilling", async () => {
   expect(store.currentId()).toBe(500);
 });
 
-it("allows small albums to revisit earlier photos without growing forever", async () => {
+it("stops a small album once everything has been shown instead of cycling", async () => {
   vi.mocked(call).mockResolvedValue([photo(1), photo(2)]);
   const store = new SlideshowStore();
   await store.surprise("library", 1, "Small", () => true);
   for (let i = 0; i < 20; i++) await store.next();
-  expect(store.playing).toBe(true);
+  // The queue dedupes and the backend honors exclusions, so a small
+  // library ends the session instead of recycling the same photos.
+  expect(store.playing).toBe(false);
   expect(store.currentId()).not.toBeNull();
+});
+
+it("starts a deliberate fresh pass when every photo has been seen", async () => {
+  const store = new SlideshowStore();
+  rememberPhoto("fresh", 1);
+  rememberPhoto("fresh", 2);
+  // First batch: every photo is excluded -> empty. The store clears the
+  // seen-history and retries once, so the session continues cleanly
+  // instead of the backend silently re-serving recent slides.
+  vi.mocked(call).mockResolvedValueOnce([]).mockResolvedValueOnce([photo(3)]);
+  await store.surprise("fresh", null, "Fresh", () => true);
+  expect(store.ids).toEqual([3]);
+  expect(recentMemories("fresh")).toEqual([]);
 });
 
 it("clears the pending state on an empty library or a failed request", async () => {

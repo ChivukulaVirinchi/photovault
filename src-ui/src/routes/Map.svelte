@@ -21,22 +21,29 @@
 
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import maplibregl, { type Map as MapInstance, type Marker } from "maplibre-gl";
+  import type { Map as MapInstance, Marker } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
   import Supercluster from "supercluster";
   import { commandErrorMessage } from "../lib/api";
   import { map as mapApi } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { enqueueThumbnail, thumbnailOnVisible } from "../lib/thumbnailRequest";
-  import { installTileCache } from "../lib/tile-cache";
+  import { ensureTileCache, loadMapLibre } from "../lib/tile-cache";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import { X, ZoomIn } from "lucide-svelte";
   import type { MapPin } from "../lib/api/all";
   import type { PhotoSummaryDto } from "../lib/api/types";
 
-  installTileCache();
+  interface Props { active?: boolean }
+  let { active = true }: Props = $props();
+
+  /// MapLibre is a ~900 KB on-demand import (see lib/tile-cache.ts). It is
+  /// resolved once in onMount and kept here so the marker helpers can use it
+  /// without every call site awaiting. Nothing renders a map before it lands.
+  let maplibregl: Awaited<ReturnType<typeof loadMapLibre>> | null = null;
 
   const currentDriveRoot = libraryStore.driveRoot;
   const currentSession = libraryStore.session;
@@ -69,7 +76,17 @@
   let usingViewportPins = false;
   let disposed = false;
   let drawerSeq = 0;
-  const ALL_PINS_CAP = 100_000;
+  /// Above this many geotagged photos we stop trying to hold every pin in
+  /// memory and switch to the server-clustered viewport path.
+  ///
+  /// `map_pins_all` returns unclustered rows, so 100k pins meant roughly
+  /// 8-15 MB of JSON in a single IPC payload, a full deserialize, and a
+  /// Supercluster index build over all of it on the main thread — all before
+  /// the first marker could appear. The viewport path
+  /// (`collect_pins`) clusters in SQLite and caps the response at 1200 pins,
+  /// which is both faster and bounded. 20k still clusters instantly
+  /// client-side, so it stays the default for ordinary libraries.
+  const ALL_PINS_CAP = 20_000;
 
   // Filmstrip drawer state — for clusters, photo_ids are the leaves of
   // the supercluster tree; for single pins, just the one id.
@@ -225,8 +242,13 @@
   }
 
   /// Render the visible clusters/points. Synchronous — no IPC roundtrip.
+  ///
+  /// Runs as soon as the map instance exists and again on every move/zoom.
+  /// `getStyle()` can still be null for a map whose style has not finished
+  /// loading; pins are simply withheld until then rather than placed against
+  /// an untransformed viewport.
   function renderMarkers() {
-    if (!map) return;
+    if (!map || !map.getStyle()) return;
     if (usingViewportPins) {
       renderViewportMarkers();
       return;
@@ -273,7 +295,7 @@
         visible += 1;
       }
       markers.push(
-        new maplibregl.Marker({ element: el, anchor: "center" })
+        new maplibregl!.Marker({ element: el, anchor: "center" })
           .setLngLat([lng, lat])
           .addTo(map!),
       );
@@ -298,7 +320,7 @@
         visible += 1;
       }
       markers.push(
-        new maplibregl.Marker({ element: el, anchor: "center" })
+        new maplibregl!.Marker({ element: el, anchor: "center" })
           .setLngLat([pin.lng, pin.lat])
           .addTo(map),
       );
@@ -321,7 +343,7 @@
   async function loadAllPins() {
     loading = true;
     try {
-      const pins = await mapApi.pinsAll();
+      const pins = await routeCache.get("map:all-pins", () => mapApi.pinsAll());
       if (disposed) return;
       if (pins.length >= ALL_PINS_CAP) {
         usingViewportPins = true;
@@ -490,9 +512,39 @@
   onMount(() => {
     if (!containerEl) return;
     disposed = false;
+    void setupMap();
+  });
+
+  $effect(() => {
+    if (!active || !map) return;
+    requestAnimationFrame(() => {
+      if (!disposed && active && map) {
+        map.resize();
+        scheduleRender();
+      }
+    });
+  });
+
+  async function setupMap() {
+    if (!containerEl) return;
+    const container = containerEl;
+    let lib: Awaited<ReturnType<typeof loadMapLibre>>;
+    try {
+      // Both are required before a map can exist: the protocol must be
+      // registered before the first tile request, or every tile fails and
+      // the map stays blank rather than merely slow.
+      const loaded = await Promise.all([loadMapLibre(), ensureTileCache()]);
+      lib = loaded[0];
+    } catch (e) {
+      if (!disposed) error = `Couldn't load the map renderer: ${commandErrorMessage(e)}`;
+      return;
+    }
+    if (disposed) return;
+    maplibregl = lib;
+
     const returnState = readReturnState();
-    map = new maplibregl.Map({
-      container: containerEl,
+    const mapInstance = new lib.Map({
+      container,
       style: {
         version: 8,
         sources: {
@@ -520,12 +572,38 @@
       attributionControl: { compact: true },
     });
 
-    map.on("load", loadAllPins);
-    map.on("move", scheduleRender);
-    map.on("zoom", scheduleRender);
-    map.on("click", closeDrawer);
+    map = mapInstance;
+    // Pins are fetched as soon as the instance has bounds, NOT on the
+    // MapLibre "load" event. "load" waits for the style *and* the first
+    // raster tiles, and those tiles are network fetches through the
+    // `cached://` protocol — so gating pin data on it put the photo query
+    // behind the slowest thing on the page and made the map look empty for
+    // seconds. The marker layer simply renders whatever has arrived.
+    loadAllPins();
+    // If the pin payload wins the race against the style, the first
+    // renderMarkers() call is a no-op on an unloaded style. Re-render once
+    // the map is genuinely ready so the pins cannot be stranded.
+    mapInstance.once("load", () => {
+      if (disposed) return;
+      scheduleRender();
+    });
+    // MapLibre reports tile/style failures here rather than rejecting
+    // anything. Surface the first one: a blank map with no explanation is
+    // the worst outcome, and a tile failure is the likeliest cause (offline,
+    // or a blocked tile host). Pins render regardless of tile state.
+    let tileErrorShown = false;
+    mapInstance.on("error", (event: { error?: { message?: string } }) => {
+      if (disposed || tileErrorShown) return;
+      tileErrorShown = true;
+      error =
+        "Map tiles couldn't be loaded — check your connection. Photo pins still work.";
+      console.warn("maplibre error", event?.error?.message ?? event);
+    });
+    mapInstance.on("move", scheduleRender);
+    mapInstance.on("zoom", scheduleRender);
+    mapInstance.on("click", closeDrawer);
     window.addEventListener("keydown", onKey);
-  });
+  }
 
   onDestroy(() => {
     saveMapRouteCache();
@@ -537,7 +615,6 @@
     map?.remove();
     map = null;
     cluster = null;
-    window.removeEventListener("keydown", onKey);
   });
 </script>
 

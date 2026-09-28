@@ -2,6 +2,7 @@ import { library } from "../api/library";
 import { resetThumbnailRequests } from "../thumbnailRequest";
 import { settings } from "../api/all";
 import { commandErrorMessage } from "../api";
+import { toasts } from "./toast.svelte";
 import type {
   CommandError,
   DriveDto,
@@ -24,35 +25,47 @@ class LibraryStore {
   error = $state<string | null>(null);
   lastError = $state<CommandError | null>(null);
   private seq = 0;
+  /// Resolves once the current refresh has loaded (or failed to load)
+  /// the remembered drives — the boot fast-path waits on this to know
+  /// which library to reopen.
+  refreshDone: Promise<void> = Promise.resolve();
 
   private async syncCurrent(seq: number) {
     const cur: LibraryHandleDto | null = await library.current();
     if (seq !== this.seq) return;
+    this.session = cur?.library_session_id ?? 0;
     this.isOpen = cur !== null && !cur.read_only;
     this.driveRoot = cur?.drive_root ?? null;
     this.photoCount = cur?.photo_count ?? 0;
     this.unsupportedSchema = cur?.schema_too_new ?? null;
   }
 
-  async refresh() {
-    const seq = ++this.seq;
+  refresh(): Promise<void> {
+    this.refreshDone = this.runRefresh(++this.seq);
+    return this.refreshDone;
+  }
+
+  private async runRefresh(seq: number) {
     this.loading = true;
     this.error = null;
     this.lastError = null;
     try {
       await this.syncCurrent(seq);
-      const drives = await library.listDrives();
+      if (seq !== this.seq) return;
+      // Optional drive discovery must not disable manual folder selection.
+      this.loading = false;
+      // Drives and settings are independent — fetch them together so
+      // the boot fast-path can start reopening the last library sooner.
+      const [drives, remembered] = await Promise.all([
+        library.listDrives(),
+        settings
+          .get()
+          .then((s) => s.remembered_drives ?? [])
+          .catch(() => []), // Settings is best-effort here; drive picker still works without.
+      ]);
       if (seq !== this.seq) return;
       this.drives = drives;
-      try {
-        const s = await settings.get();
-        if (seq !== this.seq) return;
-        this.remembered = s.remembered_drives ?? [];
-      } catch {
-        if (seq !== this.seq) return;
-        // Settings is best-effort here; drive picker still works without.
-        this.remembered = [];
-      }
+      this.remembered = remembered;
     } catch (e) {
       if (seq === this.seq) {
         this.error = commandErrorMessage(e);
@@ -73,11 +86,18 @@ class LibraryStore {
       const r = await library.open(drivePath);
       if (seq !== this.seq) return;
       resetThumbnailRequests();
-      this.session += 1;
+      this.session = r.library_session_id;
       this.isOpen = !r.read_only;
       this.driveRoot = r.drive_root;
       this.photoCount = r.photo_count;
       this.unsupportedSchema = r.schema_too_new;
+      // The catalog records which drive root it was created for; opening
+      // it from somewhere else means face/album data may not match files.
+      if (r.catalog_mismatch) {
+        toasts.error(
+          `This index was created for ${r.catalog_mismatch}, not for ${r.drive_root}. Photo data may not match.`,
+        );
+      }
       // Push into remembered_drives, dedup, cap at MAX_REMEMBERED.
       // Best-effort persistence — if settings.update fails, we still opened.
       try {

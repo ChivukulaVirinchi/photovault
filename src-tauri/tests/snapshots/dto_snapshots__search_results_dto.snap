@@ -45,5 +45,6 @@ expression: dto
       "location_country": "France",
       "thumbnail_path": ".photovault/thumbnails/search.jpg"
     }
-  ]
+  ],
+  "has_more": false
 }

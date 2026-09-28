@@ -1,5 +1,6 @@
 ---
 source: src-tauri/tests/dto_snapshots.rs
+assertion_line: 349
 expression: dto
 ---
 {
@@ -17,6 +18,7 @@ expression: dto
     "2024-01-01": 3
   },
   "heatmap_year": 2024,
+  "months_by_year": {},
   "monthly_counts": [
     1,
     2,

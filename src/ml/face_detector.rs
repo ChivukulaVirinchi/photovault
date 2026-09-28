@@ -45,7 +45,9 @@ pub struct DetectedFace {
 
 /// SCRFD Face Detector
 pub struct FaceDetector {
-    session: Session,
+    session: Option<Session>,
+    model_path: std::path::PathBuf,
+    cpu_fallback_attempted: bool,
     input_size: (u32, u32),
     confidence_threshold: f32,
     nms_threshold: f32,
@@ -67,10 +69,14 @@ impl FaceDetector {
         model_path: P,
         intra_threads: usize,
     ) -> ort::Result<Self> {
-        let session = runtime.load_model_with_threads(model_path, intra_threads)?;
+        let model_path = model_path.as_ref().to_path_buf();
+        let _ = runtime;
+        let session = OnnxRuntime::load_cpu_model_with_threads(&model_path, intra_threads)?;
 
         Ok(Self {
-            session,
+            session: Some(session),
+            model_path,
+            cpu_fallback_attempted: false,
             input_size: (640, 640),
             confidence_threshold: 0.5,
             nms_threshold: 0.4,
@@ -213,6 +219,20 @@ impl FaceDetector {
 
     /// Run ONNX inference and extract output tensors with their shapes
     fn run_inference(&mut self, input_data: &[f32]) -> ort::Result<Vec<(Vec<i64>, Vec<f32>)>> {
+        match self.run_inference_once(input_data) {
+            Ok(output) => Ok(output),
+            Err(error) if !self.cpu_fallback_attempted => {
+                tracing::warn!(%error, "Detector inference failed; retrying once on CPU");
+                self.cpu_fallback_attempted = true;
+                self.session = None; // Release device memory before constructing the fallback.
+                self.session = Some(OnnxRuntime::load_cpu_model(&self.model_path)?);
+                self.run_inference_once(input_data)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_inference_once(&mut self, input_data: &[f32]) -> ort::Result<Vec<(Vec<i64>, Vec<f32>)>> {
         let (target_w, target_h) = self.input_size;
 
         // Create input tensor (shape [1, 3, 640, 640])
@@ -221,7 +241,11 @@ impl FaceDetector {
             input_data,
         ))?;
 
-        let outputs = self.session.run(ort::inputs![input_tensor])?;
+        let outputs = self
+            .session
+            .as_mut()
+            .ok_or_else(|| ort::Error::new("Detector session unavailable"))?
+            .run(ort::inputs![input_tensor])?;
 
         // Extract all output tensors with shapes
         let mut results = Vec::new();

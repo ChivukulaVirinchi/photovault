@@ -26,6 +26,7 @@ export function createThumbnailQueue(
   let activeUrgent = 0;
   let seq = 0;
   let pumpScheduled = false;
+  let pauseCount = 0;
   const queued = new Map<number, QueueEntry>();
   const activeHandlers = new Map<number, Set<ThumbnailReadyHandler>>();
   let generation = 0;
@@ -68,6 +69,7 @@ export function createThumbnailQueue(
   }
 
   function pump() {
+    if (pauseCount > 0) return;
     while (true) {
       const next = bestEntry(undefined, false);
       if (!next) return;
@@ -172,6 +174,16 @@ export function createThumbnailQueue(
 
   return {
     enqueue,
+    pause: () => {
+      pauseCount += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        pauseCount = Math.max(0, pauseCount - 1);
+        if (pauseCount === 0) requestPump();
+      };
+    },
     reset: () => {
       generation += 1;
       queued.clear();

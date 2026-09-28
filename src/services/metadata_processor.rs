@@ -55,16 +55,27 @@ async fn run_metadata_job(
 
     let total: u64 = {
         let guard = db.lock().await;
-        guard.conn.query_row(
-            "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0)
+        // Per-run failure exclusion lives in a temp table so the chunk
+        // query plan stays constant no matter how many files failed
+        // (an ever-growing `NOT IN (…)` list degraded quadratically).
+        if let Err(e) = guard.conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS meta_failed_ids (id INTEGER PRIMARY KEY);
+             DELETE FROM meta_failed_ids;",
+        ) {
+            tracing::warn!("metadata failed-id table unavailable: {e}");
+        }
+        guard
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
     };
     let total = total as u64;
     let mut done = 0u64;
     let mut hard_error: Option<String> = None;
-    let mut failed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     let geonames_path = crate::db::geonames::geonames_db_path();
     let geocoder = if geonames_path.exists() {
@@ -80,7 +91,7 @@ async fn run_metadata_job(
 
         let chunk: Vec<(i64, String, String)> = {
             let guard = db.lock().await;
-            match load_metadata_chunk(&guard.conn, &failed_ids, METADATA_CHUNK_SIZE) {
+            match load_metadata_chunk(&guard.conn, METADATA_CHUNK_SIZE) {
                 Ok(rows) => rows,
                 Err(e) => {
                     hard_error = Some(format!("metadata query failed: {e}"));
@@ -159,7 +170,10 @@ async fn run_metadata_job(
             for ((id, file_hash, meta), (city, country)) in extracted.iter().zip(&locations) {
                 if matches!(meta, ExtractedMetadata::Skipped) {
                     errors_this_chunk += 1;
-                    failed_ids.insert(*id);
+                    let _ = tx.execute(
+                        "INSERT OR IGNORE INTO meta_failed_ids(id) VALUES (?1)",
+                        [*id],
+                    );
                     continue;
                 }
                 let gps_latitude = meta.gps_latitude();
@@ -228,12 +242,18 @@ async fn run_metadata_job(
                 match res {
                     Ok(0) => {
                         errors_this_chunk += 1;
-                        failed_ids.insert(*id);
+                        let _ = tx.execute(
+                            "INSERT OR IGNORE INTO meta_failed_ids(id) VALUES (?1)",
+                            [*id],
+                        );
                     }
                     Ok(_) => {}
                     Err(_) => {
                         errors_this_chunk += 1;
-                        failed_ids.insert(*id);
+                        let _ = tx.execute(
+                            "INSERT OR IGNORE INTO meta_failed_ids(id) VALUES (?1)",
+                            [*id],
+                        );
                     }
                 }
             }
@@ -253,6 +273,13 @@ async fn run_metadata_job(
             stage: Some("extract".to_string()),
             message: None,
         });
+    }
+
+    {
+        let guard = db.lock().await;
+        let _ = guard
+            .conn
+            .execute("DROP TABLE IF EXISTS temp.meta_failed_ids", []);
     }
 
     let _ = progress_tx
@@ -278,30 +305,15 @@ enum ExtractedMetadata {
 
 fn load_metadata_chunk(
     conn: &rusqlite::Connection,
-    failed_ids: &std::collections::HashSet<i64>,
     limit: usize,
 ) -> rusqlite::Result<Vec<(i64, String, String)>> {
-    let mut sql = String::from(
-        "SELECT id, file_path, file_hash FROM photos \
-         WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
-    );
-    let mut params: Vec<i64> = Vec::with_capacity(failed_ids.len() + 1);
-    if !failed_ids.is_empty() {
-        sql.push_str(" AND id NOT IN (");
-        for idx in 0..failed_ids.len() {
-            if idx > 0 {
-                sql.push_str(", ");
-            }
-            sql.push('?');
-        }
-        sql.push(')');
-        params.extend(failed_ids.iter().copied());
-    }
-    sql.push_str(" ORDER BY id ASC LIMIT ?");
-    params.push(limit as i64);
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+    conn.execute_batch("CREATE TEMP TABLE IF NOT EXISTS meta_failed_ids (id INTEGER PRIMARY KEY)")?;
+    let sql = "SELECT id, file_path, file_hash FROM photos \
+         WHERE metadata_extracted = FALSE AND is_trashed = FALSE \
+         AND NOT EXISTS (SELECT 1 FROM meta_failed_ids f WHERE f.id = photos.id) \
+         ORDER BY id ASC LIMIT ?";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([limit as i64], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     })?;
     rows.collect()
@@ -609,7 +621,6 @@ impl ExtractedMetadata {
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone, Timelike, Utc};
-    use std::collections::HashSet;
 
     #[test]
     fn quicktime_epoch_date_reads_mvhd_creation_time() {
@@ -664,10 +675,13 @@ mod tests {
             "#,
         )
         .unwrap();
-        let mut failed = HashSet::new();
-        failed.insert(1);
+        conn.execute_batch(
+            "CREATE TEMP TABLE meta_failed_ids (id INTEGER PRIMARY KEY);
+             INSERT INTO meta_failed_ids(id) VALUES (1);",
+        )
+        .unwrap();
 
-        let rows = load_metadata_chunk(&conn, &failed, 20).unwrap();
+        let rows = load_metadata_chunk(&conn, 20).unwrap();
 
         assert_eq!(rows, vec![(2, "good.jpg".into(), "bb222".into())]);
     }

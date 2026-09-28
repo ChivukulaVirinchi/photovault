@@ -5,11 +5,13 @@
   import { bursts } from "../lib/api/all";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
+  import { routeCache } from "../lib/stores/routeCache.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import { createVirtualScroll } from "../lib/virtualizer.svelte";
 
   let groups = $state<Awaited<ReturnType<typeof bursts.list>>>([]);
   let error = $state<string | null>(null);
@@ -22,6 +24,20 @@
   let pageEl = $state<HTMLDivElement | undefined>(undefined);
   let scrollRestored = false;
   const scrollStorageKey = $derived(`smriti:bursts-scroll:${libraryStore.driveRoot ?? "closed"}`);
+  /// Height of one burst card row, in px.
+  ///
+  /// Cards are laid out as absolutely-positioned rows at a fixed pitch, so this
+  /// must match the real card height or successive cards either overlap or
+  /// leave a gap. It was hard-coded to 300px while the card's own CSS (a 48px
+  /// header plus a 140px strip) comes to roughly 193px, so every card sat in a
+  /// 300px slot and the list looked double-spaced. Measured from the DOM
+  /// instead, the same way the Duplicates gallery does it.
+  let galleryRowHeight = $state(300);
+  let galleryEl = $state<HTMLDivElement | undefined>(undefined);
+  const galleryRows = $derived.by(() =>
+    groups.map(() => ({ height: galleryRowHeight })),
+  );
+  const galleryVirtual = createVirtualScroll({ rows: () => galleryRows, scrollEl: () => pageEl, overscan: 3 });
 
   // Detection runs in tokio::spawn on the backend. Local "running"
   // booleans were resetting on remount, so the UI lied about what
@@ -40,7 +56,11 @@
     scrollRestored = false;
     loadingMore = false;
     try {
-      const nextGroups = await bursts.list(PAGE_SIZE, 0);
+      // Cached per library session; invalidated when a bursts job
+      // completes or a stack is dismissed.
+      const nextGroups = await routeCache.get("bursts:page", () =>
+        bursts.list(PAGE_SIZE, 0),
+      );
       if (!mounted || seq !== loadSeq) return;
       groups = nextGroups;
       hasMore = nextGroups.length === PAGE_SIZE;
@@ -152,7 +172,18 @@
 
   onMount(() => {
     mounted = true;
+    const detachVirtual = galleryVirtual.attach();
     load();
+    // Keep the virtual row pitch in sync with the rendered card. One card is
+    // enough — they are identical.
+    const measureRow = () => {
+      const card = galleryEl?.querySelector<HTMLElement>(".burst-card");
+      const measured = card?.getBoundingClientRect().height ?? 0;
+      if (measured > 1) galleryRowHeight = Math.ceil(measured);
+    };
+    const ro = new ResizeObserver(measureRow);
+    if (galleryEl) ro.observe(galleryEl);
+    requestAnimationFrame(measureRow);
     const unlisten = listen<{ stage?: string; message?: string | null }>("bursts:progress", (e) => {
       if (!mounted) return;
       if (e.payload.stage === "persisted") load();
@@ -163,6 +194,8 @@
       }
     });
     return () => {
+      ro.disconnect();
+      detachVirtual();
       saveScroll();
       mounted = false;
       loadSeq += 1;
@@ -202,8 +235,12 @@
       </button>
     </div>
   {:else}
-    <ul class="card-list">
-      {#each groups as g (g.id)}
+    <div class="virtual-gallery" bind:this={galleryEl} style={`height: ${galleryVirtual.totalHeight}px`}>
+      <ul
+        class="card-list virtual-row"
+        style={`top: ${galleryVirtual.offsets[galleryVirtual.first] ?? 0}px; height: ${galleryRowHeight * Math.max(0, galleryVirtual.last - galleryVirtual.first)}px`}
+      >
+      {#each groups.slice(galleryVirtual.first, galleryVirtual.last) as g (g.id)}
         {@const memberIds = g.member_photo_ids.length > 0 ? g.member_photo_ids : g.cover_photo_ids}
         {@const slots = coverSlots(g)}
         <li class="burst-card">
@@ -246,7 +283,8 @@
           </div>
         </li>
       {/each}
-    </ul>
+      </ul>
+    </div>
     {#if hasMore}
       <div class="more-row">
         <button class="ghost" onclick={loadMore} disabled={loadingMore}>
@@ -259,6 +297,8 @@
 
 <style>
   .page { padding: var(--s-5) var(--s-7) var(--s-7); flex: 1; overflow-y: auto; }
+  .virtual-gallery { position: relative; min-height: 1px; }
+  .virtual-row { position: absolute; inset-inline: 0; margin: 0; }
   .count { font-size: var(--t-sm); color: var(--ink); }
   .empty {
     padding: var(--s-8) var(--s-5);
@@ -291,6 +331,8 @@
     border: 1px solid var(--line);
     border-radius: var(--r-md);
     overflow: hidden;
+    content-visibility: auto;
+    contain-intrinsic-size: 320px 260px;
     transition: border-color var(--t-fast) var(--ease);
   }
   .burst-card:hover { border-color: var(--accent); }

@@ -9,6 +9,7 @@ export interface ScanProgress {
   elapsed_ms: number;
   is_complete: boolean;
   error_count: number;
+  error_details: string[];
 }
 
 export const events = {

@@ -14,6 +14,11 @@ use crate::{CommandError, CommandResult};
 
 const MAX_BULK_PHOTO_IDS: usize = 10_000;
 
+// File journaling and recovery must be serialized for one process. SQLite
+// serializes writers, but it cannot serialize the filesystem staging work
+// that happens before and after the transaction.
+pub(crate) static DELETE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn encode_trash_cursor(trashed_at: &str, photo_id: i64) -> String {
     URL_SAFE_NO_PAD.encode(format!("{trashed_at}|{photo_id}"))
 }
@@ -115,6 +120,30 @@ pub async fn trash_stats(state: State<'_, AppState>) -> CommandResult<TrashStats
 #[derive(Debug, Deserialize)]
 pub struct TrashPhotoIdsArgs {
     pub photo_ids: Vec<i64>,
+    /// Backend-issued session captured when the request was created. Older
+    /// clients may omit it; new clients are rejected if the library changed.
+    #[serde(default)]
+    pub library_session_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TrashSessionArgs {
+    #[serde(default)]
+    pub library_session_id: Option<u64>,
+}
+
+fn validate_library_session(state: &AppState, expected: Option<u64>) -> CommandResult<()> {
+    if let Some(expected) = expected {
+        let actual = state
+            .active_session
+            .load(std::sync::atomic::Ordering::Acquire);
+        if actual != expected {
+            return Err(CommandError::Conflict {
+                reason: "library changed; retry the operation on the current library".into(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -127,6 +156,7 @@ pub struct TrashDeleteResultDto {
     pub files_deleted: u64,
     pub db_records_deleted: u64,
     pub errors: Vec<String>,
+    pub committed_with_recovery_errors: bool,
 }
 
 #[tauri::command]
@@ -134,6 +164,7 @@ pub async fn trash_trash_photos(
     state: State<'_, AppState>,
     args: TrashPhotoIdsArgs,
 ) -> CommandResult<TrashCountDto> {
+    validate_library_session(&state, args.library_session_id)?;
     let photo_ids = normalize_bulk_photo_ids(args.photo_ids)?;
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -147,6 +178,7 @@ pub async fn trash_restore(
     state: State<'_, AppState>,
     args: TrashPhotoIdsArgs,
 ) -> CommandResult<TrashCountDto> {
+    validate_library_session(&state, args.library_session_id)?;
     let photo_ids = normalize_bulk_photo_ids(args.photo_ids)?;
     let lib_guard = state.library.read().await;
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -160,6 +192,13 @@ pub async fn trash_permanent_delete(
     state: State<'_, AppState>,
     args: TrashPhotoIdsArgs,
 ) -> CommandResult<TrashDeleteResultDto> {
+    // Hold the lifecycle guard before resolving the target. This prevents a
+    // queued request from observing a different library after it waited for
+    // another delete to finish, and blocks close/switch for the full journal
+    // operation.
+    let _lifecycle = state.library_lifecycle.lock().await;
+    let _delete_lock = DELETE_LOCK.lock().await;
+    validate_library_session(&state, args.library_session_id)?;
     let photo_ids = normalize_bulk_photo_ids(args.photo_ids)?;
     let drive_root = {
         let lib_guard = state.library.read().await;
@@ -182,12 +221,21 @@ pub async fn trash_permanent_delete(
     Ok(TrashDeleteResultDto {
         files_deleted: r.files_deleted as u64,
         db_records_deleted: r.db_records_deleted as u64,
+        committed_with_recovery_errors: r.committed_with_recovery_errors,
         errors: r.errors,
     })
 }
 
 #[tauri::command]
-pub async fn trash_empty(state: State<'_, AppState>) -> CommandResult<TrashDeleteResultDto> {
+pub async fn trash_empty(
+    state: State<'_, AppState>,
+    args: TrashSessionArgs,
+) -> CommandResult<TrashDeleteResultDto> {
+    let _lifecycle = state.library_lifecycle.lock().await;
+    let _delete_lock = DELETE_LOCK.lock().await;
+    // Empty-trash has no IDs, but it is still bound to the session that
+    // initiated it so a queued request can never empty a newly opened drive.
+    validate_library_session(&state, args.library_session_id)?;
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -205,6 +253,7 @@ pub async fn trash_empty(state: State<'_, AppState>) -> CommandResult<TrashDelet
     Ok(TrashDeleteResultDto {
         files_deleted: r.files_deleted as u64,
         db_records_deleted: r.db_records_deleted as u64,
+        committed_with_recovery_errors: r.committed_with_recovery_errors,
         errors: r.errors,
     })
 }

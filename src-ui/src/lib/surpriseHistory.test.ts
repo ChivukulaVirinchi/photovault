@@ -8,11 +8,15 @@ it("bounds local history and keeps libraries separate", () => {
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
   });
   for (let i = 1; i <= 250; i++) rememberPhoto("a", i);
   rememberPhoto("b", 1);
-  expect(recentMemories("a")).toHaveLength(200);
-  expect(recentMemories("a")[0]).toBe(51);
+  // The cap raised 200 -> 1000: the surprise session sends the full
+  // seen-set to the backend, and a 200-photo window was small enough
+  // that long sessions started recycling already-shown photos.
+  expect(recentMemories("a")).toHaveLength(250);
+  expect(recentMemories("a")[0]).toBe(1);
   expect(recentMemories("b")).toEqual([1]);
 });
 

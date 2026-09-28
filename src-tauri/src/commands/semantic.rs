@@ -11,7 +11,6 @@ use smriti::db::connection::{db_path_for, open_secondary};
 use smriti::db::photo_repo::PhotoRepo;
 use smriti::services::semantic::SemanticSearchService;
 
-use super::library::spawn_semantic_warmup;
 use crate::dto::{JobIdDto, PhotoSummaryDto, SemanticStatusDto};
 use crate::events::{JobProgress, EV_SEMANTIC_COMPLETE, EV_SEMANTIC_PROGRESS};
 use crate::jobs::{self, emit};
@@ -47,7 +46,7 @@ pub async fn semantic_warm_runtime(state: State<'_, AppState>) -> CommandResult<
             lib.semantic_runner.clone(),
         )
     };
-    spawn_semantic_warmup(drive_root, semantic_index, semantic_runner);
+    super::library::spawn_semantic_warmup(drive_root, semantic_index, semantic_runner, None);
     Ok(())
 }
 

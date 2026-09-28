@@ -44,6 +44,11 @@ export function resetThumbnailRequests() {
   queue.reset();
 }
 
+/** Hold queued thumbnail generation while the user is actively scrolling. */
+export function pauseThumbnailRequests(): () => void {
+  return queue.pause();
+}
+
 export function thumbnailOnVisible(node: HTMLElement, initial: ThumbnailRequestOptions) {
   let options = initial;
   let prefetchObserver: IntersectionObserver | null = null;

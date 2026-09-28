@@ -46,20 +46,12 @@ pub async fn memories_surprise(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let conn = smriti::db::open_secondary(&db_path)?;
-        let mut ids =
+        // Honor exclusions strictly. When the seen-set covers the whole
+        // pool, return empty and let the frontend decide to start a
+        // fresh pass — silently re-serving recent slides made surprise
+        // sessions repeat photos and feel like they were bouncing.
+        let ids =
             smriti::services::memories::surprise_photos(&conn, args.album_id, &args.exclude_ids)?;
-        // A small album can exhaust the recent-history window. Begin a
-        // fresh pass without immediately repeating the last queued photo.
-        if ids.is_empty() && !args.exclude_ids.is_empty() {
-            ids = smriti::services::memories::surprise_photos(
-                &conn,
-                args.album_id,
-                &args.exclude_ids[args.exclude_ids.len() - 1..],
-            )?;
-            if ids.is_empty() {
-                ids = smriti::services::memories::surprise_photos(&conn, args.album_id, &[])?;
-            }
-        }
         let photos = smriti::db::PhotoRepo::new(&conn).get_by_ids(&ids)?;
         let by_id: std::collections::HashMap<_, _> = photos.iter().map(|p| (p.id, p)).collect();
         Ok(ids
@@ -87,13 +79,13 @@ pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<Mem
         }
         let cards = smriti::services::memories::generate_for_today(&db.conn, today)
             .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
-        let mut dtos: Vec<MemoryCardDto> = cards.into_iter().map(Into::into).collect();
+        let dtos: Vec<MemoryCardDto> = cards.into_iter().map(Into::into).collect();
         let inputs = collect_hero_inputs(&db.conn, &dtos)?;
         // The medium-thumbnail upgrade runs outside this lock to keep
         // the DB free for other handlers.
-        for c in dtos.iter_mut() {
-            c.hero_thumbnail_path = None;
-        }
+        // Keep the small rendition as an immediate fallback. A medium
+        // upgrade is best effort; a failed/slow source must not turn a
+        // perfectly usable card into an empty image.
         (dtos, inputs, lib.drive_root.clone(), lib.thumbnails.clone())
     };
 

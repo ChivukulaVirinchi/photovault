@@ -5,6 +5,8 @@ class SettingsStore {
   data = $state<Settings | null>(null);
   loading = $state(false);
   private seq = 0;
+  private systemThemeQuery: MediaQueryList | null = null;
+  private systemThemeListener: ((event: MediaQueryListEvent) => void) | null = null;
 
   async load() {
     const seq = ++this.seq;
@@ -35,6 +37,29 @@ class SettingsStore {
         : "dark";
     }
     document.documentElement.setAttribute("data-theme", resolved);
+    this.installSystemThemeListener(t === "system");
+  }
+
+  private installSystemThemeListener(enabled: boolean) {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    if (!enabled) {
+      if (this.systemThemeQuery && this.systemThemeListener) {
+        this.systemThemeQuery.removeEventListener("change", this.systemThemeListener);
+      }
+      this.systemThemeQuery = null;
+      this.systemThemeListener = null;
+      return;
+    }
+    if (this.systemThemeQuery && this.systemThemeListener) return;
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    const listener = () => {
+      if (this.data?.theme === "system") {
+        document.documentElement.setAttribute("data-theme", query.matches ? "light" : "dark");
+      }
+    };
+    query.addEventListener("change", listener);
+    this.systemThemeQuery = query;
+    this.systemThemeListener = listener;
   }
 
   async update(patch: Partial<Settings>) {

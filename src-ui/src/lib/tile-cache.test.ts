@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("maplibre-gl", () => ({ default: { addProtocol: vi.fn() } }));
+vi.mock("maplibre-gl", () => ({ addProtocol: vi.fn(), default: { addProtocol: vi.fn() } }));
 vi.mock("./api/all", () => ({ settings: { get: vi.fn() } }));
-import { loadTile } from "./tile-cache";
+import { ensureTileCache, loadTile } from "./tile-cache";
+import { settings } from "./api/all";
 import { clearTileCache, setTileCacheLimit, storeTile, tileCacheGeneration, tileCacheStats } from "./tile-cache-storage";
 
 const data = new Map<string, Response>();
@@ -22,22 +23,26 @@ beforeEach(async () => {
 });
 
 describe("map tile cache", () => {
-  it("uses fresh tiles without a request", async () => {
+  it("does not hold map construction behind cache-budget maintenance", async () => {
+    vi.mocked(settings.get).mockReturnValue(new Promise(() => {}));
+    await ensureTileCache();
+    const maplibre = await import("maplibre-gl");
+    expect(maplibre.addProtocol).toHaveBeenCalledWith("cached", expect.any(Function));
+  });
+
+  it("uses cached tiles without a request regardless of age", async () => {
     data.set(url, new Response("cached", { headers: { "x-pv-cached-at": String(Date.now()) } }));
     expect(new TextDecoder().decode(await loadTile(url, new AbortController().signal))).toBe("cached");
     expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("uses stale tiles offline", async () => {
     data.set(url, new Response("offline", { headers: { "x-pv-cached-at": "1" } }));
-    vi.mocked(fetch).mockRejectedValue(new TypeError("offline"));
     expect(new TextDecoder().decode(await loadTile(url, new AbortController().signal))).toBe("offline");
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("does not mask cancellation with a stale tile", async () => {
+  it("honours cancellation before reading a cached tile", async () => {
     data.set(url, new Response("old"));
     const controller = new AbortController();
-    vi.mocked(fetch).mockImplementation(async () => { controller.abort(); throw controller.signal.reason; });
+    controller.abort();
     await expect(loadTile(url, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 

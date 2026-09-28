@@ -15,11 +15,14 @@ use smriti::services::semantic::{
     SemanticIndexCache, SemanticModelRunner, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
 };
 
+use super::bursts::BurstsCompleteDto;
+use super::duplicates::DuplicatesCompleteDto;
 use crate::dto::{
     DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
     LibraryHandleDto, MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, SchemaTooNewDto,
 };
 use crate::events::{
+    JobProgress, EV_BURSTS_COMPLETE, EV_DUPLICATES_COMPLETE, EV_DUPLICATES_PROGRESS,
     EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
     EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
 };
@@ -39,7 +42,7 @@ pub async fn library_list_drives() -> CommandResult<Vec<DriveDto>> {
 pub async fn library_current(
     state: State<'_, AppState>,
 ) -> CommandResult<Option<LibraryHandleDto>> {
-    let (drive_root, db_path) = {
+    let (drive_root, db_path, session_id) = {
         let lib_guard = state.library.read().await;
         let Some(lib) = lib_guard.as_ref() else {
             let unsupported_guard = state.unsupported_library.read().await;
@@ -48,6 +51,7 @@ pub async fn library_current(
         (
             lib.drive_root.display().to_string(),
             smriti::db::db_path_for(&lib.drive_root),
+            Some(lib.session_id),
         )
     };
     let photo_count = tauri::async_runtime::spawn_blocking(move || {
@@ -63,6 +67,7 @@ pub async fn library_current(
         photo_count,
         read_only: false,
         schema_too_new: None,
+        library_session_id: session_id,
     }))
 }
 
@@ -75,6 +80,7 @@ fn unsupported_library_dto(lib: &UnsupportedLibrary) -> LibraryHandleDto {
             db_version: lib.db_version,
             max_supported: lib.max_supported,
         }),
+        library_session_id: None,
     }
 }
 
@@ -281,6 +287,10 @@ pub struct LibraryOpenResult {
     pub first_run: bool,
     pub read_only: bool,
     pub schema_too_new: Option<SchemaTooNewDto>,
+    /// Set when the catalog's recorded root differs from the drive being
+    /// opened — the index was created for another drive.
+    pub catalog_mismatch: Option<String>,
+    pub library_session_id: u64,
 }
 
 #[tauri::command]
@@ -308,7 +318,7 @@ pub async fn library_open(
         message: format!("library open worker failed: {e}"),
     })?;
 
-    let (database, needs_schema, photo_count) = match prepared {
+    let (database, needs_schema, photo_count, catalog_mismatch) = match prepared {
         Ok(prepared) => prepared,
         Err(CommandError::SchemaTooNew {
             db_version,
@@ -334,21 +344,18 @@ pub async fn library_open(
                     db_version,
                     max_supported,
                 }),
+                catalog_mismatch: None,
+                library_session_id: 0,
             });
         }
         Err(err) => return Err(err),
     };
 
-    let open_library =
+    let mut open_library =
         OpenLibrary::new(drive_root.clone(), database).map_err(|e| CommandError::Io {
             message: e.to_string(),
         })?;
-    spawn_semantic_warmup(
-        drive_root.clone(),
-        open_library.semantic_index.clone(),
-        open_library.semantic_runner.clone(),
-    );
-
+    open_library.semantic_runner = state.semantic_runner.clone();
     state.jobs.lock().await.cancel_library_scoped();
     *state.unsupported_library.write().await = None;
     let mut guard = state.library.write().await;
@@ -356,37 +363,66 @@ pub async fn library_open(
         open_library.session_id,
         std::sync::atomic::Ordering::Release,
     );
-    let cache = open_library.thumbnails.clone();
+    let semantic_index = open_library.semantic_index.clone();
+    let semantic_runner = open_library.semantic_runner.clone();
     let maintenance_cancel = open_library.maintenance_cancel.clone();
+    let maintenance_db = open_library.db.clone();
     *guard = Some(open_library);
     drop(guard);
     state.assistant.lock().await.sessions.clear();
-    let maintenance_root = drive_root.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Err(error) = cache.load_existing_thumbnails_until(&maintenance_cancel) {
-            tracing::warn!("Thumbnail inventory failed: {error}");
-        }
-        if maintenance_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+    // ONNX is optional and never belongs on the library-open path. If this
+    // library already has semantic vectors and the assets are present, warm
+    // the text runner silently on a blocking worker so later searches can use
+    // it immediately. The warmup itself checks readiness before loading.
+    spawn_semantic_warmup(
+        drive_root.clone(),
+        semantic_index,
+        semantic_runner,
+        Some(app.clone()),
+    );
+    // Interrupted-deletion recovery does filesystem moves and nothing needs
+    // it before the first query, so it must not sit on the open response
+    // path. It is detached here; DELETE_LOCK is acquired *inside* the task so
+    // recovery still cannot interleave with a permanent delete, but a slow
+    // recovery (an interrupted empty-trash of N photos costs ~2N fsyncs) no
+    // longer delays the window that the user is waiting on.
+    let recovery_root = drive_root.clone();
+    let recovery_cancel = maintenance_cancel.clone();
+    let recovery_db = maintenance_db.clone();
+    tauri::async_runtime::spawn(async move {
+        if recovery_cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        let result = smriti::db::open_secondary(&smriti::db::db_path_for(&maintenance_root))
-            .map_err(CommandError::from)
-            .and_then(|conn| {
-                repair_thumbnail_paths(&Database { conn }, &maintenance_root, &maintenance_cancel)
-            });
-        if let Err(error) = result {
-            tracing::warn!("Thumbnail repair failed: {error}");
-        }
+        let _delete_lock = super::trash::DELETE_LOCK.lock().await;
+        tauri::async_runtime::spawn_blocking(move || {
+            // Never block behind an in-flight query; recovery is best-effort
+            // and runs again on the next open.
+            let Ok(db) = recovery_db.try_lock() else {
+                tracing::debug!("Trash recovery skipped: database busy");
+                return;
+            };
+            if recovery_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            if let Err(error) =
+                smriti::services::trash::TrashService::recover_deletions(&db.conn, &recovery_root)
+            {
+                tracing::warn!("Trash recovery failed: {error}");
+            }
+        })
+        .await
+        .ok();
     });
-
-    super::semantic::maybe_start_semantic_indexing(app).await;
-
     Ok(LibraryOpenResult {
         drive_root: drive_root.display().to_string(),
         photo_count,
         first_run: needs_schema,
         read_only: false,
         schema_too_new: None,
+        catalog_mismatch,
+        library_session_id: state
+            .active_session
+            .load(std::sync::atomic::Ordering::Acquire),
     })
 }
 
@@ -511,7 +547,9 @@ fn validate_library_root(drive_root: &Path, original_path: &str) -> CommandResul
     Ok(())
 }
 
-fn prepare_library_database(drive_root: PathBuf) -> CommandResult<(Database, bool, i64)> {
+fn prepare_library_database(
+    drive_root: PathBuf,
+) -> CommandResult<(Database, bool, i64, Option<String>)> {
     if let Some((db_version, max_supported)) = preflight_schema_too_new(&drive_root)? {
         return Err(CommandError::SchemaTooNew {
             db_version,
@@ -536,14 +574,75 @@ fn prepare_library_database(drive_root: PathBuf) -> CommandResult<(Database, boo
             }
         }
     })?;
-    smriti::services::trash::TrashService::recover_deletions(&database.conn, &drive_root).map_err(
-        |error| CommandError::Internal {
-            message: error.to_string(),
-        },
-    )?;
+
+    // Interrupted-deletion recovery deliberately does NOT run here. It does
+    // filesystem moves (plus an fsync pair per staged photo) that nothing
+    // needs before the first query, so it is detached in `library_open`
+    // after the open response is assembled. Keep it that way: awaiting it
+    // here puts an interrupted empty-trash of N photos — roughly 2N fsyncs,
+    // minutes on a spinning USB drive — directly in front of the window the
+    // user is waiting on.
+
+    // Record which drive root this catalog belongs to, so an index
+    // copied between drives is flagged instead of silently mixed.
+    // Comparison uses the canonical path; a fresh catalog simply records
+    // its root and stays quiet forever after.
+    let canonical_root = drive_root
+        .canonicalize()
+        .unwrap_or_else(|_| drive_root.clone());
+    let root_key = canonical_root.display().to_string();
+    let stored_root: Option<String> = database
+        .conn
+        .query_row(
+            "SELECT value FROM library_meta WHERE key = 'catalog_root'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let catalog_mismatch = match stored_root {
+        None => {
+            let _ = database.conn.execute(
+                "INSERT INTO library_meta(key, value) VALUES ('catalog_root', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![root_key],
+            );
+            None
+        }
+        Some(stored) if stored == root_key => None,
+        Some(stored) => {
+            // The stored root differs. Two very different situations:
+            //
+            //   * The stored root no longer exists — the library was moved,
+            //     renamed, or the drive simply has a different mount path on
+            //     this boot. That is the normal case, and warning about it
+            //     produced a permanent "index was created for X" error toast
+            //     on every single open. Adopt the new root silently: the
+            //     catalog travelled with the photos, so its data is correct.
+            //
+            //   * The stored root still exists — someone copied the catalog
+            //     to a second drive. Now the warning is real, because the two
+            //     catalogs can diverge, so report it and leave the stored
+            //     value alone.
+            let stored_still_exists = std::path::Path::new(&stored).exists();
+            if !stored_still_exists {
+                tracing::info!(
+                    previous_root = %stored,
+                    new_root = %root_key,
+                    "Library catalog root moved; adopting the new path"
+                );
+                let _ = database.conn.execute(
+                    "UPDATE library_meta SET value = ?1 WHERE key = 'catalog_root'",
+                    rusqlite::params![root_key],
+                );
+                None
+            } else {
+                Some(stored)
+            }
+        }
+    };
 
     let photo_count = smriti::db::PhotoRepo::new(&database.conn).count()?;
-    Ok((database, needs_schema, photo_count))
+    Ok((database, needs_schema, photo_count, catalog_mismatch))
 }
 
 fn preflight_schema_too_new(drive_root: &Path) -> CommandResult<Option<(i32, i32)>> {
@@ -574,6 +673,7 @@ pub(crate) fn spawn_semantic_warmup(
     drive_root: PathBuf,
     semantic_index: Arc<std::sync::Mutex<SemanticIndexCache>>,
     semantic_runner: Arc<std::sync::Mutex<Option<SemanticModelRunner>>>,
+    ready_app: Option<AppHandle>,
 ) {
     tokio::task::spawn_blocking(move || {
         let db_path = smriti::db::db_path_for(&drive_root);
@@ -630,6 +730,8 @@ pub(crate) fn spawn_semantic_warmup(
                 SEMANTIC_TEXT_SEARCH_LIMIT,
             ) {
                 tracing::debug!("semantic warmup skipped: search cache failed: {}", err);
+            } else if let Some(app) = ready_app {
+                emit(&app, "semantic:ready", serde_json::json!({}));
             }
         }
     });
@@ -643,9 +745,31 @@ pub async fn library_close(state: State<'_, AppState>) -> CommandResult<()> {
         .store(0, std::sync::atomic::Ordering::Release);
     state.jobs.lock().await.cancel_library_scoped();
     *state.unsupported_library.write().await = None;
-    let mut guard = state.library.write().await;
-    if let Some(lib) = guard.take() {
-        // Drop the Arc<Mutex<Database>>; once the last reference goes
+    // Take the library out under the lock, then release the lock *before*
+    // touching the database.
+    //
+    // `wal_checkpoint(TRUNCATE)` is a blocking SQLite call bounded by the
+    // connection's busy_timeout (5s here). Running it while holding
+    // `state.library`'s write lock stalled every other handler that needs
+    // `state.library.read()` — including the next `library_open` — for as long
+    // as the checkpoint took to acquire its locks.
+    let lib = {
+        let mut guard = state.library.write().await;
+        guard.take()
+    };
+    if let Some(lib) = lib {
+        // Flush WAL into the main DB file before the last reference drops, so
+        // a catalog copied (or drive yanked) right after close cannot lose
+        // recent commits that were still in the WAL. Best-effort: the
+        // Database's Drop performs a passive checkpoint anyway.
+        // Non-blocking on purpose: `state.library`'s write lock is already
+        // released, so nothing else is waiting on us, and if a background task
+        // holds the connection we skip the explicit checkpoint rather than
+        // holding up close. `Database::drop` checkpoints passively as backstop.
+        if let Ok(db) = lib.db.try_lock() {
+            db.checkpoint_truncate();
+        }
+        // Dropping the Arc<Mutex<Database>>; once the last reference goes
         // away the Database's Drop impl triggers a passive WAL checkpoint.
         drop(lib);
     }
@@ -681,14 +805,15 @@ pub async fn library_apply_changes(
     state: State<'_, AppState>,
     args: LibraryApplyChangesArgs,
 ) -> CommandResult<ApplyResultDto> {
-    let (drive_root, db) = {
+    let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        (lib.drive_root.clone(), lib.db.clone())
+        lib.drive_root.clone()
     };
     let db_path = smriti::db::db_path_for(&drive_root);
+    let db_path_for_detect = db_path.clone();
     let mut changes = tauri::async_runtime::spawn_blocking(move || {
-        let conn = smriti::db::open_secondary(&db_path)?;
+        let conn = smriti::db::open_secondary(&db_path_for_detect)?;
         let reindexer = smriti::services::reindexer::Reindexer::new_with_options(
             smriti::config::AppConfig::load().scan_hidden_folders,
         );
@@ -710,16 +835,25 @@ pub async fn library_apply_changes(
     if !args.modified {
         changes.modified.clear();
     }
-    let db = db.lock().await;
-    let reindexer = smriti::services::reindexer::Reindexer::new_with_options(
-        smriti::config::AppConfig::load().scan_hidden_folders,
-    );
-    let r = reindexer.apply_changes(&db.conn, &changes)?;
+    // Applying changes touches many rows and walks the filesystem for
+    // added files — run it on a blocking thread on its own connection
+    // instead of stalling the shared DB mutex on the async runtime.
+    let applied = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        let reindexer = smriti::services::reindexer::Reindexer::new_with_options(
+            smriti::config::AppConfig::load().scan_hidden_folders,
+        );
+        Ok::<_, CommandError>(reindexer.apply_changes(&conn, &changes)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("apply changes worker failed: {e}"),
+    })??;
     Ok(ApplyResultDto {
-        new_files: r.new_files,
-        moves_applied: r.moves_applied,
-        removals_applied: r.removals_applied,
-        updates_applied: r.updates_applied,
+        new_files: applied.new_files,
+        moves_applied: applied.moves_applied,
+        removals_applied: applied.removals_applied,
+        updates_applied: applied.updates_applied,
     })
 }
 
@@ -740,7 +874,10 @@ pub struct ScanProgressDto {
     pub current_file: String,
     pub elapsed_ms: u64,
     pub is_complete: bool,
-    pub error_count: usize,
+    pub error_count: u64,
+    /// Bounded representative paths/messages. The count remains authoritative
+    /// while details stay small enough to emit on every progress tick.
+    pub error_details: Vec<String>,
 }
 
 /// Start a scan job. Returns the job_id immediately; progress streams on
@@ -807,7 +944,8 @@ pub async fn library_start_scan(
                 current_file: p.current_file,
                 elapsed_ms: (p.elapsed_seconds * 1000.0) as u64,
                 is_complete: p.is_complete,
-                error_count: p.errors.len(),
+                error_count: p.error_count,
+                error_details: p.errors.clone(),
             };
             if p.is_complete {
                 emit(&app_clone, EV_SCAN_COMPLETE, dto);
@@ -816,9 +954,13 @@ pub async fn library_start_scan(
             }
         }
 
-        if let Ok(report) = handle.await {
-            tracing::info!("Scan complete: inserted {}", report.files_inserted);
-        }
+        let scan_inserted = match handle.await {
+            Ok(report) => {
+                tracing::info!("Scan complete: inserted {}", report.files_inserted);
+                report.files_inserted
+            }
+            Err(_) => 0,
+        };
 
         // Always release the job slot.
         let st: tauri::State<AppState> = app_clone.state();
@@ -840,6 +982,7 @@ pub async fn library_start_scan(
                 drive_for_post,
                 db_for_post,
                 thumbnails_for_post,
+                scan_inserted,
             )
             .await;
         });
@@ -908,21 +1051,46 @@ pub async fn library_regenerate_thumbnails(
     // smaller legacy thumbnails the user wants to upgrade. The
     // existing JPEG files on disk are overwritten in place by the
     // generator, so no separate cleanup is needed.
-    {
-        let guard = db.lock().await;
-        if let Err(e) = guard.conn.execute(
-            "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE is_trashed = FALSE",
-            [],
-        ) {
-            jobs::finish_job(&state, &job_id).await;
-            return Err(e.into());
-        }
+    // Full regenerate semantics: clear the thumbnailed flag for every
+    // photo so `run_thumbnail_pass` (which selects rows with
+    // thumbnailed = FALSE) reprocesses the entire library at the current
+    // ThumbnailSize. thumbnail_path is deliberately kept — the old
+    // renditions keep displaying while each file is regenerated in place
+    // (same deterministic v2 path), so the grid never blanks out. The
+    // forced generator ignores the "existing thumbnail is adequate"
+    // shortcut, which is what previously required nulling the paths.
+    let reset = {
+        let db_handle = db.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let guard = db_handle.blocking_lock();
+            guard.conn.execute(
+                "UPDATE photos SET thumbnailed = FALSE WHERE is_trashed = FALSE",
+                [],
+            )
+        })
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("thumbnail reset worker failed: {e}"),
+        })?
+    };
+    if let Err(e) = reset {
+        jobs::finish_job(&state, &job_id).await;
+        return Err(e.into());
     }
 
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        run_thumbnail_pass(drive_root, db, thumbnails, cancel, app_clone, job_id_clone).await;
+        run_thumbnail_pass(
+            drive_root,
+            db,
+            thumbnails,
+            cancel,
+            app_clone,
+            job_id_clone,
+            true,
+        )
+        .await;
     });
 
     Ok(JobIdDto { job_id })
@@ -983,19 +1151,26 @@ pub async fn library_refresh_photo_dates(
     let job_id = job.id.clone();
     let cancel = job.cancel.clone();
 
-    {
-        let guard = db.lock().await;
-        if let Err(e) = guard.conn.execute(
-            "UPDATE photos
-             SET date_taken = NULL,
-                 date_taken_source = NULL,
-                 metadata_extracted = FALSE
-             WHERE is_trashed = FALSE",
-            [],
-        ) {
-            jobs::finish_job(&state, &job_id).await;
-            return Err(e.into());
-        }
+    let reset = {
+        let db_handle = db.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let guard = db_handle.blocking_lock();
+            guard.conn.execute(
+                // Only the re-extraction flag is reset — dates keep
+                // displaying until the worker overwrites each row with a
+                // freshly parsed value, so the timeline never blanks out.
+                "UPDATE photos SET metadata_extracted = FALSE WHERE is_trashed = FALSE",
+                [],
+            )
+        })
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("date reset worker failed: {e}"),
+        })?
+    };
+    if let Err(e) = reset {
+        jobs::finish_job(&state, &job_id).await;
+        return Err(e.into());
     }
 
     let app_clone = app.clone();
@@ -1037,7 +1212,16 @@ pub async fn library_start_thumbnail_pass(
     let app_clone = app.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
-        run_thumbnail_pass(drive_root, db, thumbnails, cancel, app_clone, job_id_clone).await;
+        run_thumbnail_pass(
+            drive_root,
+            db,
+            thumbnails,
+            cancel,
+            app_clone,
+            job_id_clone,
+            false,
+        )
+        .await;
     });
 
     Ok(JobIdDto { job_id })
@@ -1126,12 +1310,22 @@ async fn run_thumbnail_pass(
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     app: AppHandle,
     job_id: String,
+    force: bool,
 ) {
     use smriti::services::thumbnail::ThumbnailSize;
 
     let chunk_size: usize = 20;
     let total_pending: Option<u64> = {
         let guard = db.lock().await;
+        // Per-run failure exclusion lives in a temp table so the chunk
+        // query plan stays constant no matter how many files failed
+        // (an ever-growing `NOT IN (…)` list degraded quadratically).
+        if let Err(e) = guard.conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS thumb_failed_ids (id INTEGER PRIMARY KEY);
+             DELETE FROM thumb_failed_ids;",
+        ) {
+            tracing::warn!("thumbnail failed-id table unavailable: {e}");
+        }
         smriti::db::photo_repo::PhotoRepo::new(&guard.conn)
             .count_pending_thumbnails()
             .ok()
@@ -1139,7 +1333,6 @@ async fn run_thumbnail_pass(
     };
     let started = std::time::Instant::now();
     let mut total_done: u64 = 0;
-    let mut failed_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     let mut hard_error: Option<String> = None;
     loop {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1148,7 +1341,7 @@ async fn run_thumbnail_pass(
 
         let chunk: Vec<(i64, String, String, i32)> = {
             let guard = db.lock().await;
-            match load_thumbnail_chunk(&guard.conn, &failed_ids, chunk_size) {
+            match load_thumbnail_chunk(&guard.conn, chunk_size) {
                 Ok(rows) => rows,
                 Err(e) => {
                     tracing::error!("thumbnail query failed: {e}");
@@ -1182,12 +1375,22 @@ async fn run_thumbnail_pass(
                             continue;
                         }
                     };
-                    let rel = match svc_for_chunk.generate_thumbnail_background(
-                        &abs,
-                        &hash,
-                        orient,
-                        ThumbnailSize::Medium,
-                    ) {
+                    let generated = if force {
+                        svc_for_chunk.generate_thumbnail_background_forced(
+                            &abs,
+                            &hash,
+                            orient,
+                            ThumbnailSize::Medium,
+                        )
+                    } else {
+                        svc_for_chunk.generate_thumbnail_background(
+                            &abs,
+                            &hash,
+                            orient,
+                            ThumbnailSize::Medium,
+                        )
+                    };
+                    let rel = match generated {
                         Ok(_) => Some(relative_thumbnail_path(&hash)),
                         Err(e) => {
                             tracing::debug!("thumbnail pass failed for photo_id={id}: {e}");
@@ -1236,7 +1439,10 @@ async fn run_thumbnail_pass(
                         }
                     }
                 } else {
-                    failed_ids.insert(*id);
+                    let _ = tx.execute(
+                        "INSERT OR IGNORE INTO thumb_failed_ids(id) VALUES (?1)",
+                        [*id],
+                    );
                 }
             }
             if let Err(e) = tx.commit() {
@@ -1307,6 +1513,13 @@ async fn run_thumbnail_pass(
         );
     }
 
+    {
+        let guard = db.lock().await;
+        let _ = guard
+            .conn
+            .execute("DROP TABLE IF EXISTS temp.thumb_failed_ids", []);
+    }
+
     let st: tauri::State<AppState> = app.state();
     jobs::finish_job(&st, &job_id).await;
 }
@@ -1321,30 +1534,17 @@ fn relative_thumbnail_path(file_hash: &str) -> String {
 
 fn load_thumbnail_chunk(
     conn: &rusqlite::Connection,
-    failed_ids: &std::collections::HashSet<i64>,
     limit: usize,
 ) -> rusqlite::Result<Vec<(i64, String, String, i32)>> {
-    let mut sql = String::from(
-        "SELECT id, file_path, file_hash, orientation FROM photos \
-         WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo'",
-    );
-    let mut params: Vec<i64> = Vec::with_capacity(failed_ids.len() + 1);
-    if !failed_ids.is_empty() {
-        sql.push_str(" AND id NOT IN (");
-        for idx in 0..failed_ids.len() {
-            if idx > 0 {
-                sql.push_str(", ");
-            }
-            sql.push('?');
-        }
-        sql.push(')');
-        params.extend(failed_ids.iter().copied());
-    }
-    sql.push_str(" ORDER BY id ASC LIMIT ?");
-    params.push(limit as i64);
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS thumb_failed_ids (id INTEGER PRIMARY KEY)",
+    )?;
+    let sql = "SELECT id, file_path, file_hash, orientation FROM photos \
+         WHERE thumbnailed = FALSE AND is_trashed = FALSE AND media_type = 'photo' \
+         AND NOT EXISTS (SELECT 1 FROM thumb_failed_ids f WHERE f.id = photos.id) \
+         ORDER BY id ASC LIMIT ?";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([limit as i64], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
     })?;
     rows.collect()
@@ -1362,9 +1562,17 @@ fn repair_thumbnail_paths(
     database: &Database,
     drive_root: &Path,
     cancel: &std::sync::atomic::AtomicBool,
-) -> CommandResult<()> {
-    let mut last_id = 0_i64;
+) -> CommandResult<usize> {
+    // Incremental sweep: the repair cursor records the highest photo id
+    // whose stored thumbnail path has been verified on disk. Rows only
+    // gain new ids (scan/takeout inserts) or a NULLed path (reindexer
+    // clears it on modification), so verified rows never need rechecking.
+    // `library_force_thumbnail_repair` clears the cursor for a full sweep.
+    let mut last_id: i64 = library_meta_get(&database.conn, "thumbnail_repair_cursor")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let mut repaired = 0usize;
+    let mut highest_seen = last_id;
     loop {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -1389,6 +1597,7 @@ fn repair_thumbnail_paths(
             break;
         }
         last_id = rows.last().expect("nonempty chunk").0;
+        highest_seen = highest_seen.max(last_id);
         let stale: Vec<_> = rows
             .into_iter()
             .filter_map(|(id, hash, stored)| {
@@ -1413,10 +1622,68 @@ fn repair_thumbnail_paths(
         }
         tx.commit()?;
     }
+    // Every row up to `highest_seen` has been verified — even a cancelled
+    // sweep fully processed its last chunk, so the cursor is safe to move.
+    if highest_seen > 0 {
+        library_meta_set(
+            &database.conn,
+            "thumbnail_repair_cursor",
+            &highest_seen.to_string(),
+        );
+    }
     if repaired > 0 {
         tracing::info!("Cleared {} stale thumbnail_path rows", repaired);
     }
-    Ok(())
+    Ok(repaired)
+}
+
+fn library_meta_get(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM library_meta WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+fn library_meta_set(conn: &rusqlite::Connection, key: &str, value: &str) {
+    let _ = conn.execute(
+        "INSERT INTO library_meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
+    );
+}
+
+/// Force a full thumbnail-path repair sweep by clearing the incremental
+/// cursor, then verify every row against the thumbnail cache on disk.
+/// Intended as a manual maintenance action (e.g. after external changes
+/// to `.photovault/thumbnails`).
+#[tauri::command]
+pub async fn library_force_thumbnail_repair(state: State<'_, AppState>) -> CommandResult<u64> {
+    let drive_root = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        lib.drive_root.clone()
+    };
+    let db_path = smriti::db::db_path_for(&drive_root);
+    let repaired = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path)?;
+        let _ = conn.execute(
+            "DELETE FROM library_meta WHERE key = 'thumbnail_repair_cursor'",
+            [],
+        );
+        let database = Database { conn };
+        repair_thumbnail_paths(
+            &database,
+            &drive_root,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("thumbnail repair worker failed: {e}"),
+    })??;
+    Ok(repaired as u64)
 }
 
 fn estimate_eta_ms(
@@ -1491,6 +1758,7 @@ pub(crate) async fn run_post_scan_pipeline(
     drive_root: PathBuf,
     db: Arc<tokio::sync::Mutex<Database>>,
     thumbnails: Arc<smriti::services::thumbnail::ThumbnailService>,
+    scan_inserted: u64,
 ) {
     // Stage 2: metadata extraction.
     {
@@ -1559,6 +1827,7 @@ pub(crate) async fn run_post_scan_pipeline(
                                 cancel,
                                 app_for_thumbs,
                                 job_id,
+                                false,
                             )
                             .await;
                         });
@@ -1569,151 +1838,235 @@ pub(crate) async fn run_post_scan_pipeline(
         }
     }
 
-    // Existing post-scan detections (duplicates, bursts) — already idempotent.
-    run_post_scan_detection(app.clone(), drive_root, db.clone()).await;
-    if library_is_still_open(&app, &db).await {
-        super::semantic::maybe_start_semantic_indexing(app).await;
+    // Existing post-scan detections (duplicates, bursts). They are
+    // idempotent, but each is a full-library pass — only worth running
+    // when the scan actually found new files.
+    if scan_inserted > 0 {
+        run_post_scan_detection(app.clone(), drive_root, db.clone()).await;
     }
 }
 
 /// Run duplicate + burst detection passes after a scan completes. Both
 /// passes are idempotent and persist their groups, so the Bursts and
 /// Duplicates tabs reflect the fresh library state without the user
-/// having to manually click "Scan" inside each tab.
+/// having to manually click "Scan" inside each tab. They register as
+/// real jobs so the indicator shows a chip and the cancel button works,
+/// and they refuse to run if the user already started a manual pass.
 async fn run_post_scan_detection(
     app: AppHandle,
     drive_root: PathBuf,
     db: Arc<tokio::sync::Mutex<Database>>,
 ) {
-    let cancel = {
-        let state: tauri::State<AppState> = app.state();
-        let library = state.library.read().await;
-        let Some(lib) = library.as_ref().filter(|lib| Arc::ptr_eq(&lib.db, &db)) else {
-            return;
-        };
-        lib.maintenance_cancel.clone()
-    };
-
-    // Open a secondary connection so we don't compete with foreground
-    // photos_list / albums queries for the shared Arc<Mutex<Database>>.
-    // SQLite WAL handles the concurrent reader/writer.
+    let state: tauri::State<AppState> = app.state();
     let db_path = smriti::db::db_path_for(&drive_root);
 
-    let drive_for_dups = drive_root.clone();
-    let db_path_for_dups = db_path.clone();
-    let cancel_dups = cancel.clone();
-    let dups = tokio::task::spawn_blocking(move || {
-        let conn = match smriti::db::open_secondary(&db_path_for_dups) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("post-scan dups: open secondary DB failed: {}", e);
-                return 0u64;
-            }
-        };
-        let exact = match smriti::services::duplicate_detector::DuplicateDetector::find_duplicates_cancellable(
-            &conn,
-            &drive_for_dups,
-            Some(&cancel_dups),
-        ) {
-            Ok(groups) => groups,
-            Err(e) => {
-                tracing::error!("post-scan dups: exact pass failed: {}", e);
-                return 0u64;
-            }
-        };
-        let exclude_ids: std::collections::HashSet<i64> = exact
-            .iter()
-            .flat_map(|g| g.photo_ids.iter().copied())
-            .collect();
-        let perc =
-            match smriti::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates_with_progress(
+    // ---- duplicates ----
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Duplicates) {
+        tracing::info!("post-scan: duplicate detection already running, skipping");
+    } else if let Ok(dup_job) = jobs::start_job(&state, JobKind::Duplicates).await {
+        let job_id = dup_job.id.clone();
+        let cancel = dup_job.cancel.clone();
+        let started = dup_job.started_at;
+
+        let drive_for_dups = drive_root.clone();
+        let db_path_for_dups = db_path.clone();
+        let cancel_dups = cancel.clone();
+        let app_for_progress = app.clone();
+        let id_for_progress = job_id.clone();
+        let groups = tokio::task::spawn_blocking(move || -> u64 {
+            let conn = match smriti::db::open_secondary(&db_path_for_dups) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("post-scan dups: open secondary DB failed: {}", e);
+                    return 0;
+                }
+            };
+            emit(
+                &app_for_progress,
+                EV_DUPLICATES_PROGRESS,
+                JobProgress {
+                    job_id: id_for_progress.clone(),
+                    stage: "exact".into(),
+                    processed: 0,
+                    total: None,
+                    elapsed_ms: 0,
+                    eta_ms: None,
+                    message: Some("Looking for byte-identical copies".into()),
+                },
+            );
+            let exact = match smriti::services::duplicate_detector::DuplicateDetector::find_duplicates_cancellable(
+                &conn,
+                &drive_for_dups,
+                Some(&cancel_dups),
+            ) {
+                Ok(groups) => groups,
+                Err(e) => {
+                    tracing::error!("post-scan dups: exact pass failed: {}", e);
+                    return 0;
+                }
+            };
+            emit(
+                &app_for_progress,
+                EV_DUPLICATES_PROGRESS,
+                JobProgress {
+                    job_id: id_for_progress.clone(),
+                    stage: "exact".into(),
+                    processed: 1,
+                    total: Some(1),
+                    elapsed_ms: 0,
+                    eta_ms: None,
+                    message: Some(format!("{} exact groups", exact.len())),
+                },
+            );
+            let exclude_ids: std::collections::HashSet<i64> = exact
+                .iter()
+                .flat_map(|g| g.photo_ids.iter().copied())
+                .collect();
+            let perc =
+                match smriti::services::duplicate_detector::DuplicateDetector::find_perceptual_duplicates_with_progress(
                     &conn,
                     &drive_for_dups,
                     &exclude_ids,
                     Some(&cancel_dups),
-                    |_| {},
-                ) {
-                Ok(groups) => groups,
+                    {
+                        let app = app_for_progress.clone();
+                        let job_id = id_for_progress.clone();
+                        move |p| {
+                            emit(&app, EV_DUPLICATES_PROGRESS, JobProgress {
+                                job_id: job_id.clone(),
+                                stage: p.stage.into(),
+                                processed: p.processed,
+                                total: p.total,
+                                elapsed_ms: 0,
+                                eta_ms: None,
+                                message: Some(p.message.clone()),
+                            });
+                        }
+                    },
+                )
+                {
+                    Ok(groups) => groups,
+                    Err(e) => {
+                        tracing::error!("post-scan dups: perceptual pass failed: {}", e);
+                        return 0;
+                    }
+                };
+            let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
+                Vec::with_capacity(exact.len() + perc.len());
+            for g in exact.iter().chain(perc.iter()) {
+                to_persist.push((
+                    g.hash.clone(),
+                    g.photo_ids.clone(),
+                    g.suggested_keep_id,
+                    g.duplicate_type,
+                ));
+            }
+            let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
+            if cancel_dups.load(std::sync::atomic::Ordering::Relaxed) {
+                return 0;
+            }
+            match repo.sync_duplicate_groups(&to_persist) {
+                Ok(_) => (exact.len() + perc.len()) as u64,
                 Err(e) => {
-                    tracing::error!("post-scan dups: perceptual pass failed: {}", e);
-                    return 0u64;
+                    tracing::error!("post-scan dups: persist failed: {}", e);
+                    0
                 }
-            };
-        let mut to_persist: Vec<(String, Vec<i64>, Option<i64>, &'static str)> =
-            Vec::with_capacity(exact.len() + perc.len());
-        for g in exact.iter().chain(perc.iter()) {
-            to_persist.push((
-                g.hash.clone(),
-                g.photo_ids.clone(),
-                g.suggested_keep_id,
-                g.duplicate_type,
-            ));
-        }
-        let repo = smriti::db::duplicate_repo::DuplicateRepo::new(&conn);
-        if cancel_dups.load(std::sync::atomic::Ordering::Relaxed) { return 0; }
-        if let Err(e) = repo.sync_duplicate_groups(&to_persist) {
-            tracing::error!("post-scan dups: persist failed: {}", e);
-            return 0u64;
-        }
-        (exact.len() + perc.len()) as u64
-    })
-    .await
-    .unwrap_or(0);
-    tracing::info!("post-scan: {} duplicate groups", dups);
+            }
+        })
+        .await
+        .unwrap_or(0);
+
+        emit(
+            &app,
+            EV_DUPLICATES_COMPLETE,
+            DuplicatesCompleteDto {
+                job_id: job_id.clone(),
+                groups_found: groups,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            },
+        );
+        jobs::finish_job(&state, &job_id).await;
+        tracing::info!("post-scan: {} duplicate groups", groups);
+    }
 
     if !library_is_still_open(&app, &db).await {
         tracing::info!("post-scan: skipped bursts because library changed");
         return;
     }
 
-    let drive_for_bursts = drive_root.clone();
-    let db_path_for_bursts = db_path.clone();
-    let bursts = tokio::task::spawn_blocking(move || {
-        let conn = match smriti::db::open_secondary(&db_path_for_bursts) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("post-scan bursts: open secondary DB failed: {}", e);
-                return 0u64;
+    // ---- bursts ----
+    if state.jobs.lock().await.has_any_of_kind(JobKind::Bursts) {
+        tracing::info!("post-scan: burst detection already running, skipping");
+        return;
+    }
+    if let Ok(burst_job) = jobs::start_job(&state, JobKind::Bursts).await {
+        let job_id = burst_job.id.clone();
+        let cancel = burst_job.cancel.clone();
+        let started = burst_job.started_at;
+
+        let drive_for_bursts = drive_root.clone();
+        let cancel_bursts = cancel.clone();
+        let groups = tokio::task::spawn_blocking(move || -> u64 {
+            let conn = match smriti::db::open_secondary(&smriti::db::db_path_for(&drive_for_bursts))
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("post-scan bursts: open secondary DB failed: {}", e);
+                    return 0;
+                }
+            };
+            let cfg = smriti::config::AppConfig::load();
+            let burst_cfg = smriti::services::burst_detector::BurstConfig {
+                max_gap_seconds: cfg.burst_time_window_seconds,
+                ..Default::default()
+            };
+            let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
+            let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
+            let groups =
+                match detector.find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root)) {
+                    Ok(groups) => groups,
+                    Err(e) => {
+                        tracing::error!("post-scan bursts: scan failed: {}", e);
+                        return 0;
+                    }
+                };
+            let triples: Vec<(String, String, Vec<i64>)> = groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.start_time.to_rfc3339(),
+                        g.end_time.to_rfc3339(),
+                        g.photo_ids.clone(),
+                    )
+                })
+                .collect();
+            let repo = smriti::db::burst_repo::BurstRepo::new(&conn);
+            if cancel_bursts.load(std::sync::atomic::Ordering::Relaxed) {
+                return 0;
             }
-        };
-        let cfg = smriti::config::AppConfig::load();
-        let burst_cfg = smriti::services::burst_detector::BurstConfig {
-            max_gap_seconds: cfg.burst_time_window_seconds,
-            ..Default::default()
-        };
-        let detector = smriti::services::burst_detector::BurstDetector::new(burst_cfg);
-        let thumbs_root = drive_for_bursts.join(".photovault/thumbnails/small/v2");
-        let groups = match detector.find_bursts(&conn, Some(&drive_for_bursts), Some(&thumbs_root))
-        {
-            Ok(groups) => groups,
-            Err(e) => {
-                tracing::error!("post-scan bursts: scan failed: {}", e);
-                return 0u64;
+            match repo.sync_burst_groups(&triples) {
+                Ok(_) => groups.len() as u64,
+                Err(e) => {
+                    tracing::error!("post-scan bursts: persist failed: {}", e);
+                    0
+                }
             }
-        };
-        let triples: Vec<(String, String, Vec<i64>)> = groups
-            .iter()
-            .map(|g| {
-                (
-                    g.start_time.to_rfc3339(),
-                    g.end_time.to_rfc3339(),
-                    g.photo_ids.clone(),
-                )
-            })
-            .collect();
-        let repo = smriti::db::burst_repo::BurstRepo::new(&conn);
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return 0;
-        }
-        if let Err(e) = repo.sync_burst_groups(&triples) {
-            tracing::error!("post-scan bursts: persist failed: {}", e);
-            return 0u64;
-        }
-        groups.len() as u64
-    })
-    .await
-    .unwrap_or(0);
-    tracing::info!("post-scan: {} burst groups", bursts);
+        })
+        .await
+        .unwrap_or(0);
+
+        emit(
+            &app,
+            EV_BURSTS_COMPLETE,
+            BurstsCompleteDto {
+                job_id: job_id.clone(),
+                groups_found: groups,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            },
+        );
+        jobs::finish_job(&state, &job_id).await;
+        tracing::info!("post-scan: {} burst groups", groups);
+    }
 }
 
 async fn library_is_still_open(app: &AppHandle, db: &Arc<tokio::sync::Mutex<Database>>) -> bool {
@@ -1750,7 +2103,6 @@ mod tests {
         repair_thumbnail_paths(&db, root.path(), &cancel).unwrap();
         assert_eq!(count(), 0);
     }
-    use std::collections::HashSet;
 
     fn thumbnail_test_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1781,10 +2133,12 @@ mod tests {
     #[test]
     fn thumbnail_chunk_skips_current_run_failures_without_hiding_later_pending_rows() {
         let conn = thumbnail_test_conn();
-        let mut failed = HashSet::new();
-        failed.insert(1);
+        conn.execute_batch("CREATE TEMP TABLE thumb_failed_ids (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        conn.execute("INSERT INTO thumb_failed_ids(id) VALUES (1)", [])
+            .unwrap();
 
-        let rows = load_thumbnail_chunk(&conn, &failed, 20).unwrap();
+        let rows = load_thumbnail_chunk(&conn, 20).unwrap();
 
         assert_eq!(rows, vec![(2, "two.jpg".into(), "bb222".into(), 1)]);
     }

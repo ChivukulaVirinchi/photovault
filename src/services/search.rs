@@ -72,6 +72,16 @@ pub struct UnifiedSearchResults {
     pub photos_grouped: Vec<SearchResultGroup>,
     /// Flat list for cull mode.
     pub photo_ids: Vec<i64>,
+    /// True when more photo pages exist beyond this one (keyset/offset
+    /// pagination — see `search_unified_page`).
+    pub has_more: bool,
+}
+
+/// One page of unified search results plus a has-more flag.
+#[derive(Debug, Clone, Default)]
+pub struct UnifiedSearchPage {
+    pub results: UnifiedSearchResults,
+    pub has_more: bool,
 }
 
 /// Search service.
@@ -111,10 +121,20 @@ struct ResolvedAlbum {
     name: String,
 }
 
+/// A city filter. `country` is kept when the city row carried one so
+/// identical city names in different countries stay distinguishable.
 #[derive(Debug, Clone)]
-struct ResolvedPlace {
-    city: Option<String>,
+struct ResolvedCity {
+    city: String,
     country: Option<String>,
+    label: String,
+}
+
+/// A country filter — resolved from an exact country phrase and never
+/// narrowed to the cities inside it.
+#[derive(Debug, Clone)]
+struct ResolvedCountry {
+    country: String,
     label: String,
 }
 
@@ -124,7 +144,8 @@ struct SmartIntent {
     text: Option<String>,
     people_all: Vec<ResolvedPerson>,
     people_only: bool,
-    places: Vec<ResolvedPlace>,
+    cities: Vec<ResolvedCity>,
+    countries: Vec<ResolvedCountry>,
     albums: Vec<ResolvedAlbum>,
     favorite: Option<bool>,
     media_type: Option<SmartMediaType>,
@@ -135,7 +156,8 @@ impl SmartIntent {
     fn has_structured_filters(&self) -> bool {
         self.date_range.is_some()
             || !self.people_all.is_empty()
-            || !self.places.is_empty()
+            || !self.cities.is_empty()
+            || !self.countries.is_empty()
             || !self.albums.is_empty()
             || self.favorite.is_some()
             || self.media_type.is_some()
@@ -328,39 +350,60 @@ impl SearchService {
         Self::search_unified_with_semantic(conn, raw_query, Vec::new())
     }
 
+    /// First page (legacy shape: up to 1000 photos) — kept for callers
+    /// that have not moved to `search_unified_page` yet.
     pub fn search_unified_with_semantic(
         conn: &Connection,
         raw_query: &str,
         semantic_photo_ids: Vec<i64>,
     ) -> SqliteResult<UnifiedSearchResults> {
+        Ok(Self::search_unified_page(
+            conn,
+            raw_query,
+            semantic_photo_ids,
+            0,
+            Self::UNIFIED_SEARCH_MAX_PHOTOS,
+        )?
+        .results)
+    }
+
+    /// One page of unified results. `offset`/`limit` page the photo
+    /// list; people/albums/places hits are query-wide and identical on
+    /// every page. Ordering is stable (`date_taken DESC, id DESC`, or
+    /// semantic rank first when semantic candidates are supplied), so
+    /// concatenated pages never duplicate or skip a photo.
+    pub fn search_unified_page(
+        conn: &Connection,
+        raw_query: &str,
+        semantic_photo_ids: Vec<i64>,
+        offset: usize,
+        limit: usize,
+    ) -> SqliteResult<UnifiedSearchPage> {
         let query = raw_query.trim();
         if query.is_empty() {
-            return Ok(UnifiedSearchResults::default());
+            return Ok(UnifiedSearchPage::default());
         }
 
         let mut intent = Self::parse_smart_intent(conn, query)?;
         intent.semantic_photo_ids = semantic_photo_ids;
         let mut results = UnifiedSearchResults {
             interpreted: Self::interpreted_filters(&intent),
+            // Entity hit lists are query-wide and identical on every
+            // page — only `photos` is paged.
             people: Self::search_people(conn, query)?,
             albums: Self::search_albums(conn, query)?,
             places: Self::search_places(conn, query)?,
             ..Default::default()
         };
 
-        // 4. Photos — splits the query into "date part" (if any) and
-        // "free-text part" (the rest), then runs a single SQL that ANDs
-        // the date filter with an OR-match across location, filename,
-        // OCR text, and any face cluster's name. This means "Goa 2023"
-        // matches photos in 2023 with location LIKE %Goa% — even though
-        // "Goa" isn't in any hardcoded location list.
-        let photos = Self::search_smart_photos(conn, &intent)?;
+        let (photos, has_more) = Self::search_smart_photos(conn, &intent, offset, limit)?;
 
         results.photo_ids = photos.iter().map(|r| r.photo_id).collect();
         results.photos_grouped = Self::group_by_date(photos.clone());
         results.photos = photos;
+        results.has_more = has_more;
 
-        Ok(results)
+        Ok(UnifiedSearchPage { results, has_more })
     }
 
     fn parse_smart_intent(conn: &Connection, raw: &str) -> SqliteResult<SmartIntent> {
@@ -435,37 +478,43 @@ impl SearchService {
         }
 
         if !remaining.trim().is_empty() {
-            let places = Self::resolve_places(conn, remaining.trim())?;
-            if !places.is_empty() {
+            let cities = Self::resolve_cities(conn, remaining.trim())?;
+            if !cities.is_empty() {
                 remaining =
-                    Self::remove_entity_names(&remaining, places.iter().map(|p| p.label.as_str()));
+                    Self::remove_entity_names(&remaining, cities.iter().map(|c| c.city.as_str()));
+                intent.cities = cities;
+            }
+        }
+
+        if !remaining.trim().is_empty() {
+            let countries = Self::resolve_countries(conn, remaining.trim())?;
+            if !countries.is_empty() {
                 remaining = Self::remove_entity_names(
                     &remaining,
-                    places.iter().filter_map(|p| p.city.as_deref()),
+                    countries.iter().map(|c| c.country.as_str()),
                 );
-                remaining = Self::remove_entity_names(
-                    &remaining,
-                    places.iter().filter_map(|p| p.country.as_deref()),
-                );
-                intent.places = places;
+                intent.countries = countries;
             }
         }
 
         let cleanup = remaining
             .split_whitespace()
             .filter(|w| {
-                !matches!(
-                    w.to_lowercase().as_str(),
-                    "and"
-                        | "&"
-                        | "with"
-                        | "in"
-                        | "at"
-                        | "from"
-                        | "person"
-                        | "people"
-                        | "containing"
-                )
+                // Punctuation-only leftovers (e.g. the comma from
+                // "Delhi, India") are not meaningful text filters.
+                w.chars().any(char::is_alphanumeric)
+                    && !matches!(
+                        w.to_lowercase().as_str(),
+                        "and"
+                            | "&"
+                            | "with"
+                            | "in"
+                            | "at"
+                            | "from"
+                            | "person"
+                            | "people"
+                            | "containing"
+                    )
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -489,10 +538,16 @@ impl SearchService {
                 label: p.name.clone(),
             });
         }
-        for p in &intent.places {
+        for c in &intent.cities {
             out.push(InterpretedFilter {
                 kind: "place".into(),
-                label: p.label.clone(),
+                label: c.label.clone(),
+            });
+        }
+        for c in &intent.countries {
+            out.push(InterpretedFilter {
+                kind: "place".into(),
+                label: c.label.clone(),
             });
         }
         for a in &intent.albums {
@@ -592,10 +647,24 @@ impl SearchService {
         (Some(trimmed.to_string()), None)
     }
 
+    /// Upper bound on photos a single legacy (non-paged) unified search
+    /// returns, and the safety cap the semantic path ranks within.
+    /// Hard product ceiling for one query. Callers may page below this
+    /// boundary, but no page can expose or request a result beyond it.
+    pub const UNIFIED_SEARCH_MAX_PHOTOS: usize = 20_000;
+
+    /// Safety cap on rows fetched for semantic ranking. Ranking happens
+    /// in Rust (candidate order first), so pages must come out of one
+    /// globally-ordered list; the cap bounds that work.
+    const SEMANTIC_FETCH_CAP: usize = 20_000;
+
+    /// Returns (page_rows, has_more).
     fn search_smart_photos(
         conn: &Connection,
         intent: &SmartIntent,
-    ) -> SqliteResult<Vec<SearchResult>> {
+        offset: usize,
+        limit: usize,
+    ) -> SqliteResult<(Vec<SearchResult>, bool)> {
         let mut sql = String::from(
             "SELECT p.id, p.date_taken, p.location_city, p.location_country, p.thumbnail_path \
              FROM photos p WHERE p.is_trashed = FALSE",
@@ -620,24 +689,43 @@ impl SearchService {
             );
             bind.push(Value::Integer(album.id));
         }
-        for place in &intent.places {
-            match (&place.city, &place.country) {
-                (Some(city), Some(country)) => {
-                    sql.push_str(
-                        " AND LOWER(p.location_city) LIKE LOWER(?) AND LOWER(p.location_country) LIKE LOWER(?)",
-                    );
-                    bind.push(Value::Text(format!("%{}%", city)));
+        // Cities are alternatives (a photo is in one place at a time):
+        // any one of the resolved cities may match. A city keeps its
+        // country when known, so identical city names in different
+        // countries stay distinguishable.
+        if !intent.cities.is_empty() {
+            let arms = intent
+                .cities
+                .iter()
+                .map(|c| match &c.country {
+                    Some(_) => {
+                        "(LOWER(p.location_city) LIKE LOWER(?) \
+                                AND LOWER(p.location_country) LIKE LOWER(?))"
+                    }
+                    None => "LOWER(p.location_city) LIKE LOWER(?)",
+                })
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            sql.push_str(&format!(" AND ({arms})"));
+            for city in &intent.cities {
+                bind.push(Value::Text(format!("%{}%", city.city)));
+                if let Some(country) = &city.country {
                     bind.push(Value::Text(format!("%{}%", country)));
                 }
-                (Some(city), None) => {
-                    sql.push_str(" AND LOWER(p.location_city) LIKE LOWER(?)");
-                    bind.push(Value::Text(format!("%{}%", city)));
-                }
-                (None, Some(country)) => {
-                    sql.push_str(" AND LOWER(p.location_country) LIKE LOWER(?)");
-                    bind.push(Value::Text(format!("%{}%", country)));
-                }
-                (None, None) => {}
+            }
+        }
+        // Countries likewise OR together; a country predicate matches
+        // every city inside the country (never narrowed to one city).
+        if !intent.countries.is_empty() {
+            let arms = std::iter::repeat_n(
+                "LOWER(p.location_country) LIKE LOWER(?)",
+                intent.countries.len(),
+            )
+            .collect::<Vec<_>>()
+            .join(" OR ");
+            sql.push_str(&format!(" AND ({arms})"));
+            for country in &intent.countries {
+                bind.push(Value::Text(format!("%{}%", country.country)));
             }
         }
         for person in &intent.people_all {
@@ -697,7 +785,6 @@ impl SearchService {
                     LOWER(p.camera_make) LIKE LOWER(?) OR
                     LOWER(p.camera_model) LIKE LOWER(?) OR
                     LOWER(COALESCE(p.camera_make, '') || ' ' || COALESCE(p.camera_model, '')) LIKE LOWER(?) OR
-                    LOWER(COALESCE(p.ocr_text, '')) LIKE LOWER(?) OR
                     EXISTS (
                         SELECT 1
                         FROM faces f
@@ -714,7 +801,7 @@ impl SearchService {
                 )",
             ));
             let like = Value::Text(format!("%{}%", t));
-            for _ in 0..9 {
+            for _ in 0..8 {
                 bind.push(like.clone());
             }
             for id in &intent.semantic_photo_ids {
@@ -732,26 +819,51 @@ impl SearchService {
             }
         }
 
-        let limit = if intent.semantic_photo_ids.is_empty() {
-            1000
+        if intent.semantic_photo_ids.is_empty() {
+            // Pure SQL ordering is stable, so offset paging can be done
+            // entirely in SQLite. One extra row detects has_more.
+            let remaining = Self::UNIFIED_SEARCH_MAX_PHOTOS.saturating_sub(offset);
+            let page_limit = limit.min(remaining);
+            sql.push_str(&format!(
+                " ORDER BY p.date_taken DESC, p.id DESC LIMIT {} OFFSET {}",
+                page_limit.saturating_add(1),
+                offset
+            ));
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
+                Ok(SearchResult {
+                    photo_id: row.get(0)?,
+                    date_taken: row.get(1)?,
+                    location_city: row.get(2)?,
+                    location_country: row.get(3)?,
+                    thumbnail_path: row.get(4)?,
+                })
+            })?;
+            let mut results = rows.collect::<SqliteResult<Vec<_>>>()?;
+            let has_more =
+                results.len() > page_limit && offset + page_limit < Self::UNIFIED_SEARCH_MAX_PHOTOS;
+            results.truncate(page_limit);
+            Ok((results, has_more))
         } else {
-            5000
-        };
-        sql.push_str(&format!(
-            " ORDER BY p.date_taken DESC, p.id DESC LIMIT {limit}"
-        ));
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
-            Ok(SearchResult {
-                photo_id: row.get(0)?,
-                date_taken: row.get(1)?,
-                location_city: row.get(2)?,
-                location_country: row.get(3)?,
-                thumbnail_path: row.get(4)?,
-            })
-        })?;
-        let mut results = rows.collect::<SqliteResult<Vec<_>>>()?;
-        if !intent.semantic_photo_ids.is_empty() {
+            // Semantic ranking is computed in Rust over the candidate
+            // order, so all matching rows are fetched up to a safety
+            // cap and paged from the globally-ranked list. This keeps
+            // ranking stable across pages.
+            sql.push_str(&format!(
+                " ORDER BY p.date_taken DESC, p.id DESC LIMIT {}",
+                Self::SEMANTIC_FETCH_CAP
+            ));
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(bind.iter()), |row| {
+                Ok(SearchResult {
+                    photo_id: row.get(0)?,
+                    date_taken: row.get(1)?,
+                    location_city: row.get(2)?,
+                    location_country: row.get(3)?,
+                    thumbnail_path: row.get(4)?,
+                })
+            })?;
+            let mut results = rows.collect::<SqliteResult<Vec<_>>>()?;
             let rank: HashMap<i64, usize> = intent
                 .semantic_photo_ids
                 .iter()
@@ -769,9 +881,13 @@ impl SearchService {
                         .then(b.photo_id.cmp(&a.photo_id)),
                 },
             );
-            results.truncate(1000);
+            let page_limit = limit.min(Self::UNIFIED_SEARCH_MAX_PHOTOS.saturating_sub(offset));
+            let has_more = offset + page_limit < results.len()
+                && offset + page_limit < Self::UNIFIED_SEARCH_MAX_PHOTOS;
+            let page: Vec<SearchResult> =
+                results.into_iter().skip(offset).take(page_limit).collect();
+            Ok((page, has_more))
         }
-        Ok(results)
     }
 
     fn resolve_people(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPerson>> {
@@ -814,26 +930,28 @@ impl SearchService {
         rows.collect()
     }
 
-    fn resolve_places(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedPlace>> {
+    /// Resolve city filters. Cities come from the grouped (city,
+    /// country) photo rows — capped generously, not only from the top
+    /// 100 most frequent places. Multiple matching cities are
+    /// alternatives, not simultaneous requirements.
+    fn resolve_cities(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedCity>> {
         let mut stmt = conn.prepare(
             "SELECT location_city, location_country, COUNT(*) AS cnt
              FROM photos
              WHERE is_trashed = FALSE
-               AND (location_city IS NOT NULL OR location_country IS NOT NULL)
+               AND location_city IS NOT NULL
              GROUP BY location_city, location_country
              ORDER BY cnt DESC
-             LIMIT 100",
+             LIMIT 1000",
         )?;
         let rows = stmt.query_map([], |row| {
-            let city: Option<String> = row.get(0)?;
+            let city: String = row.get(0)?;
             let country: Option<String> = row.get(1)?;
-            let label = match (&city, &country) {
-                (Some(c), Some(country)) => format!("{}, {}", c, country),
-                (Some(c), None) => c.clone(),
-                (None, Some(country)) => country.clone(),
-                (None, None) => String::new(),
+            let label = match &country {
+                Some(country) => format!("{}, {}", city, country),
+                None => city.clone(),
             };
-            Ok(ResolvedPlace {
+            Ok(ResolvedCity {
                 city,
                 country,
                 label,
@@ -843,18 +961,40 @@ impl SearchService {
         let mut out = Vec::new();
         for row in rows {
             let place = row?;
-            let city_match = place
-                .city
-                .as_deref()
-                .is_some_and(|city| Self::contains_phrase(&lower, &city.to_lowercase()));
-            let country_match = place
-                .country
-                .as_deref()
-                .is_some_and(|country| Self::contains_phrase(&lower, &country.to_lowercase()));
-            let label_match = !place.label.is_empty()
-                && Self::contains_phrase(&lower, &place.label.to_lowercase());
-            if city_match || country_match || label_match {
+            if Self::contains_phrase(&lower, &place.city.to_lowercase()) {
                 out.push(place);
+                if out.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Resolve country filters from the full set of countries present
+    /// in the library (not derived from the top-N city rows). An exact
+    /// country phrase becomes a country predicate and never narrows to
+    /// individual cities.
+    fn resolve_countries(conn: &Connection, text: &str) -> SqliteResult<Vec<ResolvedCountry>> {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT location_country
+             FROM photos
+             WHERE is_trashed = FALSE
+               AND location_country IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let country: String = row.get(0)?;
+            Ok(ResolvedCountry {
+                label: country.clone(),
+                country,
+            })
+        })?;
+        let lower = text.to_lowercase();
+        let mut out = Vec::new();
+        for row in rows {
+            let resolved = row?;
+            if Self::contains_phrase(&lower, &resolved.country.to_lowercase()) {
+                out.push(resolved);
                 if out.len() >= 3 {
                     break;
                 }
@@ -873,10 +1013,23 @@ impl SearchService {
         if phrase.trim().is_empty() {
             return false;
         }
-        lower == phrase
-            || lower.contains(&format!(" {} ", phrase))
-            || lower.starts_with(&format!("{} ", phrase))
-            || lower.ends_with(&format!(" {}", phrase))
+        // Normalize punctuation to word boundaries so queries such as
+        // "Paris, France" match the same entity spans as "Paris France".
+        // Token normalization also avoids substring matches inside longer
+        // names and works for Unicode city/country names.
+        let normalize = |value: &str| {
+            value
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let haystack = normalize(lower);
+        let needle = normalize(phrase);
+        haystack == needle
+            || haystack.contains(&format!(" {needle} "))
+            || haystack.starts_with(&format!("{needle} "))
+            || haystack.ends_with(&format!(" {needle}"))
     }
 
     fn remove_word(text: &str, needle: &str) -> String {
@@ -890,11 +1043,61 @@ impl SearchService {
             .join(" ")
     }
 
+    /// Remove every recognized `name` from `text` by blanking the
+    /// matched spans (replaced with spaces, so later whitespace-based
+    /// passes still work). Matching is case-insensitive with Unicode
+    /// case folding, and requires the span to start and end on phrase
+    /// boundaries — a name embedded inside a longer word ("Tata" in
+    /// "Tataganj") is left alone.
     fn remove_entity_names<'a>(text: &str, names: impl Iterator<Item = &'a str>) -> String {
         let mut out = text.to_string();
         for name in names {
-            out = out.replace(name, " ");
-            out = out.replace(&name.to_lowercase(), " ");
+            out = Self::remove_phrase(&out, name);
+        }
+        out
+    }
+
+    fn remove_phrase(text: &str, phrase: &str) -> String {
+        let phrase = phrase.trim();
+        if phrase.is_empty() || text.is_empty() {
+            return text.to_string();
+        }
+        let t: Vec<char> = text.chars().collect();
+        let p: Vec<char> = phrase.chars().collect();
+        let is_word_char = |c: char| c.is_alphanumeric();
+        let caseless_eq = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+
+        let mut masked = vec![false; t.len()];
+        let mut i = 0;
+        while i + p.len() <= t.len() {
+            if t[i..i + p.len()]
+                .iter()
+                .zip(p.iter())
+                .all(|(&a, &b)| caseless_eq(a, b))
+            {
+                let end = i + p.len();
+                let before_ok = i == 0 || !is_word_char(t[i - 1]);
+                let after_ok = end == t.len() || !is_word_char(t[end]);
+                if before_ok && after_ok {
+                    for m in masked[i..end].iter_mut() {
+                        *m = true;
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        if masked.iter().all(|m| !*m) {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        for (c, m) in t.iter().zip(masked.iter()) {
+            if *m {
+                out.push(' ');
+            } else {
+                out.push(*c);
+            }
         }
         out
     }
@@ -1007,7 +1210,6 @@ mod tests {
                 location_country TEXT,
                 camera_make TEXT,
                 camera_model TEXT,
-                ocr_text TEXT,
                 thumbnail_path TEXT,
                 faces_processed BOOLEAN DEFAULT FALSE,
                 media_type TEXT NOT NULL DEFAULT 'photo',
@@ -1084,23 +1286,6 @@ mod tests {
             )
             .unwrap();
         }
-    }
-
-    #[test]
-    fn unified_search_matches_ocr_text() {
-        let conn = search_test_conn();
-        insert_photo(&conn, 1, "scan-001", "2024-01-01T10:00:00Z");
-        insert_photo(&conn, 2, "scan-002", "2024-01-02T10:00:00Z");
-        conn.execute(
-            "UPDATE photos SET ocr_text = 'Boarding pass Bengaluru to Delhi' WHERE id = 2",
-            [],
-        )
-        .unwrap();
-
-        let results =
-            SearchService::search_unified_with_semantic(&conn, "boarding", vec![]).unwrap();
-
-        assert_eq!(results.photo_ids, vec![2]);
     }
 
     #[test]
@@ -1205,6 +1390,22 @@ mod tests {
                 .unwrap();
 
         assert_eq!(results.photo_ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn place_search_handles_case_punctuation_and_unicode_without_span_loss() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "paris", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "munich", "2024-01-02T10:00:00Z");
+        set_location(&conn, 1, "Paris", "France");
+        set_location(&conn, 2, "München", "Germany");
+
+        let paris =
+            SearchService::search_unified_with_semantic(&conn, "PARIS, France", vec![]).unwrap();
+        assert_eq!(paris.photo_ids, vec![1]);
+
+        let munich = SearchService::search_unified_with_semantic(&conn, "mÜnchen", vec![]).unwrap();
+        assert_eq!(munich.photo_ids, vec![2]);
     }
 
     #[test]

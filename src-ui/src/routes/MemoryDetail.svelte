@@ -50,13 +50,14 @@
     if (ids.length === 0) return;
     const seq = loadSeq;
     const memoryId = id;
+    const session = libraryStore.session;
     const dropSet = new Set(ids);
     const snapshot = photos
       .map((p, idx) => ({ idx, photo: p }))
       .filter((e) => dropSet.has(e.photo.id));
     try {
       actionBusy = true;
-      const result = await trash.trashPhotos(ids);
+      const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== loadSeq || memoryId !== id) return;
       if (result.count === 0) {
         toasts.info("No selected photos needed trashing");
@@ -69,7 +70,7 @@
       toasts.undoable(
         `${result.count} ${result.count === 1 ? "photo" : "photos"} moved to trash`,
         async () => {
-          await trash.restore(ids);
+          await trash.restore(ids, session);
           if (!mounted || memoryId !== id) return;
           photoVisibility.markRestored(ids);
           const next = photos.slice();

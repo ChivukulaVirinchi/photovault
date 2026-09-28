@@ -8,6 +8,8 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { devMode } from "../lib/stores/devMode.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
+  import { dataRevision } from "../lib/stores/dataRevision.svelte";
+  import { getHealthCache, healthCacheKey, setHealthCache } from "../lib/healthCache";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import { commandErrorMessage } from "../lib/api";
@@ -398,10 +400,17 @@
 
   async function loadHealth() {
     const seq = ++healthSeq;
+    const key = healthCacheKey(libraryStore.driveRoot, libraryStore.session, dataRevision.version);
+    const cached = getHealthCache(key);
+    if (cached) {
+      healthData = cached;
+      return;
+    }
     try {
       const next = await health.compute();
       if (!mounted || seq !== healthSeq) return;
       healthData = next;
+      setHealthCache(key, next);
     } catch {
       if (mounted && seq === healthSeq) healthData = null;
     }

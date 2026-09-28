@@ -326,9 +326,8 @@ impl Reindexer {
                         thumbnail_path = NULL,
                         faces_processed = FALSE,
                         phash = NULL,
+                        content_hash = NULL,
                         brightness = NULL,
-                        ocr_text = NULL,
-                        ocr_processed = FALSE,
                         updated_at = CURRENT_TIMESTAMP
                   WHERE id = ?1",
                 params![photo_id, file_size, file_mtime, file_hash],

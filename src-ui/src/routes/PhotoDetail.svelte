@@ -32,14 +32,17 @@
   import ZoomImage from "../lib/components/ZoomImage.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import type { ZoomApi } from "../lib/zoomApi";
-  import maplibregl, { type Map as MapInstance } from "maplibre-gl";
-  import { installTileCache } from "../lib/tile-cache";
+  import type { Map as MapInstance } from "maplibre-gl";
+  import { ensureTileCache, loadMapLibre } from "../lib/tile-cache";
   import "maplibre-gl/dist/maplibre-gl.css";
   import type { PhotoDto, PersonDto, AlbumDto } from "../lib/api/types";
 
+  /// MapLibre is a ~900 KB on-demand import, resolved once when the minimap is
+  /// first built. See lib/tile-cache.ts.
+  let maplibregl: Awaited<ReturnType<typeof loadMapLibre>> | null = null;
+
   interface Props { id: number; info?: boolean }
   let { id, info = false }: Props = $props();
-  installTileCache();
 
   let photo = $state<PhotoDto | null>(null);
   let imageUrl = $state<string | null>(null);
@@ -262,9 +265,12 @@
       resolvedImageCache.set(photoId, cached);
       return [cachedPhoto, cached];
     }
-    const p = await photos.get(photoId);
-    if (libraryStore.driveRoot !== driveRoot || libraryStore.session !== session) throw new Error("Open library changed");
-    const resolved = await library.resolvePath(photoId, true);
+    // Metadata and path resolution are independent IPC calls. Start both at
+    // once so a slow filesystem lookup cannot delay the first useful card.
+    const [p, resolved] = await Promise.all([
+      photos.get(photoId),
+      library.resolvePath(photoId, true),
+    ]);
     if (libraryStore.driveRoot !== driveRoot || libraryStore.session !== session) throw new Error("Open library changed");
     const url = convertFileSrc(resolved.absolute_path);
     if (!url) throw new Error("Photo path is outside the open library");
@@ -369,35 +375,51 @@
   function initMini() {
     if (!miniEl || !photo?.gps) return;
     if (miniMap) destroyMini();
-    miniMap = new maplibregl.Map({
-      container: miniEl,
-      style: {
-        version: 8,
-        sources: {
-          osm: {
-            type: "raster",
-            tiles: [
-              "cached://https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              "cached://https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              "cached://https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
-            ],
-            tileSize: 256,
-            attribution: "© OSM",
-            maxzoom: 19,
+    const gps = photo.gps;
+    const container = miniEl;
+    void (async () => {
+      let lib: Awaited<ReturnType<typeof loadMapLibre>>;
+      try {
+        // The `cached:` protocol has to be registered before the map issues
+        // its first tile request, or every tile fails and the minimap stays
+        // blank instead of merely loading late.
+        const loaded = await Promise.all([loadMapLibre(), ensureTileCache()]);
+        lib = loaded[0];
+      } catch {
+        return; // No minimap is a better outcome than a broken one.
+      }
+      // The photo may have changed, or the panel closed, while loading.
+      if (container !== miniEl || !container.isConnected) return;
+      maplibregl = lib;
+      const instance = new lib.Map({
+        container,
+        style: {
+          version: 8,
+          sources: {
+            osm: {
+              type: "raster",
+              tiles: [
+                "cached://https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "cached://https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "cached://https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              ],
+              tileSize: 256,
+              attribution: "© OSM",
+              maxzoom: 19,
+            },
           },
+          layers: [{ id: "osm", type: "raster", source: "osm" }],
         },
-        layers: [{ id: "osm", type: "raster", source: "osm" }],
-      },
-      center: [photo.gps.lng, photo.gps.lat],
-      zoom: 13,
-      attributionControl: { compact: true },
-    });
-    miniMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-    const pin = document.createElement("div");
-    pin.className = "mini-pin";
-    new maplibregl.Marker({ element: pin })
-      .setLngLat([photo.gps.lng, photo.gps.lat])
-      .addTo(miniMap);
+        center: [gps.lng, gps.lat],
+        zoom: 13,
+        attributionControl: { compact: true },
+      });
+      miniMap = instance;
+      instance.addControl(new lib.NavigationControl({ showCompass: false }), "top-right");
+      const pin = document.createElement("div");
+      pin.className = "mini-pin";
+      new lib.Marker({ element: pin }).setLngLat([gps.lng, gps.lat]).addTo(instance);
+    })();
   }
 
   function destroyMini() {
@@ -450,10 +472,11 @@
     if (!photo || actionBusy) return;
     const seq = loadSeq;
     const id = photo.id;
+    const session = libraryStore.session;
     const advanceTo = effectiveNextId ?? effectivePrevId ?? null;
     try {
       actionBusy = true;
-      const result = await trash.trashPhotos([id]);
+      const result = await trash.trashPhotos([id], session);
       if (!mounted || seq !== loadSeq || photo?.id !== id) return;
       if (result.count === 0) {
         toasts.info("Photo was already out of the library view");
@@ -464,7 +487,7 @@
       toasts.undoable(
         "Photo moved to trash",
         async () => {
-          await trash.restore([id]);
+          await trash.restore([id], session);
           if (!mounted) return;
           photoVisibility.markRestored([id]);
           // Re-load the trashed-then-restored photo back into view.
@@ -1011,12 +1034,6 @@
           <span>Show in folder</span>
         </button>
 
-        {#if p.ocr}
-          <hr class="hairline" />
-          <h3 class="section">Transcribed text</h3>
-          <p class="ocr">{p.ocr.text}</p>
-        {/if}
-
         {#if p.gps}
           <hr class="hairline" />
           <h3 class="section">On the map</h3>
@@ -1443,17 +1460,6 @@
     color: var(--ink-soft);
   }
   .reveal:hover { color: var(--ink); }
-
-  .ocr {
-    font-style: italic;
-    font-size: var(--t-sm);
-    background: var(--bg-card);
-    padding: var(--s-3) var(--s-4);
-    border-radius: var(--r-sm);
-    border-left: 2px solid var(--accent);
-    color: var(--ink-soft);
-    line-height: 1.6;
-  }
 
   .mini-wrap {
     display: flex;

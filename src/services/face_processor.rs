@@ -5,9 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use rayon::prelude::*;
 
@@ -174,11 +173,9 @@ impl FaceProcessor {
             .map_err(|e| format!("Failed to open database: {}", e))?;
         let face_repo = FaceRepo::new(&db.conn);
 
-        // Reset processing flags if a prior run marked photos as processed
-        // but didn't actually detect any faces (e.g., model loading failed)
-        let _ = face_repo.reset_if_no_faces();
-
-        // Get unprocessed photos
+        // Get unprocessed photos. Do not reset every processing flag merely
+        // because the library currently contains no faces: a legitimate
+        // no-face library would otherwise be processed again on every run.
         let unprocessed = face_repo
             .get_unprocessed_photos_with_context()
             .map_err(|e| format!("Failed to get unprocessed photos: {}", e))?;
@@ -267,14 +264,14 @@ impl FaceProcessor {
         // most of its work on tiny thumbnails; per-worker memory is a
         // fraction of what it was when each worker held a 24 MP
         // RGB buffer. 8 saturates an 8-core machine without OOM risk.
-        let num_workers = available_cpus.clamp(1, 8);
-        let intra_threads = (available_cpus / num_workers).max(1);
+        let (num_workers, intra_threads, cpu_budget) = background_face_budget(available_cpus);
 
         tracing::info!(
-            "Face pipeline: {} workers, {} intra-threads per session ({} CPUs)",
+            "Face pipeline: {} workers, {} intra-threads per session ({} CPUs, budget {})",
             num_workers,
             intra_threads,
-            available_cpus
+            available_cpus,
+            cpu_budget
         );
 
         // Build a custom rayon thread pool so we don't pollute the global pool
@@ -292,11 +289,6 @@ impl FaceProcessor {
         let cancel = cancel_flag
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        // Stage flag: 0=Detecting, 1=Finishing, 2=Done. The reporter
-        // thread reads this to decide whether to clamp `processed` to
-        // 95% of total — that's how the bar keeps moving during the
-        // clustering tail instead of stalling at 100%.
-        let stage_flag = Arc::new(AtomicU8::new(0));
         // Bumped by the streaming writer after every chunk commit. The
         // UI uses this signal to refresh the People view mid-run so
         // newly-detected faces show up before the whole pipeline ends.
@@ -306,55 +298,6 @@ impl FaceProcessor {
         let detector_path = Arc::new(detector_path);
         let embedder_path = Arc::new(embedder_path);
         let drive_path_arc = Arc::new(drive_path.to_path_buf());
-
-        // Spawn a lightweight progress reporter
-        let progress_handle = {
-            let progress_tx = progress_tx.clone();
-            let processed_count = processed_count.clone();
-            let faces_count = faces_count.clone();
-            let cancel = cancel.clone();
-            let stage_flag = stage_flag.clone();
-            let chunks_flushed_atomic = chunks_flushed.clone();
-            let start_time = std::time::Instant::now();
-            std::thread::spawn(move || {
-                loop {
-                    let stage_raw = stage_flag.load(Ordering::Relaxed);
-                    let processed_raw = processed_count.load(Ordering::Relaxed);
-                    let stage = match stage_raw {
-                        0 => FaceProcessingStage::Detecting,
-                        1 => FaceProcessingStage::Finishing,
-                        _ => FaceProcessingStage::Done,
-                    };
-                    // Cap at 95% during Finishing so the UI shows a
-                    // moving bar with a "wrapping up" hint rather than
-                    // a frozen 100%.
-                    let processed = match stage {
-                        FaceProcessingStage::Finishing if total > 0 => {
-                            let cap = ((total as f64) * 0.95).floor() as usize;
-                            processed_raw.min(cap.max(1))
-                        }
-                        _ => processed_raw,
-                    };
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.try_send(FaceProcessingProgress {
-                            processed,
-                            total,
-                            faces_found: faces_count.load(Ordering::Relaxed),
-                            elapsed_secs: start_time.elapsed().as_secs_f64(),
-                            stage,
-                            chunks_flushed: chunks_flushed_atomic.load(Ordering::Relaxed) as u32,
-                            embedder_route,
-                        });
-                    }
-                    // Exit only when the pipeline is fully done OR cancelled.
-                    if matches!(stage, FaceProcessingStage::Done) || cancel.load(Ordering::Relaxed)
-                    {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-            })
-        };
 
         // ---- Streaming writer thread ----
         // Owns its own DB connection (rusqlite Connection isn't Send,
@@ -387,12 +330,12 @@ impl FaceProcessor {
                         &faces_dir_buf,
                         &chunk,
                         was_cancelled,
+                        &chunks_flushed,
                         clustering_threshold,
                         writer_resolver_weights,
                     )?;
                     total_faces += faces_added;
                     photos_processed += photos_added;
-                    chunks_flushed.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok((total_faces, photos_processed))
             })
@@ -692,6 +635,18 @@ impl FaceProcessor {
                     }
                     })();
 
+                    if let Some(ref tx) = progress_tx {
+                        let _ = tx.try_send(FaceProcessingProgress {
+                            processed: processed_count.load(Ordering::Relaxed),
+                            total,
+                            faces_found: faces_count.load(Ordering::Relaxed),
+                            elapsed_secs: pipeline_start.elapsed().as_secs_f64(),
+                            stage: FaceProcessingStage::Detecting,
+                            chunks_flushed: chunks_flushed.load(Ordering::Relaxed) as u32,
+                            embedder_route,
+                        });
+                    }
+
                     // Record summary BEFORE handing the result off — the
                     // writer thread takes ownership of `result`, but
                     // Stage 3 still needs the photo metadata.
@@ -747,11 +702,7 @@ impl FaceProcessor {
         // Suppress the unused-mut lint if the compiler flags it.
         let _ = (&mut total_faces, &mut photos_processed);
 
-        // Per-photo loop is done. Move into the post-processing tail
-        // (DB writes + propagation + clustering). The progress reporter
-        // keeps running and emits `Finishing` events with a 95% cap so
-        // the UI shows continued activity rather than stalling at x/x.
-        stage_flag.store(1, Ordering::Relaxed);
+        // Per-photo loop is done. Move into the post-processing tail.
 
         // Check if cancelled partway through
         let was_cancelled = cancel.load(Ordering::Relaxed);
@@ -771,7 +722,6 @@ impl FaceProcessor {
         }
 
         if was_cancelled {
-            stage_flag.store(2, Ordering::Relaxed);
             if let Some(ref tx) = progress_tx {
                 let _ = tx.try_send(FaceProcessingProgress {
                     processed: photos_processed,
@@ -783,7 +733,6 @@ impl FaceProcessor {
                     embedder_route,
                 });
             }
-            let _ = progress_handle.join();
             return Ok(FaceProcessingResult {
                 photos_processed,
                 faces_detected: total_faces,
@@ -824,10 +773,7 @@ impl FaceProcessor {
                 let _ = Self::propagate_identity_from_context(&face_repo, &inferred_repo, &params);
             }
         }
-        // Mid-tail progress nudge so the UI sees an immediate "Finishing"
-        // tick once Stages 2-3 wrap up — the reporter would catch this on
-        // the next 250 ms cycle anyway, but an explicit send eliminates
-        // the visible gap before clustering kicks off.
+        // Tell the UI when processing enters the clustering tail.
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
                 processed: photos_processed,
@@ -844,9 +790,7 @@ impl FaceProcessor {
         let clusters_created =
             Self::run_clustering(&face_repo, clustering_threshold, resolver_weights)?;
 
-        // Pipeline complete: flip stage so the reporter exits its loop
-        // and emit one final 100% Done tick for the UI.
-        stage_flag.store(2, Ordering::Relaxed);
+        // Emit one final Done tick for the UI.
         if let Some(ref tx) = progress_tx {
             let _ = tx.try_send(FaceProcessingProgress {
                 processed: photos_processed,
@@ -858,9 +802,6 @@ impl FaceProcessor {
                 embedder_route,
             });
         }
-
-        // Join the reporter now that we've signalled Done.
-        let _ = progress_handle.join();
 
         tracing::info!(
             "Face processing complete: {} photos, {} faces, {} clusters",
@@ -1139,11 +1080,20 @@ fn flush_result_chunk(
     faces_dir: &Path,
     chunk: &[PhotoFaceResult],
     was_cancelled: bool,
+    chunks_flushed: &AtomicUsize,
     clustering_threshold: f32,
     resolver_weights: crate::ml::ResolverWeights,
 ) -> Result<(usize, usize), String> {
     let mut faces_added = 0usize;
     let mut photos_added = 0usize;
+    let after_id: i64 = db
+        .conn
+        .query_row("SELECT COALESCE(MAX(id), 0) FROM faces", [], |row| {
+            row.get(0)
+        })
+        .map_err(|e| format!("Read face cursor: {e}"))?;
+    // Crop encoding/writes happen after commit, outside SQLite's write lock.
+    let mut crops = Vec::new();
 
     let tx = db
         .conn
@@ -1190,10 +1140,7 @@ fn flush_result_chunk(
             ) {
                 Ok(_) => {
                     let face_id = tx.last_insert_rowid();
-                    let crop_path = faces_dir.join(format!("{}.jpg", face_id));
-                    if let Err(e) = FaceProcessor::save_face_crop(&face.aligned_face, &crop_path) {
-                        tracing::warn!("Failed to save face crop {}: {}", face_id, e);
-                    }
+                    crops.push((face_id, &face.aligned_face));
                     faces_added += 1;
                 }
                 Err(e) => {
@@ -1215,6 +1162,15 @@ fn flush_result_chunk(
     tx.commit()
         .map_err(|e| format!("Failed to commit chunk: {}", e))?;
 
+    for (face_id, crop) in crops {
+        let crop_path = faces_dir.join(format!("{face_id}.jpg"));
+        if let Err(e) = FaceProcessor::save_face_crop(crop, &crop_path) {
+            tracing::warn!("Failed to save face crop {}: {}", face_id, e);
+        }
+    }
+    // Publish the committed batch before potentially expensive identity assignment.
+    chunks_flushed.fetch_add(1, Ordering::Relaxed);
+
     // Per-chunk Stage A: assign HIGH-band gallery matches now so the
     // user sees faces appear in People mid-run for everyone they've
     // already named (or who survived a previous run). New people are
@@ -1222,6 +1178,7 @@ fn flush_result_chunk(
     let face_repo = FaceRepo::new(&db.conn);
     if let Err(e) = FaceProcessor::stream_assign_existing_clusters(
         &face_repo,
+        after_id,
         clustering_threshold,
         resolver_weights,
     ) {
@@ -1232,3 +1189,95 @@ fn flush_result_chunk(
 }
 
 mod clustering;
+
+/// Bound aggregate CPU use, not just the threads inside each inference session.
+///
+/// Returns `(workers, intra_threads_per_worker, aggregate_thread_budget)`.
+///
+/// Face processing must never take the whole machine. It runs in the
+/// background while the user is browsing, so the invariant that matters is
+/// `workers * intra <= budget` with the budget strictly below the CPU count —
+/// leaving real capacity for the webview, the async runtime and SQLite.
+///
+/// History worth not repeating: an earlier revision computed
+/// `budget = 0.75 * logical` then `intra = budget / workers`, which floored
+/// `intra` to 1 on everything up to ~10 CPUs (8 workers x 1 thread on a
+/// 16-core box). A later fix "corrected" that by granting small machines 100%
+/// of their cores, which on the 2-core/4-thread laptop this project is tested
+/// on handed face processing all four threads and froze the UI. Both extremes
+/// are wrong: the budget must scale with the machine AND always leave headroom.
+fn background_face_budget(logical_cpus: usize) -> (usize, usize, usize) {
+    let logical = logical_cpus.max(1);
+    // Reserve at least one thread for the rest of the app, then take 3/4 of
+    // what remains. On 4 CPUs -> 2 (leaves 2 for the UI). On 16 -> 11. On 1 ->
+    // 1, because with a single CPU there is nothing to reserve.
+    let budget = if logical <= 1 {
+        1
+    } else {
+        (((logical - 1) as f64) * 0.75).floor().max(1.0) as usize
+    };
+    let workers = budget.clamp(1, 8);
+    let intra = (budget / workers).max(1);
+    (workers, intra, budget)
+}
+
+#[cfg(test)]
+mod background_budget_tests {
+    use super::background_face_budget;
+    #[test]
+    fn reserves_capacity_on_low_end_and_large_machines() {
+        for cores in [1, 2, 4, 7, 8, 12, 16, 64] {
+            let (w, t, b) = background_face_budget(cores);
+            assert!(w * t <= b, "workers*intra must fit the budget");
+            assert!(w >= 1);
+            assert!(t >= 1);
+        }
+    }
+
+    /// Every machine must keep real capacity for the UI.
+    ///
+    /// Two past regressions are pinned here: `intra_threads` collapsing to 1 on
+    /// ordinary machines (so sessions were effectively single-threaded), and a
+    /// later "fix" that granted small machines every core (so on the 2-core /
+    /// 4-thread laptop this is developed on, face processing took all four
+    /// threads and the UI froze).
+    #[test]
+    fn budget_always_leaves_headroom_and_never_collapses_to_one_thread() {
+        for cores in 1..=64usize {
+            let (workers, intra, budget) = background_face_budget(cores);
+            assert!(workers >= 1 && intra >= 1, "{cores}: {workers}x{intra}");
+            assert!(
+                workers * intra <= budget,
+                "{cores}: {workers}x{intra} exceeds budget {budget}"
+            );
+            assert!(
+                budget <= cores,
+                "{cores}: budget {budget} exceeds the CPU count"
+            );
+            if cores > 1 {
+                assert!(
+                    budget < cores,
+                    "{cores}: budget {budget} consumes every CPU; the UI needs one"
+                );
+            }
+        }
+
+        // The development machine: 2 cores / 4 threads. Half the machine, so
+        // the webview and async runtime keep two threads.
+        assert_eq!(background_face_budget(4), (2, 1, 2));
+        // A single CPU has nothing to reserve.
+        assert_eq!(background_face_budget(1), (1, 1, 1));
+        // Roomier machines stay well under their ceiling.
+        assert_eq!(background_face_budget(8), (5, 1, 5));
+        assert_eq!(background_face_budget(16), (8, 1, 11));
+        // Large machines must not come back single-threaded per session.
+        let (w24, t24, b24) = background_face_budget(24);
+        assert_eq!(b24, 17);
+        assert_eq!(
+            (w24, t24),
+            (8, 2),
+            "24-core sessions must not be single-threaded"
+        );
+        assert_eq!(background_face_budget(64), (8, 5, 47));
+    }
+}

@@ -152,25 +152,20 @@ fn thumbnail_cleanup_cannot_follow_external_directory_symlink() {
 fn modified_photo_invalidates_visual_derivatives() {
     let (dir, db) = library();
     db.conn
-        .execute(
-            "UPDATE photos SET phash=123,brightness=0.5,ocr_text='old' WHERE id=1",
-            [],
-        )
+        .execute("UPDATE photos SET phash=123,brightness=0.5 WHERE id=1", [])
         .unwrap();
     let changes = IndexChanges {
         modified: vec![(1, dir.path().join("one.jpg"))],
         ..Default::default()
     };
     Reindexer::new().apply_changes(&db.conn, &changes).unwrap();
-    let values: (Option<i64>, Option<f64>, Option<String>) = db
+    let values: (Option<i64>, Option<f64>) = db
         .conn
-        .query_row(
-            "SELECT phash,brightness,ocr_text FROM photos WHERE id=1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
+        .query_row("SELECT phash,brightness FROM photos WHERE id=1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .unwrap();
-    assert_eq!(values, (None, None, None));
+    assert_eq!(values, (None, None));
 }
 
 #[test]
@@ -192,38 +187,6 @@ fn exclusions_use_literal_directory_names() {
             .unwrap();
         assert_eq!(count, 1, "excluded {excluded}");
     }
-}
-
-#[test]
-fn ocr_replacement_and_delete_remove_old_tokens() {
-    let (_dir, db) = library();
-    db.conn
-        .execute("UPDATE photos SET ocr_text='oldtoken' WHERE id=1", [])
-        .unwrap();
-    db.conn
-        .execute("UPDATE photos SET ocr_text='newtoken' WHERE id=1", [])
-        .unwrap();
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos_fts WHERE photos_fts MATCH 'oldtoken'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
-    db.conn
-        .execute("DELETE FROM photos WHERE id=1", [])
-        .unwrap();
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos_fts WHERE photos_fts MATCH 'newtoken'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
 }
 
 #[test]
@@ -282,46 +245,6 @@ fn added_files_are_inserted_once_and_trash_is_not_rediscovered() {
         .unwrap()
         .added
         .is_empty());
-}
-
-#[test]
-fn migration_rebuilds_existing_ocr_index() {
-    let (_dir, db) = library();
-    db.conn
-        .execute_batch(
-            "DELETE FROM schema_version; INSERT INTO schema_version(version) VALUES(28);
-        UPDATE photos SET ocr_text='newtoken';
-        INSERT INTO photos_fts(rowid,ocr_text) VALUES(1,'oldtoken');
-        DROP TRIGGER photos_fts_update;
-        CREATE TRIGGER photos_fts_update AFTER UPDATE OF ocr_text ON photos BEGIN
-            DELETE FROM photos_fts WHERE rowid=old.id;
-            INSERT INTO photos_fts(rowid,ocr_text) VALUES(new.id,new.ocr_text);
-        END;",
-        )
-        .unwrap();
-    smriti::db::migrations::run_migrations(&db.conn).unwrap();
-    smriti::db::migrations::run_migrations(&db.conn).unwrap();
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos_fts WHERE photos_fts MATCH 'oldtoken'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
-    db.conn
-        .execute("UPDATE photos SET ocr_text=NULL", [])
-        .unwrap();
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM photos_fts WHERE photos_fts MATCH 'newtoken'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
 }
 
 #[test]

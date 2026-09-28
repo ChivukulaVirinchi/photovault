@@ -3,6 +3,8 @@
 //! Wraps the `smriti` library (engine) in IPC handlers. The contract
 //! is documented in `docs/COMMAND_SURFACE.md`.
 
+use tauri::Manager;
+
 pub mod commands;
 pub mod dto;
 pub mod error;
@@ -25,6 +27,41 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .setup(|app| {
+            // The semantic text model is application-wide and optional.
+            // Start it on a blocking worker as soon as the native shell is
+            // alive; neither window creation nor library_open awaits it.
+            // Search uses try_lock and remains responsive while this runs.
+            if smriti::services::semantic::SemanticSearchService::model_assets_installed()
+                && smriti::bootstrap::onnx_runtime_exists()
+            {
+                let runner = app.state::<AppState>().semantic_runner.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    // Loading a large optional model must yield to shell and
+                    // library I/O on Windows, especially on low-end PCs.
+                    #[cfg(target_os = "windows")]
+                    unsafe {
+                        use windows::Win32::System::Threading::{
+                            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+                        };
+                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                    }
+                    let Ok(mut guard) = runner.lock() else {
+                        tracing::debug!("semantic runtime preload skipped: cache poisoned");
+                        return;
+                    };
+                    if guard.is_none() {
+                        match smriti::services::semantic::SemanticSearchService::model_runner() {
+                            Ok(loaded) => *guard = Some(loaded),
+                            Err(error) => {
+                                tracing::debug!("semantic runtime preload skipped: {error}")
+                            }
+                        }
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // library
             commands::library::library_list_drives,
@@ -38,6 +75,7 @@ pub fn run() {
             commands::library::library_open,
             commands::library::library_close,
             commands::library::library_compat_photos_list,
+            commands::library::library_force_thumbnail_repair,
             commands::library::library_apply_changes,
             commands::library::library_start_scan,
             commands::library::library_cancel_scan,
@@ -169,10 +207,6 @@ pub fn run() {
             commands::trash::trash_restore,
             commands::trash::trash_permanent_delete,
             commands::trash::trash_empty,
-            // documents
-            commands::documents::documents_list,
-            commands::documents::documents_search,
-            commands::documents::documents_set_category,
             // map
             commands::map::map_pins,
             commands::map::map_pins_all,
@@ -180,6 +214,7 @@ pub fn run() {
             // insights
             commands::insights::insights_compute,
             commands::insights::insights_invalidate,
+            commands::insights::insights_milestone_probe,
             // health
             commands::health::health_compute,
             // geocoding
@@ -200,11 +235,52 @@ pub fn run() {
             commands::system::system_updates_check,
             commands::system::system_test_gpu_bridge,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Flush the open library's WAL into the main DB file before the
+            // process dies. A catalog copied (or a USB drive yanked) right
+            // after the window closes used to be able to lose recent commits
+            // that were still sitting in the WAL.
+            //
+            // Only on `Exit`, not `ExitRequested`. `ExitRequested` fires while
+            // the window is still on screen (and a handler may still veto the
+            // exit), so doing a blocking checkpoint there made closing the app
+            // look like a hang and, because both events fire on a normal quit,
+            // ran the checkpoint twice. `Exit` runs once, after the event loop
+            // has stopped and the window is gone.
+            //
+            // `try_read`/`try_lock` stay non-blocking: if a writer holds the
+            // connection the checkpoint is skipped rather than stalling exit.
+            // `Database::drop` performs a passive checkpoint as backstop.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = app.try_state::<crate::state::AppState>() {
+                    if let Ok(library) = state.library.try_read() {
+                        if let Some(lib) = library.as_ref() {
+                            if let Ok(db) = lib.db.try_lock() {
+                                db.checkpoint_truncate();
+                            }
+                        }
+                    }
+                }
+            }
+        });
 }
 #[cfg(test)]
 mod ipc_contract_tests {
+    #[test]
+    fn packaged_asset_scope_is_cross_platform_and_runtime_granted() {
+        let config: tauri::utils::config::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let asset_protocol = &config.app.security.asset_protocol;
+
+        assert!(asset_protocol.enable);
+        assert!(
+            asset_protocol.scope.allowed_paths().is_empty(),
+            "packaged config must not contain OS-specific globs; library_open grants the selected directory"
+        );
+    }
+
     #[test]
     fn frontend_envelopes_deserialize_into_command_arguments() {
         use crate::commands::{

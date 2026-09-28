@@ -15,6 +15,7 @@ pub struct DeleteResult {
     pub files_deleted: usize,
     pub db_records_deleted: usize,
     pub errors: Vec<String>,
+    pub committed_with_recovery_errors: bool,
 }
 
 /// Trash statistics.
@@ -41,7 +42,10 @@ impl TrashService {
         Ok(count)
     }
 
-    pub(crate) fn trash_photos_tx(
+    /// Mark photos as trashed inside a caller-owned transaction. This lets
+    /// compound operations (duplicate/burst cleanup) commit the photo state
+    /// and their group metadata atomically.
+    pub fn trash_photos_tx(
         tx: &rusqlite::Transaction<'_>,
         photo_ids: &[i64],
     ) -> SqliteResult<usize> {
@@ -195,6 +199,7 @@ impl TrashService {
             }
             Ok(mut result) => {
                 if let Err(error) = recovery {
+                    result.committed_with_recovery_errors = true;
                     result
                         .errors
                         .push(format!("Staged deletion retained for recovery: {error}"));
