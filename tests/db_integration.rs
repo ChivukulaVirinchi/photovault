@@ -19,6 +19,29 @@ fn setup_db() -> (tempfile::TempDir, Database) {
     (temp, db)
 }
 
+#[test]
+fn fresh_library_indexes_exist_after_migrations() {
+    let temp = tempdir().unwrap();
+    let db = Database::open_for_drive(temp.path()).unwrap();
+    create_schema(&db.conn).unwrap();
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
+    for name in [
+        "idx_photos_hash_trashed",
+        "idx_faces_photo_cluster",
+        "idx_photos_content_hash",
+    ] {
+        assert!(
+            db.conn
+                .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1")
+                .unwrap()
+                .exists([name])
+                .unwrap(),
+            "missing index: {name}"
+        );
+    }
+    smriti::db::migrations::run_migrations(&db.conn).unwrap();
+}
+
 fn sample_photo(path: &str, hash: &str) -> PhotoInsert {
     PhotoInsert {
         relative_path: path.to_string(),

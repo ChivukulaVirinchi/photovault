@@ -36,7 +36,10 @@ pub async fn semantic_status(state: State<'_, AppState>) -> CommandResult<Semant
 }
 
 #[tauri::command]
-pub async fn semantic_warm_runtime(state: State<'_, AppState>) -> CommandResult<()> {
+pub async fn semantic_warm_runtime(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
     let (drive_root, semantic_index, semantic_runner) = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
@@ -46,7 +49,7 @@ pub async fn semantic_warm_runtime(state: State<'_, AppState>) -> CommandResult<
             lib.semantic_runner.clone(),
         )
     };
-    super::library::spawn_semantic_warmup(drive_root, semantic_index, semantic_runner, None);
+    super::library::spawn_semantic_warmup(drive_root, semantic_index, semantic_runner, Some(app));
     Ok(())
 }
 
@@ -185,7 +188,8 @@ async fn start_semantic_indexing_job(app: AppHandle, state: &AppState) -> Comman
     }
     if !status.onnx_runtime_installed {
         return Err(CommandError::MlUnavailable {
-            reason: "Install ONNX Runtime from Settings -> Assets -> Download assets first.".into(),
+            reason: "Enable visual search in Search or Settings to install the runtime and model."
+                .into(),
         });
     }
     let job = jobs::start_job(state, JobKind::SemanticIndex).await?;

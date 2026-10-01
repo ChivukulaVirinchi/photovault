@@ -40,6 +40,7 @@
   import { drainSearchPages } from "../lib/searchPaging";
   import VirtualGrid from "../lib/components/VirtualGrid.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import AssetSetup from "../lib/components/AssetSetup.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import { Check, X } from "lucide-svelte";
@@ -464,6 +465,7 @@
 </script>
 
 <PageHeader title="Search" />
+<AssetSetup feature="visual" />
 
 <div class="search-row">
   <div class="bar">

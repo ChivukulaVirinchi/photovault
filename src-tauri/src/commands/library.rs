@@ -692,8 +692,7 @@ pub(crate) fn spawn_semantic_warmup(
                 return;
             }
         };
-        if !status.assets_installed || !status.onnx_runtime_installed || status.indexed_photos == 0
-        {
+        if !status.assets_installed || !status.onnx_runtime_installed {
             return;
         }
 

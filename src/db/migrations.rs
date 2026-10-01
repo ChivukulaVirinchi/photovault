@@ -270,6 +270,10 @@ fn migrate_v27_to_v28(conn: &Connection) -> SqliteResult<()> {
 fn ensure_performance_indexes(conn: &Connection) -> SqliteResult<()> {
     const INDEXES: &[(&str, &str)] = &[
         (
+            "idx_photos_hash_trashed",
+            "CREATE INDEX IF NOT EXISTS idx_photos_hash_trashed ON photos(file_hash, is_trashed)",
+        ),
+        (
             "idx_photos_timeline_order",
             "CREATE INDEX IF NOT EXISTS idx_photos_timeline_order
                 ON photos(is_trashed, (date_taken IS NULL), date_taken DESC, id DESC)",

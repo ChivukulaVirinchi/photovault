@@ -21,6 +21,8 @@
   import { photoVisibility } from "./lib/stores/photoVisibility.svelte";
   import { slideshow } from "./lib/stores/slideshow.svelte";
   import { assistantStore } from "./lib/stores/assistant.svelte";
+  import { assetSetup } from "./lib/stores/assetSetup.svelte";
+  import SmartSetupDialog from "./lib/components/SmartSetupDialog.svelte";
 
   const loadPeople = () => import("./routes/People.svelte");
   const loadPersonDetail = () => import("./routes/PersonDetail.svelte");
@@ -95,6 +97,7 @@
 
   function onKey(e: KeyboardEvent) {
     if (e.defaultPrevented) return;
+    if (document.querySelector("dialog[open]")) return;
     if (
       (e.ctrlKey || e.metaKey) &&
       e.shiftKey &&
@@ -111,7 +114,7 @@
     else if (e.key === "/") { window.location.hash = "/search"; e.preventDefault(); }
     else if (e.key === "Escape") {
       if (showShortcuts) { showShortcuts = false; }
-      else if (document.querySelector('[role="dialog"][aria-modal="true"]')) { return; }
+      else if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) { return; }
       else if (route.path !== "/timeline") { history.back(); }
     }
   }
@@ -126,7 +129,13 @@
     // route progress UI reads from this store, so navigation never
     // loses state — the work was already running in the background.
     jobs.install().catch((e) => console.warn("job event subscription failed", e));
+    let stopSetup: (() => void) | undefined;
+    let disposed = false;
+    assetSetup.install().then((stop) => { if (disposed) stop(); else stopSetup = stop; })
+      .catch((e) => console.warn("asset setup subscription failed", e));
     return () => {
+      disposed = true;
+      stopSetup?.();
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);
     };
@@ -167,7 +176,17 @@
     visitedTabs = new Set([...visitedTabs, path]);
   });
 
+  $effect(() => {
+    jobs.jobs;
+    libraryStore.session;
+    assetSetup.resume();
+  });
+
 </script>
+
+{#if libraryStore.isOpen && !assetSetup.introSeen && assetSetup.ready && !Object.values(assetSetup.ready).every(Boolean)}
+  <SmartSetupDialog />
+{/if}
 
 {#if !libraryStore.isOpen}
   {#if route.path === "/settings"}

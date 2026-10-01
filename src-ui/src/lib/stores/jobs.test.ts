@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { jobs, type Job } from "./jobs.svelte";
+import { dataRevision } from "./dataRevision.svelte";
 
 function job(overrides: Partial<Job>): Job {
   return {
@@ -23,6 +24,13 @@ beforeEach(() => {
 });
 
 describe("jobs store", () => {
+  it("refreshes existing search results when visual indexing finishes", () => {
+    const revision = dataRevision.version;
+    (jobs as unknown as {
+      applyWire: (kind: string, complete: boolean, payload: unknown) => void;
+    }).applyWire("semantic", true, { job_id: "semantic-index", stage: "index-complete" });
+    expect(dataRevision.version).toBe(revision + 1);
+  });
   it("byKind prefers a running job over a lingering completed job", () => {
     jobs.jobs = new Map([
       ["old", job({ id: "old", status: "complete", elapsed_ms: 90_000 })],

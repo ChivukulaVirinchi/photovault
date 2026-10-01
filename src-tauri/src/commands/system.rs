@@ -10,6 +10,56 @@ use crate::events::{JobProgress, EV_ASSETS_COMPLETE, EV_ASSETS_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
+use smriti::bootstrap::AssetFeature;
+
+#[derive(Default, Deserialize)]
+pub struct AssetSetupArgs {
+    #[serde(default)]
+    feature: AssetFeature,
+}
+
+#[derive(Serialize)]
+pub struct AssetSetupStatus {
+    faces: bool,
+    visual: bool,
+    places: bool,
+}
+
+#[tauri::command]
+pub async fn system_asset_setup_status() -> CommandResult<AssetSetupStatus> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let health = smriti::bootstrap::asset_health();
+        AssetSetupStatus {
+            faces: smriti::bootstrap::face_processing_assets_available(),
+            visual: !AssetFeature::Visual.needs_pack(&health)
+                && smriti::services::semantic::SemanticSearchService::model_assets_installed(),
+            places: !AssetFeature::Places.needs_pack(&health),
+        }
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: e.to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn system_asset_download_size(args: AssetSetupArgs) -> CommandResult<u64> {
+    let health = smriti::bootstrap::asset_health();
+    let pack = if args.feature.needs_pack(&health) {
+        smriti::bootstrap::asset_download_source(args.feature)
+            .await
+            .map_err(|message| CommandError::Internal { message })?
+            .1
+    } else {
+        0
+    };
+    let visual = if matches!(args.feature, AssetFeature::All | AssetFeature::Visual) {
+        smriti::services::semantic::SemanticSearchService::model_download_bytes_remaining()
+    } else {
+        0
+    };
+    Ok(pack + visual)
+}
 
 #[tauri::command]
 pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
@@ -41,7 +91,9 @@ pub async fn system_assets_inventory() -> CommandResult<AssetInventoryDto> {
 pub async fn system_install_assets(
     app: AppHandle,
     state: State<'_, AppState>,
+    args: Option<AssetSetupArgs>,
 ) -> CommandResult<JobIdDto> {
+    let feature = args.unwrap_or_default().feature;
     let registry = state.jobs.lock().await;
     if registry.has_any_of_kind(JobKind::AssetInstall)
         || registry.has_any_of_kind(JobKind::SemanticAssets)
@@ -69,36 +121,64 @@ pub async fn system_install_assets(
                 total: None,
                 elapsed_ms: 0,
                 eta_ms: None,
-                message: Some("Setting up faces, places, and visual search...".into()),
+                message: Some("Setting up the selected features...".into()),
             },
         );
 
         let result = async {
-            if smriti::bootstrap::asset_health().missing_any() {
-                smriti::bootstrap::install_asset_pack().await?;
+            if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Setup cancelled. You can retry when ready.".into());
             }
-            smriti::services::semantic::SemanticSearchService::install_model_assets(
-                Some(job.cancel.as_ref()),
-                |stage, processed, total| {
-                    emit(
-                        &app_clone,
-                        EV_ASSETS_PROGRESS,
-                        JobProgress {
-                            job_id: job_id_clone.clone(),
-                            stage: format!("visual-search-{stage}"),
-                            processed,
-                            total,
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            eta_ms: None,
-                            message: Some("Downloading visual search (one time)...".into()),
-                        },
-                    );
-                },
-            )
-            .await?;
+            if feature.needs_pack(&smriti::bootstrap::asset_health()) {
+                smriti::bootstrap::install_feature_assets(
+                    feature,
+                    |processed, total| {
+                        emit(
+                            &app_clone,
+                            EV_ASSETS_PROGRESS,
+                            JobProgress {
+                                job_id: job_id_clone.clone(),
+                                stage: "download".into(),
+                                processed,
+                                total,
+                                elapsed_ms: started.elapsed().as_millis() as u64,
+                                eta_ms: None,
+                                message: Some("Downloading feature files...".into()),
+                            },
+                        );
+                    },
+                    Some(job.cancel.as_ref()),
+                )
+                .await?;
+            }
+            if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Setup cancelled. You can retry when ready.".into());
+            }
+            if matches!(feature, AssetFeature::All | AssetFeature::Visual) {
+                smriti::services::semantic::SemanticSearchService::install_model_assets(
+                    Some(job.cancel.as_ref()),
+                    |stage, processed, total| {
+                        emit(
+                            &app_clone,
+                            EV_ASSETS_PROGRESS,
+                            JobProgress {
+                                job_id: job_id_clone.clone(),
+                                stage: format!("visual-search-{stage}"),
+                                processed,
+                                total,
+                                elapsed_ms: started.elapsed().as_millis() as u64,
+                                eta_ms: None,
+                                message: Some("Downloading visual search (one time)...".into()),
+                            },
+                        );
+                    },
+                )
+                .await?;
+            }
             let health = smriti::bootstrap::asset_health();
-            if health.missing_any()
-                || !smriti::services::semantic::SemanticSearchService::model_assets_installed()
+            if feature.needs_pack(&health)
+                || (matches!(feature, AssetFeature::All | AssetFeature::Visual)
+                    && !smriti::services::semantic::SemanticSearchService::model_assets_installed())
             {
                 return Err("Setup finished, but one or more files did not verify".into());
             }
@@ -138,7 +218,18 @@ pub async fn system_install_assets(
 
         let st: tauri::State<AppState> = app_clone.state();
         jobs::finish_job(&st, &job_id_clone).await;
-        if setup_succeeded {
+        if setup_succeeded && matches!(feature, AssetFeature::All | AssetFeature::Visual) {
+            {
+                let library = st.library.read().await;
+                if let Some(library) = library.as_ref() {
+                    super::library::spawn_semantic_warmup(
+                        library.drive_root.clone(),
+                        library.semantic_index.clone(),
+                        library.semantic_runner.clone(),
+                        Some(app_clone.clone()),
+                    );
+                }
+            }
             super::semantic::maybe_start_semantic_indexing(app_clone).await;
         }
     });

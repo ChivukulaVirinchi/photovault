@@ -122,11 +122,22 @@ impl SemanticAssetPaths {
     }
 
     fn installed(&self) -> bool {
-        self.visual_model.exists()
-            && self.textual_model.exists()
-            && self.tokenizer.exists()
-            && self.preprocess.exists()
-            && self.config.exists()
+        self.download_bytes_remaining() == 0
+    }
+
+    fn download_bytes_remaining(&self) -> u64 {
+        [
+            (&self.visual_model, VISUAL_MODEL_BYTES),
+            (&self.textual_model, TEXTUAL_MODEL_BYTES),
+            (&self.tokenizer, TOKENIZER_BYTES),
+            (&self.preprocess, PREPROCESS_BYTES),
+            (&self.config, CONFIG_BYTES),
+        ]
+        .into_iter()
+        .filter_map(|(path, size)| {
+            (!std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == size)).then_some(size)
+        })
+        .sum()
     }
 }
 
@@ -209,6 +220,13 @@ impl SemanticSearchService {
         Self::find_assets().is_some_and(|paths| paths.installed())
     }
 
+    pub fn model_download_bytes_remaining() -> u64 {
+        if Self::model_assets_installed() {
+            return 0;
+        }
+        Self::default_asset_paths().download_bytes_remaining()
+    }
+
     pub async fn install_model_assets<F>(
         cancel: Option<&AtomicBool>,
         mut progress: F,
@@ -216,6 +234,9 @@ impl SemanticSearchService {
     where
         F: FnMut(&str, u64, Option<u64>) + Send,
     {
+        if Self::model_assets_installed() {
+            return Ok(());
+        }
         let paths = Self::default_asset_paths();
         let assets = [
             SemanticDownload {
@@ -604,7 +625,7 @@ impl SemanticSearchService {
         })?;
         if !crate::bootstrap::onnx_runtime_exists() {
             return Err(
-                "ONNX Runtime is missing. Use Settings -> Assets -> Download assets before indexing visual search."
+                "ONNX Runtime is missing. Enable visual search in Search or Settings before indexing."
                     .into(),
             );
         }
@@ -621,7 +642,7 @@ impl SemanticSearchService {
         })?;
         if !crate::bootstrap::onnx_runtime_exists() {
             return Err(
-                "ONNX Runtime is missing. Use Settings -> Assets -> Download assets before indexing visual search."
+                "ONNX Runtime is missing. Enable visual search in Search or Settings before indexing."
                     .into(),
             );
         }
@@ -1082,6 +1103,32 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn truncated_models_are_not_reported_as_installed() {
+        let temp = tempdir().unwrap();
+        let paths = SemanticAssetPaths::in_root(temp.path().to_path_buf());
+        for path in [
+            &paths.visual_model,
+            &paths.textual_model,
+            &paths.tokenizer,
+            &paths.preprocess,
+            &paths.config,
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"bad download").unwrap();
+        }
+        assert!(!paths.installed());
+        assert_eq!(
+            paths.download_bytes_remaining(),
+            SEMANTIC_MODEL_DOWNLOAD_BYTES
+        );
+        std::fs::write(&paths.preprocess, vec![0_u8; PREPROCESS_BYTES as usize]).unwrap();
+        assert_eq!(
+            paths.download_bytes_remaining(),
+            SEMANTIC_MODEL_DOWNLOAD_BYTES - PREPROCESS_BYTES
+        );
+    }
 
     fn setup_semantic_test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

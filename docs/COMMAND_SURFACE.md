@@ -504,7 +504,7 @@ ledger. Re-running the same archive set resumes idempotently.
 | `people.rename` | `{ id: i64, name: Option<String> }` | `PersonDto` | None = clear name |
 | `people.merge` | `{ source_id: i64, target_id: i64 }` | `PersonDto` | returns merged cluster; `Conflict` if same id |
 | `people.delete` | `{ id: i64 }` | `()` | hides/removes a person cluster from user-facing lists |
-| `people.start_processing` | `{}` | `{ job_id: String }` | emits `faces:progress`, `faces:complete` |
+| `people.start_processing` | `{ library_session_id?: u64 }` | `{ job_id: String }` | Requires face assets; optional session guard for deferred setup continuation; emits `faces:progress`, `faces:complete` |
 | `people.cancel_processing` | `{ job_id: String }` | `()` | |
 | `people.reset_all` | `{}` | `ResetFacesDto` | destructive reset of faces/clusters before a fresh processing run |
 | `people.reset_clusters` | `{}` | `ResetClustersDto` | drops clusters but keeps detected faces/embeddings |
@@ -804,7 +804,7 @@ MapLibre fetches OSM tiles through the shared WebView Cache API. Settings contro
 
 | Command | Args | Returns |
 |---|---|---|
-| `geocoding.backfill` | `{ force: bool }` | `{ job_id: String }` | resolves GPS-bearing photos; emits a generic `JobProgress` on `geocoding:progress` |
+| `geocoding.backfill` | `{ force_refresh: bool, library_session_id?: u64 }` | `{ job_id: String }` | resolves GPS-bearing photos; optional session guard for deferred setup continuation; emits a generic `JobProgress` on `geocoding:progress` |
 | `geocoding.resolve_one` | `{ lat: f64, lng: f64 }` | `Option<LocationDto>` | sync, ~1-3ms — used by photo_detail when a specific photo opens |
 
 ### 16. `settings`
@@ -844,7 +844,9 @@ struct SettingsDto {
 |---|---|---|
 | `system.asset_health` | `{}` | `AssetHealthDto` |
 | `system.assets_inventory` | `{}` | `AssetInventoryDto` |
-| `system.install_assets` | `{}` | `{ job_id: String }` | one-click smart setup: installs and verifies runtime, face/geodata, and semantic model assets; emits `assets:progress`, `assets:complete`, then starts pending semantic indexing automatically |
+| `system.asset_setup_status` | `{}` | `{ faces: bool, visual: bool, places: bool }` | Local checks only; no model loading or network |
+| `system.asset_download_size` | `{ feature: "all" \| "faces" \| "visual" \| "places" }` | `u64` | Remaining download bytes; resolves the release archive size on explicit setup surfaces |
+| `system.install_assets` | `{ feature?: "all" \| "faces" \| "visual" \| "places" }` | `{ job_id: String }` | Defaults to all. Installs/verifies the selected assets; emits byte-count `assets:progress` and `assets:complete`; visual setup warms search and starts pending indexing. Old releases fall back to the combined archive. |
 | `system.inference_provider` | `{}` | `String` | active inference provider label |
 | `system.test_gpu_bridge` | `{ url: String }` | `BridgeTestResult` | tests the optional user-owned GPU bridge |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |

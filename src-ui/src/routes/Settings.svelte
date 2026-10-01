@@ -12,6 +12,8 @@
   import { getHealthCache, healthCacheKey, setHealthCache } from "../lib/healthCache";
   import { toasts } from "../lib/stores/toast.svelte";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import AssetSetup from "../lib/components/AssetSetup.svelte";
+  import { assetSetup } from "../lib/stores/assetSetup.svelte";
   import { commandErrorMessage } from "../lib/api";
   import type { AssetInventory, AssetItem, LibraryHealthData, SemanticStatus, Settings } from "../lib/api/all";
   import type { ExcludedFolderDto } from "../lib/api/types";
@@ -33,6 +35,7 @@
   let exclusionsBusy = $state(false);
   let exclusionsActing = $state(false);
   let assetsBusy = $state(false);
+  let individualSetup = $state(false);
   let acting = $state(false);
   let testBusy = $state(false);
   let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
@@ -69,7 +72,6 @@
   // survives navigation (a 50k-photo backfill is a multi-second job).
   const backfilling = $derived(jobs.isRunning("geocoding"));
   const geocodingJob = $derived(jobs.byKind("geocoding"));
-  const installingAssets = $derived(jobs.isRunning("assets"));
   const assetsJob = $derived(jobs.byKind("assets"));
   const semanticRunning = $derived(jobs.isRunning("semantic"));
   const semanticJob = $derived(jobs.byKind("semantic"));
@@ -350,6 +352,7 @@
     const seq = ++assetsSeq;
     assetsBusy = true;
     try {
+      await assetSetup.refresh();
       const next = await systemEx.assetsInventory();
       if (!mounted || seq !== assetsSeq) return;
       assets = next;
@@ -413,36 +416,6 @@
       setHealthCache(key, next);
     } catch {
       if (mounted && seq === healthSeq) healthData = null;
-    }
-  }
-
-  async function installAssets() {
-    if (installingAssets) return;
-    const placeholderId = `pending-assets-${Date.now()}`;
-    jobs.register(placeholderId, "assets");
-    toasts.success("Downloading asset pack...");
-    try {
-      const r = await systemEx.installAssets();
-      jobs.dismiss(placeholderId);
-      jobs.register(r.job_id, "assets");
-    } catch (e) {
-      jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start asset setup: ${commandErrorMessage(e)}`);
-    }
-  }
-
-  async function installSemanticModel() {
-    if (semanticRunning) return;
-    const placeholderId = `pending-semantic-assets-${Date.now()}`;
-    jobs.register(placeholderId, "semantic");
-    toasts.success("Downloading visual search model...");
-    try {
-      const r = await semantic.installModel();
-      jobs.dismiss(placeholderId);
-      jobs.register(r.job_id, "semantic");
-    } catch (e) {
-      jobs.dismiss(placeholderId);
-      toasts.error(`Couldn't start visual search model install: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -926,13 +899,19 @@
         Local runtimes, models, and offline data live outside the app binary. Smriti uses these when available and keeps browsing usable when optional assets are missing.
       </p>
       <div class="asset-actions">
-        <button class="primary" onclick={installAssets} disabled={installingAssets}>
-          {installingAssets ? "Installing..." : "Download assets"}
-        </button>
         <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
           {assetsBusy ? "Checking..." : "Recheck"}
         </button>
       </div>
+      <AssetSetup feature="all" />
+      <details bind:open={individualSetup}>
+        <summary>Enable individual features</summary>
+        {#if individualSetup}
+          <AssetSetup feature="faces" />
+          <AssetSetup feature="visual" />
+          <AssetSetup feature="places" />
+        {/if}
+      </details>
       <div class="semantic-panel">
         <div class="section-heading-row">
           <div>
@@ -957,15 +936,12 @@
             <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
           {/if}
           {#if visualSearchMissingRuntime}
-            <p class="hint blurb">ONNX Runtime is missing. Click Download assets, then recheck visual search before indexing.</p>
+            <p class="hint blurb">Enable visual search to download the runtime and model together.</p>
           {/if}
         {:else}
           <p class="hint blurb">Open a library to see visual search status.</p>
         {/if}
         <div class="asset-actions">
-          <button class="primary" onclick={installSemanticModel} disabled={semanticRunning || semanticModelInstalled}>
-            {semanticRunning ? "Working..." : "Download visual model"}
-          </button>
           <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
             {semanticRunning ? "Indexing..." : "Index visual search"}
           </button>

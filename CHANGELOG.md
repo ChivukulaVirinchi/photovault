@@ -5,6 +5,20 @@ All notable changes to Smriti will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Optional smart-feature setup after opening the first library, with a remembered
+  Later choice and feature-specific setup in People, Search, Map, and Settings.
+- Background downloads show their size and progress, support cancellation and
+  retry, and automatically start the requested feature when its files are ready.
+
+### Fixed
+- Updated compatible frontend lockfile versions to resolve npm audit advisories.
+- Missing face assets no longer start a misleading detection job.
+- Fresh libraries create performance indexes after schema initialization.
+- Linux AppImages bundle the GStreamer media framework for video playback.
+
 ## [0.4.0] — 2026-09-28
 
 ### Added

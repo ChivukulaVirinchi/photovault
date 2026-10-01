@@ -58,6 +58,7 @@ pub struct GeocodingBackfillResult {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct GeocodingBackfillArgs {
+    pub library_session_id: Option<u64>,
     /// When true, re-resolve EVERY GPS-tagged photo (including those
     /// already attributed). Necessary to repair stale data after the
     /// geocoder rules change — without this we never overwrite the
@@ -81,7 +82,8 @@ pub struct GeocodingCompleteDto {
 
 fn build_message(considered: u64, updated: u64, cleared: u64, db_present: bool) -> String {
     if !db_present {
-        return "GeoNames database not found. Run scripts/setup_assets.sh.".to_string();
+        return "Enable offline place names in Map or Settings to identify towns and countries."
+            .to_string();
     }
     if considered == 0 {
         return "No GPS-tagged photos to backfill.".to_string();
@@ -136,6 +138,14 @@ pub async fn geocoding_backfill(
     args: GeocodingBackfillArgs,
 ) -> CommandResult<JobIdDto> {
     let _lifecycle = state.library_lifecycle.lock().await;
+    if args.library_session_id.is_some_and(|session| {
+        session
+            != state
+                .active_session
+                .load(std::sync::atomic::Ordering::Acquire)
+    }) {
+        return Err(CommandError::LibraryClosed);
+    }
     if state.jobs.lock().await.has_any_of_kind(JobKind::Geocoding) {
         return Err(CommandError::Conflict {
             reason: "geocoding is already in progress".into(),
@@ -256,19 +266,19 @@ fn backfill_inner(
                 .then_some(root)
             })
             .ok_or_else(|| {
-                "GeoNames database is out of date and its source data is unavailable. Use Set up assets on the Welcome screen or Download assets in Settings to replace it."
+                "Offline place data is out of date. Enable offline place names in Map or Settings to replace it."
                     .to_string()
             })?;
         if let Err(e) = smriti::db::geonames::build_geonames_db(&source_root) {
             tracing::error!("geonames rebuild failed: {}", e);
             return Err(format!(
-                "GeoNames database is out of date and rebuild failed: {}. Download assets again to refresh it.",
+                "Offline place data is out of date and rebuild failed: {}. Enable offline place names in Map or Settings to refresh it.",
                 e
             ));
         }
         if !smriti::db::geonames::geonames_db_is_current(&path) {
             return Err(
-                "GeoNames rebuild completed at an unexpected location. Download assets again to repair it."
+                "Offline place data could not be repaired. Enable offline place names in Map or Settings to replace it."
                     .to_string(),
             );
         }

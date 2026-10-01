@@ -91,17 +91,6 @@ impl Database {
 
         // Configure SQLite for optimal performance
         Self::configure_connection(&conn)?;
-        // Best-effort, and deliberately non-fatal: this runs on every open,
-        // including against catalogs that predate some of these columns.
-        // A failure used to be discarded entirely (`let _ =`), which hid the
-        // real problem — `execute_batch` stops at the first failing statement,
-        // so one missing column silently skipped every index after it.
-        // Log it so the skipped indexes are at least visible.
-        if let Err(error) = Self::create_indexes(&conn) {
-            tracing::warn!(
-                "Index creation on open failed (remaining indexes in that batch were skipped): {error}"
-            );
-        }
 
         Ok(Self { conn })
     }
@@ -133,36 +122,6 @@ impl Database {
         conn.pragma_update(None, "busy_timeout", 5000)?;
 
         Ok(())
-    }
-
-    /// Create recommended indexes for query performance.
-    ///
-    /// Runs on every open, so it must tolerate catalogs that predate a column
-    /// one of these indexes references. `execute_batch` stops at the first
-    /// failing statement, so any index that depends on a column added by a
-    /// later migration is placed LAST — otherwise its failure would silently
-    /// skip every index that followed it, and the caller discards the error
-    /// because a missing index is never worth failing an open over.
-    fn create_indexes(conn: &Connection) -> SqliteResult<()> {
-        conn.execute_batch(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_photos_date ON photos(date_taken);
-            CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
-            CREATE INDEX IF NOT EXISTS idx_photos_location ON photos(location_country, location_city);
-            CREATE INDEX IF NOT EXISTS idx_photos_place ON photos(is_trashed, location_country, location_city);
-            CREATE INDEX IF NOT EXISTS idx_photos_trashed ON photos(is_trashed);
-            CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(file_path);
-            CREATE INDEX IF NOT EXISTS idx_photos_faces_trashed ON photos(faces_processed, is_trashed);
-            CREATE INDEX IF NOT EXISTS idx_photos_hash_trashed ON photos(file_hash, is_trashed);
-            CREATE INDEX IF NOT EXISTS idx_photos_file_size ON photos(file_size);
-            CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
-            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
-            CREATE INDEX IF NOT EXISTS idx_faces_photo_cluster ON faces(photo_id, cluster_id);
-            CREATE INDEX IF NOT EXISTS idx_clusters_name ON face_clusters(name);
-            -- Depends on photos.content_hash, added in migration v31. Keep last.
-            CREATE INDEX IF NOT EXISTS idx_photos_content_hash ON photos(content_hash) WHERE content_hash IS NOT NULL;
-            "#,
-        )
     }
 
     /// Check if this is a fresh database (needs schema creation)

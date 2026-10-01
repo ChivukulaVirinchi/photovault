@@ -203,11 +203,11 @@ impl FaceProcessor {
         // is already explicit ("library not found, set ORT_DYLIB_PATH or
         // place libonnxruntime.so..."); the previous wrapper duplicated
         // those instructions and produced a wall-of-text toast. Keep the
-        // toast short and point users at the script that installs
+        // toast short and point users at the setup that installs
         // everything in one shot.
         let runtime = OnnxRuntime::init().map_err(|e| {
             format!(
-                "Face detection unavailable — {}. Run scripts/setup_assets.sh in the project root to install the ONNX runtime + face models.",
+                "Face detection unavailable — {}. Enable face recognition in People or Settings.",
                 e
             )
         })?;
@@ -237,13 +237,13 @@ impl FaceProcessor {
 
         if !detector_path.exists() {
             return Err(
-                "Face detection model is missing. Run scripts/setup_assets.sh in the project root to download the SCRFD + ArcFace models."
+                "Face detection model is missing. Enable face recognition in People or Settings."
                     .to_string(),
             );
         }
         if !embedder_path.exists() && gpu_bridge_url.is_none() {
             return Err(
-                "Face embedding model is missing. Run scripts/setup_assets.sh in the project root to download the face models, or enable a healthy remote GPU bridge."
+                "Face embedding model is missing. Enable face recognition in People or Settings, or configure a healthy remote GPU bridge."
                     .to_string(),
             );
         }

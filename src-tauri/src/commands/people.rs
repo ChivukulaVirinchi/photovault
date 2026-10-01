@@ -907,6 +907,12 @@ pub struct FacesProgressDto {
     pub embedder_route: String,
 }
 
+/// Optional session guard for deferred setup continuation.
+#[derive(Default, Deserialize)]
+pub struct PeopleProcessingArgs {
+    pub library_session_id: Option<u64>,
+}
+
 /// Start the face-processing pipeline (detect + embed + cluster).
 ///
 /// `face_processor::process_photos` opens its own connection to the same
@@ -915,11 +921,30 @@ pub struct FacesProgressDto {
 pub async fn people_start_processing(
     app: AppHandle,
     state: State<'_, AppState>,
+    args: Option<PeopleProcessingArgs>,
 ) -> CommandResult<JobIdDto> {
+    let available =
+        tauri::async_runtime::spawn_blocking(smriti::bootstrap::face_processing_assets_available)
+            .await
+            .map_err(|e| CommandError::Internal {
+                message: e.to_string(),
+            })?;
+    if !available {
+        return Err(CommandError::MlUnavailable {
+            reason: "Enable face recognition in People or Settings before finding faces.".into(),
+        });
+    }
     let _lifecycle = state.library_lifecycle.lock().await;
     let drive_root = {
         let lib_guard = state.library.read().await;
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        if args
+            .as_ref()
+            .and_then(|args| args.library_session_id)
+            .is_some_and(|session| session != lib.session_id)
+        {
+            return Err(CommandError::LibraryClosed);
+        }
         lib.drive_root.clone()
     };
 

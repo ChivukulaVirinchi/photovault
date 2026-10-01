@@ -25,6 +25,69 @@ pub const ASSET_PACK_URL_DEFAULT: &str = concat!(
 const ASSET_PACK_LATEST_URL: &str =
     "https://github.com/ChivukulaVirinchi/photovault/releases/latest/download/Smriti-Assets.zip";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetFeature {
+    #[default]
+    All,
+    Faces,
+    Visual,
+    Places,
+}
+
+impl AssetFeature {
+    pub fn needs_pack(self, health: &AssetHealth) -> bool {
+        match self {
+            Self::All => health.missing_any(),
+            Self::Faces => health.missing_face_models || health.missing_onnx_runtime,
+            Self::Visual => health.missing_onnx_runtime,
+            Self::Places => health.missing_geonames_db,
+        }
+    }
+
+    fn archive_name(self) -> &'static str {
+        match self {
+            Self::All => "Smriti-Assets.zip",
+            Self::Faces => "Smriti-Faces.zip",
+            Self::Visual => "Smriti-Runtime.zip",
+            Self::Places => "Smriti-Places.zip",
+        }
+    }
+}
+
+/// Probe only on an explicit setup surface, never on the startup path.
+/// Older releases have only the combined archive; disclose its real size.
+pub async fn asset_download_source(feature: AssetFeature) -> Result<(String, u64), String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut urls = Vec::new();
+    if feature != AssetFeature::All {
+        urls.push(ASSET_PACK_URL_DEFAULT.replace("Smriti-Assets.zip", feature.archive_name()));
+        urls.push(ASSET_PACK_LATEST_URL.replace("Smriti-Assets.zip", feature.archive_name()));
+    }
+    urls.push(asset_pack_url());
+    urls.push(ASSET_PACK_LATEST_URL.to_string());
+    for url in urls {
+        if let Ok(response) = client.head(&url).send().await {
+            if response.status().is_success() {
+                if let Some(size) = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|n| *n > 0 && *n <= MAX_ASSET_PACK_DOWNLOAD_BYTES)
+                {
+                    return Ok((url, size));
+                }
+            }
+        }
+    }
+    Err("Couldn't check the download size. Check your internet connection and retry.".into())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AssetHealth {
     pub missing_face_models: bool,
@@ -248,14 +311,24 @@ pub fn asset_roots() -> Vec<PathBuf> {
 }
 
 pub fn model_dir() -> PathBuf {
-    for root in candidate_asset_roots() {
-        let candidate = root.join("models");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
+    select_face_model_dir(
+        &candidate_asset_roots(),
+        &crate::config::AppConfig::load().face_embedder_model,
+    )
+    .unwrap_or_else(|| project_root().join("models"))
+}
 
-    project_root().join("models")
+fn select_face_model_dir(roots: &[PathBuf], embedder: &str) -> Option<PathBuf> {
+    let find = |require_embedder: bool| {
+        roots
+            .iter()
+            .map(|root| root.join("models"))
+            .find(|directory| {
+                usable_binary_asset(&directory.join("scrfd_10g_bnkps.onnx"))
+                    && (!require_embedder || usable_binary_asset(&directory.join(embedder)))
+            })
+    };
+    find(true).or_else(|| find(false))
 }
 
 pub fn detector_model_path() -> PathBuf {
@@ -268,6 +341,14 @@ pub fn embedder_model_path() -> PathBuf {
 
 pub fn has_face_models() -> bool {
     usable_binary_asset(&detector_model_path()) && usable_binary_asset(&embedder_model_path())
+}
+
+pub fn face_processing_assets_available() -> bool {
+    let config = crate::config::AppConfig::load();
+    onnx_runtime_exists()
+        && usable_binary_asset(&detector_model_path())
+        && (usable_binary_asset(&embedder_model_path())
+            || (config.face_gpu_bridge_enabled && config.face_gpu_bridge_url.is_some()))
 }
 
 pub fn ensure_geonames_db() {
@@ -317,6 +398,17 @@ pub fn ensure_geonames_db() {
 }
 
 pub async fn install_asset_pack() -> Result<String, String> {
+    install_feature_assets(AssetFeature::All, |_, _| {}, None).await
+}
+
+pub async fn install_feature_assets<F>(
+    feature: AssetFeature,
+    mut progress: F,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<String, String>
+where
+    F: FnMut(u64, Option<u64>) + Send,
+{
     let install_root = default_asset_install_dir();
     let install_parent = install_root
         .parent()
@@ -347,7 +439,11 @@ pub async fn install_asset_pack() -> Result<String, String> {
         }
         (path, false)
     } else {
-        let primary_url = asset_pack_url();
+        let primary_url = if feature == AssetFeature::All {
+            asset_pack_url()
+        } else {
+            asset_download_source(feature).await?.0
+        };
         let fallback_url = std::env::var("SMRITI_ASSET_PACK_FALLBACK_URL")
             .or_else(|_| std::env::var("PHOTOVAULT_ASSET_PACK_FALLBACK_URL"))
             .unwrap_or_else(|_| ASSET_PACK_LATEST_URL.to_string());
@@ -392,10 +488,17 @@ pub async fn install_asset_pack() -> Result<String, String> {
                     break;
                 }
             };
+            let total = response.content_length();
             let mut stream = response.bytes_stream();
             let mut written = 0_u64;
+            let mut last_progress = std::time::Instant::now();
             let mut stream_error = None;
             while let Some(chunk) = stream.next().await {
+                if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                    drop(output);
+                    let _ = std::fs::remove_file(&download_path);
+                    return Err("Setup cancelled. You can retry when ready.".into());
+                }
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
                     Err(error) => {
@@ -412,6 +515,10 @@ pub async fn install_asset_pack() -> Result<String, String> {
                     stream_error = Some(format!("download write failed: {}", error));
                     break;
                 }
+                if last_progress.elapsed() >= std::time::Duration::from_millis(150) {
+                    progress(written, total);
+                    last_progress = std::time::Instant::now();
+                }
             }
             drop(output);
             if let Some(error) = stream_error {
@@ -424,18 +531,29 @@ pub async fn install_asset_pack() -> Result<String, String> {
                 let _ = std::fs::remove_file(&download_path);
                 continue;
             }
+            progress(written, total);
             downloaded = true;
             break;
         }
 
         if !downloaded {
-            return Err(format!(
-                "Asset pack download failed. {}. If you are testing locally before publishing a release, set SMRITI_ASSET_PACK_PATH to a local Smriti-Assets.zip.",
-                last_error.unwrap_or_else(|| "No successful download source".to_string())
-            ));
+            tracing::warn!(
+                "Asset pack download failed: {}",
+                last_error.unwrap_or_default()
+            );
+            return Err(
+                "Couldn't download feature files. Check your internet connection and retry.".into(),
+            );
         }
         (download_path, true)
     };
+
+    if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+        if remove_archive_after {
+            let _ = std::fs::remove_file(&archive_path);
+        }
+        return Err("Setup cancelled. You can retry when ready.".into());
+    }
 
     let install_root_for_worker = install_root.clone();
     let install_parent_for_worker = install_parent.to_path_buf();
@@ -445,6 +563,7 @@ pub async fn install_asset_pack() -> Result<String, String> {
             remove_archive_after,
             &install_root_for_worker,
             &install_parent_for_worker,
+            feature,
         )
     })
     .await
@@ -458,6 +577,7 @@ fn install_downloaded_asset_pack(
     remove_archive_after: bool,
     install_root: &Path,
     install_parent: &Path,
+    feature: AssetFeature,
 ) -> Result<(), String> {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -474,10 +594,36 @@ fn install_downloaded_asset_pack(
     std::fs::create_dir_all(&staging)
         .map_err(|e| format!("Failed creating asset staging directory: {e}"))?;
 
-    let install_result = (|| {
+    let install_result: Result<(), String> = (|| {
         extract_asset_archive(archive_path, &staging)?;
-        prepare_staged_asset_pack(&staging)?;
-        merge_asset_tree(&staging, install_root)
+        prepare_staged_feature_pack(&staging, feature)?;
+        // A legacy combined archive may contain other features. Install only
+        // what was requested and missing; never replace a runtime DLL in use.
+        let health = asset_health();
+        for (directory, needed) in [
+            (
+                "libs",
+                matches!(
+                    feature,
+                    AssetFeature::All | AssetFeature::Faces | AssetFeature::Visual
+                ) && health.missing_onnx_runtime,
+            ),
+            (
+                "models",
+                matches!(feature, AssetFeature::All | AssetFeature::Faces)
+                    && health.missing_face_models,
+            ),
+            (
+                "data",
+                matches!(feature, AssetFeature::All | AssetFeature::Places)
+                    && health.missing_geonames_db,
+            ),
+        ] {
+            if needed {
+                merge_asset_tree(&staging.join(directory), &install_root.join(directory))?;
+            }
+        }
+        Ok(())
     })();
 
     let cleanup_result = std::fs::remove_dir_all(&staging);
@@ -496,12 +642,19 @@ fn install_downloaded_asset_pack(
     Ok(())
 }
 
+#[cfg(test)]
 fn prepare_staged_asset_pack(staging: &Path) -> Result<(), String> {
+    prepare_staged_feature_pack(staging, AssetFeature::All)
+}
+
+fn prepare_staged_feature_pack(staging: &Path, feature: AssetFeature) -> Result<(), String> {
     // v0.3.1's published pack accidentally contained GeoNames source text
     // but no geonames.db. Repair that pack locally so one-click setup works
     // for existing releases as well as corrected future ones.
     let staged_geonames = staging.join("data").join("geonames.db");
-    if !crate::db::geonames::geonames_db_is_current(&staged_geonames) {
+    if matches!(feature, AssetFeature::All | AssetFeature::Places)
+        && !crate::db::geonames::geonames_db_is_current(&staged_geonames)
+    {
         let cities = staging.join("data").join("cities1000.txt");
         let countries = staging.join("data").join("country_codes.txt");
         if cities.is_file() && countries.is_file() {
@@ -512,7 +665,7 @@ fn prepare_staged_asset_pack(staging: &Path) -> Result<(), String> {
     // Validate this download itself. Looking across all candidate roots could
     // let an old development asset mask an incomplete release archive.
     let health = asset_health_in_root(staging);
-    if health.missing_any() {
+    if feature.needs_pack(&health) {
         return Err(format!(
             "Downloaded asset pack is incomplete. {}",
             health.summary()
@@ -663,6 +816,55 @@ mod tests {
             "/v{}/Smriti-Assets.zip",
             env!("CARGO_PKG_VERSION")
         )));
+    }
+
+    #[test]
+    fn feature_setup_checks_only_required_assets() {
+        let mut health = AssetHealth {
+            missing_face_models: true,
+            missing_onnx_runtime: false,
+            missing_geonames_db: true,
+        };
+        assert!(AssetFeature::All.needs_pack(&health));
+        assert!(AssetFeature::Faces.needs_pack(&health));
+        assert!(AssetFeature::Places.needs_pack(&health));
+        assert!(!AssetFeature::Visual.needs_pack(&health));
+        health.missing_face_models = false;
+        assert!(!AssetFeature::Faces.needs_pack(&health));
+        health.missing_onnx_runtime = true;
+        assert!(AssetFeature::Faces.needs_pack(&health));
+        assert!(AssetFeature::Visual.needs_pack(&health));
+    }
+
+    #[test]
+    fn incomplete_model_directory_does_not_mask_installed_faces() {
+        let temp = tempfile::tempdir().unwrap();
+        let incomplete = temp.path().join("incomplete");
+        let installed = temp.path().join("installed");
+        std::fs::create_dir_all(incomplete.join("models/semantic")).unwrap();
+        std::fs::create_dir_all(installed.join("models")).unwrap();
+        let marker = vec![0_u8; MIN_BINARY_ASSET_BYTES as usize];
+        std::fs::write(installed.join("models/scrfd_10g_bnkps.onnx"), &marker).unwrap();
+        std::fs::write(installed.join("models/embedder.onnx"), marker).unwrap();
+        assert_eq!(
+            select_face_model_dir(&[incomplete, installed.clone()], "embedder.onnx"),
+            Some(installed.join("models"))
+        );
+    }
+
+    #[test]
+    fn places_pack_does_not_require_models_or_runtime() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(prepare_staged_feature_pack(temp.path(), AssetFeature::Places).is_err());
+        let data = temp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("country_codes.txt"), "ZZ\tTest Country\n").unwrap();
+        let cities = (1..=1_001).map(|id| format!(
+            "{id}\tCity {id}\tCity {id}\t\t1.0\t2.0\tP\tPPL\tZZ\t\t\t\t\t\t{id}\t\t\tUTC\t2026-01-01\n"
+        )).collect::<String>();
+        std::fs::write(data.join("cities1000.txt"), cities).unwrap();
+        prepare_staged_feature_pack(temp.path(), AssetFeature::Places).unwrap();
+        assert!(prepare_staged_feature_pack(temp.path(), AssetFeature::Faces).is_err());
     }
 
     #[test]

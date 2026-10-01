@@ -189,7 +189,8 @@ class JobsStore {
         kind === "metadata" ||
         kind === "takeout" ||
         kind === "faces" ||
-        kind === "geocoding"
+        kind === "geocoding" ||
+        (kind === "semantic" && stage === "index-complete")
       ) {
         dataRevision.bump();
       }

@@ -140,11 +140,12 @@ releases run build and package checks in CI before publishing.
 
 ### Optional smart features
 
-Click **Set up smart features** on Welcome. One action downloads and verifies
-faces, offline place names, and visual search (about 1.8 GB, once). If a
-library is open, visual indexing begins automatically; pending photos are
-also picked up after later scans and imports. Smriti remains fully usable if
-you decline.
+After opening your first library, choose **Enable smart features** in the
+one-time dialog, or **Later** to keep browsing without another startup prompt.
+Setup shows the download size and runs in the background. People, visual
+search, and offline place names start automatically when ready. You can also
+enable just one feature in People, Search, Map, or Settings. Downloads are
+one-time; photos are processed locally and the rest of the app works without them.
 
 ### Automatic updates
 

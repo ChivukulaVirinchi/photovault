@@ -26,7 +26,7 @@
     return `~${h}h ${mr}m left`;
   }
   function canCancel(j: Job): boolean {
-    return j.kind !== "assets";
+    return j.status === "running";
   }
   async function cancelJob(j: Job) {
     if (cancelling.has(j.id)) return;

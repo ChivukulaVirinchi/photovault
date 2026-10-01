@@ -67,7 +67,11 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libdbus-1-dev \
             pkg-config \
-            libheif-dev
+            libheif-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav
 
       - name: Install macOS deps
         if: matrix.os == 'macos-latest'
@@ -185,10 +189,13 @@ jobs:
         run: |
           cd assets-pack
           zip -r ../Smriti-Assets.zip .
+          zip -r ../Smriti-Faces.zip models libs
+          zip -r ../Smriti-Runtime.zip libs
+          zip -r ../Smriti-Places.zip data
       - uses: actions/upload-artifact@v4
         with:
           name: smriti-assets
-          path: Smriti-Assets.zip
+          path: Smriti-*.zip
 
   release:
     name: Attach asset pack to release
@@ -203,7 +210,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: Smriti-Assets.zip
+          files: Smriti-*.zip
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
       - name: Attach stable, human-readable installer names

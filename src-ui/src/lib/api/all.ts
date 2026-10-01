@@ -48,7 +48,7 @@ export const people = {
     mutate(call<null>("people_review_different", { queue_id: queueId })),
   reviewSkip: (queueId: number) =>
     mutate(call<null>("people_review_skip", { queue_id: queueId })),
-  startProcessing: () => call<JobIdDto>("people_start_processing"),
+  startProcessing: (librarySessionId?: number) => call<JobIdDto>("people_start_processing", { library_session_id: librarySessionId }),
   cancelProcessing: (jobId: string) =>
     call<null>("people_cancel_processing", { job_id: jobId }),
   resetAll: () =>
@@ -641,8 +641,8 @@ export const geocoding = {
   /// fills only NULL rows; `forceRefresh = true` re-resolves all and
   /// clears entries that no longer match (used to flush stale data
   /// after geocoder rules change).
-  backfill: (forceRefresh = false) =>
-    call<JobIdDto>("geocoding_backfill", { force_refresh: forceRefresh }),
+  backfill: (forceRefresh = false, librarySessionId?: number) =>
+    call<JobIdDto>("geocoding_backfill", { force_refresh: forceRefresh, library_session_id: librarySessionId }),
 };
 
 // ---------- system ----------
@@ -670,7 +670,9 @@ export interface AssetItem {
 export const systemEx = {
   assetHealth: () => call<AssetHealthDto>("system_asset_health"),
   assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
-  installAssets: () => call<JobIdDto>("system_install_assets"),
+    assetSetupStatus: () => call<{ faces: boolean; visual: boolean; places: boolean }>("system_asset_setup_status"),
+    assetDownloadSize: (feature: "all" | "faces" | "visual" | "places") => call<number>("system_asset_download_size", { feature }),
+    installAssets: (feature: "all" | "faces" | "visual" | "places" = "all") => call<JobIdDto>("system_install_assets", { feature }),
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
   openPath: (path: string) => call<null>("system_open_path", { path }),

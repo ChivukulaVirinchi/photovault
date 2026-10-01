@@ -7,22 +7,20 @@ with your OS, Smriti version, and the symptom.
 
 ## Face features are disabled
 
-**Symptom:** The People view says face recognition is unavailable, or
-the asset-health banner on the Welcome screen flags missing face
-models.
+**Symptom:** People offers to enable face recognition instead of finding faces.
 
 **Causes & fixes:**
 
-1. **Asset pack not installed.** Click **Set up assets** on Welcome or
-   **Settings → Download Assets**.
-   This downloads the ONNX runtime, face detection + embedding
-   models, and the GeoNames database. Requires internet for the
-   one-time download.
-2. **Asset download was interrupted.** Run **Download Assets** again.
+1. **Face files not installed.** Click **Enable face recognition** in People
+   or under **Settings → Assets → Enable individual features**. The download
+   size is shown before you proceed. Setup requires internet once; processing
+   runs locally and starts automatically when the files are ready.
+2. **Asset download was interrupted.** Click **Retry** in the feature prompt.
    Installation is staged, so an interrupted attempt does not replace
    previously working assets.
-3. **Disk space.** Allow roughly 1 GB of free temporary space while the
-   ~300 MB pack is downloaded, validated, and unpacked.
+3. **Disk space.** Leave room for both downloaded archives and unpacked files.
+   Visual search alone needs about 1.5 GB for its models; enabling all features
+   needs several GB of free space during installation.
 4. **Source build without assets.** Run
    `./scripts/setup_assets.sh` (Linux/macOS) or
    `.\scripts\setup_assets.ps1` (Windows) at the repo root.

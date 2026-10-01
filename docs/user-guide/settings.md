@@ -135,9 +135,11 @@ schedule.
   and uses file modified time only as a marked fallback.
 - **Asset Inventory** — inspect which local model/runtime/data files
   are present and which exact paths Smriti resolved.
-- **Download Assets** — downloads the optional Smriti asset pack from
-  the GitHub release and installs it into the app's managed asset
-  folder.
+- **Enable smart features** — shows the one-time download size and installs
+  missing runtimes, models, and offline place data in the background.
+  **Enable individual features** lets you choose only faces, visual search,
+  or offline place names. **Recheck** refreshes readiness; failed downloads
+  offer **Retry**. Existing valid files are kept.
 - **Fix Rotated Photos** — regenerate cached data for photos whose
   EXIF orientation wasn't previously applied.
 

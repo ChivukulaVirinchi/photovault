@@ -33,6 +33,7 @@
   import { enqueueThumbnail, thumbnailOnVisible } from "../lib/thumbnailRequest";
   import { ensureTileCache, loadMapLibre } from "../lib/tile-cache";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import AssetSetup from "../lib/components/AssetSetup.svelte";
   import { X, ZoomIn } from "lucide-svelte";
   import type { MapPin } from "../lib/api/all";
   import type { PhotoSummaryDto } from "../lib/api/types";
@@ -625,6 +626,7 @@
   {#if loading}<span class="loading mono">⋯</span>{/if}
   <button class="ghost" onclick={fitToContent}>Reset</button>
 </PageHeader>
+<AssetSetup feature="places" />
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 

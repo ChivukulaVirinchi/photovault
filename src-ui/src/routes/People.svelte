@@ -8,6 +8,8 @@
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import AssetSetup from "../lib/components/AssetSetup.svelte";
+  import { assetSetup } from "../lib/stores/assetSetup.svelte";
   import type { PersonDto } from "../lib/api/types";
 
   let clusters = $state<PersonDto[]>([]);
@@ -173,6 +175,7 @@
 
   async function startFaceProcessing() {
     if (running || faceActionBusy) return;
+    if (!assetSetup.ready?.faces) return;
     const root = libraryStore.driveRoot;
     faceActionBusy = true;
     // Optimistic placeholder so the user sees the click registered
@@ -181,9 +184,9 @@
     // job-id as soon as the IPC returns.
     const placeholderId = `pending-faces-${Date.now()}`;
     jobs.register(placeholderId, "faces");
-    toasts.success("Looking for faces — feel free to navigate away.");
     try {
       const r = await people.startProcessing();
+      toasts.success("Looking for faces — feel free to navigate away.");
       jobs.dismiss(placeholderId);
       if (libraryStore.driveRoot !== root) return;
       jobs.register(r.job_id, "faces");
@@ -305,9 +308,10 @@
     <button class="ghost" disabled>Finding…</button>
   {:else}
     <a class="ghost review-link" href="#/review-faces">Review faces</a>
-    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Find faces</button>
+    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Find faces</button>
   {/if}
 </PageHeader>
+<AssetSetup feature="faces" />
 
 {#if running && facesJob && progressPct != null}
   <div class="progress" aria-label="Face detection progress">
@@ -322,7 +326,7 @@
       We've upgraded the face recognition model to AdaFace.
       Re-run face detection to apply the improved embeddings.
     </div>
-    <button class="primary" onclick={reRunFacesFromScratch} disabled={running || faceActionBusy}>Re-run detection</button>
+    <button class="primary" onclick={reRunFacesFromScratch} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Re-run detection</button>
     <button class="ghost" onclick={dismissModelUpgrade} disabled={faceActionBusy}>Dismiss</button>
   </div>
 {/if}
@@ -336,7 +340,7 @@
         Pick up where you left off — works even if you moved the drive from another machine.
       </span>
     </div>
-    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Resume detection</button>
+    <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Resume detection</button>
   </div>
 {/if}
 
@@ -388,7 +392,7 @@
   {:else if clusters.length === 0 && !running}
     <div class="empty">
       <p>No faces yet. Run face detection to start finding the people in your library.</p>
-      <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy}>Find faces</button>
+      <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Find faces</button>
     </div>
   {:else if clusters.length === 0 && running}
     <div class="empty">
