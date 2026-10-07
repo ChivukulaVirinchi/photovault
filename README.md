@@ -34,6 +34,10 @@
     </a>
   </p>
 
+  <p>
+    Featured on <a href="https://linuxunplugged.com/684"><strong>LINUX Unplugged #684</strong> — You Ain’t Ready For This Jelly</a> · September 13, 2026.
+  </p>
+
   <a href="https://chivukulavirinchi.github.io/photovault/">
     <img src="website/featured.gif" alt="Smriti in motion — 30 second loop showing indexing, timeline, face clustering, map, search, and slideshow" width="820">
   </a>
