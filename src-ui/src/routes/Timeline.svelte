@@ -39,10 +39,15 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Image as ImageIcon, Layers, Play, X } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import ImageIcon from "lucide-svelte/icons/image";
+  import Layers from "lucide-svelte/icons/layers";
+  import Play from "lucide-svelte/icons/play";
+  import X from "lucide-svelte/icons/x";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import SurpriseButton from "../lib/components/SurpriseButton.svelte";
+  import { inInactivePanel } from "../lib/inactivePanel";
 
   interface Props { revealId?: number | null }
   let { revealId = null }: Props = $props();
@@ -520,22 +525,7 @@
 
   async function startScan() {
     if (scanRunning) return;
-    const root = currentDriveRoot;
-    const placeholderId = `pending-scan-${Date.now()}`;
-    jobs.register(placeholderId, "scan");
-    toasts.success("Scanning library — feel free to navigate away.");
-    try {
-      const r = await library.startScan();
-      jobs.dismiss(placeholderId);
-      if (!sameLibrary(root)) return;
-      jobs.register(r.job_id, "scan");
-    } catch (e) {
-      jobs.dismiss(placeholderId);
-      if (!mounted || !sameLibrary(root)) return;
-      const msg = commandErrorMessage(e);
-      error = msg;
-      toasts.error(`Couldn't start scan: ${msg}`);
-    }
+    await libraryStore.startScan();
   }
 
   // When a scan completes, refresh the photo list so the user sees
@@ -1128,6 +1118,7 @@
   }
 
   function onGlobalKey(e: KeyboardEvent) {
+    if (inInactivePanel(scrollEl)) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     // Ctrl/Cmd+A: select every loaded photo. (Ctrl+Shift+A is the
     // assistant, handled in App.svelte.)
@@ -1437,14 +1428,25 @@
     <span class="count mono">
       {(total ?? items.length).toLocaleString()}{" "}<span class="muted">photos</span>
     </span>
-    <button class="primary" onclick={startScan}>Scan now</button>
   {/if}
 </PageHeader>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-{#if showResumeMetadata || showResumeThumbnails}
+{#if showResumeMetadata || showResumeThumbnails || libraryStore.missingHeldBack > 0}
   <div class="resume-banners">
+    {#if libraryStore.missingHeldBack > 0}
+      <div class="resume-banner">
+        <span class="msg">
+          {libraryStore.missingHeldBack.toLocaleString()} photos are no longer on disk. If a folder
+          or drive is disconnected, reconnect it and check again. Otherwise they can go to Trash.
+        </span>
+        <button class="primary" onclick={() => libraryStore.trashMissing()}>Move to Trash</button>
+        <button class="dismiss-banner" onclick={() => (libraryStore.missingHeldBack = 0)} aria-label="Keep missing photos for now" title="Keep for now">
+          <X size={14} strokeWidth={2} />
+        </button>
+      </div>
+    {/if}
     {#if showResumeMetadata}
       <div class="resume-banner">
         <span class="msg">
@@ -1468,6 +1470,27 @@
 {/if}
 
 <div class="timeline-host">
+  {#if !loading && items.length === 0 && !total}
+    <div class="empty-state">
+      {#if scanRunning}
+        <h2>Looking for photos…</h2>
+        <p class="muted">
+          {#if scanJob && scanJob.processed > 0}
+            Found {scanJob.processed.toLocaleString()} so far. They appear here as they're indexed.
+          {:else}
+            Smriti is reading {libraryStore.driveRoot ?? "this folder"}. Your files stay exactly where they are.
+          {/if}
+        </p>
+      {:else}
+        <h2>No photos here yet</h2>
+        <p class="muted">
+          Smriti didn't find photos or videos in {libraryStore.driveRoot ?? "this folder"}.
+          Add some, or choose another folder from the sidebar.
+        </p>
+        <button class="primary" onclick={startScan}>Check again</button>
+      {/if}
+    </div>
+  {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="scroll"
@@ -1619,6 +1642,32 @@
     position: relative;
     overflow: hidden;
     min-height: 0;
+  }
+  .empty-state {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-3);
+    padding: var(--s-7);
+    text-align: center;
+    pointer-events: none;
+  }
+  .empty-state h2 {
+    margin: 0;
+    font-size: var(--t-lg);
+    color: var(--ink);
+  }
+  .empty-state p {
+    margin: 0;
+    max-width: 44ch;
+    font-size: var(--t-sm);
+  }
+  .empty-state button {
+    pointer-events: auto;
   }
 
   .scroll {

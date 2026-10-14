@@ -5,7 +5,9 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
-  import { Check, X, SkipForward } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import X from "lucide-svelte/icons/x";
+  import SkipForward from "lucide-svelte/icons/skip-forward";
 
   let stats = $state<ReviewFaceCountDto | null>(null);
   let faces = $state<FaceDetailDto[]>([]);

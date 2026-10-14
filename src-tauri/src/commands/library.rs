@@ -19,11 +19,13 @@ use super::bursts::BurstsCompleteDto;
 use super::duplicates::DuplicatesCompleteDto;
 use crate::dto::{
     DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
-    LibraryHandleDto, MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, SchemaTooNewDto,
+    LibraryHandleDto, MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, ReconcileDto,
+    SchemaTooNewDto,
 };
 use crate::events::{
     JobProgress, EV_BURSTS_COMPLETE, EV_DUPLICATES_COMPLETE, EV_DUPLICATES_PROGRESS,
     EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
+    EV_SCAN_RECONCILED,
     EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
 };
 use crate::jobs::{self, emit};
@@ -925,12 +927,21 @@ pub async fn library_start_scan(
 
     tokio::spawn(async move {
         let cancel_after_scan = cancel.clone();
+        let scan_hidden_folders = args
+            .scan_hidden_folders
+            .unwrap_or_else(|| smriti::config::AppConfig::load().scan_hidden_folders);
+
+        // Stage 0: reconcile what is already indexed with the disk. The
+        // scanner below only ever adds new files.
+        let reconciled =
+            reconcile_before_scan(&app_clone, &job_id_clone, &drive_root, &db, scan_hidden_folders)
+                .await;
+
         let (rx, handle) = smriti::services::scanner::start_scan(
             drive_root.clone(),
             db.clone(),
             cancel,
-            args.scan_hidden_folders
-                .unwrap_or_else(|| smriti::config::AppConfig::load().scan_hidden_folders),
+            scan_hidden_folders,
         );
 
         // Forward progress.
@@ -981,13 +992,94 @@ pub async fn library_start_scan(
                 drive_for_post,
                 db_for_post,
                 thumbnails_for_post,
-                scan_inserted,
+                scan_inserted + reconciled,
             )
             .await;
         });
     });
 
     Ok(JobIdDto { job_id })
+}
+
+/// Follow moves, trash missing files and reset edited files before the
+/// scanner adds new ones. Returns how many photos now need reprocessing.
+/// Failures are logged and skipped: the scan itself must still run.
+async fn reconcile_before_scan(
+    app: &AppHandle,
+    job_id: &str,
+    drive_root: &Path,
+    db: &Arc<tokio::sync::Mutex<Database>>,
+    scan_hidden_folders: bool,
+) -> u64 {
+    let indexed = {
+        let guard = db.lock().await;
+        guard
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM photos)", [], |row| {
+                row.get::<_, bool>(0)
+            })
+            .unwrap_or(false)
+    };
+    if !indexed {
+        return 0;
+    }
+    emit(
+        app,
+        EV_SCAN_PROGRESS,
+        ScanProgressDto {
+            job_id: job_id.to_string(),
+            files_found: 0,
+            files_processed: 0,
+            bytes_processed: 0,
+            current_file: "Checking for changes…".into(),
+            elapsed_ms: 0,
+            is_complete: false,
+            error_count: 0,
+            error_details: Vec::new(),
+        },
+    );
+    let db_path = smriti::db::db_path_for(drive_root);
+    let root = drive_root.to_path_buf();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let conn = smriti::db::open_secondary(&db_path).map_err(|e| e.to_string())?;
+        smriti::services::reindexer::Reindexer::new_with_options(scan_hidden_folders)
+            .reconcile_existing(&conn, &root)
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    let outcome = match outcome {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(e)) => {
+            tracing::warn!("reconcile before scan failed: {e}");
+            return 0;
+        }
+        Err(e) => {
+            tracing::warn!("reconcile worker failed: {e}");
+            return 0;
+        }
+    };
+    let applied = &outcome.applied;
+    tracing::info!(
+        "reconcile: {} moved, {} trashed, {} modified, {} held back, {} unreadable",
+        applied.moves_applied,
+        applied.removals_applied,
+        applied.updates_applied,
+        outcome.held_back_removals,
+        outcome.unreadable
+    );
+    emit(
+        app,
+        EV_SCAN_RECONCILED,
+        ReconcileDto {
+            job_id: job_id.to_string(),
+            moved: applied.moves_applied as u64,
+            removed: applied.removals_applied as u64,
+            modified: applied.updates_applied as u64,
+            held_back_removals: outcome.held_back_removals as u64,
+            unreadable: outcome.unreadable as u64,
+        },
+    );
+    applied.updates_applied as u64
 }
 
 #[derive(Debug, Deserialize)]

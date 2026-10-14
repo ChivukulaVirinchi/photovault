@@ -577,6 +577,7 @@ export interface Settings {
   burst_time_window_seconds: number;
   trash_auto_delete_days: number;
   scan_hidden_folders: boolean;
+  scan_on_open: boolean;
   show_timeline_stacks: boolean;
   date_format: string;
   remembered_drives: string[];

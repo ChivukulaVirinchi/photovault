@@ -3,6 +3,9 @@ import { resetThumbnailRequests } from "../thumbnailRequest";
 import { settings } from "../api/all";
 import { commandErrorMessage } from "../api";
 import { toasts } from "./toast.svelte";
+import { jobs } from "./jobs.svelte";
+import { dataRevision } from "./dataRevision.svelte";
+import { events, type ScanReconciled } from "../api/events";
 import type {
   CommandError,
   DriveDto,
@@ -24,6 +27,13 @@ class LibraryStore {
   loading = $state(false);
   error = $state<string | null>(null);
   lastError = $state<CommandError | null>(null);
+  /// Indexed photos whose files vanished in such numbers during the last
+  /// scan that Smriti left them in place instead of trashing them (a
+  /// disconnected folder is the likelier cause). The Timeline asks.
+  missingHeldBack = $state(0);
+  /// True from opening a library until its automatic scan has been
+  /// registered (or skipped), so first-run UI doesn't flash up before it.
+  scanPending = $state(false);
   private seq = 0;
   /// Resolves once the current refresh has loaded (or failed to load)
   /// the remembered drives — the boot fast-path waits on this to know
@@ -76,7 +86,12 @@ class LibraryStore {
     }
   }
 
-  async open(drivePath: string) {
+  /// Open a library. Unless `scan` is false, a scan then picks up new,
+  /// moved, edited and deleted files: always for a library that has no
+  /// photos yet, otherwise when the "check for changes on open" setting
+  /// is on. The Google Takeout flow opts out because it starts its own
+  /// import job, which can't run alongside a scan.
+  async open(drivePath: string, { scan = true }: { scan?: boolean } = {}) {
     resetThumbnailRequests();
     const seq = ++this.seq;
     this.loading = true;
@@ -91,6 +106,15 @@ class LibraryStore {
       this.driveRoot = r.drive_root;
       this.photoCount = r.photo_count;
       this.unsupportedSchema = r.schema_too_new;
+      this.missingHeldBack = 0;
+      jobs.cancelledKinds.clear();
+      if (scan && !r.read_only) {
+        // Deferred one task: App's library-change effect clears
+        // library-scoped jobs, which would drop a scan registered now.
+        this.scanPending = true;
+        const empty = r.photo_count === 0;
+        setTimeout(() => void this.scanOnOpen(seq, empty), 0);
+      }
       // The catalog records which drive root it was created for; opening
       // it from somewhere else means face/album data may not match files.
       if (r.catalog_mismatch) {
@@ -132,6 +156,74 @@ class LibraryStore {
     }
   }
 
+  private async scanOnOpen(seq: number, empty: boolean) {
+    try {
+      if (seq !== this.seq) return;
+      if (!empty) {
+        const enabled = await settings
+          .get()
+          .then((s) => s.scan_on_open ?? true)
+          .catch(() => true);
+        if (!enabled || seq !== this.seq) return;
+      }
+      await this.startScan({ quiet: true });
+    } finally {
+      if (seq === this.seq) this.scanPending = false;
+    }
+  }
+
+  /// Start a scan of the open library and register it with the jobs
+  /// indicator. `quiet` is the automatic check on open: no toasts at all,
+  /// failures are only logged. Returns false when the scan couldn't start.
+  async startScan({ quiet = false }: { quiet?: boolean } = {}): Promise<boolean> {
+    if (jobs.isRunning("scan") || jobs.isRunning("takeout")) return false;
+    const seq = this.seq;
+    const placeholderId = `pending-scan-${Date.now()}`;
+    jobs.register(placeholderId, "scan");
+    if (!quiet) toasts.success("Scanning library — feel free to navigate away.");
+    try {
+      const r = await library.startScan();
+      jobs.dismiss(placeholderId);
+      if (seq !== this.seq) return false;
+      jobs.register(r.job_id, "scan");
+      return true;
+    } catch (e) {
+      jobs.dismiss(placeholderId);
+      // Another scan or import got there first: nothing to report.
+      if (seq !== this.seq || (isCommandError(e) && e.kind === "conflict")) return false;
+      if (quiet) {
+        console.warn("automatic library check skipped", e);
+        return false;
+      }
+      toasts.error(`Couldn't start scan: ${commandErrorMessage(e)}`);
+      return false;
+    }
+  }
+
+  /// Subscribe to `scan:reconciled` for the lifetime of the app.
+  listenForReconcile() {
+    return events.onScanReconciled((r) => this.applyReconcile(r));
+  }
+
+  /// Changes from disk are applied silently; screens just refresh. Only a
+  /// mass disappearance (held back for safety) surfaces, as a banner.
+  private applyReconcile(r: ScanReconciled) {
+    this.missingHeldBack = r.held_back_removals;
+    if (r.removed || r.moved || r.modified) dataRevision.bump();
+  }
+
+  /// Confirm the removals a scan held back.
+  async trashMissing() {
+    try {
+      const r = await library.trashMissing();
+      this.missingHeldBack = 0;
+      dataRevision.bump();
+      toasts.success(`${r.removals_applied.toLocaleString()} missing photos moved to Trash.`);
+    } catch (e) {
+      toasts.error(`Couldn't update the library: ${commandErrorMessage(e)}`);
+    }
+  }
+
   async close() {
     resetThumbnailRequests();
     const seq = ++this.seq;
@@ -142,6 +234,8 @@ class LibraryStore {
     this.driveRoot = null;
     this.photoCount = 0;
     this.unsupportedSchema = null;
+    this.missingHeldBack = 0;
+    this.scanPending = false;
     this.error = null;
     this.lastError = null;
   }

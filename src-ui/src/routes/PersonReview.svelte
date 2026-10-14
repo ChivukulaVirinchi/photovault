@@ -5,7 +5,9 @@
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
-  import { Check, X, SkipForward } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import X from "lucide-svelte/icons/x";
+  import SkipForward from "lucide-svelte/icons/skip-forward";
   import type { ReviewItem } from "../lib/api/all";
 
   // The clustering pipeline writes ambiguous face → cluster pairs to a

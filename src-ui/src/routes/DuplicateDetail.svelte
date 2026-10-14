@@ -9,7 +9,7 @@
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import DetailHeader from "../lib/components/DetailHeader.svelte";
-  import { ZoomIn } from "lucide-svelte";
+  import ZoomIn from "lucide-svelte/icons/zoom-in";
   import type { DupMember } from "../lib/api/all";
 
   interface Props { id: number }

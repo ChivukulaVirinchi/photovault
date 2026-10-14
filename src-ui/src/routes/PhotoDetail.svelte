@@ -12,10 +12,22 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { library } from "../lib/api/library";
-  import {
-    ChevronLeft, ChevronRight, Info, ZoomIn, ZoomOut, Fullscreen,
-    RotateCcw, RotateCw, FolderOpen, FolderPlus, Layers, Play, Share2, Star, Trash2, X,
-  } from "lucide-svelte";
+  import ChevronLeft from "lucide-svelte/icons/chevron-left";
+  import ChevronRight from "lucide-svelte/icons/chevron-right";
+  import Info from "lucide-svelte/icons/info";
+  import ZoomIn from "lucide-svelte/icons/zoom-in";
+  import ZoomOut from "lucide-svelte/icons/zoom-out";
+  import Fullscreen from "lucide-svelte/icons/fullscreen";
+  import RotateCcw from "lucide-svelte/icons/rotate-ccw";
+  import RotateCw from "lucide-svelte/icons/rotate-cw";
+  import FolderOpen from "lucide-svelte/icons/folder-open";
+  import FolderPlus from "lucide-svelte/icons/folder-plus";
+  import Layers from "lucide-svelte/icons/layers";
+  import Play from "lucide-svelte/icons/play";
+  import Share2 from "lucide-svelte/icons/share-2";
+  import Star from "lucide-svelte/icons/star";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import X from "lucide-svelte/icons/x";
   import { photos, type ExifExtras, type TimelineNeighbors } from "../lib/api/photos";
   import { system } from "../lib/api/system";
   import { stacks, trash, type PhotoStack } from "../lib/api/all";

@@ -291,6 +291,7 @@ class JobsStore {
   register(id: string, kind: JobKind) {
     if (!id) return;
     this.suppressedLibraryJobIds.delete(id);
+    this.cancelledKinds.delete(kind);
     if (this.jobs.has(id)) return;
     const next = new Map(this.jobs);
     next.set(id, {
@@ -338,9 +339,14 @@ class JobsStore {
     this.jobs = next;
   }
 
+  /// Kinds the user cancelled. Automatic smart-feature processing leaves
+  /// them alone until the user starts that kind again or opens a library.
+  readonly cancelledKinds = new Set<JobKind>();
+
   markCancelling(id: string) {
     const job = this.jobs.get(id);
     if (!job) return;
+    this.cancelledKinds.add(job.kind);
     const next = new Map(this.jobs);
     next.set(id, { ...job, message: "Cancelling..." });
     this.jobs = next;

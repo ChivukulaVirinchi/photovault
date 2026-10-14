@@ -3,7 +3,7 @@
   import { people, type FaceDetailDto } from "../api/all";
   import { commandErrorMessage } from "../api";
   import FaceCell from "./FaceCell.svelte";
-  import { X } from "lucide-svelte";
+  import X from "lucide-svelte/icons/x";
 
   interface Props {
     clusterId: number;

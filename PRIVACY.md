@@ -40,10 +40,15 @@ that rely on them).
 
 Re-triggered from **Settings → Advanced → Reinstall Assets**.
 
+Before anything is installed, the downloaded archive's SHA-256 is compared
+with the `SHA256SUMS` file published in the same GitHub release; a mismatch
+discards the download.
+
 The same opt-in setup also fetches the optional visual-search model
 (SigLIP2, about 1.5 GB across five files) from
-`huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli`. These are model
-weights only — the request is a plain file download and sends no library
+`huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli`, pinned to a
+fixed revision. Each file is checked against a SHA-256 digest built into
+the app before it is used. These are model weights only — the request is a plain file download and sends no library
 contents. Photo and text vectors are computed locally on your machine.
 
 ### 3. Update check (opt-in)

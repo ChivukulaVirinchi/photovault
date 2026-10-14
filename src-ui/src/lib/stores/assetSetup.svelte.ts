@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { systemEx, people, geocoding } from "../api/all";
+import { systemEx, people, geocoding, semantic } from "../api/all";
 import { commandErrorMessage } from "../api";
 import { libraryStore } from "./library.svelte";
 import { jobs } from "./jobs.svelte";
@@ -68,6 +68,45 @@ class AssetSetupStore {
       this.errors = { ...this.errors, [feature]: commandErrorMessage(error) };
       this.pending = null;
     } finally { this.requesting = false; }
+  }
+
+  /// Run the smart features the user has already installed on photos that
+  /// still need them — after a scan, a Takeout import or an earlier
+  /// interrupted run. Faces go first; visual search starts on the next
+  /// idle pass once face detection has finished, so the two heavy ML jobs
+  /// never compete for the CPU.
+  async processPending() {
+    if (!libraryStore.isOpen) return;
+    const session = libraryStore.session;
+    try {
+      if (!this.ready) await this.refresh();
+    } catch {
+      return;
+    }
+    const ready = this.ready;
+    if (!ready || session !== libraryStore.session) return;
+    if (jobs.isRunning("faces") || jobs.isRunning("semantic")) return;
+    try {
+      if (ready.faces && !jobs.cancelledKinds.has("faces")) {
+        const { pending_photos } = await people.pendingFaceCount();
+        if (pending_photos > 0 && session === libraryStore.session) {
+          const r = await people.startProcessing(session);
+          if (session === libraryStore.session) jobs.register(r.job_id, "faces");
+          return;
+        }
+      }
+      if (ready.visual && !jobs.cancelledKinds.has("semantic")) {
+        const status = await semantic.status();
+        if (status.pending_photos > 0 && session === libraryStore.session) {
+          const r = await semantic.startIndexing();
+          if (session === libraryStore.session) jobs.register(r.job_id, "semantic");
+        }
+      }
+    } catch (error) {
+      // Another job of the same kind may have started in between; the
+      // next idle pass picks up whatever is still pending.
+      console.warn("automatic smart-feature processing skipped", error);
+    }
   }
 
   resume() {

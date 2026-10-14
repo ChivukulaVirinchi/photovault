@@ -37,7 +37,7 @@ pub(crate) const SUPPORTED_EXTENSIONS: &[&str] = &[
 ];
 
 /// Directories to skip during scanning
-const SKIP_DIRECTORIES: &[&str] = &[
+pub(crate) const SKIP_DIRECTORIES: &[&str] = &[
     ".photovault",
     ".Trash",
     "$RECYCLE.BIN",
@@ -209,10 +209,17 @@ async fn run_scan_streaming(
 ) -> Result<ScanReport, String> {
     let start = Instant::now();
     let (paths_tx, paths_rx) = bounded::<FileCandidate>(WALKER_CHANNEL_DEPTH);
-    let exclusions = {
+    let (exclusions, known_paths) = {
         let guard = db.lock().await;
-        ExclusionMatcher::from_db(&guard.conn)
-            .map_err(|e| format!("failed to load folder exclusions; scan aborted: {e}"))?
+        let exclusions = ExclusionMatcher::from_db(&guard.conn)
+            .map_err(|e| format!("failed to load folder exclusions; scan aborted: {e}"))?;
+        // Already-indexed paths are skipped before hashing, so a rescan of
+        // an unchanged library costs a directory walk, not a 64 KB read per
+        // file. Changes to known files are the reindexer's job.
+        let known_paths = PhotoRepo::new(&guard.conn)
+            .all_file_paths()
+            .map_err(|e| format!("failed to load indexed paths; scan aborted: {e}"))?;
+        (exclusions, known_paths)
     };
 
     // ----- Producer: walker thread -----
@@ -248,6 +255,16 @@ async fn run_scan_streaming(
             if !is_supported_file(&entry) {
                 continue;
             }
+            let relative_path = entry
+                .path()
+                .strip_prefix(&walker_root)
+                .map(crate::services::path_util::relative_path_for_storage)
+                .unwrap_or_else(|_| {
+                    crate::services::path_util::relative_path_for_storage(entry.path())
+                });
+            if known_paths.contains(&relative_path) {
+                continue;
+            }
             let media_type = media_type_for_path(entry.path()).unwrap_or_default();
             let metadata = match entry.metadata() {
                 Ok(metadata) => metadata,
@@ -262,14 +279,6 @@ async fn run_scan_streaming(
             if metadata.len() < MIN_FILE_SIZE {
                 continue;
             }
-
-            let relative_path = entry
-                .path()
-                .strip_prefix(&walker_root)
-                .map(crate::services::path_util::relative_path_for_storage)
-                .unwrap_or_else(|_| {
-                    crate::services::path_util::relative_path_for_storage(entry.path())
-                });
 
             let mtime = metadata
                 .modified()

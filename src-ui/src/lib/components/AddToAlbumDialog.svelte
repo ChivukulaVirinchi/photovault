@@ -3,7 +3,9 @@
   import { albums } from "../api/all";
   import { commandErrorMessage } from "../api";
   import type { AlbumDto } from "../api/types";
-  import { FolderPlus, Search, Plus } from "lucide-svelte";
+  import FolderPlus from "lucide-svelte/icons/folder-plus";
+  import Search from "lucide-svelte/icons/search";
+  import Plus from "lucide-svelte/icons/plus";
 
   interface Props {
     photoIds: number[];

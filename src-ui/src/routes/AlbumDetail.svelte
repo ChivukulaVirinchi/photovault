@@ -16,7 +16,11 @@
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Download, FolderOpen, Play, X } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import Download from "lucide-svelte/icons/download";
+  import FolderOpen from "lucide-svelte/icons/folder-open";
+  import Play from "lucide-svelte/icons/play";
+  import X from "lucide-svelte/icons/x";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import SurpriseButton from "../lib/components/SurpriseButton.svelte";

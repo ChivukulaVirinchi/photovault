@@ -9,6 +9,9 @@ use serde::Serialize;
 
 pub const EV_SCAN_PROGRESS: &str = "scan:progress";
 pub const EV_SCAN_COMPLETE: &str = "scan:complete";
+/// Emitted once per scan after already-indexed photos were reconciled with
+/// the disk (moves followed, missing files trashed, edited files reset).
+pub const EV_SCAN_RECONCILED: &str = "scan:reconciled";
 pub const EV_METADATA_PROGRESS: &str = "metadata:progress";
 pub const EV_METADATA_COMPLETE: &str = "metadata:complete";
 pub const EV_THUMBNAIL_READY: &str = "thumbnail:ready";

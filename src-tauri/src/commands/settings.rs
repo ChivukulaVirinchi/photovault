@@ -52,6 +52,7 @@ pub struct SettingsUpdateArgs {
     pub burst_time_window_seconds: Option<i64>,
     pub trash_auto_delete_days: Option<u32>,
     pub scan_hidden_folders: Option<bool>,
+    pub scan_on_open: Option<bool>,
     pub show_timeline_stacks: Option<bool>,
     pub date_format: Option<String>,
     pub map_cache_limit_mb: Option<u32>,
@@ -113,6 +114,9 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     }
     if let Some(v) = args.scan_hidden_folders {
         cfg.scan_hidden_folders = v;
+    }
+    if let Some(v) = args.scan_on_open {
+        cfg.scan_on_open = v;
     }
     if let Some(v) = args.show_timeline_stacks {
         cfg.show_timeline_stacks = v;

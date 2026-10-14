@@ -130,12 +130,16 @@
     // loses state — the work was already running in the background.
     jobs.install().catch((e) => console.warn("job event subscription failed", e));
     let stopSetup: (() => void) | undefined;
+    let stopReconcile: (() => void) | undefined;
     let disposed = false;
+    libraryStore.listenForReconcile().then((stop) => { if (disposed) stop(); else stopReconcile = stop; })
+      .catch((e) => console.warn("reconcile subscription failed", e));
     assetSetup.install().then((stop) => { if (disposed) stop(); else stopSetup = stop; })
       .catch((e) => console.warn("asset setup subscription failed", e));
     return () => {
       disposed = true;
       stopSetup?.();
+      stopReconcile?.();
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);
     };
@@ -182,9 +186,41 @@
     assetSetup.resume();
   });
 
+  // When ingest and ML work goes idle, process whatever is pending with
+  // the smart features already installed. Edge-triggered (busy → idle,
+  // or a newly opened library) so the frequent thumbnail progress events
+  // don't keep pushing the timer back.
+  const PROCESSING_KINDS = ["scan", "metadata", "takeout", "faces", "semantic", "assets"] as const;
+  let processingWasBusy = true;
+  let processingSession = -1;
+  let processingTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    jobs.jobs;
+    const session = libraryStore.session;
+    if (!libraryStore.isOpen) return;
+    if (session !== processingSession) {
+      processingSession = session;
+      processingWasBusy = true;
+    }
+    const busy = libraryStore.scanPending || PROCESSING_KINDS.some((kind) => jobs.isRunning(kind));
+    if (busy) {
+      processingWasBusy = true;
+      clearTimeout(processingTimer);
+      return;
+    }
+    if (!processingWasBusy) return;
+    processingWasBusy = false;
+    clearTimeout(processingTimer);
+    // The post-scan metadata job starts a moment after the scan job ends;
+    // wait so faces aren't detected before orientation is known.
+    processingTimer = setTimeout(() => {
+      if (session === libraryStore.session) void assetSetup.processPending();
+    }, 3000);
+  });
+
 </script>
 
-{#if libraryStore.isOpen && !assetSetup.introSeen && assetSetup.ready && !Object.values(assetSetup.ready).every(Boolean)}
+{#if libraryStore.isOpen && !assetSetup.introSeen && assetSetup.ready && !Object.values(assetSetup.ready).every(Boolean) && !libraryStore.scanPending && !jobs.isRunning("scan") && !jobs.isRunning("takeout")}
   <SmartSetupDialog />
 {/if}
 

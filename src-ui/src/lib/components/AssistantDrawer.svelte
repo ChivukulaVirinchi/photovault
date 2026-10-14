@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { Sparkles, X, Send, StopCircle, Check, Ban } from "lucide-svelte";
+  import Sparkles from "lucide-svelte/icons/sparkles";
+  import X from "lucide-svelte/icons/x";
+  import Send from "lucide-svelte/icons/send";
+  import StopCircle from "lucide-svelte/icons/stop-circle";
+  import Check from "lucide-svelte/icons/check";
+  import Ban from "lucide-svelte/icons/ban";
   import { assistantStore, type AssistantActivityEvent } from "../stores/assistant.svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";

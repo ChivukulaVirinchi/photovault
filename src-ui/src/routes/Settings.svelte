@@ -794,6 +794,11 @@
           onchange={(e) => patch({ scan_hidden_folders: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Scan hidden folders</span>
       </label>
+      <label class="checkbox">
+        <input type="checkbox" checked={s.scan_on_open ?? true}
+          onchange={(e) => patch({ scan_on_open: (e.target as HTMLInputElement).checked })} />
+        <span class="label-text">Check for changes when a library opens</span>
+      </label>
       <label>
         <span class="label-text">Map tile cache (MB, shared across libraries)</span>
         <input type="number" min="50" max="10000" value={s.map_cache_limit_mb}

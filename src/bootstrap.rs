@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use futures::StreamExt;
+use sha2::{Digest, Sha256};
 use zip::read::ZipArchive;
 
 const MAX_ASSET_PACK_FILES: usize = 1_000;
@@ -490,6 +491,7 @@ where
             };
             let total = response.content_length();
             let mut stream = response.bytes_stream();
+            let mut hasher = Sha256::new();
             let mut written = 0_u64;
             let mut last_progress = std::time::Instant::now();
             let mut stream_error = None;
@@ -515,6 +517,7 @@ where
                     stream_error = Some(format!("download write failed: {}", error));
                     break;
                 }
+                hasher.update(&chunk);
                 if last_progress.elapsed() >= std::time::Duration::from_millis(150) {
                     progress(written, total);
                     last_progress = std::time::Instant::now();
@@ -531,6 +534,15 @@ where
                 let _ = std::fs::remove_file(&download_path);
                 continue;
             }
+            // The pack carries a native library and ML models that will be
+            // loaded into the process: never install one that doesn't match
+            // the SHA256SUMS published with the same release.
+            let actual = format!("{:x}", hasher.finalize());
+            if let Err(error) = verify_release_checksum(&client, url, &actual).await {
+                last_error = Some(error);
+                let _ = std::fs::remove_file(&download_path);
+                continue;
+            }
             progress(written, total);
             downloaded = true;
             break;
@@ -542,7 +554,7 @@ where
                 last_error.unwrap_or_default()
             );
             return Err(
-                "Couldn't download feature files. Check your internet connection and retry.".into(),
+                "Couldn't download or verify feature files. Check your internet connection and retry.".into(),
             );
         }
         (download_path, true)
@@ -570,6 +582,37 @@ where
     .map_err(|error| format!("Asset installation worker failed: {error}"))??;
 
     Ok(format!("Assets installed to {}", install_root.display()))
+}
+
+/// Check `actual_sha256` against the `SHA256SUMS` file that sits next to
+/// `url` in the same GitHub release.
+async fn verify_release_checksum(
+    client: &reqwest::Client,
+    url: &str,
+    actual_sha256: &str,
+) -> Result<(), String> {
+    let (base, file_name) = url
+        .rsplit_once('/')
+        .ok_or_else(|| format!("cannot derive checksum location from {url}"))?;
+    let sums_url = format!("{base}/SHA256SUMS");
+    let body = client
+        .get(&sums_url)
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| format!("checksum list unavailable at {sums_url}: {error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("checksum list unreadable at {sums_url}: {error}"))?;
+    let expected = crate::services::self_replace::parse_sha256sums(&body, file_name)
+        .ok_or_else(|| format!("{sums_url} has no entry for {file_name}"))?;
+    if expected.eq_ignore_ascii_case(actual_sha256) {
+        Ok(())
+    } else {
+        Err(format!(
+            "checksum mismatch for {url}: expected {expected}, got {actual_sha256}"
+        ))
+    }
 }
 
 fn install_downloaded_asset_pack(

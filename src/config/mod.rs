@@ -16,6 +16,10 @@ pub struct AppConfig {
     pub burst_time_window_seconds: i64,
     pub trash_auto_delete_days: u32,
     pub scan_hidden_folders: bool,
+    /// Check the library folder for new, moved, edited and deleted files
+    /// every time a library is opened.
+    #[serde(default = "default_true")]
+    pub scan_on_open: bool,
     #[serde(default = "default_show_timeline_stacks")]
     pub show_timeline_stacks: bool,
     pub date_format: DateFormat,
@@ -181,6 +185,10 @@ fn default_thumbnail_cache_gb() -> f64 {
     5.0
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_show_timeline_stacks() -> bool {
     true
 }
@@ -215,6 +223,7 @@ impl Default for AppConfig {
             burst_time_window_seconds: 3,
             trash_auto_delete_days: 30,
             scan_hidden_folders: false,
+            scan_on_open: true,
             show_timeline_stacks: true,
             date_format: DateFormat::Locale,
             remembered_drives: Vec::new(),

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { FolderMinus, FolderPlus, Trash2, X, Check } from "lucide-svelte";
+  import FolderMinus from "lucide-svelte/icons/folder-minus";
+  import FolderPlus from "lucide-svelte/icons/folder-plus";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import X from "lucide-svelte/icons/x";
+  import Check from "lucide-svelte/icons/check";
 
   interface Props {
     count: number;

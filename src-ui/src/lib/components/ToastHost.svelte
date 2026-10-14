@@ -1,6 +1,10 @@
 <script lang="ts">
   import { toasts } from "../stores/toast.svelte";
-  import { CheckCircle2, AlertCircle, Info, Undo2, X } from "lucide-svelte";
+  import CheckCircle2 from "lucide-svelte/icons/check-circle-2";
+  import AlertCircle from "lucide-svelte/icons/alert-circle";
+  import Info from "lucide-svelte/icons/info";
+  import Undo2 from "lucide-svelte/icons/undo-2";
+  import X from "lucide-svelte/icons/x";
 
   let undoing = $state<Set<number>>(new Set());
 

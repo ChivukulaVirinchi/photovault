@@ -1,7 +1,9 @@
 <script lang="ts">
   import { jobs, etaMs, type Job } from "../stores/jobs.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { CircleX, Loader2, Minus } from "lucide-svelte";
+  import CircleX from "lucide-svelte/icons/circle-x";
+  import Loader2 from "lucide-svelte/icons/loader-2";
+  import Minus from "lucide-svelte/icons/minus";
 
   let expanded = $state(false);
   let cancelling = $state<Set<string>>(new Set());

@@ -1209,6 +1209,7 @@ pub struct SettingsDto {
     pub burst_time_window_seconds: i64,
     pub trash_auto_delete_days: u32,
     pub scan_hidden_folders: bool,
+    pub scan_on_open: bool,
     pub show_timeline_stacks: bool,
     pub date_format: String,
     pub remembered_drives: Vec<String>,
@@ -1252,6 +1253,7 @@ impl From<&AppConfig> for SettingsDto {
             burst_time_window_seconds: c.burst_time_window_seconds,
             trash_auto_delete_days: c.trash_auto_delete_days,
             scan_hidden_folders: c.scan_hidden_folders,
+            scan_on_open: c.scan_on_open,
             show_timeline_stacks: c.show_timeline_stacks,
             date_format,
             remembered_drives: c
@@ -1286,6 +1288,20 @@ pub struct IndexChangesDto {
     pub removed: u64,
     pub moved: u64,
     pub modified: u64,
+}
+
+/// Payload of `scan:reconciled`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ReconcileDto {
+    pub job_id: String,
+    pub moved: u64,
+    pub removed: u64,
+    pub modified: u64,
+    /// Missing photos left in place because so many vanished at once that
+    /// a disconnected folder is likelier than a deletion. The UI asks the
+    /// user before trashing them.
+    pub held_back_removals: u64,
+    pub unreadable: u64,
 }
 
 // ---------- metadata extraction progress ----------

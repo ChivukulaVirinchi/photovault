@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Check, Copy } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import Copy from "lucide-svelte/icons/copy";
   import { commandErrorMessage } from "../api";
   import { burstConfetti } from "../confetti";
   import { shareCard } from "../stores/shareCard.svelte";

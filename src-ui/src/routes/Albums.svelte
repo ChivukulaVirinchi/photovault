@@ -30,6 +30,7 @@
   import PageHeader from "../lib/components/PageHeader.svelte";
   import type { AlbumDto, AlbumSuggestionDto } from "../lib/api/types";
   import type { PhotoSummaryDto } from "../lib/api/types";
+  import { inInactivePanel } from "../lib/inactivePanel";
 
   const currentDriveRoot = libraryStore.driveRoot;
   const currentSession = libraryStore.session;
@@ -252,7 +253,7 @@
   }
 
   function onPreviewKey(e: KeyboardEvent) {
-    if (!previewSugg) return;
+    if (!previewSugg || inInactivePanel(pageEl)) return;
     if (e.key === "Escape") { e.preventDefault(); closePreview(); }
   }
 

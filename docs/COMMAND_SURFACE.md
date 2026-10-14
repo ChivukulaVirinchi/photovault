@@ -223,6 +223,7 @@ Long-running ops emit events on a typed channel. Channel name is the event topic
 | `semantic:complete` | server → client | `JobProgress` | after semantic model install/index finishes or is cancelled |
 | `scan:progress` | server → client | `ScanProgress` | every 200ms during active scan |
 | `scan:complete` | server → client | `ScanResult` | on scan finish (ok or error) |
+| `scan:reconciled` | server → client | `ReconcileDto` | once per scan, after indexed rows were reconciled with the disk (moves, trashed missing files, edits, held-back mass removals) |
 | `faces:progress` | server → client | `FacesProgress` | every chunk (25 photos) |
 | `faces:complete` | server → client | `FacesResult` | on completion |
 | `duplicates:progress` | server → client | `JobProgress` | during run |
@@ -440,7 +441,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.compat_photos_list` | `{ offset: u32, limit: Option<u32> }` | `Page<PhotoSummaryDto>` | read-only preview for schema-too-new libraries; reads only stable `photos` columns, never generates thumbnails or mutates the DB |
 | `library.close` | `{}` | `()` | for "switch library" flow; flushes pending writes |
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
-| `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; emits `scan:progress`, `scan:complete` |
+| `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; reconciles moved/deleted/edited files first, then adds new ones; emits `scan:progress`, `scan:reconciled`, `scan:complete` |
 | `library.cancel_scan` | `{ job_id: String }` | `()` | flips cancel flag; scan finishes mid-batch |
 | `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
 | `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |
@@ -814,6 +815,7 @@ struct SettingsDto {
     theme: Theme,                     // Light | Dark | System
     thumbnail_grid_size: ThumbnailSize,
     scan_hidden_folders: bool,
+    scan_on_open: bool,
     face_confidence_threshold: f32,   // 0..1
     clustering_threshold: f32,        // 0..1
     burst_window_seconds: u32,

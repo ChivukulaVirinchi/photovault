@@ -13,7 +13,8 @@
   import DetailHeader from "../lib/components/DetailHeader.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, Play } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import Play from "lucide-svelte/icons/play";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
   import { slideshow } from "../lib/stores/slideshow.svelte";

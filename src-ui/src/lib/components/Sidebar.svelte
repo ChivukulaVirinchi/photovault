@@ -1,9 +1,22 @@
 <script lang="ts">
-  import {
-    Clock, Users, FolderOpen, Sparkles, Search, Map as MapIcon, Bot,
-    Copy, Layers, BarChart2, Trash2, Settings,
-    ChevronLeft, ChevronRight, Sun, Moon, Monitor, type Icon as IconType,
-  } from "lucide-svelte";
+  import Clock from "lucide-svelte/icons/clock";
+  import Users from "lucide-svelte/icons/users";
+  import FolderOpen from "lucide-svelte/icons/folder-open";
+  import Sparkles from "lucide-svelte/icons/sparkles";
+  import Search from "lucide-svelte/icons/search";
+  import MapIcon from "lucide-svelte/icons/map";
+  import Bot from "lucide-svelte/icons/bot";
+  import Copy from "lucide-svelte/icons/copy";
+  import Layers from "lucide-svelte/icons/layers";
+  import BarChart2 from "lucide-svelte/icons/bar-chart-2";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import Settings from "lucide-svelte/icons/settings";
+  import ChevronLeft from "lucide-svelte/icons/chevron-left";
+  import ChevronRight from "lucide-svelte/icons/chevron-right";
+  import Sun from "lucide-svelte/icons/sun";
+  import Moon from "lucide-svelte/icons/moon";
+  import Monitor from "lucide-svelte/icons/monitor";
+  import type { Icon as IconType } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
   import { assistantStore } from "../stores/assistant.svelte";

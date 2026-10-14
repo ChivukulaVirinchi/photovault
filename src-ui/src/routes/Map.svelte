@@ -34,7 +34,8 @@
   import { ensureTileCache, loadMapLibre } from "../lib/tile-cache";
   import PageHeader from "../lib/components/PageHeader.svelte";
   import AssetSetup from "../lib/components/AssetSetup.svelte";
-  import { X, ZoomIn } from "lucide-svelte";
+  import X from "lucide-svelte/icons/x";
+  import ZoomIn from "lucide-svelte/icons/zoom-in";
   import type { MapPin } from "../lib/api/all";
   import type { PhotoSummaryDto } from "../lib/api/types";
 

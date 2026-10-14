@@ -36,14 +36,32 @@ const MODEL_DIR_NAME: &str = "vit-b-32-siglip2-256-webli";
 const VECTOR_FILE: &str = "vectors.f32";
 const MANIFEST_FILE: &str = "manifest.json";
 
-const VISUAL_MODEL_URL: &str =
-    "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/visual/model.onnx";
-const TEXTUAL_MODEL_URL: &str =
-    "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/textual/model.onnx";
-const TOKENIZER_URL: &str = "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/textual/tokenizer.json";
-const PREPROCESS_URL: &str = "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/visual/preprocess_cfg.json";
-const CONFIG_URL: &str =
-    "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/main/config.json";
+/// Files are fetched from the pinned revision (the literal must match
+/// `SEMANTIC_MODEL_REVISION`; a test enforces it) and checked against the
+/// SHA-256 digests below, so an upstream change can never silently swap
+/// the model Smriti loads.
+macro_rules! semantic_model_url {
+    ($path:literal) => {
+        concat!(
+            "https://huggingface.co/immich-app/ViT-B-32-SigLIP2-256__webli/resolve/",
+            "762c736d366fc253e9453021144f9fe71789b075/",
+            $path
+        )
+    };
+}
+const VISUAL_MODEL_URL: &str = semantic_model_url!("visual/model.onnx");
+const TEXTUAL_MODEL_URL: &str = semantic_model_url!("textual/model.onnx");
+const TOKENIZER_URL: &str = semantic_model_url!("textual/tokenizer.json");
+const PREPROCESS_URL: &str = semantic_model_url!("visual/preprocess_cfg.json");
+const CONFIG_URL: &str = semantic_model_url!("config.json");
+
+const VISUAL_MODEL_SHA256: &str =
+    "e96b8a3d32ab1b683aa12c45312342b4a10d4befef5f195f5cf84eadf1938696";
+const TEXTUAL_MODEL_SHA256: &str =
+    "ba6e09d2dbb3d7ac0f9e2935676db92dceebddfd06c1462b67019caa90eeea20";
+const TOKENIZER_SHA256: &str = "220c63d496e0c14e63eb656c91e0215e926202e4c74b1f089e09f1920d779b04";
+const PREPROCESS_SHA256: &str = "05d19a2078cf0e1a23807f96d4c2ca4efdda6e95846b87ae2e66dbf554fabf02";
+const CONFIG_SHA256: &str = "13fcc60dc967de86aa8dd831f3d9c65b92ccfa87997f448fad08b0d1fad2b11f";
 
 const VISUAL_MODEL_BYTES: u64 = 378_359_772;
 const TEXTUAL_MODEL_BYTES: u64 = 1_129_435_819;
@@ -244,30 +262,35 @@ impl SemanticSearchService {
                 destination: paths.visual_model,
                 stage: "visual-model",
                 expected_size: VISUAL_MODEL_BYTES,
+                sha256: VISUAL_MODEL_SHA256,
             },
             SemanticDownload {
                 url: TEXTUAL_MODEL_URL,
                 destination: paths.textual_model,
                 stage: "text-model",
                 expected_size: TEXTUAL_MODEL_BYTES,
+                sha256: TEXTUAL_MODEL_SHA256,
             },
             SemanticDownload {
                 url: TOKENIZER_URL,
                 destination: paths.tokenizer,
                 stage: "tokenizer",
                 expected_size: TOKENIZER_BYTES,
+                sha256: TOKENIZER_SHA256,
             },
             SemanticDownload {
                 url: PREPROCESS_URL,
                 destination: paths.preprocess,
                 stage: "preprocess",
                 expected_size: PREPROCESS_BYTES,
+                sha256: PREPROCESS_SHA256,
             },
             SemanticDownload {
                 url: CONFIG_URL,
                 destination: paths.config,
                 stage: "config",
                 expected_size: CONFIG_BYTES,
+                sha256: CONFIG_SHA256,
             },
         ];
         let total = SEMANTIC_MODEL_DOWNLOAD_BYTES;
@@ -955,6 +978,7 @@ struct SemanticDownload {
     stage: &'static str,
     destination: PathBuf,
     expected_size: u64,
+    sha256: &'static str,
 }
 
 async fn download_asset<F>(
@@ -1008,6 +1032,7 @@ where
     let mut downloaded = 0u64;
     let mut last_emit = 0u64;
     let mut stream = response.bytes_stream();
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
 
     use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
@@ -1019,6 +1044,7 @@ where
         tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
             .await
             .map_err(|e| format!("failed writing {}: {e}", tmp.display()))?;
+        sha2::Digest::update(&mut hasher, &chunk);
         downloaded += chunk.len() as u64;
         if downloaded.saturating_sub(last_emit) >= 1_048_576 || downloaded >= expected {
             last_emit = downloaded;
@@ -1038,6 +1064,14 @@ where
         return Err(format!(
             "download size mismatch for {}: expected {} bytes, got {}",
             asset.url, asset.expected_size, downloaded
+        ));
+    }
+    let actual = format!("{:x}", sha2::Digest::finalize(hasher));
+    if !actual.eq_ignore_ascii_case(asset.sha256) {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!(
+            "checksum mismatch for {}: expected {}, got {actual}",
+            asset.url, asset.sha256
         ));
     }
     tokio::fs::rename(&tmp, &asset.destination)
@@ -1103,6 +1137,32 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn model_downloads_are_pinned_to_the_reviewed_revision() {
+        for url in [
+            VISUAL_MODEL_URL,
+            TEXTUAL_MODEL_URL,
+            TOKENIZER_URL,
+            PREPROCESS_URL,
+            CONFIG_URL,
+        ] {
+            assert!(
+                url.contains(&format!("/resolve/{SEMANTIC_MODEL_REVISION}/")),
+                "{url} must use the pinned revision"
+            );
+        }
+        for digest in [
+            VISUAL_MODEL_SHA256,
+            TEXTUAL_MODEL_SHA256,
+            TOKENIZER_SHA256,
+            PREPROCESS_SHA256,
+            CONFIG_SHA256,
+        ] {
+            assert_eq!(digest.len(), 64);
+            assert!(digest.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+    }
 
     #[test]
     fn truncated_models_are_not_reported_as_installed() {

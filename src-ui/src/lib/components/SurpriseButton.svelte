@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Sparkles } from "lucide-svelte";
+  import Sparkles from "lucide-svelte/icons/sparkles";
   import { slideshow } from "../stores/slideshow.svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { toasts } from "../stores/toast.svelte";

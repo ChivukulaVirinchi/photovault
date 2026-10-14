@@ -31,7 +31,7 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Share2 } from "lucide-svelte";
+  import Share2 from "lucide-svelte/icons/share-2";
   import { commandErrorMessage } from "../lib/api";
   import { insights } from "../lib/api/all";
   import { photos } from "../lib/api/photos";

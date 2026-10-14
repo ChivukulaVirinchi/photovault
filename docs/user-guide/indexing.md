@@ -9,16 +9,19 @@ the index.
 
 For every supported file under the library root:
 
-1. **Checks if Smriti has already indexed it.** Files identified by
-   path + size + modification time are skipped on subsequent scans.
-2. **Reads EXIF.** Capture date, GPS coordinates, camera make/model,
+1. **Reconciles what's already indexed** (see [Keeping the index in
+   sync](#keeping-the-index-in-sync)).
+2. **Skips files Smriti already knows** by path, so a rescan of an
+   unchanged library costs a folder walk, not a re-read of every photo.
+3. **Fingerprints new files** (size, modification time and the first
+   64 KB) and adds them to the library.
+4. **Reads EXIF.** Capture date, GPS coordinates, camera make/model,
    ISO, aperture, shutter, focal length, orientation.
-3. **Hashes the file** (SHA-256) for byte-level duplicate detection.
-4. **Resolves a place name** if GPS is present, using the local
+5. **Resolves a place name** if GPS is present, using the local
    GeoNames database.
-5. **Generates thumbnails** (three sizes) lazily, the first time each
-   photo is viewed.
-6. **Queues face detection** if the asset pack is installed.
+6. **Generates thumbnails** in the background.
+7. **Runs face detection, then visual-search indexing**, for features
+   you have enabled.
 
 Smriti never copies, moves, or modifies your originals.
 
@@ -30,23 +33,39 @@ GIF (first frame), plus the common camera RAW formats with embedded
 JPEG previews: NEF, CR2, ARW, DNG, ORF, RW2, PEF, SRW, RAF.
 
 **Skipped:**
-- Files smaller than 10 KB (guards against icons and email
-  thumbnails).
+- Files smaller than 1 KB (guards against icons and junk).
 - Files without a recognised extension.
 - Hidden folders (those starting with `.`) — unless **Scan hidden
   folders** is enabled in Settings.
 - `.photovault/` itself, always.
 
-## Reindex actions
+## Keeping the index in sync
 
-Smriti doesn't run scans on a schedule. You re-trigger them from
-**Settings → Maintenance**:
+Smriti doesn't run in the background or on a schedule. Instead, every
+time you open a library it quietly checks the folder for changes (turn
+this off with **Settings → Check for changes when a library opens**).
+To pick up photos added while Smriti is open, reopen the library.
 
-- **Rescan Library** — walks the entire library, picks up new files,
-  files that changed, files that moved, and files that were deleted.
-  Existing rows for unchanged files are left alone.
-- **Check for Changes** — like rescan but doesn't re-process unchanged
-  files. Faster when you only added or removed a few photos.
+A check:
+
+- **Adds new files.**
+- **Follows moved and renamed files**, keeping their faces, albums and
+  favourites.
+- **Re-processes files edited outside Smriti** (new size or modification
+  time). Same-size files whose time shifted by a whole number of quarter
+  hours — what FAT/exFAT drives do when the time zone changes — are left
+  alone.
+- **Moves photos whose files were deleted to Smriti's Trash**, where you
+  can restore them. If a large share of the library is missing at once
+  (a disconnected folder, share or drive is the usual cause), nothing is
+  trashed; the Timeline asks you first.
+- **Leaves photos in unreadable folders alone** instead of treating them
+  as deleted.
+
+## Maintenance actions
+
+From **Settings → Maintenance**:
+
 - **Refresh Capture Dates** — re-reads capture dates for photos and
   videos. Smriti prefers embedded metadata, then strict filename dates,
   and uses file modified time only as a marked fallback.
@@ -60,8 +79,9 @@ Smriti doesn't run scans on a schedule. You re-trigger them from
   detection on CPU (the slow step). A free Kaggle/Colab GPU bridge
   can cut the face pass to ~5 minutes — see
   [the face GPU bridge doc](../face-gpu-bridge.md).
-- **Incremental rescan** when a few hundred new photos appeared:
-  seconds to minutes.
+- **Checking for changes** on an unchanged library: one folder walk —
+  seconds on an SSD, about a minute for very large libraries on a USB
+  hard drive.
 - **Thumbnails** are lazy — generated when a view scrolls a photo
   into the viewport, not upfront. Scrolling the Timeline for the
   first time is when most thumbnail work happens.

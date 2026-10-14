@@ -12,9 +12,21 @@ export interface ScanProgress {
   error_details: string[];
 }
 
+/// Already-indexed photos reconciled with the disk at the start of a scan.
+export interface ScanReconciled {
+  job_id: string;
+  moved: number;
+  removed: number;
+  modified: number;
+  held_back_removals: number;
+  unreadable: number;
+}
+
 export const events = {
   onScanProgress: (cb: (p: ScanProgress) => void) =>
     listen<ScanProgress>("scan:progress", (e) => cb(e.payload)) as Promise<UnlistenFn>,
   onScanComplete: (cb: (p: ScanProgress) => void) =>
     listen<ScanProgress>("scan:complete", (e) => cb(e.payload)) as Promise<UnlistenFn>,
+  onScanReconciled: (cb: (p: ScanReconciled) => void) =>
+    listen<ScanReconciled>("scan:reconciled", (e) => cb(e.payload)) as Promise<UnlistenFn>,
 };

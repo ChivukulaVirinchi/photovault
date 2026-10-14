@@ -18,6 +18,9 @@ pub struct IndexChanges {
     pub removed: Vec<(i64, PathBuf)>,
     pub moved: Vec<(i64, PathBuf, PathBuf)>,
     pub modified: Vec<(i64, PathBuf)>,
+    /// Folders or files the walk could not read. Indexed photos under them
+    /// are left alone rather than reported as removed.
+    pub unreadable: usize,
 }
 
 impl IndexChanges {
@@ -37,9 +40,24 @@ pub struct ApplyResult {
     pub updates_applied: usize,
 }
 
+/// Outcome of [`Reindexer::reconcile_existing`].
+#[derive(Debug, Default, Clone)]
+pub struct ReconcileOutcome {
+    pub applied: ApplyResult,
+    /// Missing photos that were *not* trashed because so many vanished at
+    /// once that a disconnected folder or drive is the likelier cause.
+    pub held_back_removals: usize,
+    pub unreadable: usize,
+}
+
+/// Below this many missing photos, removals are always applied.
+const MASS_REMOVAL_MIN: usize = 25;
+/// Above this share (1 / N) of the active library, removals are held back
+/// for explicit confirmation.
+const MASS_REMOVAL_FRACTION: usize = 5;
+
 pub struct Reindexer {
     supported_extensions: HashSet<String>,
-    skip_patterns: Vec<String>,
     scan_hidden_folders: bool,
 }
 
@@ -61,16 +79,8 @@ impl Reindexer {
             supported_extensions.insert(ext.to_string());
         }
 
-        let skip_patterns = vec![
-            "System Volume Information".to_string(),
-            "$RECYCLE.BIN".to_string(),
-            ".Trash".to_string(),
-            ".photovault".to_string(),
-        ];
-
         Self {
             supported_extensions,
-            skip_patterns,
             scan_hidden_folders,
         }
     }
@@ -104,6 +114,11 @@ impl Reindexer {
         let mut insert_stmt = conn
             .prepare("INSERT OR IGNORE INTO found_files (path, mtime, size) VALUES (?1, ?2, ?3)")?;
 
+        // Relative paths the walk could not read. A permission error on one
+        // folder must neither abort the whole pass nor make every photo
+        // inside it look deleted.
+        let mut unreadable_prefixes: Vec<String> = Vec::new();
+
         for entry in WalkDir::new(drive_root)
             .follow_links(false)
             .into_iter()
@@ -111,7 +126,25 @@ impl Reindexer {
         {
             let entry = match entry {
                 Ok(e) => e,
-                Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
+                Err(error) => {
+                    let relative = error
+                        .path()
+                        .filter(|p| *p != drive_root)
+                        .and_then(|p| p.strip_prefix(drive_root).ok())
+                        .map(crate::services::path_util::relative_path_for_storage);
+                    match relative {
+                        Some(relative) => {
+                            tracing::warn!("reindex: skipping unreadable {relative}: {error}");
+                            unreadable_prefixes.push(relative);
+                            continue;
+                        }
+                        // The root itself became unreadable (drive unplugged
+                        // mid-walk): nothing can be concluded.
+                        None => {
+                            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+                        }
+                    }
+                }
             };
 
             if !entry.file_type().is_file() {
@@ -138,7 +171,11 @@ impl Reindexer {
 
             let metadata = match fs::metadata(entry.path()) {
                 Ok(metadata) => metadata,
-                Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
+                Err(error) => {
+                    tracing::warn!("reindex: skipping unreadable {relative_path}: {error}");
+                    unreadable_prefixes.push(relative_path);
+                    continue;
+                }
             };
             let mtime = metadata
                 .modified()
@@ -166,19 +203,30 @@ impl Reindexer {
             }
         }
 
-        // Modified files: matching path but newer mtime
+        // Modified files: matching path but different size or mtime
         {
             let mut stmt = conn.prepare(
-                "SELECT p.id, p.file_path FROM photos p
-                 INNER JOIN temp.found_files f ON f.path = p.file_path
-                 WHERE p.is_trashed = FALSE
-                   AND (f.mtime IS NOT p.file_mtime OR f.size != p.file_size)",
+                "SELECT p.id, p.file_path, p.file_size, p.file_mtime, f.size, f.mtime
+                   FROM photos p
+                   INNER JOIN temp.found_files f ON f.path = p.file_path
+                  WHERE p.is_trashed = FALSE
+                    AND (f.mtime IS NOT p.file_mtime OR f.size != p.file_size)",
             )?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
             })?;
             for row in rows {
-                let (id, path) = row?;
+                let (id, path, stored_size, stored_mtime, disk_size, disk_mtime) = row?;
+                if !content_may_have_changed(stored_size, stored_mtime, disk_size, disk_mtime) {
+                    continue;
+                }
                 if let Ok(full) = safe_join_relative(drive_root, &path) {
                     changes.modified.push((id, full));
                 }
@@ -203,7 +251,10 @@ impl Reindexer {
 
             let mut missing: Vec<(i64, String, String)> = Vec::new();
             for row in rows {
-                missing.push(row?);
+                let row = row?;
+                if !is_under_any_prefix(&row.1, &unreadable_prefixes) {
+                    missing.push(row);
+                }
             }
 
             // Pre-hash all candidate (added) files exactly once into a hash → path map.
@@ -267,7 +318,49 @@ impl Reindexer {
 
         conn.execute("DROP TABLE IF EXISTS temp.found_files", [])?;
 
+        changes.unreadable = unreadable_prefixes.len();
         Ok(changes)
+    }
+
+    /// Bring already-indexed rows in line with the disk: follow moves,
+    /// trash photos whose files are gone and reset photos edited outside
+    /// Smriti. New files are left to the scanner.
+    ///
+    /// When an unusually large share of the library is missing at once the
+    /// removals are held back (see [`ReconcileOutcome::held_back_removals`])
+    /// so a disconnected sub-folder or share doesn't empty the library into
+    /// the trash.
+    pub fn reconcile_existing(
+        &self,
+        conn: &Connection,
+        drive_root: &Path,
+    ) -> SqliteResult<ReconcileOutcome> {
+        let mut changes = self.detect_changes(conn, drive_root)?;
+        changes.added.clear();
+
+        let mut held_back_removals = 0;
+        if !changes.removed.is_empty() {
+            let active: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM photos WHERE is_trashed = FALSE",
+                [],
+                |row| row.get(0),
+            )?;
+            if is_mass_removal(changes.removed.len(), active.max(0) as usize) {
+                held_back_removals = changes.removed.len();
+                changes.removed.clear();
+            }
+        }
+
+        let applied = if changes.is_empty() {
+            ApplyResult::default()
+        } else {
+            self.apply_changes(conn, &changes)?
+        };
+        Ok(ReconcileOutcome {
+            applied,
+            held_back_removals,
+            unreadable: changes.unreadable,
+        })
     }
 
     pub fn apply_changes(
@@ -413,9 +506,51 @@ impl Reindexer {
         if !self.scan_hidden_folders && name.starts_with('.') {
             return true;
         }
-        self.skip_patterns.iter().any(|p| name.starts_with(p))
+        // Same skip list as the scanner, so a reindex never reports the
+        // scanner's deliberately skipped folders (e.g. Synology `@eaDir`)
+        // as new files.
+        crate::services::scanner::SKIP_DIRECTORIES.contains(&name)
             || exclusions.should_skip_path(drive_root, path)
     }
+}
+
+fn is_under_any_prefix(path: &str, prefixes: &[String]) -> bool {
+    prefixes.iter().any(|prefix| {
+        path == prefix
+            || (path.len() > prefix.len()
+                && path.starts_with(prefix.as_str())
+                && path.as_bytes()[prefix.len()] == b'/')
+    })
+}
+
+fn is_mass_removal(missing: usize, active: usize) -> bool {
+    missing >= MASS_REMOVAL_MIN && missing * MASS_REMOVAL_FRACTION > active
+}
+
+/// Whether a size/mtime difference means the file content may have changed.
+///
+/// A same-size file whose mtime moved by up to 2 s (FAT resolution) or by a
+/// whole number of quarter hours within ±14 h (FAT/exFAT store local time,
+/// so a timezone or DST change shifts every mtime on the drive) is treated
+/// as unchanged: re-processing it would discard its faces for nothing.
+fn content_may_have_changed(
+    stored_size: i64,
+    stored_mtime: Option<i64>,
+    disk_size: i64,
+    disk_mtime: Option<i64>,
+) -> bool {
+    if stored_size != disk_size {
+        return true;
+    }
+    let (Some(stored), Some(disk)) = (stored_mtime, disk_mtime) else {
+        // Rows without a recorded mtime: size is all we can compare.
+        return false;
+    };
+    let delta = (disk - stored).abs();
+    if delta <= 2 {
+        return false;
+    }
+    !(delta % 900 == 0 && delta <= 14 * 3600)
 }
 
 fn clear_face_derivatives_for_photo(
@@ -753,6 +888,111 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cluster_count, 0, "empty stale cluster should be pruned");
+    }
+
+    #[test]
+    fn timezone_and_fat_mtime_shifts_are_not_modifications() {
+        // Same size, FAT 2 s rounding / whole-hour / half-hour / DST shifts.
+        for delta in [1, 2, 3600, -3600, 1800, 5 * 3600 + 1800, 14 * 3600] {
+            assert!(
+                !content_may_have_changed(100, Some(1_000_000), 100, Some(1_000_000 + delta)),
+                "delta {delta} should be treated as unchanged"
+            );
+        }
+        // Real edits.
+        assert!(content_may_have_changed(100, Some(1_000_000), 101, Some(1_000_000)));
+        assert!(content_may_have_changed(100, Some(1_000_000), 100, Some(1_000_123)));
+        assert!(content_may_have_changed(100, Some(1_000_000), 100, Some(1_000_000 + 15 * 3600)));
+        // Legacy rows without an mtime only compare size.
+        assert!(!content_may_have_changed(100, None, 100, Some(5)));
+    }
+
+    #[test]
+    fn prefix_match_respects_path_components() {
+        let prefixes = vec!["Trips/Goa".to_string()];
+        assert!(is_under_any_prefix("Trips/Goa", &prefixes));
+        assert!(is_under_any_prefix("Trips/Goa/a.jpg", &prefixes));
+        assert!(!is_under_any_prefix("Trips/Goa2/a.jpg", &prefixes));
+    }
+
+    #[test]
+    fn reindexer_skips_scanner_skip_directories() {
+        let temp = tempdir().unwrap();
+        let ea = temp.path().join("@eaDir");
+        fs::create_dir_all(&ea).unwrap();
+        let matcher = ExclusionMatcher::new(vec![]);
+        assert!(Reindexer::new().should_skip(temp.path(), &ea, &matcher));
+    }
+
+    fn insert_photo_row(conn: &Connection, id: i64, path: &str) {
+        conn.execute(
+            "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, is_trashed)
+             VALUES (?1, ?2, ?2, ?3, 2048, FALSE)",
+            params![id, path, format!("hash-{id}")],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reconcile_trashes_a_few_missing_files() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        for id in 1..=10 {
+            let name = format!("p{id}.jpg");
+            let path = temp.path().join(&name);
+            fs::write(&path, vec![0u8; 2048]).unwrap();
+            insert_photo_row(&conn, id, &name);
+        }
+        // Record the real mtimes so present files aren't seen as modified.
+        for id in 1..=10 {
+            let meta = fs::metadata(temp.path().join(format!("p{id}.jpg"))).unwrap();
+            let mtime = meta
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            conn.execute(
+                "UPDATE photos SET file_mtime = ?1 WHERE id = ?2",
+                params![mtime, id],
+            )
+            .unwrap();
+        }
+        fs::remove_file(temp.path().join("p3.jpg")).unwrap();
+
+        let outcome = Reindexer::new_with_options(true)
+            .reconcile_existing(&conn, temp.path())
+            .unwrap();
+        assert_eq!(outcome.applied.removals_applied, 1);
+        assert_eq!(outcome.applied.updates_applied, 0);
+        assert_eq!(outcome.held_back_removals, 0);
+    }
+
+    #[test]
+    fn reconcile_holds_back_mass_removal() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        // 40 indexed photos, none present on disk: looks like a
+        // disconnected folder, not 40 deliberate deletions.
+        for id in 1..=40 {
+            insert_photo_row(&conn, id, &format!("Gone/p{id}.jpg"));
+        }
+
+        let outcome = Reindexer::new_with_options(true)
+            .reconcile_existing(&conn, temp.path())
+            .unwrap();
+        assert_eq!(outcome.applied.removals_applied, 0);
+        assert_eq!(outcome.held_back_removals, 40);
+        let trashed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM photos WHERE is_trashed = TRUE",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trashed, 0);
     }
 
     #[test]

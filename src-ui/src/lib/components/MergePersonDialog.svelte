@@ -5,7 +5,8 @@
   import type { PersonDto } from "../api/types";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";
-  import { Search, Users } from "lucide-svelte";
+  import Search from "lucide-svelte/icons/search";
+  import Users from "lucide-svelte/icons/users";
 
   interface Props {
     source: PersonDto;

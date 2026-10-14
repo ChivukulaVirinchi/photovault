@@ -43,8 +43,10 @@
   import AssetSetup from "../lib/components/AssetSetup.svelte";
   import SelectionBar from "../lib/components/SelectionBar.svelte";
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
-  import { Check, X } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import X from "lucide-svelte/icons/x";
   import type { SearchResults } from "../lib/api/all";
+  import { inInactivePanel } from "../lib/inactivePanel";
 
   interface Props {
     /// Pre-fill the search bar from the URL (e.g. #/search?q=Goa).
@@ -368,6 +370,7 @@
   }
 
   function onGlobalKey(e: KeyboardEvent) {
+    if (inInactivePanel(pageEl)) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (!selection.active()) return;
     if (e.key === "Escape") { selection.clear(); e.preventDefault(); }

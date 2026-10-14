@@ -1,17 +1,15 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
-  import {
-    ChevronLeft,
-    ChevronRight,
-    Gauge,
-    LocateFixed,
-    Maximize2,
-    Pause,
-    Play,
-    Repeat,
-    Repeat1,
-    X,
-  } from "lucide-svelte";
+  import ChevronLeft from "lucide-svelte/icons/chevron-left";
+  import ChevronRight from "lucide-svelte/icons/chevron-right";
+  import Gauge from "lucide-svelte/icons/gauge";
+  import LocateFixed from "lucide-svelte/icons/locate-fixed";
+  import Maximize2 from "lucide-svelte/icons/maximize-2";
+  import Pause from "lucide-svelte/icons/pause";
+  import Play from "lucide-svelte/icons/play";
+  import Repeat from "lucide-svelte/icons/repeat";
+  import Repeat1 from "lucide-svelte/icons/repeat-1";
+  import X from "lucide-svelte/icons/x";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { commandErrorMessage } from "../api";

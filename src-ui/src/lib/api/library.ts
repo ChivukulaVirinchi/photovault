@@ -20,6 +20,15 @@ export const library = {
   close: () => call<null>("library_close"),
   startScan: (scanHidden?: boolean) =>
     call<JobIdDto>("library_start_scan", { scan_hidden_folders: scanHidden }),
+  /// Trash every indexed photo whose file is no longer on disk. Used to
+  /// confirm removals a scan held back as a likely disconnected folder.
+  trashMissing: () =>
+    call<{ removals_applied: number }>("library_apply_changes", {
+      added: false,
+      removed: true,
+      moved: false,
+      modified: false,
+    }),
   cancelScan: (jobId: string) =>
     call<null>("library_cancel_scan", { job_id: jobId }),
   resolvePath: (photoId: number, forDisplay = false) =>

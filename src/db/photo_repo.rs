@@ -252,6 +252,13 @@ impl<'a> PhotoRepo<'a> {
         )
     }
 
+    /// Every stored relative path, trashed rows included.
+    pub fn all_file_paths(&self) -> SqliteResult<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT file_path FROM photos")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
     /// Get all photos ordered by date
     pub fn get_all_by_date(&self, limit: i64, offset: i64) -> SqliteResult<Vec<Photo>> {
         let mut stmt = self.conn.prepare(

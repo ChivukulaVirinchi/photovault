@@ -69,7 +69,7 @@
         ? selectedDestination[0]
         : selectedDestination;
       if (!destination) return;
-      await libraryStore.open(destination);
+      await libraryStore.open(destination, { scan: false });
       const placeholderId = `pending-takeout-${Date.now()}`;
       jobs.register(placeholderId, "takeout");
       try {

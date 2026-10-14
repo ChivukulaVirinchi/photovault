@@ -17,7 +17,8 @@
   import ReassignFaceDialog from "../lib/components/ReassignFaceDialog.svelte";
   import KSimilarDialog from "../lib/components/KSimilarDialog.svelte";
   import FaceCell from "../lib/components/FaceCell.svelte";
-  import { Check, Search } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import Search from "lucide-svelte/icons/search";
   import type { PersonDto, PhotoSummaryDto } from "../lib/api/types";
   import { createVirtualScroll } from "../lib/virtualizer.svelte";
 

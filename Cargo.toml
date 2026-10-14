@@ -90,7 +90,7 @@ fs2 = "0.4"
 sha2 = "0.10"
 
 # Image processing
-image = { version = "0.25", default-features = false, features = ["rayon", "avif", "bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 
 # Optional HEIC decoder. Requires the `libheif` system library at
 # runtime (apt install libheif-dev / brew install libheif / Windows
@@ -126,7 +126,7 @@ ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "
 libloading = "0.9"
 
 # Linear algebra for face embeddings
-ndarray = "0.16"
+ndarray = "0.17"
 
 # EXIF extraction
 kamadak-exif = "0.5"

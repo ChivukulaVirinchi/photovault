@@ -12,8 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Later choice and feature-specific setup in People, Search, Map, and Settings.
 - Background downloads show their size and progress, support cancellation and
   retry, and automatically start the requested feature when its files are ready.
+- The library now stays in sync with the disk. Opening a library quietly checks
+  the folder in the background: new photos are added, moved and renamed files
+  are followed, photos whose files were deleted go to Trash, and files edited
+  outside Smriti are re-processed. If a large share of the library vanishes at
+  once, Smriti asks before trashing anything. Can be turned off in Settings.
+- A newly opened folder is scanned straight away, with a Timeline empty state
+  while it indexes; the smart-features prompt waits until the scan is done.
+- Face detection and then visual-search indexing run automatically on new
+  photos once those features are installed. Cancelling either one pauses it
+  until you start it again.
+
+### Changed
+- Rescans skip files that are already indexed instead of re-reading every file,
+  so checking an unchanged library costs one folder walk.
+- Asset-pack downloads are verified against the release's `SHA256SUMS`, and the
+  visual-search models are fetched from a pinned revision and checked against
+  built-in SHA-256 digests, before anything is installed.
+- Icons are imported one by one instead of through the icon library's index,
+  cutting the development build's startup payload from about 23 MB to 4 MB.
+- Dropped the unused AV1 *encoder* that the `image` crate's `avif` feature
+  pulled in, and aligned `ndarray` with the version ONNX Runtime uses: about 30
+  fewer crates to compile.
+- The website no longer loads Google Analytics, and its network disclosure now
+  lists all six kinds of request, matching `PRIVACY.md`.
 
 ### Fixed
+- Keyboard shortcuts from hidden tabs no longer fire on other screens: arrow,
+  Page and Home/End keys work normally outside the Timeline, and Delete on an
+  album, person or memory selection no longer also triggers the hidden
+  Timeline's trash action.
+- Change detection no longer aborts on one unreadable folder or reports its
+  photos as deleted, skips the same system folders as the scanner (such as
+  Synology `@eaDir`), and ignores the whole-hour timestamp shifts FAT/exFAT
+  drives show after a time-zone change.
 - Updated compatible frontend lockfile versions to resolve npm audit advisories.
 - Missing face assets no longer start a misleading detection job.
 - Fresh libraries create performance indexes after schema initialization.

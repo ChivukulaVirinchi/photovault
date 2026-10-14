@@ -1,7 +1,9 @@
 <script lang="ts">
   import { thumbUrl } from "../thumbnail";
   import { libraryStore } from "../stores/library.svelte";
-  import { Check, ArrowLeftRight, X } from "lucide-svelte";
+  import Check from "lucide-svelte/icons/check";
+  import ArrowLeftRight from "lucide-svelte/icons/arrow-left-right";
+  import X from "lucide-svelte/icons/x";
 
   interface Props {
     face: {

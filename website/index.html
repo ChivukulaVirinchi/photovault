@@ -3,20 +3,6 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <!-- Google tag (gtag.js) -->
-        <script
-            async
-            src="https://www.googletagmanager.com/gtag/js?id=G-CL78S29HK5"
-        ></script>
-        <script>
-            window.dataLayer = window.dataLayer || [];
-            function gtag() {
-                dataLayer.push(arguments);
-            }
-            gtag("js", new Date());
-
-            gtag("config", "G-CL78S29HK5");
-        </script>
         <title>Smriti — photos without a server</title>
         <meta
             name="description"
@@ -8096,13 +8082,15 @@
                             class="fold-title display"
                             style="margin-top: var(--s-3)"
                         >
-                            Smriti makes exactly <em>four</em><br />kinds of
+                            Smriti makes exactly <em>six</em><br />kinds of
                             HTTP request.
                         </h2>
                         <p class="fold-sub">
-                            Three of them you can turn off. Nothing else leaves
+                            Every one that isn't a direct response to something
+                            you clicked can be turned off. Nothing else leaves
                             your machine — ever. No telemetry, no analytics, no
-                            "anonymous usage statistics".
+                            "anonymous usage statistics" — in the app or on
+                            this website.
                         </p>
                     </div>
                 </header>
@@ -8127,12 +8115,13 @@
                     <li class="network-row">
                         <span class="network-num">02</span>
                         <div class="network-body">
-                            <h4>Asset pack download — one time</h4>
+                            <h4>Asset pack download — one time, opt-in</h4>
                             <p>
-                                ONNX models for face recognition + GeoNames
-                                database for offline reverse-geocoding. You're
-                                prompted on first run; declining is fine, core
-                                app still works.
+                                ONNX Runtime, face-recognition models and the
+                                GeoNames database for offline place names
+                                (~285&nbsp;MB). Checked against the release's
+                                SHA256SUMS before install. Declining is fine;
+                                the core app still works.
                             </p>
                             <code
                                 >github.com/ChivukulaVirinchi/photovault/releases</code
@@ -8167,15 +8156,46 @@
                             <p>
                                 If you accept an update, Smriti fetches the
                                 matching installer for your platform and
-                                verifies its SHA-256 against the signed
-                                checksum. No metadata about your install or
-                                library is sent.
+                                verifies its SHA-256 against the release's
+                                SHA256SUMS file. No metadata about your install
+                                or library is sent.
                             </p>
                             <code>github.com/.../releases/download/...</code>
                         </div>
                         <span class="network-switch"
                             >Disable: don't click Download</span
                         >
+                    </li>
+                    <li class="network-row">
+                        <span class="network-num">05</span>
+                        <div class="network-body">
+                            <h4>Visual-search models — one time, opt-in</h4>
+                            <p>
+                                The SigLIP2 image and text models (~1.5&nbsp;GB)
+                                from a pinned revision, each file checked
+                                against a SHA-256 built into the app. Text and
+                                photo vectors are computed on your machine.
+                            </p>
+                            <code>huggingface.co/immich-app/...</code>
+                        </div>
+                        <span class="network-switch"
+                            >Disable: don't enable visual search</span
+                        >
+                    </li>
+                    <li class="network-row">
+                        <span class="network-num">06</span>
+                        <div class="network-body">
+                            <h4>Optional remote inference — only if you set it up</h4>
+                            <p>
+                                The GPU face-embedding bridge and the AI
+                                assistant send face crops or conversation and
+                                library context to a service <em>you</em>
+                                configure. Both are off until you enter an
+                                endpoint or API key.
+                            </p>
+                            <code>your configured endpoint</code>
+                        </div>
+                        <span class="network-switch off">Default: off</span>
                     </li>
                 </ol>
             </section>
@@ -8625,30 +8645,6 @@
                             // The release page remains a safe fallback when GitHub's API is unavailable.
                         });
 
-                    // ============ Download conversion events ============
-                    // GA4 only records pageviews otherwise, which makes every
-                    // channel indistinguishable. One event per download click,
-                    // tagged with placement and resolved OS.
-                    function trackDownload(placement, element) {
-                        if (typeof window.gtag !== "function") return;
-                        window.gtag("event", "download", {
-                            placement: placement,
-                            platform: os || "unknown",
-                            direct: element ? /\.(exe|msi|dmg|deb|rpm|AppImage|tar\.gz)$/i.test(element.href) : false,
-                        });
-                    }
-                    [primary, hero].forEach(function (element) {
-                        if (element) {
-                            element.addEventListener("click", function () {
-                                trackDownload(element.id, element);
-                            });
-                        }
-                    });
-                    document.querySelectorAll(".download-card").forEach(function (card) {
-                        card.addEventListener("click", function () {
-                            trackDownload("card-" + (card.getAttribute("data-os") || "unknown"), card);
-                        });
-                    });
                 })();
 
                 // ============ Face clustering demo ============
