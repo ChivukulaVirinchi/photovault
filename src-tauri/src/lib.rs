@@ -28,41 +28,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
-        .setup(|app| {
-            // The semantic text model is application-wide and optional.
-            // Start it on a blocking worker as soon as the native shell is
-            // alive; neither window creation nor library_open awaits it.
-            // Search uses try_lock and remains responsive while this runs.
-            if smriti::services::semantic::SemanticSearchService::model_assets_installed()
-                && smriti::bootstrap::onnx_runtime_exists()
-            {
-                let runner = app.state::<AppState>().semantic_runner.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    // Loading a large optional model must yield to shell and
-                    // library I/O on Windows, especially on low-end PCs.
-                    #[cfg(target_os = "windows")]
-                    unsafe {
-                        use windows::Win32::System::Threading::{
-                            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
-                        };
-                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-                    }
-                    let Ok(mut guard) = runner.lock() else {
-                        tracing::debug!("semantic runtime preload skipped: cache poisoned");
-                        return;
-                    };
-                    if guard.is_none() {
-                        match smriti::services::semantic::SemanticSearchService::model_runner() {
-                            Ok(loaded) => *guard = Some(loaded),
-                            Err(error) => {
-                                tracing::debug!("semantic runtime preload skipped: {error}")
-                            }
-                        }
-                    }
-                });
-            }
-            Ok(())
-        })
+        // The optional visual-search text model (~1.1 GB) is no longer
+        // preloaded at launch, where its read competed with the WebView's
+        // first paint. `spawn_semantic_warmup` loads it in the background
+        // once a library with a semantic index is open.
         .invoke_handler(tauri::generate_handler![
             // library
             commands::library::library_list_drives,
@@ -92,6 +61,7 @@ pub fn run() {
             // photos
             commands::photos::photos_list,
             commands::photos::photos_list_at,
+            commands::photos::photos_year_counts,
             commands::photos::photos_get,
             commands::photos::photos_get_many,
             commands::photos::photos_set_favorite,

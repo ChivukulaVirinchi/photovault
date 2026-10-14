@@ -162,6 +162,40 @@ pub async fn photos_list_at(
     Ok(page)
 }
 
+#[derive(Debug, Serialize)]
+pub struct YearCountDto {
+    /// `None` for photos without a capture date (listed last).
+    pub year: Option<i32>,
+    pub count: u64,
+}
+
+/// Photo counts per year in timeline order; drives the scrubber's year
+/// markers across the whole library, not just the loaded window.
+#[tauri::command]
+pub async fn photos_year_counts(state: State<'_, AppState>) -> CommandResult<Vec<YearCountDto>> {
+    let db_path = {
+        let lib_guard = state.library.read().await;
+        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+        db_path_for(&lib.drive_root)
+    };
+    let show_stacks = smriti::config::AppConfig::load().show_timeline_stacks;
+    let rows = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_secondary(&db_path)?;
+        Ok::<_, CommandError>(PhotoRepo::new(&conn).timeline_year_counts(show_stacks)?)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("year count worker failed: {e}"),
+    })??;
+    Ok(rows
+        .into_iter()
+        .map(|(year, count)| YearCountDto {
+            year,
+            count: count.max(0) as u64,
+        })
+        .collect())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PhotosGetArgs {
     pub id: i64,

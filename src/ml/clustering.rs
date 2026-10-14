@@ -246,13 +246,40 @@ fn cluster_hnsw(
         }
     }
 
-    // Build a per-component photo set so we don't union two
-    // components if doing so would put the same photo's faces
-    // into one cluster (same-photo conflict).
-    let mut component_photos: HashMap<usize, std::collections::HashSet<i64>> = HashMap::new();
-    for (i, f) in faces.iter().enumerate() {
-        component_photos.entry(i).or_default().insert(f.photo_id);
+    // Per-component state, kept on the union-find root and merged
+    // smaller-into-larger, so each candidate edge is checked in time
+    // proportional to the (small) component sets instead of rescanning
+    // every face:
+    // - photos: same-photo conflict (two faces of one photo never share
+    //   a person);
+    // - clusters / negated: face_negatives — no face may join a cluster
+    //   the user said it is not.
+    struct Component {
+        photos: HashSet<i64>,
+        clusters: HashSet<i64>,
+        negated: HashSet<i64>,
     }
+    let mut negated_by_face: HashMap<i64, Vec<i64>> = HashMap::new();
+    if let Some(neg) = negatives {
+        for &(face_id, cluster_id) in neg {
+            negated_by_face.entry(face_id).or_default().push(cluster_id);
+        }
+    }
+    let mut components: HashMap<usize, Component> = faces
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let component = Component {
+                photos: HashSet::from([f.photo_id]),
+                clusters: f.current_cluster_id.into_iter().collect(),
+                negated: negated_by_face
+                    .get(&f.face_id)
+                    .map(|cids| cids.iter().copied().collect())
+                    .unwrap_or_default(),
+            };
+            (i, component)
+        })
+        .collect();
 
     let knbn = 15;
     let ef_search = ef_c;
@@ -277,65 +304,29 @@ fn cluster_hnsw(
             if ra == rb {
                 continue;
             }
-            // Check same-photo conflict across the two components.
-            let photos_a = component_photos.get(&ra).cloned().unwrap_or_default();
-            let photos_b = component_photos.get(&rb).cloned().unwrap_or_default();
-            if photos_a.intersection(&photos_b).next().is_some() {
+            let (Some(a), Some(b)) = (components.get(&ra), components.get(&rb)) else {
+                continue;
+            };
+            if !a.photos.is_disjoint(&b.photos)
+                || !a.negated.is_disjoint(&b.clusters)
+                || !b.negated.is_disjoint(&a.clusters)
+            {
                 continue;
             }
 
-            // Check face_negatives constraints: if any face in component A
-            // has a negative against the current cluster of any face in
-            // component B (or vice versa), skip the merge.
-            if let Some(neg) = negatives {
-                // Collect face_ids in each component.
-                let faces_a: HashSet<i64> = faces
-                    .iter()
-                    .enumerate()
-                    .filter(|(fi, _)| find(&mut parent, *fi) == ra)
-                    .map(|(_, f)| f.face_id)
-                    .collect();
-                let faces_b: HashSet<i64> = faces
-                    .iter()
-                    .enumerate()
-                    .filter(|(fi, _)| find(&mut parent, *fi) == rb)
-                    .map(|(_, f)| f.face_id)
-                    .collect();
-
-                // Check A→B: any face in A has negative against B's cluster?
-                let conflict_a_to_b = faces_a.iter().any(|fa| {
-                    faces_b.iter().any(|fb| {
-                        let fb_cluster = faces
-                            .iter()
-                            .find(|f| f.face_id == *fb)
-                            .and_then(|f| f.current_cluster_id);
-                        fb_cluster.is_some_and(|cid| neg.contains(&(*fa, cid)))
-                    })
-                });
-                // Check B→A: any face in B has negative against A's cluster?
-                let conflict_b_to_a = faces_b.iter().any(|fb| {
-                    faces_a.iter().any(|fa| {
-                        let fa_cluster = faces
-                            .iter()
-                            .find(|f| f.face_id == *fa)
-                            .and_then(|f| f.current_cluster_id);
-                        fa_cluster.is_some_and(|cid| neg.contains(&(*fb, cid)))
-                    })
-                });
-
-                if conflict_a_to_b || conflict_b_to_a {
-                    continue;
-                }
-            }
-
             union(&mut parent, ra, rb);
-            // Move the smaller set into the larger; track on the new root.
             let new_root = find(&mut parent, ra);
-            let other = if new_root == ra { rb } else { ra };
-            let mut merged = photos_a;
-            merged.extend(photos_b);
-            component_photos.insert(new_root, merged);
-            component_photos.remove(&other);
+            let (Some(mut a), Some(mut b)) = (components.remove(&ra), components.remove(&rb))
+            else {
+                continue;
+            };
+            if a.photos.len() < b.photos.len() {
+                std::mem::swap(&mut a, &mut b);
+            }
+            a.photos.extend(b.photos);
+            a.clusters.extend(b.clusters);
+            a.negated.extend(b.negated);
+            components.insert(new_root, a);
         }
     }
 
@@ -408,5 +399,50 @@ mod tests {
         let labels = clusterer.cluster(&[mk(1, 42), mk(2, 42)], None);
         assert_eq!(labels[&1], -1);
         assert_eq!(labels[&2], -1);
+    }
+
+    #[cfg(feature = "hnsw_clustering")]
+    #[test]
+    fn hnsw_merges_identical_faces_from_different_photos() {
+        let mk = |id: i64, p: i64| ClusterInput {
+            face_id: id,
+            photo_id: p,
+            current_cluster_id: None,
+            embedding: emb(&[1.0, 0.0, 0.0]),
+        };
+        let labels = cluster_hnsw(&[mk(1, 10), mk(2, 20), mk(3, 30)], 0.35, None);
+        assert!(labels[&1] >= 0);
+        assert_eq!(labels[&1], labels[&2]);
+        assert_eq!(labels[&2], labels[&3]);
+    }
+
+    #[cfg(feature = "hnsw_clustering")]
+    #[test]
+    fn hnsw_honours_face_negatives_and_same_photo() {
+        // Face 1 was rejected from cluster 7; face 2 belongs to cluster 7.
+        // They look identical but must not be grouped.
+        let a = ClusterInput {
+            face_id: 1,
+            photo_id: 10,
+            current_cluster_id: None,
+            embedding: emb(&[1.0, 0.0, 0.0]),
+        };
+        let b = ClusterInput {
+            face_id: 2,
+            photo_id: 20,
+            current_cluster_id: Some(7),
+            embedding: emb(&[1.0, 0.0, 0.0]),
+        };
+        // Face 3 shares a photo with face 2: never the same person.
+        let c = ClusterInput {
+            face_id: 3,
+            photo_id: 20,
+            current_cluster_id: None,
+            embedding: emb(&[1.0, 0.0, 0.0]),
+        };
+        let negatives = std::collections::HashSet::from([(1_i64, 7_i64)]);
+        let labels = cluster_hnsw(&[a, b, c], 0.35, Some(&negatives));
+        assert!(labels[&1] < 0 || labels[&1] != labels[&2]);
+        assert!(labels[&2] < 0 || labels[&2] != labels[&3]);
     }
 }

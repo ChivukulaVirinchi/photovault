@@ -563,6 +563,16 @@ fn prepare_library_database(
     let needs_schema = database.needs_schema()?;
     if needs_schema {
         smriti::db::create_schema(&database.conn)?;
+    } else if smriti::db::migrations::get_schema_version(&database.conn).unwrap_or(0)
+        < smriti::db::migrations::MAX_KNOWN_SCHEMA_VERSION
+    {
+        // Snapshot the library before upgrading its schema, so a failed or
+        // buggy migration can never cost the user their faces and albums.
+        // Only the newest backup is kept, and only upgrades write one.
+        match Database::backup(&drive_root, 1) {
+            Ok(path) => tracing::info!("pre-migration backup at {}", path.display()),
+            Err(e) => tracing::warn!("pre-migration backup failed, migrating anyway: {e}"),
+        }
     }
     smriti::db::migrations::run_migrations(&database.conn).map_err(|e| {
         if let Some(schema) = e.downcast_ref::<smriti::db::migrations::SchemaTooNewError>() {
@@ -678,6 +688,16 @@ pub(crate) fn spawn_semantic_warmup(
     ready_app: Option<AppHandle>,
 ) {
     tokio::task::spawn_blocking(move || {
+        // Loading a large optional model must yield to the UI and library
+        // I/O, especially on low-end Windows PCs.
+        #[cfg(target_os = "windows")]
+        // SAFETY: adjusts only the calling thread's scheduling priority.
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
         let db_path = smriti::db::db_path_for(&drive_root);
         let conn = match smriti::db::open_secondary(&db_path) {
             Ok(conn) => conn,
@@ -1397,7 +1417,10 @@ async fn run_thumbnail_pass(
 ) {
     use smriti::services::thumbnail::ThumbnailSize;
 
-    let chunk_size: usize = 20;
+    // Large enough to keep every background decode permit busy between
+    // database round-trips; small enough that progress and cancel stay
+    // responsive.
+    let chunk_size: usize = 48;
     let total_pending: Option<u64> = {
         let guard = db.lock().await;
         // Per-run failure exclusion lives in a temp table so the chunk
@@ -1444,36 +1467,32 @@ async fn run_thumbnail_pass(
         let updates: Vec<(i64, String, Option<String>)> =
             match tauri::async_runtime::spawn_blocking(move || {
                 let mut updates = Vec::with_capacity(chunk.len());
+                let mut work = Vec::with_capacity(chunk.len());
+                let mut work_ids = Vec::with_capacity(chunk.len());
                 for (id, path, hash, orient) in chunk {
-                    if cancel_for_chunk.load(std::sync::atomic::Ordering::Relaxed) {
-                        break;
-                    }
-                    let abs = match smriti::services::path_util::safe_join_relative(&drive, &path) {
-                        Ok(abs) => abs,
+                    match smriti::services::path_util::safe_join_relative(&drive, &path) {
+                        Ok(abs) => {
+                            work_ids.push(id);
+                            work.push((abs, hash, orient));
+                        }
                         Err(e) => {
                             tracing::debug!(
                                 "thumbnail pass skipped unsafe path for photo_id={id}: {e}"
                             );
                             updates.push((id, hash, None));
-                            continue;
                         }
-                    };
-                    let generated = if force {
-                        svc_for_chunk.generate_thumbnail_background_forced(
-                            &abs,
-                            &hash,
-                            orient,
-                            ThumbnailSize::Medium,
-                        )
-                    } else {
-                        svc_for_chunk.generate_thumbnail_background(
-                            &abs,
-                            &hash,
-                            orient,
-                            ThumbnailSize::Medium,
-                        )
-                    };
-                    let rel = match generated {
+                    }
+                }
+                let results = svc_for_chunk.generate_background_batch(
+                    &work,
+                    ThumbnailSize::Medium,
+                    force,
+                    &cancel_for_chunk,
+                );
+                for ((id, (_, hash, _)), result) in work_ids.into_iter().zip(work).zip(results) {
+                    // Skipped by cancel: leave it pending for the next run.
+                    let Some(result) = result else { continue };
+                    let rel = match result {
                         Ok(_) => Some(relative_thumbnail_path(&hash)),
                         Err(e) => {
                             tracing::debug!("thumbnail pass failed for photo_id={id}: {e}");
@@ -1879,13 +1898,18 @@ pub(crate) async fn run_post_scan_pipeline(
     // requests still take permits first. Without this pass, jumping deep
     // into a large cold library can require scroll-time generation for
     // every visible cell.
-    {
+    //
+    // It is awaited (outside the lifecycle lock) before the detections
+    // below: duplicate and burst fingerprints read these thumbnails, and
+    // running alongside the pass made them decode every original instead.
+    let thumbnail_job = {
         let state: tauri::State<AppState> = app.state();
         let _lifecycle = state.library_lifecycle.lock().await;
         if !library_is_still_open(&app, &db).await {
             tracing::info!("post-scan: skipped thumbnail prewarm because library changed");
             return;
         }
+        let mut started = None;
         if !state.jobs.lock().await.has_any_of_kind(JobKind::Thumbnails) {
             let pending = {
                 let guard = db.lock().await;
@@ -1895,29 +1919,26 @@ pub(crate) async fn run_post_scan_pipeline(
             };
             if pending > 0 {
                 match jobs::start_job(&state, JobKind::Thumbnails).await {
-                    Ok(job) => {
-                        let cancel = job.cancel.clone();
-                        let job_id = job.id.clone();
-                        let app_for_thumbs = app.clone();
-                        let drive_for_thumbs = drive_root.clone();
-                        let db_for_thumbs = db.clone();
-                        let thumbnails_for_job = thumbnails.clone();
-                        tokio::spawn(async move {
-                            run_thumbnail_pass(
-                                drive_for_thumbs,
-                                db_for_thumbs,
-                                thumbnails_for_job,
-                                cancel,
-                                app_for_thumbs,
-                                job_id,
-                                false,
-                            )
-                            .await;
-                        });
-                    }
+                    Ok(job) => started = Some((job.cancel.clone(), job.id.clone())),
                     Err(e) => tracing::warn!("post-scan thumbnail prewarm skipped: {e}"),
                 }
             }
+        }
+        started
+    };
+    if let Some((cancel, job_id)) = thumbnail_job {
+        run_thumbnail_pass(
+            drive_root.clone(),
+            db.clone(),
+            thumbnails.clone(),
+            cancel,
+            app.clone(),
+            job_id,
+            false,
+        )
+        .await;
+        if !library_is_still_open(&app, &db).await {
+            return;
         }
     }
 

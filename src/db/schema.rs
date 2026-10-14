@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO schema_version (version) VALUES (32);
+INSERT INTO schema_version (version) VALUES (33);
 
 -- ============================================================
 -- LIBRARY META — key/value store for library-level bookkeeping
@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS photos (
     -- Processing state
     thumbnail_path TEXT,               -- Path to cached thumbnail (relative)
     faces_processed BOOLEAN DEFAULT FALSE,
+    face_attempts INTEGER NOT NULL DEFAULT 0, -- failed face-detection runs
     metadata_extracted BOOLEAN DEFAULT FALSE,
     thumbnailed BOOLEAN DEFAULT FALSE,
     brightness REAL,                   -- Average luma in [0,1], cached from face pipeline

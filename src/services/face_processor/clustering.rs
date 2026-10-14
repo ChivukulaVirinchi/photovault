@@ -626,7 +626,7 @@ impl FaceProcessor {
                         continue;
                     }
                 };
-            let img = match image::open(&full_path) {
+            let img = match crate::services::image_io::open_image(&full_path) {
                 Ok(img) => apply_exif_orientation(img, *orientation),
                 Err(_) => continue,
             };

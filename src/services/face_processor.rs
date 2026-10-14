@@ -19,6 +19,9 @@ use crate::ml::{
 use crate::services::image_utils::apply_exif_orientation;
 use crate::services::path_util::safe_join_relative;
 
+/// Failed face-detection runs after which a photo is given up on.
+const MAX_FACE_ATTEMPTS: i64 = 3;
+
 /// Coarse progress phase. The UI uses this to keep the bar moving past
 /// the per-photo loop into clustering, so we never sit at "x/x" while
 /// the post-processing tail runs.
@@ -355,7 +358,9 @@ impl FaceProcessor {
                     if cancel.load(Ordering::Relaxed) {
                         return;
                     }
-                    let result: PhotoFaceResult = (|| -> PhotoFaceResult {
+                    // A panic in a decoder or ONNX session fails this
+                    // photo only; the rest of the batch carries on.
+                    let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PhotoFaceResult {
 
                     // Thread-local ONNX sessions
                     thread_local! {
@@ -633,7 +638,19 @@ impl FaceProcessor {
                         brightness,
                         had_error: false,
                     }
-                    })();
+                    }));
+                    let result = guarded.unwrap_or_else(|_| {
+                        tracing::warn!("face processing crashed on {file_path}; skipping it");
+                        processed_count.fetch_add(1, Ordering::Relaxed);
+                        PhotoFaceResult {
+                            photo_id: *photo_id,
+                            file_path: file_path.clone(),
+                            faces: Vec::new(),
+                            taken_ts: *taken_ts,
+                            brightness: 0.0,
+                            had_error: true,
+                        }
+                    });
 
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.try_send(FaceProcessingProgress {
@@ -1102,12 +1119,17 @@ fn flush_result_chunk(
 
     for result in chunk {
         if result.had_error && result.faces.is_empty() {
-            // Mark errored photos processed only when we're not in the
-            // middle of a cancel — otherwise leave them queued for next run.
+            // Count the failure, and give up (mark processed) only after
+            // MAX_FACE_ATTEMPTS runs, so a transient problem — drive
+            // unplugged, decoder missing — is retried rather than recorded
+            // as "no faces". Cancelled runs leave the photo queued as is.
             if !was_cancelled {
                 let _ = tx.execute(
-                    "UPDATE photos SET faces_processed = TRUE WHERE id = ?1",
-                    rusqlite::params![result.photo_id],
+                    "UPDATE photos
+                        SET face_attempts = face_attempts + 1,
+                            faces_processed = (face_attempts + 1 >= ?2)
+                      WHERE id = ?1",
+                    rusqlite::params![result.photo_id, MAX_FACE_ATTEMPTS],
                 );
                 photos_added += 1;
             }

@@ -25,15 +25,13 @@ fn install_tracing() {
         .try_init();
 }
 
-/// Write panic messages to a crash log file before the process aborts.
+/// Write panic messages to a crash log file.
 ///
-/// Background: the release profile has `panic = "abort"` and the binary
-/// runs under `windows_subsystem = "windows"` (no attached console), so
-/// any panic — including those in tokio `spawn_blocking` workers — was
-/// previously invisible. The geonames backfill and similar long jobs
-/// could die silently and leave users wondering why the app "restarted
-/// for no reason." Panic hooks run before the abort, so this captures
-/// the failure even with `panic = abort` configured.
+/// Background: the binary runs under `windows_subsystem = "windows"` (no
+/// attached console), so any panic — including those in tokio
+/// `spawn_blocking` workers or ones a decoder guard catches and turns into
+/// a failed file — would otherwise be invisible. The hook runs for every
+/// panic, caught or not, before unwinding begins.
 ///
 /// The log lives next to the app data so we don't litter the user's
 /// home directory; if that's unavailable we fall back to `crash.log`

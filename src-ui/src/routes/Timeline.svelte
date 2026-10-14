@@ -48,6 +48,7 @@
   import { slideshow } from "../lib/stores/slideshow.svelte";
   import SurpriseButton from "../lib/components/SurpriseButton.svelte";
   import { inInactivePanel } from "../lib/inactivePanel";
+  import { centerX, estimatedPerRow, indexAtX, justifyRows } from "../lib/justifiedLayout";
 
   interface Props { revealId?: number | null }
   let { revealId = null }: Props = $props();
@@ -246,23 +247,56 @@
 
   function beginScrolling() {
     scrolling = true;
-    if (!resumeImageLoads) resumeImageLoads = pausePooledImages();
-    if (!resumeThumbnailRequests) resumeThumbnailRequests = pauseThumbnailRequests();
     if (thumbnailPatchRaf !== 0) {
       cancelAnimationFrame(thumbnailPatchRaf);
       thumbnailPatchRaf = 0;
     }
   }
 
-  function finishScrolling() {
-    if (!scrolling) return;
-    scrolling = false;
+  // Thumbnails keep loading during ordinary scrolling so tiles fill in as
+  // they come into view. Loads (and generation of missing thumbnails) are
+  // paused only while the view moves faster than a few screens per second
+  // — a fling or a scrubber drag, where tiles pass by unseen — and resume
+  // shortly after it slows, even if scrolling continues.
+  const FAST_SCROLL_SCREENS_PER_SEC = 4;
+  const FAST_SCROLL_SETTLE_MS = 150;
+  let fastScrollTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastScrollSample = { top: 0, at: 0 };
+
+  function pauseLoadsForFastScroll() {
+    if (!resumeImageLoads) resumeImageLoads = pausePooledImages();
+    if (!resumeThumbnailRequests) resumeThumbnailRequests = pauseThumbnailRequests();
+    if (fastScrollTimer) clearTimeout(fastScrollTimer);
+    fastScrollTimer = setTimeout(resumeLoads, FAST_SCROLL_SETTLE_MS);
+  }
+
+  function resumeLoads() {
+    if (fastScrollTimer) {
+      clearTimeout(fastScrollTimer);
+      fastScrollTimer = null;
+    }
     const resume = resumeImageLoads;
     resumeImageLoads = null;
     resume?.();
     const resumeThumbnails = resumeThumbnailRequests;
     resumeThumbnailRequests = null;
     resumeThumbnails?.();
+  }
+
+  function sampleScrollSpeed(top: number) {
+    const now = performance.now();
+    const dt = now - lastScrollSample.at;
+    if (dt > 0 && dt < 200) {
+      const screensPerSec = (Math.abs(top - lastScrollSample.top) / Math.max(1, containerH)) * (1000 / dt);
+      if (screensPerSec > FAST_SCROLL_SCREENS_PER_SEC) pauseLoadsForFastScroll();
+    }
+    lastScrollSample = { top, at: now };
+  }
+
+  function finishScrolling() {
+    if (!scrolling) return;
+    scrolling = false;
+    resumeLoads();
     rememberTimelineScrollTop(scrollTop);
     hydrateScrolledWindow();
     if (pendingThumbnailPatches.size > 0 && thumbnailPatchRaf === 0) {
@@ -428,6 +462,13 @@
     return Math.floor((containerW - gap * (cols - 1)) / cols);
   });
 
+  /// Day and Month use a justified layout (photos at their real shape,
+  /// rows filling the width); Year keeps the dense square grid for an
+  /// overview, as Google Photos does when zoomed out.
+  const justified = $derived(zoom !== "year" && containerW > 0);
+  const JUSTIFIED_HEIGHT_SCALE = 1.3;
+  const justifiedTargetH = $derived(Math.round(TILE_PX[zoom] * JUSTIFIED_HEIGHT_SCALE));
+
   async function loadMore(): Promise<boolean> {
     if (!mounted || loading || !hasMore) return false;
     const seq = pageSeq;
@@ -573,10 +614,24 @@
   type Row =
     | { kind: "spacer"; height: number }
     | { kind: "label"; height: number; label: string; firstIso: string | null }
-    | { kind: "photos"; height: number; photos: PhotoSummaryDto[]; firstIso: string | null };
+    | {
+        kind: "photos";
+        height: number;
+        photos: PhotoSummaryDto[];
+        firstIso: string | null;
+        /// Per-photo widths in justified mode; absent for the square grid.
+        widths?: number[];
+      };
 
   function estimatedHeightForPhotoCount(count: number): number {
     if (count <= 0 || cols <= 0) return 0;
+    if (justified) {
+      const gap = GAP_PX[zoom];
+      const perRow = estimatedPerRow(containerW, justifiedTargetH, gap);
+      const photoRows = Math.ceil(count / perRow);
+      const labelRows = Math.ceil(photoRows / 4);
+      return photoRows * (justifiedTargetH + gap) + labelRows * LABEL_PX[zoom];
+    }
     const photoRows = Math.ceil(count / cols);
     const labelRows = Math.ceil(photoRows / 4);
     return photoRows * Math.max(1, rowH + GAP_PX[zoom]) + labelRows * LABEL_PX[zoom];
@@ -595,7 +650,25 @@
     let lastKey = "";
     let bucket: PhotoSummaryDto[] = [];
     let bucketFirstIso: string | null = null;
+    const justify = justified;
+    const width = containerW;
+    const targetH = justifiedTargetH;
+    const gap = GAP_PX[zoom];
     const flush = () => {
+      if (justify) {
+        for (const packed of justifyRows(bucket, width, targetH, gap)) {
+          out.push({
+            kind: "photos",
+            // The row carries its own vertical gap below the photos.
+            height: packed.height + gap,
+            photos: packed.items,
+            firstIso: bucketFirstIso,
+            widths: packed.widths,
+          });
+        }
+        bucket = [];
+        return;
+      }
       for (let start = 0; start < bucket.length; start += C) {
         out.push({
           kind: "photos",
@@ -738,15 +811,20 @@
       saveTimelineCache();
       rememberTimelineScrollTop(initialScrollTop);
     }
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      containerW = r.width - 14; // leave room for the scrubber gutter
-      containerH = r.height;
-    });
+    // Rows are laid out inside the scroll area's padding box, so measure
+    // the content width (padding excluded, whole pixels). The justified
+    // layout sizes photos in exact pixels; using the outer width pushed the
+    // last photo of every row past the right edge. The scrubber floats in
+    // the right padding, so it needs no extra gutter.
+    const measure = () => {
+      const style = getComputedStyle(el);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      containerW = Math.max(0, Math.floor(el.clientWidth - padX));
+      containerH = el.getBoundingClientRect().height;
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    const r = el.getBoundingClientRect();
-    containerW = r.width - 14;
-    containerH = r.height;
+    measure();
     let scrollRaf = 0;
     const onScroll = () => {
       beginScrolling();
@@ -754,6 +832,7 @@
       scrollRaf = requestAnimationFrame(() => {
         scrollRaf = 0;
         scrollTop = el.scrollTop;
+        sampleScrollSpeed(scrollTop);
         if (marqueeStart && marqueePointer) {
           marqueeCurrent = marqueePointFromClient(marqueePointer.x, marqueePointer.y);
           queueMarqueeUpdate();
@@ -770,10 +849,7 @@
       snapshotTimelineScroll(el);
       if (scrollRaf !== 0) cancelAnimationFrame(scrollRaf);
       scrolling = false;
-      resumeImageLoads?.();
-      resumeImageLoads = null;
-      resumeThumbnailRequests?.();
-      resumeThumbnailRequests = null;
+      resumeLoads();
       ro.disconnect();
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("scrollend", finishScrolling);
@@ -1143,13 +1219,17 @@
     const N = items.length;
     if (N === 0) return;
     let next = focusedIdx;
+    // Justified rows hold different numbers of photos, so vertical moves
+    // go to the photo directly above/below instead of ±columns.
+    const vertical = (rowsToMove: number, fallback: number) =>
+      focusedIdx < 0 ? 0 : justified ? justifiedVerticalTarget(focusedIdx, rowsToMove) : fallback;
     switch (e.key) {
       case "ArrowRight": next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + 1)); break;
       case "ArrowLeft":  next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - 1)); break;
-      case "ArrowDown":  next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + C)); break;
-      case "ArrowUp":    next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - C)); break;
-      case "PageDown":   next = Math.min(N - 1, (focusedIdx < 0 ? 0 : focusedIdx + C * pageRows())); break;
-      case "PageUp":     next = Math.max(0, (focusedIdx < 0 ? 0 : focusedIdx - C * pageRows())); break;
+      case "ArrowDown":  next = vertical(1, Math.min(N - 1, focusedIdx + C)); break;
+      case "ArrowUp":    next = vertical(-1, Math.max(0, focusedIdx - C)); break;
+      case "PageDown":   next = vertical(pageRows(), Math.min(N - 1, focusedIdx + C * pageRows())); break;
+      case "PageUp":     next = vertical(-pageRows(), Math.max(0, focusedIdx - C * pageRows())); break;
       case "Home":       next = 0; break;
       case "End":        next = N - 1; break;
       case "Enter": {
@@ -1167,8 +1247,35 @@
     focusedIdx = next;
     scrollFocusedIntoView();
   }
+  /// Index (in `items`) of the photo `rowsToMove` photo rows above/below
+  /// the one at `fromIdx`, nearest to it horizontally.
+  function justifiedVerticalTarget(fromIdx: number, rowsToMove: number): number {
+    const id = items[fromIdx]?.id;
+    if (id == null) return fromIdx;
+    const rowIdx = rowIndexForPhoto(id);
+    const row = rows[rowIdx];
+    if (row?.kind !== "photos" || !row.widths) return fromIdx;
+    const gap = GAP_PX[zoom];
+    const x = centerX(row.widths, gap, row.photos.findIndex((p) => p.id === id));
+    const dir = Math.sign(rowsToMove);
+    let remaining = Math.abs(rowsToMove);
+    let target = row;
+    for (let r = rowIdx + dir; r >= 0 && r < rows.length && remaining > 0; r += dir) {
+      const candidate = rows[r];
+      if (candidate.kind === "photos" && candidate.widths) {
+        target = candidate;
+        remaining -= 1;
+      }
+    }
+    if (target === row) return fromIdx;
+    const targetId = target.photos[indexAtX(target.widths ?? [], gap, x)]?.id;
+    const nextIdx = items.findIndex((p) => p.id === targetId);
+    return nextIdx >= 0 ? nextIdx : fromIdx;
+  }
+
   function pageRows(): number {
-    return Math.max(1, Math.floor((containerH - 32) / Math.max(1, rowH + GAP_PX[zoom])));
+    const stride = (justified ? justifiedTargetH : rowH) + GAP_PX[zoom];
+    return Math.max(1, Math.floor((containerH - 32) / Math.max(1, stride)));
   }
   /// Locate the virtualizer row that contains `photoId`. Returns -1
   /// if not loaded yet. The row index walks the same `rows` derived
@@ -1365,11 +1472,67 @@
     if (head.kind === "spacer") return "";
     return bucketLabel(head.firstIso, zoom);
   }
-  const draggedBucket = $derived.by(() => {
-    if (!scrubDragging) return "";
-    const ratio = trackHeight > 28 ? scrubY / (trackHeight - 28) : 0;
-    return bucketAtY(Math.min(1, Math.max(0, ratio)) * scrollableMax);
+  // Per-year photo counts for the whole library, so year markers and the
+  // hover bubble work across regions that aren't loaded yet. Reloaded
+  // whenever the timeline total changes (scans, trash, imports).
+  let yearCounts = $state<{ year: number | null; count: number }[]>([]);
+  let yearCountsSeq = 0;
+  $effect(() => {
+    void total;
+    const seq = ++yearCountsSeq;
+    photos
+      .yearCounts()
+      .then((rows) => { if (mounted && seq === yearCountsSeq) yearCounts = rows; })
+      .catch(() => {});
   });
+  const yearCountsTotal = $derived(yearCounts.reduce((sum, c) => sum + c.count, 0));
+
+  /// Year (or "Undated") at a 0..1 position along the timeline, by share of
+  /// photos — the same proportion the scroll height follows.
+  function yearAtRatio(ratio: number): string {
+    if (yearCountsTotal === 0) return "";
+    const target = Math.min(1, Math.max(0, ratio)) * yearCountsTotal;
+    let before = 0;
+    for (const c of yearCounts) {
+      before += c.count;
+      if (target < before) return c.year == null ? "Undated" : String(c.year);
+    }
+    const last = yearCounts[yearCounts.length - 1];
+    return last?.year == null ? "Undated" : String(last.year);
+  }
+
+  /// Year ticks along the track; a label is shown only where it won't
+  /// collide with the previous one.
+  const YEAR_LABEL_GAP_PX = 18;
+  const yearMarkers = $derived.by(() => {
+    const span = trackHeight - 28;
+    if (yearCountsTotal === 0 || span <= 0) return [];
+    const out: { year: number; y: number; label: boolean }[] = [];
+    let before = 0;
+    let lastLabelY = -Infinity;
+    for (const c of yearCounts) {
+      const y = (before / yearCountsTotal) * span + 14;
+      if (c.year != null) {
+        const label = y - lastLabelY >= YEAR_LABEL_GAP_PX;
+        if (label) lastLabelY = y;
+        out.push({ year: c.year, y, label });
+      }
+      before += c.count;
+    }
+    return out;
+  });
+
+  const scrubRatio = $derived(trackHeight > 28 ? Math.min(1, Math.max(0, scrubY / (trackHeight - 28))) : 0);
+  /// Bubble text while hovering or dragging: the exact bucket when that part
+  /// of the timeline is loaded, otherwise the year from the counts.
+  const scrubBubble = $derived.by(() => {
+    if (!scrubHover && !scrubDragging) return "";
+    const exact = scrubDragging ? bucketAtY(scrubRatio * scrollableMax) : "";
+    return exact || yearAtRatio(scrubRatio);
+  });
+  const currentYearLabel = $derived(
+    yearAtRatio(scrollableMax > 0 ? scrollTop / scrollableMax : 0),
+  );
 
   function onScrubPointer(e: PointerEvent) {
     if (!scrollEl) return;
@@ -1516,11 +1679,15 @@
           {:else if row.kind === "photos"}
             <div
               class="photos"
-              style="grid-template-columns: repeat({cols}, 1fr); gap: {GAP_PX[zoom]}px;"
+              class:justified={row.widths != null}
+              style={row.widths
+                ? `gap: ${GAP_PX[zoom]}px; height: ${row.height - GAP_PX[zoom]}px;`
+                : `grid-template-columns: repeat(${cols}, 1fr); gap: ${GAP_PX[zoom]}px;`}
             >
-              {#each row.photos as photo (photo.id)}
+              {#each row.photos as photo, k (photo.id)}
                 <a
                   class="cell"
+                  style={row.widths ? `width: ${row.widths[k]}px` : undefined}
                   class:selected={selection.has(photo.id)}
                   class:focused={focusedIdx >= 0 && items[focusedIdx]?.id === photo.id}
                   href="#/photo?id={photo.id}"
@@ -1605,12 +1772,18 @@
     aria-valuemin={0}
     aria-valuemax={100}
     aria-valuenow={scrollableMax > 0 ? Math.round((scrollTop / scrollableMax) * 100) : 0}
+    aria-valuetext={currentYearLabel || undefined}
     tabindex="0"
   >
     <div class="track"></div>
+    {#each yearMarkers as marker (marker.year)}
+      <div class="year-tick" style="top: {marker.y}px" aria-hidden="true">
+        {#if marker.label}<span class="year-label">{marker.year}</span>{/if}
+      </div>
+    {/each}
     <div class="thumb" style="top: {thumbY}px"></div>
-    {#if scrubDragging && draggedBucket}
-      <div class="bubble" style="top: {scrubY}px">{draggedBucket}</div>
+    {#if scrubBubble}
+      <div class="bubble" style="top: {scrubY}px">{scrubBubble}</div>
     {/if}
   </div>
 </div>
@@ -1725,6 +1898,15 @@
     display: grid;
     padding: 1px 0;
     transition: gap 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .photos.justified {
+    display: flex;
+    padding: 0;
+  }
+  .photos.justified .cell {
+    aspect-ratio: auto;
+    flex: none;
+    height: 100%;
   }
   .cell {
     background: var(--bg-card);
@@ -1977,6 +2159,30 @@
   .scrubber:hover .track,
   .scrubber.dragging .track {
     background: var(--ink-faint);
+  }
+  .year-tick {
+    position: absolute;
+    left: 4px;
+    width: 6px;
+    height: 1px;
+    background: var(--ink-faint);
+    opacity: 0;
+    transition: opacity 160ms var(--ease);
+    pointer-events: none;
+  }
+  .year-label {
+    position: absolute;
+    right: 12px;
+    top: 0;
+    transform: translateY(-50%);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+  .scrubber:hover .year-tick,
+  .scrubber.dragging .year-tick {
+    opacity: 1;
   }
   .thumb {
     position: absolute;

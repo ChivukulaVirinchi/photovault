@@ -195,7 +195,9 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
+# Unwind (the default) rather than abort: decoders run on arbitrary user
+# files, and `image_io::catch_decode` turns a decoder panic into a failed
+# file instead of a dead app.
 
 # Bundle configuration moved to src-tauri/tauri.conf.json — Tauri's
 # bundler owns .deb, AppImage, .msi, and .dmg packaging now.

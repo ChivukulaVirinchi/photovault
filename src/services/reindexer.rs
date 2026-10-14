@@ -418,6 +418,7 @@ impl Reindexer {
                         thumbnailed = FALSE,
                         thumbnail_path = NULL,
                         faces_processed = FALSE,
+                        face_attempts = 0,
                         phash = NULL,
                         content_hash = NULL,
                         brightness = NULL,

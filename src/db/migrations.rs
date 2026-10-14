@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 /// `run_migrations` refuses to open a DB whose `schema_version` is
 /// higher than this — that would mean a newer build wrote it, and
 /// blindly reading would expose missing tables / columns to old code.
-pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 32;
+pub const MAX_KNOWN_SCHEMA_VERSION: i32 = 33;
 
 /// Get the current schema version
 pub fn get_schema_version(conn: &Connection) -> SqliteResult<i32> {
@@ -157,9 +157,31 @@ pub fn run_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error
     if current_version < 32 {
         migrate_v31_to_v32(conn)?;
     }
+    if current_version < 33 {
+        migrate_v32_to_v33(conn)?;
+    }
     ensure_performance_indexes(conn)?;
     let updated_version = get_schema_version(conn).unwrap_or(current_version);
     tracing::info!("Database at schema version {}", updated_version);
+    Ok(())
+}
+
+/// v33: count failed face-detection runs per photo, so a transient failure
+/// (unplugged drive, missing decoder) is retried instead of being recorded
+/// forever as "no faces".
+fn migrate_v32_to_v33(conn: &Connection) -> SqliteResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    let exists = tx
+        .prepare("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'face_attempts'")?
+        .exists([])?;
+    if !exists {
+        tx.execute_batch(
+            "ALTER TABLE photos ADD COLUMN face_attempts INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    tx.execute("INSERT INTO schema_version (version) VALUES (33)", [])?;
+    tx.commit()?;
+    tracing::info!("Migrated database to schema version 33 (face detection attempts)");
     Ok(())
 }
 

@@ -233,6 +233,39 @@ impl<'a> PhotoRepo<'a> {
         )
     }
 
+    /// Timeline-visible photos per capture year, in timeline order (newest
+    /// year first, undated last). Uses the same visibility rules as
+    /// `count_timeline_visible`, so the counts add up to the timeline total
+    /// and let the scrubber place year markers without loading every row.
+    pub fn timeline_year_counts(&self, show_stacks: bool) -> SqliteResult<Vec<(Option<i32>, i64)>> {
+        let stack_filter = if show_stacks {
+            r#"AND NOT EXISTS (
+                   SELECT 1
+                     FROM photo_stack_members m
+                     JOIN live_stacks s ON s.id = m.stack_id
+                    WHERE m.photo_id = p.id
+                      AND p.id != s.cover_photo_id
+               )"#
+        } else {
+            ""
+        };
+        let sql = format!(
+            r#"
+            WITH live_stacks AS ({live_stacks_cte})
+            SELECT CAST(substr(p.date_taken, 1, 4) AS INTEGER) AS year, COUNT(*)
+              FROM photos p
+             WHERE p.is_trashed = FALSE
+               {stack_filter}
+             GROUP BY year
+             ORDER BY year IS NULL ASC, year DESC
+            "#,
+            live_stacks_cte = LIVE_STACKS_CTE,
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, Option<i32>>(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     /// Photos awaiting EXIF / geocoding extraction (Phase 2 of the
     /// streaming scanner). Drives the "Resume reading metadata" banner.
     pub fn count_pending_metadata(&self) -> SqliteResult<i64> {
@@ -438,6 +471,31 @@ mod tests {
     use super::*;
     use crate::db::schema::create_schema;
     use rusqlite::Connection;
+
+    #[test]
+    fn timeline_year_counts_match_timeline_order_and_total() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        for (id, date, trashed) in [
+            (1, Some("2019-05-01T10:00:00"), false),
+            (2, Some("2021-01-02T10:00:00"), false),
+            (3, Some("2021-12-31T23:00:00"), false),
+            (4, None, false),
+            (5, Some("2021-06-01T10:00:00"), true),
+        ] {
+            conn.execute(
+                "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, is_trashed)
+                 VALUES (?1, ?2, ?2, ?2, 2048, ?3, ?4)",
+                params![id, format!("p{id}.jpg"), date, trashed],
+            )
+            .unwrap();
+        }
+        let repo = PhotoRepo::new(&conn);
+        let counts = repo.timeline_year_counts(true).unwrap();
+        assert_eq!(counts, vec![(Some(2021), 2), (Some(2019), 1), (None, 1)]);
+        let sum: i64 = counts.iter().map(|(_, n)| n).sum();
+        assert_eq!(sum, repo.count_timeline_visible(true).unwrap());
+    }
 
     #[test]
     fn insert_batch_stub_counts_only_new_rows() {

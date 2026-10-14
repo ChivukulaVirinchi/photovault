@@ -84,6 +84,16 @@ pub struct ThumbnailEntry {
 /// scrolling window even on huge libraries.
 const CACHE_ENTRY_CAPACITY: usize = 10_000;
 
+/// Concurrent background (prewarm) decodes: half the cores, between 1 and
+/// 3, so at least one of the 4 decode permits stays free for thumbnails the
+/// user is looking at.
+fn background_permits() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get() / 2)
+        .unwrap_or(1)
+        .clamp(1, 3)
+}
+
 /// Blocking concurrency limiter. Callers wait on a condvar until a
 /// permit is free instead of failing fast. The previous `try_acquire`
 /// returned an error when the queue was full — under prewarm load that
@@ -355,7 +365,7 @@ impl ThumbnailService {
             // Cap concurrent decodes at 4. Each large JPEG holds ~50–80 MB
             // of decoded RGB while resizing — at 8-wide we saw OOM on
             // mid-spec laptops. 4 keeps the working set under ~320 MB.
-            generation_limiter: Arc::new(ConcurrencyLimiter::new(4, 1)),
+            generation_limiter: Arc::new(ConcurrencyLimiter::new(4, background_permits())),
             generating: Arc::new(GenerationDeduper::new()),
         })
     }
@@ -436,6 +446,50 @@ impl ThumbnailService {
             GenerationPriority::Background,
             false,
         )
+    }
+
+    /// Generate background thumbnails for a batch on a few scoped worker
+    /// threads (one per background permit), returning results in input
+    /// order. `None` marks items skipped because `cancel` was set.
+    ///
+    /// Dedicated threads, not Rayon: workers park on the limiter while
+    /// foreground requests run, and parking Rayon's global pool would
+    /// stall face detection and other parallel work sharing it.
+    pub fn generate_background_batch(
+        &self,
+        items: &[(PathBuf, String, i32)],
+        size: ThumbnailSize,
+        force: bool,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Vec<Option<Result<PathBuf, String>>> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let results: Vec<Mutex<Option<Result<PathBuf, String>>>> =
+            items.iter().map(|_| Mutex::new(None)).collect();
+        let next = AtomicUsize::new(0);
+        let workers = background_permits().min(items.len()).max(1);
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((path, hash, orientation)) = items.get(index) else {
+                        break;
+                    };
+                    let result = if force {
+                        self.generate_thumbnail_background_forced(path, hash, *orientation, size)
+                    } else {
+                        self.generate_thumbnail_background(path, hash, *orientation, size)
+                    };
+                    *results[index].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                });
+            }
+        });
+        results
+            .into_iter()
+            .map(|slot| slot.into_inner().unwrap_or_else(|e| e.into_inner()))
+            .collect()
     }
 
     /// Background generation that ignores an existing adequate thumbnail —
@@ -690,7 +744,9 @@ impl ThumbnailService {
         let path = photo_path.to_path_buf();
         std::thread::spawn(move || {
             let _decoder_permit = decoder_permit;
-            let _ = tx.send(Self::decode_image_fast(&path, target_size));
+            let _ = tx.send(crate::services::image_io::catch_decode(&path, || {
+                Self::decode_image_fast(&path, target_size)
+            }));
         });
         match rx.recv_timeout(THUMBNAIL_TIMEOUT) {
             Ok(result) => result,
@@ -716,7 +772,10 @@ impl ThumbnailService {
             .and_then(|f| f.value.get_uint(0))? as usize;
         let end = offset.checked_add(len)?;
         let bytes = exif.buf().get(offset..end)?;
-        let img = image::load_from_memory(bytes).ok()?;
+        let img = crate::services::image_io::catch_decode(photo_path, || {
+            image::load_from_memory(bytes).map_err(|e| e.to_string())
+        })
+        .ok()?;
         let (width, height) = img.dimensions();
         if width.max(height) < target_size.pixels() {
             return None;

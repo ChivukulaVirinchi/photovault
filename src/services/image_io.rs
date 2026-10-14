@@ -34,6 +34,20 @@ pub fn needs_display_rendition(path: &Path) -> bool {
 /// proprietary colour profiles); everything else uses the `image`
 /// crate's native decoders.
 pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
+    catch_decode(path, || open_image_unguarded(path))
+}
+
+/// Run a decoder, turning a panic inside it into an ordinary error.
+///
+/// Image, HEIC and RAW decoders are fed arbitrary files from users'
+/// drives; one malformed file must fail that file, not the job or the
+/// app. The panic hook still records the panic in the crash log.
+pub fn catch_decode<T>(path: &Path, decode: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
+        .unwrap_or_else(|_| Err(format!("decoder crashed on {}", path.display())))
+}
+
+fn open_image_unguarded(path: &Path) -> Result<DynamicImage, String> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

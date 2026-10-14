@@ -89,11 +89,19 @@
     window.location.hash = `/photo?id=${id}&info=1`;
   }
 
+  /// Set when the slideshow itself made the window fullscreen, so closing
+  /// the slideshow restores it without undoing a user's own fullscreen.
+  let enteredFullscreen = false;
+
   async function toggleFullscreen() {
     try {
       const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
-    } catch {}
+      const next = !(await w.isFullscreen());
+      await w.setFullscreen(next);
+      enteredFullscreen = next;
+    } catch (error) {
+      console.warn("slideshow fullscreen toggle failed", error);
+    }
   }
 
   async function goNext() {
@@ -383,6 +391,10 @@
       return () => {
         window.removeEventListener("keydown", onKey, { capture: true });
         if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+        if (enteredFullscreen) {
+          enteredFullscreen = false;
+          getCurrentWindow().setFullscreen(false).catch(() => {});
+        }
       };
     }
   });

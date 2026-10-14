@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, Smriti asks before trashing anything. Can be turned off in Settings.
 - A newly opened folder is scanned straight away, with a Timeline empty state
   while it indexes; the smart-features prompt waits until the scan is done.
+- The Timeline's Day and Month views use a justified layout: photos keep
+  their real shape (no more square crops of portraits and panoramas) and each
+  row fills the width. Year view keeps the dense square grid. Arrow keys move
+  to the photo directly above or below.
+- The Timeline scrubber shows year markers across the whole library and a
+  date bubble on hover, not only while dragging; screen readers hear the
+  current year.
 - Face detection and then visual-search indexing run automatically on new
   photos once those features are installed. Cancelling either one pauses it
   until you start it again.
@@ -29,6 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Asset-pack downloads are verified against the release's `SHA256SUMS`, and the
   visual-search models are fetched from a pinned revision and checked against
   built-in SHA-256 digests, before anything is installed.
+- Thumbnails keep loading while you scroll; loads pause only during very
+  fast movement (a fling or a scrubber drag) and resume as soon as it slows.
+- Release builds unwind instead of aborting on a panic: a decoder crash on one
+  malformed photo now fails that photo, not the whole app or job.
+- Before a library's database is upgraded to a new schema, Smriti keeps one
+  snapshot of it in `.photovault/backups/` (only the newest is kept).
+- Photos that fail face detection are retried on later runs and given up on
+  after three attempts, instead of being recorded as "no faces" straight away.
+- Background thumbnails are generated on up to three worker threads (half
+  the cores) instead of one, while still leaving a decode slot free for the
+  photos on screen.
+- After a scan, duplicate and burst detection wait for the thumbnail pass and
+  fingerprint the thumbnails, instead of decoding every original alongside it.
+  Fingerprints are saved in chunks, so cancelling keeps the work already done.
+- Face clustering on large libraries no longer re-scans every face for each
+  candidate pair when checking rejected-person constraints.
+- The visual-search text model (~1.1 GB) is no longer loaded at app launch; it
+  warms up in the background, at low priority, after a library opens.
 - Icons are imported one by one instead of through the icon library's index,
   cutting the development build's startup payload from about 23 MB to 4 MB.
 - Dropped the unused AV1 *encoder* that the `image` crate's `avif` feature
@@ -38,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists all six kinds of request, matching `PRIVACY.md`.
 
 ### Fixed
+- The slideshow's fullscreen button works: the window permission it needed
+  was missing, and the error was silently swallowed. Closing the slideshow
+  leaves fullscreen if the slideshow entered it.
 - Keyboard shortcuts from hidden tabs no longer fire on other screens: arrow,
   Page and Home/End keys work normally outside the Timeline, and Delete on an
   album, person or memory selection no longer also triggers the hidden

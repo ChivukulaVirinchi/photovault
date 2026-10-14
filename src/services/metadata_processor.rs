@@ -120,14 +120,22 @@ async fn run_metadata_job(
                                     return (*id, file_hash.clone(), ExtractedMetadata::Skipped);
                                 }
                             };
-                        let meta = match media_type_for_path(&abs).unwrap_or_default() {
-                            MediaType::Video => {
-                                ExtractedMetadata::Video(VideoMetadata::from_path(&abs))
+                        // A parser panic on one malformed file skips that
+                        // file instead of failing the whole metadata pass.
+                        let meta = std::panic::catch_unwind(|| {
+                            match media_type_for_path(&abs).unwrap_or_default() {
+                                MediaType::Video => {
+                                    ExtractedMetadata::Video(VideoMetadata::from_path(&abs))
+                                }
+                                MediaType::Photo => ExtractedMetadata::Photo(Box::new(
+                                    ExifExtractor::extract(&abs),
+                                )),
                             }
-                            MediaType::Photo => {
-                                ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
-                            }
-                        };
+                        })
+                        .unwrap_or_else(|_| {
+                            tracing::warn!("metadata extraction crashed on {}", abs.display());
+                            ExtractedMetadata::Skipped
+                        });
                         (*id, file_hash.clone(), meta)
                     })
                     .collect()

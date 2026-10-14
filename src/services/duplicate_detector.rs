@@ -11,6 +11,9 @@ use rusqlite::Connection;
 
 use crate::services::path_util::safe_join_relative;
 
+/// Perceptual hashes computed between database writes during backfill.
+const PHASH_WRITE_CHUNK: usize = 256;
+
 /// Result of duplicate detection
 #[derive(Debug, Clone)]
 pub struct DuplicateGroup {
@@ -432,49 +435,56 @@ impl DuplicateDetector {
         });
 
         let processed = AtomicU64::new(0);
+        let mut ready = 0usize;
 
-        let computed: Vec<(i64, i64)> = pending
-            .par_iter()
-            .filter_map(|photo| {
-                if is_cancelled(cancel) {
-                    return None;
-                }
-                let (source, apply_orientation) = Self::phash_source_path(drive_root, photo)?;
-                let result = match Self::compute_phash(
-                    &source,
-                    apply_orientation.then_some(photo.orientation),
-                ) {
-                    Ok(phash) => Some((photo.id, phash)),
-                    Err(e) => {
-                        tracing::trace!("phash skip {}: {}", source.display(), e);
-                        None
-                    }
-                };
-                processed.fetch_add(1, Ordering::Relaxed);
-                result
-            })
-            .collect();
-        let done = processed.load(Ordering::Relaxed);
-        progress(DuplicateProgress {
-            stage: "perceptual-hash",
-            processed: done,
-            total: Some(total),
-            message: format!("{} visual fingerprints ready", computed.len()),
-        });
-        if is_cancelled(cancel) {
-            return Ok(());
-        }
-
-        let tx = conn.unchecked_transaction()?;
-        {
-            let mut update = tx.prepare("UPDATE photos SET phash = ?2 WHERE id = ?1")?;
-            for (id, phash) in &computed {
-                update.execute(rusqlite::params![id, phash])?;
+        // Chunked so each chunk's fingerprints are saved as soon as they
+        // are computed: cancelling (or closing the app) keeps the work done
+        // so far, and progress moves during long first-run backfills.
+        for chunk in pending.chunks(PHASH_WRITE_CHUNK) {
+            if is_cancelled(cancel) {
+                break;
             }
+            let computed: Vec<(i64, i64)> = chunk
+                .par_iter()
+                .filter_map(|photo| {
+                    if is_cancelled(cancel) {
+                        return None;
+                    }
+                    let (source, apply_orientation) =
+                        Self::phash_source_path(drive_root, photo)?;
+                    let result = match Self::compute_phash(
+                        &source,
+                        apply_orientation.then_some(photo.orientation),
+                    ) {
+                        Ok(phash) => Some((photo.id, phash)),
+                        Err(e) => {
+                            tracing::trace!("phash skip {}: {}", source.display(), e);
+                            None
+                        }
+                    };
+                    processed.fetch_add(1, Ordering::Relaxed);
+                    result
+                })
+                .collect();
+
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut update = tx.prepare("UPDATE photos SET phash = ?2 WHERE id = ?1")?;
+                for (id, phash) in &computed {
+                    update.execute(rusqlite::params![id, phash])?;
+                }
+            }
+            tx.commit()?;
+            ready += computed.len();
+            progress(DuplicateProgress {
+                stage: "perceptual-hash",
+                processed: processed.load(Ordering::Relaxed),
+                total: Some(total),
+                message: format!("{ready} visual fingerprints ready"),
+            });
         }
-        tx.commit()?;
-        if !computed.is_empty() {
-            tracing::info!("Backfilled phash for {} photos", computed.len());
+        if ready > 0 {
+            tracing::info!("Backfilled phash for {ready} photos");
         }
         Ok(())
     }

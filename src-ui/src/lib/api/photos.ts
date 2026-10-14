@@ -58,6 +58,9 @@ export const photos = {
       limit: args.limit ?? null,
       include_trashed: args.includeTrashed ?? false,
     }),
+  /// Timeline photo counts per year (newest first, undated `year: null`
+  /// last), for the scrubber's year markers.
+  yearCounts: () => call<{ year: number | null; count: number }[]>("photos_year_counts"),
   get: (id: number) => call<PhotoDto>("photos_get", { id }),
   getMany: (ids: number[]) => call<PhotoDto[]>("photos_get_many", { ids }),
   setFavorite: (id: number, isFavorite: boolean) =>

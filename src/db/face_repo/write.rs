@@ -21,7 +21,7 @@ impl<'a> FaceRepo<'a> {
 
         if face_count == 0 && processed_count > 0 {
             let reset = self.conn.execute(
-                "UPDATE photos SET faces_processed = FALSE WHERE faces_processed = TRUE",
+                "UPDATE photos SET faces_processed = FALSE, face_attempts = 0 WHERE faces_processed = TRUE",
                 [],
             )?;
             tracing::info!(
