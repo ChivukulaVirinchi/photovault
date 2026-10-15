@@ -73,7 +73,8 @@ fn open_image_decodes_each_raw_extension_via_the_same_path() {
     // JPEG container is what every TIFF-based RAW boils down to.
     // This test verifies the extension matcher in `image_io.rs`
     // covers every member of `scanner::SUPPORTED_EXTENSIONS`'s RAW
-    // group.
+    // group. CR3 and RAF use their own containers and are covered by
+    // `raw_containers`' unit tests.
     let dir = tempfile::Builder::new()
         .prefix("smriti-test-")
         .tempdir()
@@ -81,7 +82,7 @@ fn open_image_decodes_each_raw_extension_via_the_same_path() {
     let preview = common::make_jpeg(48, 32, [200, 200, 100]);
     let nef = common::make_minimal_nef(&preview);
     for ext in [
-        "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw",
+        "nef", "cr2", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw",
     ] {
         let path = dir.path().join(format!("shot.{}", ext));
         std::fs::write(&path, &nef).unwrap();
@@ -91,8 +92,9 @@ fn open_image_decodes_each_raw_extension_via_the_same_path() {
     }
 }
 
+#[cfg(feature = "raw")]
 #[test]
-fn open_image_reports_raf_as_unsupported_container() {
+fn open_image_reports_a_malformed_raf_clearly() {
     let dir = tempfile::Builder::new()
         .prefix("smriti-test-")
         .tempdir()
@@ -102,7 +104,7 @@ fn open_image_reports_raf_as_unsupported_container() {
 
     let err = open_image(&path).unwrap_err();
     assert!(
-        err.contains("RAF support is not available yet"),
+        err.contains("RAW preview lookup failed"),
         "unexpected error message: {}",
         err
     );
@@ -125,4 +127,18 @@ fn open_image_without_raw_feature_errors_on_nef() {
         "unexpected error message: {}",
         err
     );
+}
+
+/// Decodes a real HEIC photo when one is supplied, e.g.
+/// `SMRITI_TEST_HEIC=path/to/photo.heic cargo test --features heic`.
+/// No sample is committed to keep the repository small.
+#[cfg(feature = "heic")]
+#[test]
+fn open_image_decodes_a_real_heic_when_provided() {
+    let Ok(sample) = std::env::var("SMRITI_TEST_HEIC") else {
+        eprintln!("SMRITI_TEST_HEIC not set; skipping");
+        return;
+    };
+    let img = open_image(std::path::Path::new(&sample)).expect("HEIC should decode");
+    assert!(img.width() > 0 && img.height() > 0);
 }

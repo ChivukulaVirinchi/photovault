@@ -29,7 +29,8 @@ use crate::services::exclusions::ExclusionMatcher;
 ///      hash + EXIF + thumbnail pipeline as ordinary JPEGs.
 pub(crate) const SUPPORTED_EXTENSIONS: &[&str] = &[
     // Stills
-    "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "avif", "bmp", "gif",
+    // (AVIF is not listed: no bundled decoder can read it yet.)
+    "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "bmp", "gif",
     // RAWs (TIFF-based, embedded-JPEG path)
     "nef", "cr2", "cr3", "arw", "dng", "orf", "rw2", "pef", "rwl", "srw", "raf",
     // Videos

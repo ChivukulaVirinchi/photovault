@@ -119,7 +119,7 @@ The **[Smriti website](https://chivukulavirinchi.github.io/photovault/#download)
 ### Windows
 
 - `.exe` installer (recommended) or `.msi` package — Windows 10 / 11, x64.
-- Windows builds ship **without HEIC support** for now.
+- iPhone (HEIC) photos are supported out of the box.
 
 > Smriti does not have a code-signing certificate yet. On the first install,
 > Windows may show **Windows protected your PC**: click **More info** →
@@ -192,9 +192,10 @@ cd src-tauri
 cargo tauri build --features heic
 ```
 
-Shipped binaries (.deb, AppImage, macOS .tar.gz) include HEIC support
-out of the box. The Windows MSI ships without HEIC for now — `libheif`
-Windows binaries will land in v1.1. Without HEIC enabled, Smriti still
+Shipped binaries on every platform include HEIC support out of the box
+(Windows builds link a decode-only libheif from vcpkg:
+`vcpkg install "libheif[core]:x64-windows-static-md"`, then build with
+`VCPKG_ROOT` set and `VCPKGRS_TRIPLET=x64-windows-static-md`). Without HEIC enabled, Smriti still
 indexes `.heic` files but reports a clear "HEIC support not compiled in"
 error when asked to decode one.
 

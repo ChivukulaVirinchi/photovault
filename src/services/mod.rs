@@ -20,6 +20,8 @@ pub mod metadata_processor;
 pub mod path_util;
 pub mod photo_stacks;
 #[cfg(feature = "raw")]
+pub mod raw_containers;
+#[cfg(feature = "raw")]
 pub mod raw_preview;
 pub mod reindexer;
 pub mod scanner;

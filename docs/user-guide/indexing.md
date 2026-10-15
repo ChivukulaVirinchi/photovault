@@ -30,7 +30,8 @@ Smriti never copies, moves, or modifies your originals.
 **Image formats:**
 JPEG, PNG, WebP, HEIC / HEIF (if `libheif` is compiled in), TIFF, BMP,
 GIF (first frame), plus the common camera RAW formats with embedded
-JPEG previews: NEF, CR2, ARW, DNG, ORF, RW2, PEF, SRW, RAF.
+JPEG previews: NEF, CR2, CR3, ARW, DNG, ORF, RW2, PEF, SRW, RAF.
+AVIF is not supported yet.
 
 **Skipped:**
 - Files smaller than 1 KB (guards against icons and junk).

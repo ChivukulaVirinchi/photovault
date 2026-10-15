@@ -131,9 +131,13 @@ impl ExifExtractor {
     /// — so the caller can decide whether to prefer it over the
     /// filename fallback.
     fn extract_exif<P: AsRef<Path>>(path: P) -> Option<(ImageMetadata, Option<DateTime<Utc>>)> {
-        let file = std::fs::File::open(path.as_ref()).ok()?;
+        let path = path.as_ref();
+        let file = std::fs::File::open(path).ok()?;
         let mut bufreader = std::io::BufReader::new(&file);
-        let exif = ExifReader::new().read_from_container(&mut bufreader).ok()?;
+        let exif = match ExifReader::new().read_from_container(&mut bufreader) {
+            Ok(exif) => exif,
+            Err(_) => return Self::extract_raw_container_exif(path),
+        };
 
         let mut metadata = ImageMetadata::default();
         let mut datetime_candidate: Option<DateTime<Utc>> = None;
@@ -375,6 +379,59 @@ impl ExifExtractor {
     /// ("dinner at 10pm"), not by the UTC equivalent. The resulting
     /// `DateTime<Utc>` carries those wall-clock numbers verbatim, and the
     /// frontend treats the serialized string as local time.
+    /// EXIF for RAW containers the generic reader can't open: RAF keeps
+    /// standard EXIF inside its embedded JPEG; CR3 keeps capture date,
+    /// camera and orientation in its Canon metadata box.
+    #[cfg(feature = "raw")]
+    fn extract_raw_container_exif(path: &Path) -> Option<(ImageMetadata, Option<DateTime<Utc>>)> {
+        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+        match ext.as_str() {
+            "raf" => {
+                let jpeg = crate::services::raw_containers::raf_preview(path).ok()??;
+                let mut cursor = std::io::Cursor::new(jpeg);
+                let exif = ExifReader::new().read_from_container(&mut cursor).ok()?;
+                let mut metadata = ImageMetadata::default();
+                if let Some(field) = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY) {
+                    metadata.had_exif_date_field = true;
+                    if let Some(date) = Self::parse_exif_date(&field.display_value().to_string()) {
+                        metadata.date_taken = Some(date);
+                        metadata.date_taken_source = Some("exif".to_string());
+                    }
+                }
+                if let Some(field) = exif.get_field(Tag::Make, In::PRIMARY) {
+                    metadata.camera_make = Self::clean_exif_text(field);
+                }
+                if let Some(field) = exif.get_field(Tag::Model, In::PRIMARY) {
+                    metadata.camera_model = Self::clean_exif_text(field);
+                }
+                Some((metadata, None))
+            }
+            "cr3" => {
+                let cr3 = crate::services::raw_containers::cr3_metadata(path).ok()?;
+                let mut metadata = ImageMetadata {
+                    camera_make: cr3.make,
+                    camera_model: cr3.model,
+                    orientation: cr3.orientation,
+                    ..ImageMetadata::default()
+                };
+                if let Some(raw_date) = cr3.date_time_original {
+                    metadata.had_exif_date_field = true;
+                    if let Some(date) = Self::parse_exif_date(&raw_date) {
+                        metadata.date_taken = Some(date);
+                        metadata.date_taken_source = Some("exif".to_string());
+                    }
+                }
+                Some((metadata, None))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(not(feature = "raw"))]
+    fn extract_raw_container_exif(_path: &Path) -> Option<(ImageMetadata, Option<DateTime<Utc>>)> {
+        None
+    }
+
     pub(crate) fn parse_exif_date(date_str: &str) -> Option<DateTime<Utc>> {
         let mut clean = date_str
             .trim()

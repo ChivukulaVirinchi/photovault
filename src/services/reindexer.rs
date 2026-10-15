@@ -252,7 +252,12 @@ impl Reindexer {
             let mut missing: Vec<(i64, String, String)> = Vec::new();
             for row in rows {
                 let row = row?;
-                if !is_under_any_prefix(&row.1, &unreadable_prefixes) {
+                // Files under unreadable folders, or of a type this build no
+                // longer indexes, were never in `found_files` — they are not
+                // missing, so they must not be trashed.
+                if !is_under_any_prefix(&row.1, &unreadable_prefixes)
+                    && self.is_supported_path(&row.1)
+                {
                     missing.push(row);
                 }
             }
@@ -497,6 +502,13 @@ impl Reindexer {
             FaceRepo::new(conn).normalize_cluster_stats()?;
         }
         Ok(result)
+    }
+
+    fn is_supported_path(&self, relative: &str) -> bool {
+        Path::new(relative)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| self.supported_extensions.contains(&e.to_ascii_lowercase()))
     }
 
     fn should_skip(&self, drive_root: &Path, path: &Path, exclusions: &ExclusionMatcher) -> bool {
@@ -967,6 +979,23 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.applied.removals_applied, 1);
         assert_eq!(outcome.applied.updates_applied, 0);
+        assert_eq!(outcome.held_back_removals, 0);
+    }
+
+    #[test]
+    fn reconcile_never_trashes_types_no_longer_indexed() {
+        let temp = tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        // Indexed by an older build; the file is still on disk, but the
+        // walk no longer reports .avif files.
+        fs::write(temp.path().join("old.avif"), vec![0u8; 2048]).unwrap();
+        insert_photo_row(&conn, 1, "old.avif");
+
+        let outcome = Reindexer::new_with_options(true)
+            .reconcile_existing(&conn, temp.path())
+            .unwrap();
+        assert_eq!(outcome.applied.removals_applied, 0);
         assert_eq!(outcome.held_back_removals, 0);
     }
 

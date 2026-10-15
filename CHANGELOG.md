@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, Smriti asks before trashing anything. Can be turned off in Settings.
 - A newly opened folder is scanned straight away, with a Timeline empty state
   while it indexes; the smart-features prompt waits until the scan is done.
+- Windows builds now open iPhone (HEIC) photos. They link a decode-only
+  libheif (no HEVC encoder) statically, so no extra DLLs ship.
+- Canon CR3 and Fujifilm RAF photos now show thumbnails and open in the
+  viewer, using the full-size JPEG the camera embeds, with capture date, camera
+  and orientation read from the file.
 - The Timeline's Day and Month views use a justified layout: photos keep
   their real shape (no more square crops of portraits and panoramas) and each
   row fills the width. Year view keeps the dense square grid. Arrow keys move
@@ -61,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fewer crates to compile.
 - The website no longer loads Google Analytics, and its network disclosure now
   lists all six kinds of request, matching `PRIVACY.md`.
+
+### Removed
+- AVIF files are no longer indexed: no bundled decoder could read them, so
+  they only ever showed as broken tiles. Ones indexed before are left as they
+  are (never trashed by the library check).
 
 ### Fixed
 - The slideshow's fullscreen button works: the window permission it needed

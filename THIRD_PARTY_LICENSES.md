@@ -48,10 +48,21 @@ The shared library that loads and executes the above models.
 Decoder for HEIC / HEIF photos (every iPhone export since iOS 11).
 - License: [LGPL-3.0](https://github.com/strukturag/libheif/blob/master/COPYING)
 - Attribution: Dirk Farin / Struktur AG
-- System library — install via `apt install libheif-dev` (Linux),
-  `brew install libheif` (macOS), or vendor binaries (Windows).
+- Linux and macOS builds use the system library (`apt install libheif-dev`,
+  `brew install libheif`). Windows release builds link a decode-only
+  libheif (vcpkg `libheif[core]`, no x265 encoder) statically into
+  `smriti.exe`.
+- Under the LGPL you may relink Smriti against a modified libheif: the
+  complete Smriti source is available in this repository, and building with
+  `--features heic` against your own libheif produces such a build.
   When the `heic` feature is off Smriti still indexes HEIC files
   but reports a clear "HEIC support not compiled in" error on decode.
+
+### libde265
+HEVC decoder used by libheif to read HEIC images; linked statically into
+Windows release builds alongside libheif.
+- License: [LGPL-3.0](https://github.com/strukturag/libde265/blob/master/COPYING)
+- Attribution: Dirk Farin / Struktur AG
 
 ## Fonts
 

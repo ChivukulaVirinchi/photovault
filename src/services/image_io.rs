@@ -4,9 +4,10 @@
 //!   - HEIC/HEIF (every modern iPhone photo) decodes through libheif
 //!     when the `heic` Cargo feature is enabled, fails clearly
 //!     otherwise.
-//!   - TIFF-based RAW (NEF / CR2 / CR3 / ARW / DNG / ORF / RW2 /
-//!     PEF / RWL / SRW) decodes via the camera's embedded full-res
-//!     JPEG preview when the `raw` feature is on (default).
+//!   - RAW (NEF / CR2 / ARW / DNG / ORF / RW2 / PEF / RWL / SRW via the
+//!     TIFF walker; CR3 and RAF via their own containers) decodes via the
+//!     camera's embedded full-res JPEG preview when the `raw` feature is
+//!     on (default).
 //!   - Everything else falls through to the `image` crate.
 //!
 //! Call this from any code path that previously did `image::open(...)`
@@ -55,10 +56,6 @@ fn open_image_unguarded(path: &Path) -> Result<DynamicImage, String> {
 
     match ext.as_deref() {
         Some("heic") | Some("heif") => decode_heic(path),
-        Some("raf") => Err(format!(
-            "RAF support is not available yet ({} is a Fujifilm RAW container, not TIFF-based)",
-            path.display()
-        )),
         Some(e) if is_raw_extension(e) => decode_raw_via_preview(path),
         _ => image::open(path).map_err(|e| e.to_string()),
     }
@@ -71,13 +68,28 @@ fn open_image_unguarded(path: &Path) -> Result<DynamicImage, String> {
 pub fn is_raw_extension(e: &str) -> bool {
     matches!(
         e,
-        "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw"
+        "nef" | "cr2" | "cr3" | "arw" | "dng" | "orf" | "rw2" | "pef" | "rwl" | "srw" | "raf"
     )
+}
+
+/// Bytes of the embedded JPEG preview for any supported RAW: CR3 and RAF
+/// have their own containers, everything else is TIFF-based.
+#[cfg(feature = "raw")]
+pub fn raw_preview_jpeg(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("cr3") => crate::services::raw_containers::cr3_preview(path),
+        Some("raf") => crate::services::raw_containers::raf_preview(path),
+        _ => crate::services::raw_preview::extract_largest_preview(path),
+    }
 }
 
 #[cfg(feature = "raw")]
 fn decode_raw_via_preview(path: &Path) -> Result<DynamicImage, String> {
-    let jpeg_bytes = crate::services::raw_preview::extract_largest_preview(path)
+    let jpeg_bytes = raw_preview_jpeg(path)
         .map_err(|e| format!("RAW preview lookup failed for {}: {}", path.display(), e))?
         .ok_or_else(|| {
             format!(

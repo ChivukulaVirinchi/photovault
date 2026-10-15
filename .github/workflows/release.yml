@@ -34,8 +34,9 @@ jobs:
           - platform: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            # Windows skipped on heic for v1 — libheif build chain is fragile.
-            heic_flag: ""
+            # libheif comes from vcpkg as a static, decode-only build (see
+            # "Install Windows deps"), so no extra DLLs ship.
+            heic_flag: "--features heic"
 
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +77,29 @@ jobs:
       - name: Install macOS deps
         if: matrix.os == 'macos-latest'
         run: brew install libheif
+
+      - name: Cache vcpkg binaries
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-libheif-core-x64-windows-static-md-v1
+
+      # `libheif[core]` on purpose: the port's default `hevc` feature adds
+      # the x265 *encoder* (GPL-2.0, several MB). Decoding only needs
+      # libde265, which `core` always includes (LGPL-3.0). The static-md
+      # triplet links both into smriti.exe against the dynamic CRT.
+      - name: Install Windows deps (decode-only libheif)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-binary-cache
+        run: |
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          & (Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe") install "libheif[core]:x64-windows-static-md" --disable-metrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
 
       - name: Install frontend dependencies
         run: npm ci --prefix src-ui
