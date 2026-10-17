@@ -15,6 +15,8 @@
   import AddToAlbumDialog from "../lib/components/AddToAlbumDialog.svelte";
   import Check from "lucide-svelte/icons/check";
   import Play from "lucide-svelte/icons/play";
+  import LayoutDashboard from "lucide-svelte/icons/layout-dashboard";
+  import { collage } from "../lib/stores/collage.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
   import { slideshow } from "../lib/stores/slideshow.svelte";
@@ -216,6 +218,11 @@
       <button class="ghost icon-action" onclick={startMemorySlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start memory slideshow">
         <Play size={15} strokeWidth={2} />
       </button>
+      <button class="ghost with-icon" onclick={() => collage.showBest({ photoIds: photos.map((p) => p.id) })}
+        disabled={photos.length < 2 || collage.picking} title="A collage of this memory's best photos">
+        <LayoutDashboard size={14} strokeWidth={1.9} />
+        Collage
+      </button>
       {#if savedAlbumId}
         <a class="saved-link" href="#/album?id={savedAlbumId}">Saved as album →</a>
       {:else}
@@ -287,6 +294,7 @@
     padding-bottom: 2px;
   }
   .saved-link:hover { border-bottom-color: var(--accent); }
+  .with-icon { display: inline-flex; align-items: center; gap: 6px; }
   .icon-action {
     width: 32px;
     height: 32px;

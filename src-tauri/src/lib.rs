@@ -206,7 +206,16 @@ pub fn run() {
             commands::system::system_share_photo,
             commands::system::system_open_path,
             commands::system::system_copy_path_to_clipboard,
+            commands::collage::collage_face_boxes,
+            commands::collage::collage_save,
+            commands::collage::collage_location,
+            commands::collage::collage_reveal,
+            commands::collage::collage_pick,
+            commands::collage::collage_suggestions,
+            commands::collage::collage_dismiss_suggestion,
             commands::system::system_updates_check,
+            commands::system::system_update_install,
+            commands::system::system_restart,
             commands::system::system_test_gpu_bridge,
         ])
         .build(tauri::generate_context!())

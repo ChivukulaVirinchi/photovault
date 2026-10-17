@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { MemoryCard as CachedMemoryCard } from "../lib/api/all";
+  import type { CollageSuggestion as CachedCollage, MemoryCard as CachedMemoryCard } from "../lib/api/all";
 
   let cachedMemoriesRoute:
     | {
@@ -7,6 +7,7 @@
         /// Library session this cache belongs to. See `currentMemoriesCache`.
         session: number;
         cards: CachedMemoryCard[];
+        collages: CachedCollage[];
         scrollTop: number;
       }
     | null = null;
@@ -15,12 +16,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
-  import { memories } from "../lib/api/all";
+  import { collageApi, memories } from "../lib/api/all";
+  import { collage } from "../lib/stores/collage.svelte";
+  import { toasts } from "../lib/stores/toast.svelte";
+  import CollageSuggestionCard from "../lib/components/CollageSuggestionCard.svelte";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
-  import type { MemoryCard } from "../lib/api/all";
+  import type { CollageSuggestion, MemoryCard } from "../lib/api/all";
+  import type { ShapeId } from "../lib/collage";
 
   const currentDriveRoot = libraryStore.driveRoot;
   const currentSession = libraryStore.session;
@@ -34,6 +39,7 @@
       : null;
 
   let cards = $state<MemoryCard[]>(currentMemoriesCache?.cards ?? []);
+  let collages = $state<CollageSuggestion[]>(currentMemoriesCache?.collages ?? []);
   let error = $state<string | null>(null);
   let loading = $state((currentMemoriesCache?.cards.length ?? 0) === 0);
   let pageEl = $state<HTMLDivElement | undefined>(undefined);
@@ -45,6 +51,7 @@
       driveRoot: currentDriveRoot,
       session: currentSession,
       cards,
+      collages,
       scrollTop: pageEl?.scrollTop ?? cachedMemoriesRoute?.scrollTop ?? 0,
     };
   }
@@ -61,6 +68,9 @@
     const seq = ++loadSeq;
     loading = true;
     error = null;
+    // Suggested collages come separately; they can take a moment longer
+    // (thumbnails) and must never hold up or break the memories.
+    void loadCollages(seq);
     try {
       const nextCards = await memories.today();
       if (!mounted || seq !== loadSeq) return;
@@ -71,6 +81,35 @@
       if (mounted && seq === loadSeq) error = commandErrorMessage(e);
     } finally {
       if (mounted && seq === loadSeq) loading = false;
+    }
+  }
+
+  async function loadCollages(seq: number) {
+    try {
+      const next = await collageApi.suggestions();
+      if (!mounted || seq !== loadSeq) return;
+      collages = next;
+      saveMemoriesCache();
+    } catch {
+      // Suggestions are a nicety; leave whatever was there.
+    }
+  }
+
+  function openCollage(ids: number[], layoutId: string, shape: ShapeId) {
+    collage.show(ids, { auto: true, layoutId, shape });
+  }
+
+  async function dismissCollage(suggestion: CollageSuggestion) {
+    const before = collages;
+    collages = collages.filter((c) => c.key !== suggestion.key);
+    saveMemoriesCache();
+    try {
+      await collageApi.dismissSuggestion(suggestion.key);
+      toasts.info("Got it. You won't see that collage again");
+    } catch (e) {
+      collages = before;
+      saveMemoriesCache();
+      toasts.error(`Couldn't hide that collage: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -119,6 +158,19 @@
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
 <div class="page" bind:this={pageEl}>
+  {#if collages.length > 0}
+    <section class="made" aria-labelledby="made-for-you">
+      <header>
+        <h2 id="made-for-you">Made for you</h2>
+        <p>Collages from your photos, put together today. Nothing is kept unless you save it.</p>
+      </header>
+      <div class="collages">
+        {#each collages as suggestion (suggestion.key)}
+          <CollageSuggestionCard {suggestion} onopen={openCollage} ondismiss={() => dismissCollage(suggestion)} />
+        {/each}
+      </div>
+    </section>
+  {/if}
   {#if loading}
     <div class="empty">
       <p>Loading memories...</p>
@@ -167,6 +219,20 @@
     margin: 0 auto;
   }
   .empty p { color: var(--ink-soft); line-height: 1.6; }
+  .made { margin-bottom: var(--s-7); }
+  .made header { display: flex; align-items: baseline; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-4); }
+  .made h2 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--t-xl);
+    font-weight: 500;
+  }
+  .made p { margin: 0; font-size: var(--t-sm); color: var(--ink-muted); }
+  .collages {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 200px));
+    gap: var(--s-5);
+  }
   .cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

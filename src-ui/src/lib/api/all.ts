@@ -3,6 +3,7 @@
 // for the most-used endpoints; everything else lives here so M3 can ship
 // without 13 tiny files.
 
+import { invoke } from "@tauri-apps/api/core";
 import { call } from "./index";
 import { dataRevision } from "../stores/dataRevision.svelte";
 import { libraryStore } from "../stores/library.svelte";
@@ -668,6 +669,19 @@ export interface AssetItem {
   note: string | null;
 }
 
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  newer_available: boolean;
+  release_url: string | null;
+  body: string | null;
+  /** What "Update" does on this install. */
+  install: "installer" | "appimage" | "dmg" | "package_manager" | "release_page";
+  upgrade_cmd: string | null;
+  /** `deb` or `rpm` for Linux package installs. */
+  package_format: string | null;
+}
+
 export const systemEx = {
   assetHealth: () => call<AssetHealthDto>("system_asset_health"),
   assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
@@ -681,17 +695,61 @@ export const systemEx = {
     call<{ path: string }>("system_copy_path_to_clipboard", {
       photo_id: photoId,
     }),
-  updatesCheck: () =>
-    call<{
-      current: string;
-      latest: string | null;
-      newer_available: boolean;
-      release_url: string | null;
-      body: string | null;
-    }>("system_updates_check"),
+  updatesCheck: () => call<UpdateStatus>("system_updates_check"),
+  updateInstall: () =>
+    call<{ outcome: "installer_launched" | "restart_required" | "release_page" | "package_manager" }>(
+      "system_update_install",
+    ),
+  restart: () => call<void>("system_restart"),
   testGpuBridge: (url: string) =>
     call<{ ok: boolean; latency_ms: number; gpu_name: string; model: string | null }>(
       "system_test_gpu_bridge",
       { url },
     ),
+};
+
+export interface CollageLocation {
+  path: string;
+  label: string;
+}
+
+export interface CollageFaceBox { x: number; y: number; width: number; height: number }
+
+export interface CollageSuggestionPhoto {
+  id: number;
+  thumbnail_path: string | null;
+  width: number | null;
+  height: number | null;
+  orientation: number;
+  faces: CollageFaceBox[];
+}
+
+/** A collage suggested on the Memories page. Nothing about it is stored. */
+export interface CollageSuggestion {
+  key: string;
+  eyebrow: string;
+  title: string;
+  /** Feature photo first. */
+  photos: CollageSuggestionPhoto[];
+}
+
+export const collageApi = {
+  /** The best few photos of an album (`-1` is Favourites) or of a set of
+   *  photos, feature photo first. */
+  pick: (source: { albumId?: number; photoIds?: number[] }) =>
+    call<number[]>("collage_pick", { album_id: source.albumId ?? null, photo_ids: source.photoIds ?? [] }),
+  /** Today's suggested collages. */
+  suggestions: () => call<CollageSuggestion[]>("collage_suggestions"),
+  /** Stop suggesting collages from this suggestion's source. */
+  dismissSuggestion: (key: string) => call<void>("collage_dismiss_suggestion", { key }),
+  /** Face boxes per photo id, normalised to the displayed (rotated) photo. */
+  faceBoxes: (photoIds: number[]) =>
+    call<Record<string, CollageFaceBox[]>>("collage_face_boxes", {
+      photo_ids: photoIds,
+    }),
+  /** Where Save puts collages (Pictures › Smriti Collages). */
+  location: () => invoke<CollageLocation>("collage_location"),
+  /** Writes the JPEG into the collages folder under a new name. */
+  save: (jpeg: Uint8Array) => invoke<{ path: string; location: CollageLocation }>("collage_save", jpeg),
+  reveal: (path: string) => invoke<void>("collage_reveal", { args: { path } }),
 };

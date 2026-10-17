@@ -25,8 +25,7 @@ use crate::dto::{
 use crate::events::{
     JobProgress, EV_BURSTS_COMPLETE, EV_DUPLICATES_COMPLETE, EV_DUPLICATES_PROGRESS,
     EV_METADATA_COMPLETE, EV_METADATA_PROGRESS, EV_SCAN_COMPLETE, EV_SCAN_PROGRESS,
-    EV_SCAN_RECONCILED,
-    EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
+    EV_SCAN_RECONCILED, EV_THUMBNAILS_COMPLETE, EV_THUMBNAILS_PROGRESS, EV_THUMBNAIL_READY,
 };
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind, OpenLibrary, UnsupportedLibrary};
@@ -953,9 +952,14 @@ pub async fn library_start_scan(
 
         // Stage 0: reconcile what is already indexed with the disk. The
         // scanner below only ever adds new files.
-        let reconciled =
-            reconcile_before_scan(&app_clone, &job_id_clone, &drive_root, &db, scan_hidden_folders)
-                .await;
+        let reconciled = reconcile_before_scan(
+            &app_clone,
+            &job_id_clone,
+            &drive_root,
+            &db,
+            scan_hidden_folders,
+        )
+        .await;
 
         let (rx, handle) = smriti::services::scanner::start_scan(
             drive_root.clone(),

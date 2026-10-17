@@ -43,7 +43,10 @@ pub fn open_image(path: &Path) -> Result<DynamicImage, String> {
 /// Image, HEIC and RAW decoders are fed arbitrary files from users'
 /// drives; one malformed file must fail that file, not the job or the
 /// app. The panic hook still records the panic in the crash log.
-pub fn catch_decode<T>(path: &Path, decode: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+pub fn catch_decode<T>(
+    path: &Path,
+    decode: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
         .unwrap_or_else(|_| Err(format!("decoder crashed on {}", path.display())))
 }

@@ -13,8 +13,6 @@
 //! here fails safely rather than corrupting an install.
 
 use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
 
 /// How Smriti was installed on this machine.
 ///
@@ -32,6 +30,16 @@ pub enum InstallMethod {
     /// Installed via a Windows MSI. The self-replace path invokes
     /// msiexec on the newly-downloaded MSI with a UAC prompt.
     MsiInstaller,
+
+    /// Installed via the NSIS `-setup.exe`. Tauri's NSIS installer is
+    /// per-user by default (`%LOCALAPPDATA%\Smriti`) and always leaves an
+    /// `uninstall.exe` beside the binary. Updating re-runs the new setup.
+    NsisInstaller,
+
+    /// A `.deb` or `.rpm` from the GitHub release. Smriti is not in any
+    /// distro repository, so there is no upgrade command to suggest; the
+    /// update flow opens the release page and names the file to grab.
+    LinuxPackage { format: String },
 
     /// macOS `.app` bundle in /Applications. The self-replace path
     /// downloads the new .dmg and opens it so the user can drag the
@@ -95,11 +103,21 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
                 upgrade_cmd: "snap refresh smriti".into(),
             };
         }
-        // Default apt/.deb layout: binary at /usr/bin, resources under /usr/lib/smriti.
-        if path_str == "/usr/bin/smriti" && PathBuf::from("/usr/lib/smriti").exists() {
-            return InstallMethod::PackageManager {
-                name: "apt".into(),
-                upgrade_cmd: "sudo apt update && sudo apt install --only-upgrade smriti".into(),
+        // Tauri's .deb and .rpm both put the binary in /usr/bin and the
+        // resources in /usr/lib/<productName>. Neither comes from a distro
+        // repository, so tell them apart only to name the right download.
+        if lower.starts_with("/usr/bin/") {
+            let format = if Path::new("/var/lib/dpkg/info/smriti.list").exists() {
+                "deb"
+            } else if Path::new("/var/lib/rpm").exists()
+                || Path::new("/usr/lib/sysimage/rpm").exists()
+            {
+                "rpm"
+            } else {
+                "deb"
+            };
+            return InstallMethod::LinuxPackage {
+                format: format.into(),
             };
         }
     }
@@ -123,6 +141,11 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
     // --- Windows --------------------------------------------------
     #[cfg(target_os = "windows")]
     {
+        // The NSIS installer (per-user or per-machine) leaves its
+        // uninstaller next to the binary; MSI installs never do.
+        if exe.with_file_name("uninstall.exe").is_file() {
+            return InstallMethod::NsisInstaller;
+        }
         // MSI-installed binaries typically land under Program Files.
         if lower.contains("\\program files\\") || lower.contains("\\program files (x86)\\") {
             return InstallMethod::MsiInstaller;
@@ -210,6 +233,28 @@ mod tests {
     fn msi_installer_detected() {
         let p = PathBuf::from("C:\\Program Files\\Smriti\\smriti.exe");
         assert_eq!(classify_path(&p), InstallMethod::MsiInstaller);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn nsis_install_detected_by_its_uninstaller() {
+        // Tauri's NSIS default is per-user, outside Program Files.
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("smriti.exe");
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(classify_path(&exe), InstallMethod::Portable);
+        std::fs::write(dir.path().join("uninstall.exe"), b"").unwrap();
+        assert_eq!(classify_path(&exe), InstallMethod::NsisInstaller);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_package_never_suggests_a_repository_upgrade() {
+        let p = PathBuf::from("/usr/bin/smriti");
+        assert!(matches!(
+            classify_path(&p),
+            InstallMethod::LinuxPackage { .. }
+        ));
     }
 
     #[cfg(target_os = "windows")]

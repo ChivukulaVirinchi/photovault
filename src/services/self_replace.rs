@@ -124,6 +124,29 @@ pub async fn install_update(
             Ok(InstallOutcome::ReplacedRestartRequired)
         }
 
+        // .deb/.rpm from the release: nothing to upgrade through, and
+        // installing a system package needs the user's own package tool.
+        InstallMethod::LinuxPackage { .. } => {
+            open_in_browser(&latest.html_url)?;
+            Ok(InstallOutcome::OpenedReleasePage {
+                url: latest.html_url,
+            })
+        }
+
+        // Windows NSIS: download the new setup and run it in passive mode.
+        // The installer closes the running app, updates and relaunches it.
+        InstallMethod::NsisInstaller => {
+            let asset = pick_nsis_asset(&latest.assets)?.clone();
+            let downloaded = download_and_verify(&asset, &latest.assets, progress).await?;
+            launch_nsis(&downloaded)?;
+            downloaded
+                .keep()
+                .map_err(|error| UpdateError::Io(error.error))?;
+            Ok(InstallOutcome::InstallerLaunched {
+                installer: asset.name,
+            })
+        }
+
         // Windows MSI: download + invoke msiexec with UAC.
         InstallMethod::MsiInstaller => {
             let asset = pick_msi_asset(&latest.assets)?.clone();
@@ -176,6 +199,16 @@ fn pick_msi_asset(assets: &[ReleaseAsset]) -> Result<&ReleaseAsset, UpdateError>
         .iter()
         .find(|a| {
             a.name.to_ascii_lowercase().ends_with(".msi")
+                && asset_matches_arch(&a.name, std::env::consts::ARCH)
+        })
+        .ok_or(UpdateError::NoAssetForPlatform)
+}
+
+fn pick_nsis_asset(assets: &[ReleaseAsset]) -> Result<&ReleaseAsset, UpdateError> {
+    assets
+        .iter()
+        .find(|a| {
+            a.name.to_ascii_lowercase().ends_with("-setup.exe")
                 && asset_matches_arch(&a.name, std::env::consts::ARCH)
         })
         .ok_or(UpdateError::NoAssetForPlatform)
@@ -411,6 +444,26 @@ fn launch_msi(msi: &Path) -> Result<(), UpdateError> {
         .map_err(|e| UpdateError::SpawnInstaller(e.to_string()))
 }
 
+/// `/P` is Tauri's passive mode (progress only, no questions) and `/R`
+/// relaunches Smriti once the files are replaced.
+#[cfg(target_os = "windows")]
+fn launch_nsis(setup: &Path) -> Result<(), UpdateError> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(setup)
+        .args(["/P", "/R"])
+        .creation_flags(0x0000_0008 | 0x0000_0200)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| UpdateError::SpawnInstaller(e.to_string()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn launch_nsis(_setup: &Path) -> Result<(), UpdateError> {
+    Err(UpdateError::SpawnInstaller(
+        "NSIS setup is only supported on Windows".into(),
+    ))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn launch_msi(_msi: &Path) -> Result<(), UpdateError> {
     Err(UpdateError::SpawnInstaller(
@@ -456,6 +509,30 @@ mod tests {
             "x86_64"
         ));
         assert!(!asset_matches_arch("Smriti.dmg", "x86_64"));
+    }
+
+    #[test]
+    fn installer_assets_follow_tauri_release_names() {
+        let asset = |name: &str| ReleaseAsset {
+            name: name.into(),
+            browser_download_url: String::new(),
+            size_bytes: 0,
+        };
+        let assets = vec![
+            asset("Smriti_0.5.0_x64_en-US.msi"),
+            asset("Smriti_0.5.0_x64-setup.exe"),
+            asset("Smriti_0.5.0_aarch64.dmg"),
+        ];
+        if std::env::consts::ARCH == "x86_64" {
+            assert_eq!(
+                pick_nsis_asset(&assets).unwrap().name,
+                "Smriti_0.5.0_x64-setup.exe"
+            );
+            assert_eq!(
+                pick_msi_asset(&assets).unwrap().name,
+                "Smriti_0.5.0_x64_en-US.msi"
+            );
+        }
     }
 
     #[test]

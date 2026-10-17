@@ -913,9 +913,24 @@ mod tests {
             );
         }
         // Real edits.
-        assert!(content_may_have_changed(100, Some(1_000_000), 101, Some(1_000_000)));
-        assert!(content_may_have_changed(100, Some(1_000_000), 100, Some(1_000_123)));
-        assert!(content_may_have_changed(100, Some(1_000_000), 100, Some(1_000_000 + 15 * 3600)));
+        assert!(content_may_have_changed(
+            100,
+            Some(1_000_000),
+            101,
+            Some(1_000_000)
+        ));
+        assert!(content_may_have_changed(
+            100,
+            Some(1_000_000),
+            100,
+            Some(1_000_123)
+        ));
+        assert!(content_may_have_changed(
+            100,
+            Some(1_000_000),
+            100,
+            Some(1_000_000 + 15 * 3600)
+        ));
         // Legacy rows without an mtime only compare size.
         assert!(!content_may_have_changed(100, None, 100, Some(5)));
     }

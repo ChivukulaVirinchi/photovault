@@ -450,8 +450,7 @@ impl DuplicateDetector {
                     if is_cancelled(cancel) {
                         return None;
                     }
-                    let (source, apply_orientation) =
-                        Self::phash_source_path(drive_root, photo)?;
+                    let (source, apply_orientation) = Self::phash_source_path(drive_root, photo)?;
                     let result = match Self::compute_phash(
                         &source,
                         apply_orientation.then_some(photo.orientation),

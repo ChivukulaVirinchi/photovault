@@ -7,6 +7,8 @@ use crate::ml::FaceEmbedding;
 use super::{FaceClusterRecord, FaceDetail, FaceRepo, FaceStatus, GalleryEmbedding, ReviewItem};
 
 type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
+/// (photo_id, x, y, width, height), normalised.
+type FaceBoxRow = (i64, f32, f32, f32, f32);
 /// (id, file_path, orientation, taken_ts, file_hash)
 ///
 /// `file_hash` is plumbed through so the face worker can locate the
@@ -165,6 +167,32 @@ impl<'a> FaceRepo<'a> {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    /// Normalised face boxes `(photo_id, x, y, width, height)` for the given
+    /// photos, in display orientation. Used to keep faces in frame when a
+    /// photo is cropped into a collage cell.
+    pub fn get_face_boxes_for_photos(&self, photo_ids: &[i64]) -> SqliteResult<Vec<FaceBoxRow>> {
+        if photo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; photo_ids.len()].join(",");
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT photo_id, bbox_x, bbox_y, bbox_width, bbox_height
+             FROM faces WHERE photo_id IN ({placeholders}) ORDER BY photo_id, id"
+        ))?;
+        let rows = stmt
+            .query_map(params_from_iter(photo_ids), |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?
+            .collect();
+        rows
     }
 
     /// Get person names for a photo (faces detected in this photo with cluster names)
@@ -977,6 +1005,18 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn face_boxes_are_returned_only_for_requested_photos() {
+        let conn = seeded_conn();
+        let repo = FaceRepo::new(&conn);
+
+        let boxes = repo.get_face_boxes_for_photos(&[1, 3, 99]).unwrap();
+
+        assert_eq!(boxes.iter().map(|b| b.0).collect::<Vec<_>>(), vec![1, 3]);
+        assert!((boxes[0].3 - 0.2).abs() < 1e-6);
+        assert!(repo.get_face_boxes_for_photos(&[]).unwrap().is_empty());
     }
 
     #[test]

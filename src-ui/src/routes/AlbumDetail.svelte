@@ -20,6 +20,8 @@
   import Download from "lucide-svelte/icons/download";
   import FolderOpen from "lucide-svelte/icons/folder-open";
   import Play from "lucide-svelte/icons/play";
+  import LayoutDashboard from "lucide-svelte/icons/layout-dashboard";
+  import { collage } from "../lib/stores/collage.svelte";
   import X from "lucide-svelte/icons/x";
   import type { AlbumDto, PhotoSummaryDto } from "../lib/api/types";
   import { slideshow } from "../lib/stores/slideshow.svelte";
@@ -510,6 +512,11 @@
           <Play size={15} strokeWidth={2} />
         </button>
         <SurpriseButton albumId={id} label={a.name} disabled={a.photo_count === 0} />
+        <button class="ghost export-action" onclick={() => collage.showBest({ albumId: id })}
+          disabled={a.photo_count < 2 || collage.picking} title="A collage of this album's best photos">
+          <LayoutDashboard size={14} strokeWidth={1.9} />
+          Collage
+        </button>
         <button class="ghost export-action" onclick={exportAlbum} disabled={a.photo_count === 0 || exporting || actionBusy} title="Export album originals">
           <Download size={14} strokeWidth={1.9} />
           {exporting ? "Exporting" : "Export"}

@@ -127,9 +127,9 @@ async fn run_metadata_job(
                                 MediaType::Video => {
                                     ExtractedMetadata::Video(VideoMetadata::from_path(&abs))
                                 }
-                                MediaType::Photo => ExtractedMetadata::Photo(Box::new(
-                                    ExifExtractor::extract(&abs),
-                                )),
+                                MediaType::Photo => {
+                                    ExtractedMetadata::Photo(Box::new(ExifExtractor::extract(&abs)))
+                                }
                             }
                         })
                         .unwrap_or_else(|_| {

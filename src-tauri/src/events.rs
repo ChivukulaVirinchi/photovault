@@ -36,6 +36,7 @@ pub const EV_ASSETS_COMPLETE: &str = "assets:complete";
 pub const EV_TAKEOUT_PROGRESS: &str = "takeout:progress";
 pub const EV_TAKEOUT_COMPLETE: &str = "takeout:complete";
 pub const EV_ASSISTANT_ACTIVITY: &str = "assistant:activity";
+pub const EV_UPDATE_PROGRESS: &str = "update:progress";
 
 /// Generic progress payload used by most jobs that don't need
 /// stage-specific fields.

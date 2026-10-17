@@ -84,8 +84,12 @@ pub fn raf_preview(path: &Path) -> Result<Option<Vec<u8>>, String> {
     if !header.starts_with(RAF_MAGIC) {
         return Err("not a Fujifilm RAF (bad magic)".into());
     }
-    let offset = u64::from(u32::from_be_bytes([header[84], header[85], header[86], header[87]]));
-    let size = u64::from(u32::from_be_bytes([header[88], header[89], header[90], header[91]]));
+    let offset = u64::from(u32::from_be_bytes([
+        header[84], header[85], header[86], header[87],
+    ]));
+    let size = u64::from(u32::from_be_bytes([
+        header[88], header[89], header[90], header[91],
+    ]));
     read_jpeg(&mut file, len, offset, size)
 }
 
@@ -124,7 +128,8 @@ struct Walker<'a> {
 fn scan_cr3(file: &mut File, len: u64) -> Result<Cr3Layout, String> {
     let mut ftyp = [0u8; 12];
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    file.read_exact(&mut ftyp).map_err(|e| format!("read CR3 header: {e}"))?;
+    file.read_exact(&mut ftyp)
+        .map_err(|e| format!("read CR3 header: {e}"))?;
     if &ftyp[4..8] != b"ftyp" || &ftyp[8..12] != b"crx " {
         return Err("not a Canon CR3 (bad ftyp)".into());
     }
@@ -147,7 +152,9 @@ impl Walker<'_> {
             return Ok(None);
         }
         let mut head = [0u8; 8];
-        self.file.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
+        self.file
+            .seek(SeekFrom::Start(at))
+            .map_err(|e| e.to_string())?;
         self.file.read_exact(&mut head).map_err(|e| e.to_string())?;
         let size32 = u64::from(u32::from_be_bytes([head[0], head[1], head[2], head[3]]));
         let kind = [head[4], head[5], head[6], head[7]];
@@ -155,7 +162,9 @@ impl Walker<'_> {
             0 => (at + 8, parent_end - at),
             1 => {
                 let mut large = [0u8; 8];
-                self.file.read_exact(&mut large).map_err(|e| e.to_string())?;
+                self.file
+                    .read_exact(&mut large)
+                    .map_err(|e| e.to_string())?;
                 (at + 16, u64::from_be_bytes(large))
             }
             n => (at + 8, n),
@@ -247,7 +256,9 @@ impl Walker<'_> {
         if count == 0 || body.len() < 16 {
             return Ok(None);
         }
-        Ok(Some(u64::from(u32::from_be_bytes([body[12], body[13], body[14], body[15]]))))
+        Ok(Some(u64::from(u32::from_be_bytes([
+            body[12], body[13], body[14], body[15],
+        ]))))
     }
 
     /// First chunk offset from a `co64` / `stco` box.
@@ -277,11 +288,19 @@ fn read_jpeg(file: &mut File, len: u64, offset: u64, size: u64) -> Result<Option
     Ok(bytes.starts_with(&[0xFF, 0xD8]).then_some(bytes))
 }
 
-fn read_bounded(file: &mut File, len: u64, offset: u64, size: u64, cap: u64) -> Result<Vec<u8>, String> {
+fn read_bounded(
+    file: &mut File,
+    len: u64,
+    offset: u64,
+    size: u64,
+    cap: u64,
+) -> Result<Vec<u8>, String> {
     let size = size.min(cap).min(len.saturating_sub(offset));
     let mut buf = vec![0u8; size as usize];
-    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
-    file.read_exact(&mut buf).map_err(|e| format!("read: {e}"))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    file.read_exact(&mut buf)
+        .map_err(|e| format!("read: {e}"))?;
     Ok(buf)
 }
 
@@ -294,11 +313,19 @@ fn tiff_entry(tiff: &[u8], tag: u16) -> Option<(u16, u32, Vec<u8>)> {
     };
     let u16_at = |at: usize| -> Option<u16> {
         let b: [u8; 2] = tiff.get(at..at + 2)?.try_into().ok()?;
-        Some(if little { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+        Some(if little {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
     };
     let u32_at = |at: usize| -> Option<u32> {
         let b: [u8; 4] = tiff.get(at..at + 4)?.try_into().ok()?;
-        Some(if little { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+        Some(if little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
     };
     let ifd = u32_at(4)? as usize;
     let count = u16_at(ifd)? as usize;
@@ -411,7 +438,10 @@ mod tests {
     fn write_temp(bytes: &[u8], name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(name);
-        std::fs::File::create(&path).unwrap().write_all(bytes).unwrap();
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
         (dir, path)
     }
 
@@ -436,7 +466,13 @@ mod tests {
     /// ftyp, moov{Canon uuid{CMT1,CMT2}, trak{mdia{minf{stbl{stsz,co64}}}}}, mdat{jpeg}.
     fn build_cr3(jpeg: &[u8]) -> Vec<u8> {
         let ftyp = bmff_box(b"ftyp", b"crx \0\0\0\x01crx isom");
-        let cmt1 = bmff_box(b"CMT1", &tiny_tiff(&[(0x010F, "Canon"), (0x0110, "Canon EOS R6")], &[(0x0112, 6)]));
+        let cmt1 = bmff_box(
+            b"CMT1",
+            &tiny_tiff(
+                &[(0x010F, "Canon"), (0x0110, "Canon EOS R6")],
+                &[(0x0112, 6)],
+            ),
+        );
         let cmt2 = bmff_box(b"CMT2", &tiny_tiff(&[(0x9003, "2024:03:15 10:20:30")], &[]));
         let mut canon = CANON_META_UUID.to_vec();
         canon.extend_from_slice(&cmt1);
@@ -451,7 +487,10 @@ mod tests {
             let mut co64 = vec![0u8; 4];
             co64.extend_from_slice(&1u32.to_be_bytes());
             co64.extend_from_slice(&offset.to_be_bytes());
-            let stbl = bmff_box(b"stbl", &[bmff_box(b"stsz", &stsz), bmff_box(b"co64", &co64)].concat());
+            let stbl = bmff_box(
+                b"stbl",
+                &[bmff_box(b"stsz", &stsz), bmff_box(b"co64", &co64)].concat(),
+            );
             let trak = bmff_box(b"trak", &bmff_box(b"mdia", &bmff_box(b"minf", &stbl)));
             bmff_box(b"moov", &[canon_box.clone(), trak].concat())
         };
@@ -466,7 +505,10 @@ mod tests {
         let (_dir, path) = write_temp(&build_cr3(&jpeg), "photo.cr3");
         assert_eq!(cr3_preview(&path).unwrap(), Some(jpeg));
         let meta = cr3_metadata(&path).unwrap();
-        assert_eq!(meta.date_time_original.as_deref(), Some("2024:03:15 10:20:30"));
+        assert_eq!(
+            meta.date_time_original.as_deref(),
+            Some("2024:03:15 10:20:30")
+        );
         assert_eq!(meta.make.as_deref(), Some("Canon"));
         assert_eq!(meta.model.as_deref(), Some("Canon EOS R6"));
         assert_eq!(meta.orientation, Some(6));

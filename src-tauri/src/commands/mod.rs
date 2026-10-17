@@ -7,6 +7,7 @@
 pub mod albums;
 pub mod assistant;
 pub mod bursts;
+pub mod collage;
 pub mod duplicates;
 pub mod geocoding;
 pub mod health;

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { libraryStore } from "./lib/stores/library.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
+  import { updates } from "./lib/stores/updates.svelte";
   import Welcome from "./routes/Welcome.svelte";
   import Timeline from "./routes/Timeline.svelte";
   import Search from "./routes/Search.svelte";
@@ -11,6 +12,7 @@
   import ToastHost from "./lib/components/ToastHost.svelte";
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
   import ShareCardDialog from "./lib/components/ShareCardDialog.svelte";
+  import CollageDialog from "./lib/components/CollageDialog.svelte";
   import MilestoneMoment from "./lib/components/MilestoneMoment.svelte";
   import AssistantDrawer from "./lib/components/AssistantDrawer.svelte";
   import Slideshow from "./lib/components/Slideshow.svelte";
@@ -143,6 +145,11 @@
       window.removeEventListener("hashchange", parseHash);
       window.removeEventListener("keydown", onKey);
     };
+  });
+
+  // Opt-in (off by default): one quiet check per launch.
+  $effect(() => {
+    if (settingsStore.data?.auto_update_check_enabled === true) updates.scheduleAutoCheck();
   });
 
   $effect(() => {
@@ -304,6 +311,7 @@
 <Slideshow />
 <AssistantDrawer />
 <ShareCardDialog />
+<CollageDialog />
 <MilestoneMoment />
 
 <style>

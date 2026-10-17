@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Collages: select 2–9 photos, pick a layout, shape and border, drag to
+  reframe or swap. Saves to Pictures › Smriti Collages.
+- "Made for you" collages on Memories, plus a Collage button on albums and
+  memories: the best few photos, arranged and framed on faces. Never stored.
+- Install updates from Settings; automatic update checks now work.
 - Optional smart-feature setup after opening the first library, with a remembered
   Later choice and feature-specific setup in People, Search, Map, and Settings.
 - Background downloads show their size and progress, support cancellation and
@@ -73,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are (never trashed by the library check).
 
 ### Fixed
+- Updates take the right path for setup.exe and Linux package installs.
 - The slideshow's fullscreen button works: the window permission it needed
   was missing, and the error was silently swallowed. Closing the slideshow
   leaves fullscreen if the slideshow entered it.

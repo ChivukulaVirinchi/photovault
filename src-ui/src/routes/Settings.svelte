@@ -15,6 +15,7 @@
   import AssetSetup from "../lib/components/AssetSetup.svelte";
   import { assetSetup } from "../lib/stores/assetSetup.svelte";
   import { commandErrorMessage } from "../lib/api";
+  import { updates } from "../lib/stores/updates.svelte";
   import type { AssetInventory, AssetItem, LibraryHealthData, SemanticStatus, Settings } from "../lib/api/all";
   import type { ExcludedFolderDto } from "../lib/api/types";
 
@@ -40,9 +41,7 @@
   let testBusy = $state(false);
   let testResult = $state<{ ok: boolean; gpu_name: string; latency_ms: number; model?: string | null } | null>(null);
   let assistantApiKey = $state("");
-  let updateChecking = $state(false);
-  let updateStatus = $state<Awaited<ReturnType<typeof systemEx.updatesCheck>> | null>(null);
-  let updateError = $state<string | null>(null);
+  const update = $derived(updates.status);
   let mounted = false;
   let assetsSeq = 0;
   let semanticSeq = 0;
@@ -50,7 +49,6 @@
   let bridgeSeq = 0;
   let healthSeq = 0;
   let saveSeq = 0;
-  let updateSeq = 0;
 
   async function testBridge() {
     if (!s?.face_gpu_bridge_url) return;
@@ -171,7 +169,6 @@
       exclusionsSeq += 1;
       bridgeSeq += 1;
       healthSeq += 1;
-      updateSeq += 1;
     };
   });
 
@@ -362,22 +359,6 @@
       }
     } finally {
       if (mounted && seq === assetsSeq) assetsBusy = false;
-    }
-  }
-
-  async function checkUpdatesNow() {
-    if (updateChecking) return;
-    const seq = ++updateSeq;
-    updateChecking = true;
-    updateError = null;
-    try {
-      const next = await systemEx.updatesCheck();
-      if (!mounted || seq !== updateSeq) return;
-      updateStatus = next;
-    } catch (e) {
-      if (mounted && seq === updateSeq) updateError = commandErrorMessage(e);
-    } finally {
-      if (mounted && seq === updateSeq) updateChecking = false;
     }
   }
 
@@ -1157,24 +1138,53 @@
         <span class="label-text">Check for updates automatically</span>
       </label>
       <div class="action-row">
-        <button class="ghost" onclick={checkUpdatesNow} disabled={updateChecking}>
-          {updateChecking ? "Checking..." : "Check now"}
+        <button class="ghost" onclick={() => updates.check()} disabled={updates.checking || updates.installing}>
+          {updates.checking ? "Checking…" : "Check now"}
         </button>
-        {#if updateStatus?.newer_available && updateStatus.release_url}
-          <a class="ghost inline-action" href={updateStatus.release_url} target="_blank" rel="noopener">
-            Download update
-          </a>
+        {#if updates.restartReady}
+          <button class="primary" onclick={() => updates.restart()}>Restart to finish</button>
+        {:else if update?.newer_available}
+          {#if update.install === "release_page" || update.install === "package_manager"}
+            {#if update.release_url}
+              <a class="ghost inline-action" href={update.release_url} target="_blank" rel="noopener">
+                Open release page
+              </a>
+            {/if}
+          {:else}
+            <button class="primary" onclick={() => updates.install()} disabled={updates.installing}>
+              {#if updates.installing}
+                {updates.progress != null ? `Downloading… ${Math.round(updates.progress * 100)}%` : "Downloading…"}
+              {:else}
+                Download &amp; install
+              {/if}
+            </button>
+          {/if}
         {/if}
       </div>
-      {#if updateStatus}
+      {#if update}
         <p class="hint blurb">
-          {updateStatus.newer_available
-            ? `Smriti ${updateStatus.latest} is available. Current version: ${updateStatus.current}.`
-            : `Smriti is up to date (${updateStatus.current}).`}
+          {#if !update.newer_available}
+            Smriti is up to date ({update.current}).
+          {:else if updates.restartReady}
+            Smriti {update.latest} is ready. Restart to start using it.
+          {:else}
+            Smriti {update.latest} is available. You have {update.current}.
+            {#if update.install === "package_manager" && update.upgrade_cmd}
+              Update with <code>{update.upgrade_cmd}</code>.
+            {:else if update.package_format}
+              Download the new <code>.{update.package_format}</code> from the release page and open it to upgrade.
+            {:else if update.install === "release_page"}
+              Download the new version from the release page.
+            {:else if update.install === "dmg"}
+              The disk image opens when it's ready; drag Smriti into Applications.
+            {:else if update.install === "installer"}
+              Downloaded from GitHub and checked against the release checksums before it runs.
+            {/if}
+          {/if}
         </p>
       {/if}
-      {#if updateError}
-        <p class="error">{updateError}</p>
+      {#if updates.error}
+        <p class="error">{updates.error}</p>
       {/if}
     </section>
 

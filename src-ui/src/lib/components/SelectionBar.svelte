@@ -4,6 +4,10 @@
   import Trash2 from "lucide-svelte/icons/trash-2";
   import X from "lucide-svelte/icons/x";
   import Check from "lucide-svelte/icons/check";
+  import LayoutDashboard from "lucide-svelte/icons/layout-dashboard";
+  import { MAX_PHOTOS } from "../collage";
+  import { collage } from "../stores/collage.svelte";
+  import { selection } from "../stores/selection.svelte";
 
   interface Props {
     count: number;
@@ -30,6 +34,13 @@
 
   <div class="spacer"></div>
 
+  {#if count >= 2}
+    <button class="action" onclick={() => collage.show(selection.list())} disabled={count > MAX_PHOTOS}
+      title={count > MAX_PHOTOS ? `Collages hold up to ${MAX_PHOTOS} photos` : "Make a collage"}>
+      <LayoutDashboard size={15} strokeWidth={1.75} />
+      <span>Collage</span>
+    </button>
+  {/if}
   <button class="action" onclick={onAddToAlbum} title="Add to album (A)">
     <FolderPlus size={15} strokeWidth={1.75} />
     <span>Add to album</span>
@@ -124,4 +135,5 @@
   .action.keep:hover { color: var(--keep, var(--accent)); }
   .action.danger:hover { color: var(--danger, #d96363); }
   .action.ghost { padding: 6px; }
+  .action:disabled { opacity: 0.45; cursor: default; background: transparent; }
 </style>

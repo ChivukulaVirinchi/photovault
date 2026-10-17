@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::dto::{AppVersionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto, JobIdDto};
-use crate::events::{JobProgress, EV_ASSETS_COMPLETE, EV_ASSETS_PROGRESS};
+use crate::events::{JobProgress, EV_ASSETS_COMPLETE, EV_ASSETS_PROGRESS, EV_UPDATE_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
@@ -504,7 +504,7 @@ pub async fn system_share_photo(
 /// known file manager binaries directly with `setsid` to escape our
 /// process-group / cgroup scope.
 #[cfg(target_os = "linux")]
-fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     use std::collections::HashSet;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -622,7 +622,7 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     use std::process::Command;
     Command::new("open")
         .arg("-R")
@@ -638,7 +638,7 @@ fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     // We tried two command-line approaches and both had failure modes:
     //   1. `explorer.exe /select,<path>` via Command::arg — Rust quotes
     //      the whole token, Explorer falls back to opening Documents.
@@ -757,6 +757,31 @@ pub struct UpdateStatusDto {
     pub newer_available: bool,
     pub release_url: Option<String>,
     pub body: Option<String>,
+    /// What "Update" does on this install: `installer` (download and run
+    /// the setup), `appimage` (swap in place, then restart), `dmg`,
+    /// `package_manager` (show `upgrade_cmd`) or `release_page`.
+    pub install: &'static str,
+    pub upgrade_cmd: Option<String>,
+    /// For `.deb`/`.rpm` installs: which file to download.
+    pub package_format: Option<String>,
+}
+
+fn install_action(
+    method: &smriti::services::install_method::InstallMethod,
+) -> (&'static str, Option<String>, Option<String>) {
+    use smriti::services::install_method::InstallMethod as M;
+    match method {
+        M::NsisInstaller | M::MsiInstaller => ("installer", None, None),
+        M::Portable if cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_some() => {
+            ("appimage", None, None)
+        }
+        M::MacOsApp => ("dmg", None, None),
+        M::PackageManager { upgrade_cmd, .. } => {
+            ("package_manager", Some(upgrade_cmd.clone()), None)
+        }
+        M::LinuxPackage { format } => ("release_page", None, Some(format.clone())),
+        M::Portable | M::SourceBuild | M::Unknown => ("release_page", None, None),
+    }
 }
 
 #[tauri::command]
@@ -766,13 +791,86 @@ pub async fn system_updates_check() -> CommandResult<UpdateStatusDto> {
         .map_err(|e| CommandError::Network {
             message: e.to_string(),
         })?;
+    let (install, upgrade_cmd, package_format) =
+        install_action(&smriti::services::install_method::detect());
     Ok(UpdateStatusDto {
         current: result.current.to_string(),
         latest: Some(result.latest.version.to_string()),
         newer_available: result.newer_available,
         release_url: Some(result.latest.html_url),
         body: Some(result.latest.body),
+        install,
+        upgrade_cmd,
+        package_format,
     })
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UpdateDownloadProgress {
+    pub downloaded: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateInstallDto {
+    /// `installer_launched`, `restart_required`, `release_page` or
+    /// `package_manager`.
+    pub outcome: &'static str,
+}
+
+/// Download, verify (SHA256SUMS) and hand over the newest release. When a
+/// Windows installer was launched, Smriti closes itself shortly after so the
+/// installer can replace the files; the NSIS setup relaunches it.
+#[tauri::command]
+pub async fn system_update_install(app: AppHandle) -> CommandResult<UpdateInstallDto> {
+    use smriti::services::self_replace::{install_update, InstallOutcome};
+
+    let status = smriti::services::update_checker::check_for_updates()
+        .await
+        .map_err(|e| CommandError::Network {
+            message: e.to_string(),
+        })?;
+    if !status.newer_available {
+        return Err(CommandError::Conflict {
+            reason: "Smriti is already up to date".into(),
+        });
+    }
+    let progress_app = app.clone();
+    let progress: smriti::services::self_replace::ProgressCallback =
+        Box::new(move |downloaded, total| {
+            emit(
+                &progress_app,
+                EV_UPDATE_PROGRESS,
+                UpdateDownloadProgress { downloaded, total },
+            );
+        });
+    let method = smriti::services::install_method::detect();
+    let outcome = install_update(method, status.latest, Some(progress))
+        .await
+        .map_err(|e| CommandError::Network {
+            message: e.to_string(),
+        })?;
+    let outcome = match outcome {
+        InstallOutcome::InstallerLaunched { .. } => {
+            if cfg!(target_os = "windows") {
+                let exit_app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    exit_app.exit(0);
+                });
+            }
+            "installer_launched"
+        }
+        InstallOutcome::ReplacedRestartRequired => "restart_required",
+        InstallOutcome::OpenedReleasePage { .. } => "release_page",
+        InstallOutcome::HandedOffToPackageManager { .. } => "package_manager",
+    };
+    Ok(UpdateInstallDto { outcome })
+}
+
+#[tauri::command]
+pub fn system_restart(app: AppHandle) {
+    app.restart();
 }
 
 #[derive(Debug, Deserialize)]

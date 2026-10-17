@@ -4,6 +4,7 @@ pub mod album_suggestions;
 pub mod assistant;
 pub mod burst_detector;
 pub mod camera_names;
+pub mod collage_picks;
 pub mod drive_detector;
 pub mod duplicate_detector;
 pub mod exclusions;
