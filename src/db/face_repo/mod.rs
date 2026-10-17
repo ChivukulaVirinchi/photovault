@@ -28,21 +28,6 @@ pub struct FaceClusterRecord {
     pub face_thumbnail_path: Option<String>,
 }
 
-/// A row from face_review_queue ready to be presented to the user.
-///
-/// Sample face ids are a small set of representative faces from the candidate
-/// cluster, used by the UI to show "here's the person we think this matches."
-#[derive(Debug, Clone)]
-pub struct ReviewItem {
-    pub queue_id: i64,
-    pub face_id: i64,
-    pub candidate_cluster_id: i64,
-    pub candidate_cluster_name: Option<String>,
-    pub candidate_cluster_size: i64,
-    pub candidate_sample_face_ids: Vec<i64>,
-    pub score: f32,
-}
-
 /// Face confirmation status filter for queries.
 #[derive(Debug, Clone)]
 pub enum FaceStatus {

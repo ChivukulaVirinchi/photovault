@@ -149,7 +149,7 @@ pub async fn collage_suggestions(
         let conn = smriti::db::open_secondary(&db_path)?;
         let today = chrono::Local::now().date_naive();
         let memories = if smriti::services::memories::library_is_old_enough(&conn, today) {
-            smriti::services::memories::generate_for_today(&conn, today)
+            smriti::services::memories::generate_for_today_cached(&conn, today)
                 .map_err(|s| CommandError::internal(format!("memories: {s}")))?
         } else {
             Vec::new()

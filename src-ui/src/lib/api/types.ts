@@ -102,17 +102,6 @@ export interface PhotoDto extends PhotoSummaryDto {
   indexed_at: string;
 }
 
-export interface AssetHealthDto {
-  missing_face_models: boolean;
-  missing_onnx_runtime: boolean;
-  missing_geonames_db: boolean;
-  summary: string;
-}
-
-export interface AppVersionDto {
-  version: string;
-}
-
 export interface JobIdDto {
   job_id: string;
 }

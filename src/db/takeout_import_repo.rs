@@ -31,34 +31,6 @@ impl<'a> TakeoutImportRepo<'a> {
             .optional()
     }
 
-    pub fn upsert_item(
-        &self,
-        content_hash: &str,
-        file_path: &str,
-        metadata_json: Option<&str>,
-        albums: &BTreeSet<String>,
-    ) -> SqliteResult<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            r#"
-            INSERT INTO google_takeout_items (content_hash, file_path, metadata_json)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(content_hash) DO UPDATE SET
-                file_path = excluded.file_path,
-                metadata_json = COALESCE(excluded.metadata_json, google_takeout_items.metadata_json),
-                updated_at = CURRENT_TIMESTAMP
-            "#,
-            params![content_hash, file_path, metadata_json],
-        )?;
-        for album in albums {
-            tx.execute(
-                "INSERT OR IGNORE INTO google_takeout_albums (content_hash, album_name) VALUES (?1, ?2)",
-                params![content_hash, album],
-            )?;
-        }
-        tx.commit()
-    }
-
     pub fn upsert_items(&self, items: &[TakeoutLedgerItem]) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
         for item in items {
@@ -114,20 +86,15 @@ mod tests {
         let db = Database::open_for_drive(dir.path()).unwrap();
         crate::db::create_schema(&db.conn).unwrap();
         let repo = TakeoutImportRepo::new(&db.conn);
-        repo.upsert_item(
-            "abc",
-            "Imported from Google Photos/2020/a.jpg",
-            Some(r#"{"favorited":true}"#),
-            &BTreeSet::from(["Trip".to_string()]),
-        )
-        .unwrap();
-        repo.upsert_item(
-            "abc",
-            "Imported from Google Photos/2020/a.jpg",
-            None,
-            &BTreeSet::from(["Family".to_string()]),
-        )
-        .unwrap();
+        let item = |metadata: Option<&str>, album: &str| TakeoutLedgerItem {
+            content_hash: "abc".into(),
+            file_path: "Imported from Google Photos/2020/a.jpg".into(),
+            metadata_json: metadata.map(str::to_string),
+            albums: BTreeSet::from([album.to_string()]),
+        };
+        repo.upsert_items(&[item(Some(r#"{"favorited":true}"#), "Trip")])
+            .unwrap();
+        repo.upsert_items(&[item(None, "Family")]).unwrap();
 
         assert_eq!(
             repo.path_for_hash("abc").unwrap().as_deref(),

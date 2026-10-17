@@ -978,13 +978,6 @@ pub fn detect_gatherings(
 // Top-level pipeline
 // ---------------------------------------------------------------------------
 
-pub fn detect_suggestions_with_diagnostics(
-    conn: &Connection,
-    home_city_override: Option<&str>,
-) -> (Vec<DetectedSuggestion>, SuggestionDiagnostics) {
-    detect_suggestions_with_diagnostics_cancel(conn, home_city_override, None)
-}
-
 pub fn detect_suggestions_with_diagnostics_cancel(
     conn: &Connection,
     home_city_override: Option<&str>,

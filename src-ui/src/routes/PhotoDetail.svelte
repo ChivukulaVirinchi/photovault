@@ -9,14 +9,13 @@
 </script>
 
 <script lang="ts">
+  import { isTypingTarget, modalOpen } from "../lib/keys";
   import { onMount, onDestroy, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { library } from "../lib/api/library";
   import ChevronLeft from "lucide-svelte/icons/chevron-left";
   import ChevronRight from "lucide-svelte/icons/chevron-right";
   import Info from "lucide-svelte/icons/info";
-  import ZoomIn from "lucide-svelte/icons/zoom-in";
-  import ZoomOut from "lucide-svelte/icons/zoom-out";
   import Fullscreen from "lucide-svelte/icons/fullscreen";
   import RotateCcw from "lucide-svelte/icons/rotate-ccw";
   import RotateCw from "lucide-svelte/icons/rotate-cw";
@@ -51,7 +50,6 @@
 
   /// MapLibre is a ~900 KB on-demand import, resolved once when the minimap is
   /// first built. See lib/tile-cache.ts.
-  let maplibregl: Awaited<ReturnType<typeof loadMapLibre>> | null = null;
 
   interface Props { id: number; info?: boolean }
   let { id, info = false }: Props = $props();
@@ -402,7 +400,6 @@
       }
       // The photo may have changed, or the panel closed, while loading.
       if (container !== miniEl || !container.isConnected) return;
-      maplibregl = lib;
       const instance = new lib.Map({
         container,
         style: {
@@ -532,6 +529,9 @@
     }
   }
 
+  /// Briefly set after favouriting, so only a fresh star pops.
+  let favPop = $state(false);
+
   async function toggleFavorite() {
     if (!photo || actionBusy) return;
     const seq = loadSeq;
@@ -541,6 +541,7 @@
       const updated = await photos.setFavorite(photoId, !photo.is_favorite);
       if (!mounted || seq !== loadSeq || photo?.id !== photoId) return;
       photo = updated;
+      favPop = updated.is_favorite;
       const url = resolvedImageCache.get(photoId);
       if (url) rememberPhoto(updated, url);
     } catch (e) {
@@ -629,7 +630,8 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    // A slideshow or dialog on top owns the keyboard.
+    if (slideshow.active || isTypingTarget(e.target) || modalOpen()) return;
     if (e.target instanceof HTMLVideoElement) return;
     switch (e.key) {
       case "Escape":
@@ -839,20 +841,14 @@
         </button>
         <span class="sep"></span>
         {#if !isVideo}
-          <button class="tool" onclick={() => { zoomApi?.zoomOut(); atActual = false; }} title="Zoom out (−)" aria-label="Zoom out">
-            <ZoomOut size={16} strokeWidth={1.75} />
-          </button>
-          <button class="tool" onclick={() => { zoomApi?.zoomIn(); atActual = false; }} title="Zoom in (+)" aria-label="Zoom in">
-            <ZoomIn size={16} strokeWidth={1.75} />
-          </button>
-          <button class="tool" onclick={toggleFullscreen} title="Toggle fullscreen (F)" aria-label="Toggle fullscreen">
+          <button class="tool" onclick={toggleFullscreen} title="Fullscreen (F)" aria-label="Toggle fullscreen">
             <Fullscreen size={16} strokeWidth={1.75} />
           </button>
           <span class="sep"></span>
-          <button class="tool" onclick={rotateCcw} title="Rotate CCW ([)" aria-label="Rotate counter-clockwise">
+          <button class="tool" onclick={rotateCcw} title="Rotate left ([)" aria-label="Rotate counter-clockwise">
             <RotateCcw size={16} strokeWidth={1.75} />
           </button>
-          <button class="tool" onclick={rotateCw} title="Rotate CW (])" aria-label="Rotate clockwise">
+          <button class="tool" onclick={rotateCw} title="Rotate right (])" aria-label="Rotate clockwise">
             <RotateCw size={16} strokeWidth={1.75} />
           </button>
           <span class="sep"></span>
@@ -863,28 +859,28 @@
         <button
           class="tool"
           class:on={photo?.is_favorite ?? false}
+          class:pop={favPop}
+          onanimationend={() => (favPop = false)}
           onclick={toggleFavorite}
+          aria-pressed={photo?.is_favorite ?? false}
           disabled={actionBusy}
-          title={photo?.is_favorite ? "Remove from favourites (S)" : "Add to favourites (S)"}
-          aria-label={photo?.is_favorite ? "Remove from favourites" : "Add to favourites"}
+          title={photo?.is_favorite ? "Unfavourite (S)" : "Favourite (S)"}
+          aria-label="Favourite"
         >
           <Star size={16} strokeWidth={1.75} fill={photo?.is_favorite ? "currentColor" : "none"} />
         </button>
-        <button class="tool" onclick={startSlideshow} title="Start slideshow" aria-label="Start slideshow">
+        <button class="tool" onclick={startSlideshow} title="Slideshow" aria-label="Start slideshow">
           <Play size={16} strokeWidth={1.75} />
         </button>
         <button class="tool" onclick={shareCurrent} disabled={actionBusy} title="Share" aria-label="Share">
           <Share2 size={16} strokeWidth={1.75} />
-        </button>
-        <button class="tool" onclick={revealInFolder} title="Show in folder" aria-label="Show in folder">
-          <FolderOpen size={16} strokeWidth={1.75} />
         </button>
         {#if stack}
           <button
             class="tool stack-tool"
             class:on={stackTrayOpen}
             onclick={() => (stackTrayOpen = !stackTrayOpen)}
-            title={stackTrayOpen ? "Hide stack filmstrip" : `Show ${stack.member_count} stacked photos`}
+            title={stackTrayOpen ? "Hide stack" : `Show stack (${stack.member_count})`}
             aria-label={stackTrayOpen ? "Hide stack filmstrip" : "Show stack filmstrip"}
           >
             <Layers size={16} strokeWidth={1.75} />
@@ -895,7 +891,7 @@
           <Trash2 size={16} strokeWidth={1.75} />
         </button>
         <span class="sep"></span>
-        <button class="tool" class:on={metaOpen} onclick={() => (metaOpen = !metaOpen)} title="Toggle info (I)" aria-label="Toggle info">
+        <button class="tool" class:on={metaOpen} aria-pressed={metaOpen} onclick={() => (metaOpen = !metaOpen)} title="Info (I)" aria-label="Info">
           <Info size={16} strokeWidth={1.75} />
         </button>
       </div>
@@ -1217,6 +1213,11 @@
   .tool.on {
     background: var(--accent-ghost);
     color: var(--accent);
+  }
+  .tool.pop :global(svg) { animation: fav-pop 360ms var(--ease-out); }
+  @keyframes fav-pop {
+    40% { transform: scale(1.35) rotate(-8deg); }
+    to  { transform: scale(1); }
   }
   .stack-tool {
     gap: 2px;

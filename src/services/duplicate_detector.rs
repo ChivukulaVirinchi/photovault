@@ -80,16 +80,6 @@ fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
 }
 
 impl DuplicateDetector {
-    /// Find all exact duplicate groups in the database
-    ///
-    /// Returns groups where 2+ photos share the same SHA256 hash.
-    pub fn find_duplicates(
-        conn: &Connection,
-        drive_root: &Path,
-    ) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        Self::find_duplicates_cancellable(conn, drive_root, None)
-    }
-
     pub fn find_duplicates_cancellable(
         conn: &Connection,
         drive_root: &Path,
@@ -702,7 +692,8 @@ mod tests {
         )
         .unwrap();
 
-        let groups = DuplicateDetector::find_duplicates(&conn, temp.path()).unwrap();
+        let groups =
+            DuplicateDetector::find_duplicates_cancellable(&conn, temp.path(), None).unwrap();
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].duplicate_type, "exact");

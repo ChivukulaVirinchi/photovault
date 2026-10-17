@@ -64,25 +64,29 @@ Windows release builds alongside libheif.
 - License: [LGPL-3.0](https://github.com/strukturag/libde265/blob/master/COPYING)
 - Attribution: Dirk Farin / Struktur AG
 
-## Fonts
+## Fonts and icons
 
-### Inter
-UI text font.
+Bundled into the app from npm packages.
+
+### Bricolage Grotesque
+Display font (`@fontsource-variable/bricolage-grotesque`).
 - License: [SIL Open Font License 1.1](https://openfontlicense.org/)
-- Attribution: Rasmus Andersson, https://rsms.me/inter/
-- Bundled at `assets/fonts/Inter-{Regular,Medium,SemiBold}.ttf`.
+- Attribution: Mathieu Triay
+
+### Cormorant Garamond
+Serif font (`@fontsource/cormorant-garamond`).
+- License: [SIL Open Font License 1.1](https://openfontlicense.org/)
+- Attribution: Christian Thalmann, Catharsis Fonts
 
 ### JetBrains Mono
-Monospaced font (used for the loading spinner, braille glyphs).
+Monospaced font (`@fontsource/jetbrains-mono`).
 - License: [SIL Open Font License 1.1](https://openfontlicense.org/)
 - Attribution: JetBrains s.r.o., https://www.jetbrains.com/lp/mono/
-- Bundled at `assets/fonts/JetBrainsMono-Regular.ttf`.
 
 ### Lucide
-Icon font.
+Icons (`lucide-svelte`).
 - License: [ISC License](https://github.com/lucide-icons/lucide/blob/main/LICENSE) (with Feather-derived icons under the MIT License)
 - Attribution: Lucide Icons and Contributors, https://lucide.dev/
-- Bundled at `assets/fonts/lucide.ttf`.
 
 ## Software dependencies
 

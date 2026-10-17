@@ -83,19 +83,4 @@ pub struct Photo {
     pub updated_at: DateTime<Utc>,
 }
 
-impl Photo {
-    /// Check if this photo has GPS coordinates
-    pub fn has_location(&self) -> bool {
-        self.gps_latitude.is_some() && self.gps_longitude.is_some()
-    }
-
-    /// Get a human-readable location string
-    pub fn location_string(&self) -> Option<String> {
-        match (&self.location_city, &self.location_country) {
-            (Some(city), Some(country)) => Some(format!("{}, {}", city, country)),
-            (Some(city), None) => Some(city.clone()),
-            (None, Some(country)) => Some(country.clone()),
-            (None, None) => None,
-        }
-    }
-}
+impl Photo {}

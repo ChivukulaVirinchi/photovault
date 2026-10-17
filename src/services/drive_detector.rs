@@ -82,11 +82,6 @@ impl DriveDetector {
         drives
     }
 
-    /// Inspect a user-provided folder path and return DriveInfo if valid.
-    pub fn inspect_path(path: PathBuf) -> Option<DriveInfo> {
-        Self::check_path(path)
-    }
-
     /// Check if a path is a valid drive/folder for indexing
     fn check_path(path: PathBuf) -> Option<DriveInfo> {
         if !path.exists() || !path.is_dir() {

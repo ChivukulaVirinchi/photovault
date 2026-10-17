@@ -1,60 +1,15 @@
-//! Geocoding — single-point resolution + library backfill.
+//! Geocoding — library place-name backfill.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use smriti::services::geocoding::GeocodingService;
 
-use crate::dto::{JobIdDto, LocationDto};
+use crate::dto::JobIdDto;
 use crate::events::{JobProgress, EV_GEOCODING_COMPLETE, EV_GEOCODING_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
 use crate::{CommandError, CommandResult};
-
-#[derive(Debug, Deserialize)]
-pub struct GeocodingResolveOneArgs {
-    pub lat: f64,
-    pub lng: f64,
-}
-
-fn validate_lat_lng(lat: f64, lng: f64) -> CommandResult<()> {
-    if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) {
-        return Err(CommandError::Validation {
-            field: "lat".into(),
-            reason: "latitude must be between -90 and 90".into(),
-        });
-    }
-    if !lng.is_finite() || !(-180.0..=180.0).contains(&lng) {
-        return Err(CommandError::Validation {
-            field: "lng".into(),
-            reason: "longitude must be between -180 and 180".into(),
-        });
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn geocoding_resolve_one(
-    args: GeocodingResolveOneArgs,
-) -> CommandResult<Option<LocationDto>> {
-    validate_lat_lng(args.lat, args.lng)?;
-    let path = smriti::db::geonames::geonames_db_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let svc = GeocodingService::new(&path).map_err(|e| CommandError::Internal {
-        message: e.to_string(),
-    })?;
-    Ok(svc.reverse_geocode(args.lat, args.lng).map(Into::into))
-}
-
-#[derive(Debug, Serialize)]
-pub struct GeocodingBackfillResult {
-    pub considered: u64,
-    pub updated: u64,
-    pub cleared: u64,
-    pub geonames_db_present: bool,
-}
 
 #[derive(Debug, Default, Deserialize)]
 pub struct GeocodingBackfillArgs {
@@ -97,29 +52,6 @@ fn build_message(considered: u64, updated: u64, cleared: u64, db_present: bool) 
         );
     }
     format!("Resolved {} of {} GPS-tagged photos.", updated, considered)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_lat_lng;
-    use crate::CommandError;
-
-    #[test]
-    fn validate_lat_lng_rejects_non_finite_and_out_of_range() {
-        assert!(validate_lat_lng(17.4, 78.5).is_ok());
-        assert!(matches!(
-            validate_lat_lng(f64::NAN, 78.5),
-            Err(CommandError::Validation { .. })
-        ));
-        assert!(matches!(
-            validate_lat_lng(91.0, 78.5),
-            Err(CommandError::Validation { .. })
-        ));
-        assert!(matches!(
-            validate_lat_lng(17.4, 181.0),
-            Err(CommandError::Validation { .. })
-        ));
-    }
 }
 
 /// Re-geocode photos. With `force_refresh = false` (default) only

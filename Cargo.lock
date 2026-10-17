@@ -4967,7 +4967,6 @@ dependencies = [
  "hnsw_rs",
  "image",
  "image_hasher",
- "insta",
  "kamadak-exif",
  "keyring",
  "lazy_static",

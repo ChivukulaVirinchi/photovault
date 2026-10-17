@@ -134,17 +134,6 @@ impl Database {
         Ok(count == 0)
     }
 
-    /// Run periodic database maintenance.
-    ///
-    /// Call after bulk operations (scan, trash empty, reindex).
-    pub fn run_maintenance(&self) -> SqliteResult<()> {
-        // Let SQLite optimize its query planner statistics
-        self.conn.execute_batch("PRAGMA optimize;")?;
-        // Checkpoint WAL to keep it from growing unbounded
-        self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
-        Ok(())
-    }
-
     /// Aggressively flush WAL to the main DB file and consume the
     /// connection. Use on drive deselect / app exit so a yanked USB
     /// drive doesn't leave unwritten data behind. TRUNCATE is the
@@ -167,16 +156,6 @@ impl Database {
         if let Err(e) = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
             tracing::debug!("exit WAL checkpoint failed: {}", e);
         }
-    }
-
-    /// Run integrity check on the database.
-    ///
-    /// Returns Ok(true) if database is healthy, Ok(false) if corrupt.
-    pub fn check_integrity(&self) -> SqliteResult<bool> {
-        let result: String = self
-            .conn
-            .query_row("PRAGMA quick_check;", [], |row| row.get(0))?;
-        Ok(result == "ok")
     }
 
     /// Create a backup of the database file.

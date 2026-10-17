@@ -20,6 +20,8 @@
 </script>
 
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
@@ -27,7 +29,6 @@
   import { trash } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
   import { jobs } from "../lib/stores/jobs.svelte";
-  import { library } from "../lib/api/library";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
@@ -59,7 +60,6 @@
     cachedTimeline?.driveRoot === currentDriveRoot && cachedTimeline.session === currentSession ? cachedTimeline : null;
   const scrollStorageKey = `scroll:/timeline:${currentDriveRoot ?? "closed"}`;
   const returnAnchorKey = `return-anchor:/timeline:${currentDriveRoot ?? "closed"}`;
-  const thumbnailPromptDismissKey = `dismiss:/timeline-thumbnails:${currentDriveRoot ?? "closed"}`;
   const initialScrollTop = readSavedTimelineScrollTop();
   const hasInitialReturnAnchor = (() => {
     try { return sessionStorage.getItem(returnAnchorKey) != null; }
@@ -113,65 +113,6 @@
   // away and came back.
   const scanJob = $derived(jobs.byKind("scan"));
   const scanRunning = $derived(jobs.isRunning("scan"));
-
-  // Pipeline-stage state for the Resume banners. Refreshed whenever a
-  // scan / metadata / thumbnail job completes; computed once on mount
-  // too so users who land on Timeline mid-pipeline see the right CTA.
-  let pendingMetadata = $state<number>(0);
-  let pendingThumbnails = $state<number>(0);
-  let thumbnailPromptDismissed = $state(false);
-  const metadataRunning = $derived(jobs.isRunning("metadata"));
-  const thumbnailRunning = $derived(jobs.isRunning("thumbnails"));
-  const showResumeMetadata = $derived(
-    !metadataRunning && !scanRunning && pendingMetadata > 0,
-  );
-  const showResumeThumbnails = $derived(
-    !thumbnailPromptDismissed && !thumbnailRunning && !scanRunning && pendingThumbnails > 0,
-  );
-
-  function sameLibrary(root: string | null): boolean {
-    return libraryStore.isOpen && libraryStore.driveRoot === root;
-  }
-
-  async function refreshPendingCounts() {
-    try {
-      const [m, t] = await Promise.all([
-        library.pendingMetadataCount(),
-        library.pendingThumbnailCount(),
-      ]);
-      if (!mounted) return;
-      pendingMetadata = m.pending_photos;
-      pendingThumbnails = t.pending_photos;
-    } catch {
-      // library not open yet, ignore
-    }
-  }
-
-  async function resumeMetadata() {
-    const root = currentDriveRoot;
-    try {
-      const r = await library.startMetadataExtraction();
-      if (!sameLibrary(root)) return;
-      jobs.register(r.job_id, "metadata");
-    } catch (e) {
-      if (!mounted || !sameLibrary(root)) return;
-      const msg = commandErrorMessage(e);
-      toasts.error(`Couldn't resume metadata: ${msg}`);
-    }
-  }
-
-  async function resumeThumbnails() {
-    const root = currentDriveRoot;
-    try {
-      const r = await library.startThumbnailPass();
-      if (!sameLibrary(root)) return;
-      jobs.register(r.job_id, "thumbnails");
-    } catch (e) {
-      if (!mounted || !sameLibrary(root)) return;
-      const msg = commandErrorMessage(e);
-      toasts.error(`Couldn't resume thumbnails: ${msg}`);
-    }
-  }
 
   // Scrubber state
   let scrubHover = $state(false);
@@ -368,11 +309,6 @@
 
   function clearTimelineReturnAnchor() {
     try { sessionStorage.removeItem(returnAnchorKey); } catch {}
-  }
-
-  function dismissThumbnailPrompt() {
-    thumbnailPromptDismissed = true;
-    try { localStorage.setItem(thumbnailPromptDismissKey, "1"); } catch {}
   }
 
   function patchThumbnail(photoId: number, thumbnailPath: string) {
@@ -902,7 +838,6 @@
 
   onMount(() => {
     mounted = true;
-    try { thumbnailPromptDismissed = localStorage.getItem(thumbnailPromptDismissKey) === "1"; } catch {}
     const hasReturnAnchor = readTimelineReturnAnchor() != null;
     if (hasReturnAnchor) scrollRestored = true;
     const restored = hasReturnAnchor ? restoreTimelineReturnAnchor() : Promise.resolve(false);
@@ -911,19 +846,11 @@
         if (mounted && !ok && items.length === 0) loadMore();
       });
     }
-    refreshPendingCounts();
     window.addEventListener("keydown", onGlobalKey);
 
-    // Streaming-scanner integration. Three Tauri events drive in-place
-    // updates to the timeline so users see photos / dates / thumbnails
-    // populate progressively instead of staring at an empty grid:
-    //
-    //   thumbnail:ready    → fetch the batch of upgraded rows and patch
-    //                        their thumbnail_path in-place
-    //   metadata:progress  → refresh totals so date-group headers reflow
-    //                        as EXIF dates land
-    //   thumbnails:complete + metadata:complete → recount pending so
-    //                        the Resume banners hide
+    // Streaming-scanner integration: thumbnail:ready patches upgraded
+    // rows in place so users see thumbnails populate progressively
+    // instead of staring at an empty grid.
     const unlistens: Promise<UnlistenFn>[] = [];
     unlistens.push(
       listen<{ photo_ids: number[] }>("thumbnail:ready", async (e) => {
@@ -946,25 +873,10 @@
         }
       }),
     );
-    let metadataRefreshRaf = 0;
-    unlistens.push(
-      listen("metadata:progress", () => {
-        if (metadataRefreshRaf !== 0) return;
-        metadataRefreshRaf = requestAnimationFrame(() => {
-          metadataRefreshRaf = 0;
-          if (mounted) refreshPendingCounts();
-        });
-      }),
-    );
-    unlistens.push(listen("metadata:complete", () => refreshPendingCounts()));
-    unlistens.push(listen("thumbnails:complete", () => refreshPendingCounts()));
     // Stream new arrivals into the top of the Timeline while a scan runs.
     // Coalesced and top-of-list-only; see scheduleScanRefresh.
     unlistens.push(listen("scan:progress", () => scheduleScanRefresh()));
-    unlistens.push(listen("scan:complete", () => {
-      refreshPendingCounts();
-      void refreshFirstPage();
-    }));
+    unlistens.push(listen("scan:complete", () => void refreshFirstPage()));
 
     return () => {
       snapshotTimelineScroll();
@@ -973,7 +885,6 @@
       pageSeq += 1;
       window.removeEventListener("keydown", onGlobalKey);
       if (thumbnailPatchRaf !== 0) cancelAnimationFrame(thumbnailPatchRaf);
-      if (metadataRefreshRaf !== 0) cancelAnimationFrame(metadataRefreshRaf);
       if (zoomTimer != null) clearTimeout(zoomTimer);
       if (scanRefreshRaf !== 0) cancelAnimationFrame(scanRefreshRaf);
       cancelMarqueeDrag();
@@ -1195,7 +1106,7 @@
 
   function onGlobalKey(e: KeyboardEvent) {
     if (inInactivePanel(scrollEl)) return;
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
     // Ctrl/Cmd+A: select every loaded photo. (Ctrl+Shift+A is the
     // assistant, handled in App.svelte.)
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "a" || e.key === "A")) {
@@ -1574,13 +1485,13 @@
 
 <PageHeader title="Timeline">
   <SurpriseButton disabled={libraryStore.photoCount === 0} />
-  <button class="icon-action" onclick={startTimelineSlideshow} disabled={items.length === 0} title="Start slideshow" aria-label="Start timeline slideshow">
+  <button class="icon-action" onclick={startTimelineSlideshow} disabled={items.length === 0} title="Slideshow" aria-label="Start timeline slideshow">
     <Play size={15} strokeWidth={2} />
   </button>
-  <div class="zoom-pill" role="tablist" aria-label="Zoom level">
-    <button class:on={zoom === "year"}  onclick={() => setZoom("year")}  aria-label="Years">Year</button>
-    <button class:on={zoom === "month"} onclick={() => setZoom("month")} aria-label="Months">Month</button>
-    <button class:on={zoom === "day"}   onclick={() => setZoom("day")}   aria-label="Days">Day</button>
+  <div class="zoom-pill" role="group" aria-label="Zoom">
+    <button class:on={zoom === "year"}  aria-pressed={zoom === "year"}  onclick={() => setZoom("year")}>Year</button>
+    <button class:on={zoom === "month"} aria-pressed={zoom === "month"} onclick={() => setZoom("month")}>Month</button>
+    <button class:on={zoom === "day"}   aria-pressed={zoom === "day"}   onclick={() => setZoom("day")}>Day</button>
   </div>
   {#if scanRunning && scanJob}
     <span class="scan-status mono">
@@ -1596,7 +1507,7 @@
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-{#if showResumeMetadata || showResumeThumbnails || libraryStore.missingHeldBack > 0}
+{#if libraryStore.missingHeldBack > 0}
   <div class="resume-banners">
     {#if libraryStore.missingHeldBack > 0}
       <div class="resume-banner">
@@ -1606,25 +1517,6 @@
         </span>
         <button class="primary" onclick={() => libraryStore.trashMissing()}>Move to Trash</button>
         <button class="dismiss-banner" onclick={() => (libraryStore.missingHeldBack = 0)} aria-label="Keep missing photos for now" title="Keep for now">
-          <X size={14} strokeWidth={2} />
-        </button>
-      </div>
-    {/if}
-    {#if showResumeMetadata}
-      <div class="resume-banner">
-        <span class="msg">
-          {pendingMetadata.toLocaleString()} photos still need EXIF + place data.
-        </span>
-        <button class="primary" onclick={resumeMetadata}>Resume reading metadata</button>
-      </div>
-    {/if}
-    {#if showResumeThumbnails}
-      <div class="resume-banner">
-        <span class="msg">
-          {pendingThumbnails.toLocaleString()} photos still need cached thumbnails.
-        </span>
-        <button class="primary" onclick={resumeThumbnails}>Resume thumbnails</button>
-        <button class="dismiss-banner" onclick={dismissThumbnailPrompt} aria-label="Dismiss thumbnail prompt" title="Dismiss">
           <X size={14} strokeWidth={2} />
         </button>
       </div>
@@ -1691,6 +1583,7 @@
                   class:selected={selection.has(photo.id)}
                   class:focused={focusedIdx >= 0 && items[focusedIdx]?.id === photo.id}
                   href="#/photo?id={photo.id}"
+                  aria-label={photoLabel(photo)}
                   use:thumbnailOnVisible={{
                     id: photo.id,
                     thumbnailPath: photo.thumbnail_path,
@@ -1929,8 +1822,16 @@
   }
   .cell.selected {
     box-shadow: inset 0 0 0 3px var(--accent);
+    background: color-mix(in oklab, var(--accent) 16%, var(--bg-card));
   }
-  .cell.selected img { filter: brightness(0.85); }
+  .cell img {
+    transition: transform 180ms var(--ease-out), border-radius 180ms var(--ease-out), filter 180ms var(--ease-out);
+  }
+  .cell.selected img {
+    filter: brightness(0.85);
+    transform: scale(0.9);
+    border-radius: var(--r-sm);
+  }
   .cell.focused {
     box-shadow: 0 0 0 2px var(--accent);
     z-index: 1;

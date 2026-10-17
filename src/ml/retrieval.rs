@@ -54,13 +54,11 @@ pub struct BandingConfig {
 
 impl Default for BandingConfig {
     fn default() -> Self {
-        // Tuned to err toward the review queue. A face gets auto-assigned
-        // only when its mean top-K cosine to a cluster's gallery is ≥ 0.65
-        // AND beats the runner-up cluster by ≥ 0.12. Anything weaker goes
-        // to AMBIGUOUS — the user confirms via PersonReview, and that
-        // confirmed face becomes a sticky `user_confirmed` gallery exemplar
-        // that drives all future retrievals. Better to ask twice than to
-        // silently misclassify.
+        // Tuned to err toward caution. A face gets auto-assigned only when
+        // its mean top-K cosine to a cluster's gallery is ≥ 0.65 AND beats
+        // the runner-up cluster by ≥ 0.12. Anything weaker is AMBIGUOUS and
+        // left for the clustering pass. Better to leave a face unassigned
+        // than to silently misclassify.
         Self {
             low_threshold: 0.40,
             high_threshold: 0.65,

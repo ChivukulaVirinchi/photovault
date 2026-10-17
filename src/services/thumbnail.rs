@@ -370,47 +370,6 @@ impl ThumbnailService {
         })
     }
 
-    /// Prewarm Small thumbnails for a batch of photos. Skips any that
-    /// already exist on disk (cheap stat). Runs in parallel via Rayon —
-    /// the concurrency limiter inside `generate_thumbnail` caps the
-    /// number of in-flight image decodes at 4 to avoid OOM.
-    ///
-    /// Aborts as soon as `cancel` is set so a fresh scan or app-exit
-    /// can stop prewarm immediately. Returns the number of newly
-    /// generated thumbnails.
-    pub fn prewarm_small(
-        &self,
-        items: &[(PathBuf, String, i32)],
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> usize {
-        use rayon::prelude::*;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let size = ThumbnailSize::Small;
-        let generated = AtomicUsize::new(0);
-        items
-            .par_iter()
-            .for_each(|(photo_path, file_hash, orientation)| {
-                if cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                // Skip if a thumbnail file already exists on disk for this
-                // hash+size — that's the same key the on-demand generator
-                // uses, so the cost is one stat per photo.
-                let cached = self.thumbnail_path(file_hash, size);
-                if cached.exists() {
-                    return;
-                }
-                match self.generate_thumbnail_background(photo_path, file_hash, *orientation, size)
-                {
-                    Ok(_) => {
-                        generated.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => tracing::trace!("prewarm skipped {}: {}", photo_path.display(), e),
-                }
-            });
-        generated.load(Ordering::Relaxed)
-    }
-
     /// Generate a thumbnail synchronously with a timeout guard.
     ///
     /// Call this from a background task (spawn_blocking) after get_thumbnail returns Pending.

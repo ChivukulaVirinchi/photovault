@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { trapFocus } from "../lib/actions/trapFocus";
+
   interface Props { onclose: () => void }
   let { onclose }: Props = $props();
 
@@ -6,61 +8,103 @@
 
   const groups: Group[] = [
     {
-      title: "Photo viewer",
+      title: "Anywhere",
       rows: [
-        ["←", "Previous photo"],
-        ["→", "Next photo"],
-        ["Esc", "Back to gallery"],
-        ["I", "Toggle info panel"],
-        ["+ / −", "Zoom in / out"],
-        ["0", "Fit to screen"],
-        ["1", "Actual size (1:1)"],
-        ["[ / ]", "Rotate left / right"],
-        ["F", "Toggle fullscreen"],
-        ["S", "Toggle favourite"],
+        ["Ctrl+1…9", "Go to a page"],
+        ["Ctrl+,", "Settings"],
+        ["/", "Search"],
+        ["Esc", "Back"],
+        ["?", "This list"],
       ],
     },
     {
-      title: "Anywhere",
+      title: "Photo grids",
       rows: [
-        ["?", "Toggle this overlay"],
-        ["/", "Focus search"],
-        ["Esc", "Back / close overlay"],
+        ["Arrows", "Move (Timeline)"],
+        ["Enter", "Open photo"],
+        ["Ctrl+A", "Select all"],
+        ["Esc", "Clear selection"],
+        ["A", "Add selection to album"],
+        ["Delete", "Trash selection"],
+      ],
+    },
+    {
+      title: "Photo viewer",
+      rows: [
+        ["← / →", "Previous / next"],
+        ["I", "Info"],
+        ["S", "Favourite"],
+        ["A", "Add to album"],
+        ["+ / − / 0", "Zoom in / out / fit"],
+        ["1", "Actual size"],
+        ["[ / ]", "Rotate"],
+        ["F", "Fullscreen"],
+        ["Delete", "Trash"],
+        ["Esc", "Back"],
+      ],
+    },
+    {
+      title: "Slideshow",
+      rows: [
+        ["Space", "Play / pause"],
+        ["← / →", "Previous / next"],
+        ["F", "Fullscreen"],
+        ["Esc", "Close"],
+      ],
+    },
+    {
+      title: "Collage",
+      rows: [
+        ["Ctrl+S", "Save"],
+        ["Ctrl+C", "Copy"],
+        ["Double-click", "Reset a photo"],
+      ],
+    },
+    {
+      title: "Reviewing faces",
+      rows: [
+        ["Y", "Same person"],
+        ["N", "Not this person"],
+        ["S", "Skip"],
+        ["Esc", "Done"],
       ],
     },
   ];
 
-  function onBackdrop(e: KeyboardEvent | MouseEvent) {
-    if (e instanceof KeyboardEvent && e.key !== "Enter" && e.key !== " ") return;
-    onclose();
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onclose(); }
   }
 </script>
 
-<div
-  class="overlay"
-  onclick={(e) => { if (e.target === e.currentTarget) onBackdrop(e); }}
-  onkeydown={onBackdrop}
-  role="button"
-  tabindex="-1"
-  aria-label="Close shortcuts"
->
-  <div class="card" role="dialog" aria-label="Keyboard shortcuts">
-    <h2>Keyboard shortcuts</h2>
-    {#each groups as group}
-      <section>
-        <h3 class="group-title">{group.title}</h3>
-        <ul>
-          {#each group.rows as [key, label]}
-            <li>
-              <kbd>{key}</kbd>
-              <span>{label}</span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/each}
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}>
+  <div
+    class="card pv-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="shortcuts-title"
+    tabindex="-1"
+    onkeydown={onKey}
+    use:trapFocus
+  >
+    <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+    <div class="groups">
+      {#each groups as group}
+        <section>
+          <h3 class="group-title">{group.title}</h3>
+          <ul>
+            {#each group.rows as [key, label]}
+              <li>
+                <kbd>{key}</kbd>
+                <span>{label}</span>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/each}
+    </div>
     <div class="row">
-      <button class="ghost" onclick={onclose}>Close</button>
+      <button class="ghost" onclick={onclose} title="Close (Esc)">Close</button>
     </div>
   </div>
 </div>
@@ -82,7 +126,7 @@
     border: 1px solid var(--line);
     padding: var(--s-6);
     border-radius: var(--r-md);
-    width: min(460px, calc(100vw - 32px));
+    width: min(720px, calc(100vw - 32px));
     max-width: 90vw;
     max-height: 90vh;
     overflow-y: auto;
@@ -96,6 +140,11 @@
     font-size: var(--t-xl);
     font-weight: 600;
     margin: 0;
+  }
+  .groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--s-5) var(--s-6);
   }
   section {
     display: flex;
@@ -120,7 +169,7 @@
   }
   li {
     display: grid;
-    grid-template-columns: 96px 1fr;
+    grid-template-columns: 104px 1fr;
     gap: var(--s-3);
     align-items: center;
   }

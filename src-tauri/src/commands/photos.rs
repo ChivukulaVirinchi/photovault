@@ -348,29 +348,6 @@ pub async fn photos_list_by_date(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PhotosListByPlaceArgs {
-    pub city: Option<String>,
-    pub country: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
-#[tauri::command]
-pub async fn photos_list_by_place(
-    state: State<'_, AppState>,
-    args: PhotosListByPlaceArgs,
-) -> CommandResult<Page<PhotoSummaryDto>> {
-    let city = args.city.clone();
-    let country = args.country.clone();
-    paged(state, args.cursor, args.limit, move |db, cur, limit| {
-        let repo = PhotoRepo::new(db);
-        repo.list_after_by_place(city.as_deref(), country.as_deref(), cur, limit)
-            .map_err(Into::into)
-    })
-    .await
-}
-
-#[derive(Debug, Deserialize)]
 pub struct PhotosPeopleInPhotoArgs {
     pub photo_id: i64,
 }

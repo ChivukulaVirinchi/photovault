@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { people, trash, type FaceDetailDto } from "../lib/api/all";
@@ -141,7 +143,12 @@
     }
   }
   function onGlobalKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "a") {
+      const ids = photos.map((p) => p.id);
+      if (ids.length > 0) { selection.replace(new Set(ids)); e.preventDefault(); }
+      return;
+    }
     if (selection.active()) {
       if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
       else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
@@ -447,6 +454,7 @@
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
         data-photo-id={p.id}
+        aria-label={photoLabel(p)}
         href="#/photo?id={p.id}"
         use:thumbnailOnVisible={{
           id: p.id,

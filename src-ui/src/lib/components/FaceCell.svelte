@@ -41,11 +41,11 @@
   }
 
   const unconfirmed = $derived(face.user_confirmed === 0);
+  let focused = $state(false);
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- Role and tabindex are set only when the cell is clickable. -->
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
 <div
   class="face-cell"
   class:unconfirmed
@@ -53,9 +53,18 @@
   class:busy
   onmouseenter={() => (hover = true)}
   onmouseleave={() => (hover = false)}
+  onfocusin={() => (focused = true)}
+  onfocusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused = false; }}
   onclick={() => onClick?.(face.face_id)}
+  onkeydown={(e) => {
+    if (onClick && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      onClick(face.face_id);
+    }
+  }}
   role={onClick ? "button" : undefined}
   tabindex={onClick ? 0 : undefined}
+  aria-label={onClick ? "Face" : undefined}
 >
   {#if faceCropUrl(face.face_id)}
     <img src={faceCropUrl(face.face_id) ?? ""} alt="" loading="lazy" />
@@ -63,13 +72,15 @@
     <span class="placeholder small">no face</span>
   {/if}
 
-  {#if (hover || showActions) && !busy}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
+  {#if (hover || focused || showActions) && !busy}
+    <!-- Only stops clicks on the buttons from also opening the face. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="actions" onclick={(e) => e.stopPropagation()}>
       {#if unconfirmed && onConfirm}
         <button
           class="action-btn confirm"
           title="Confirm"
+          aria-label="Confirm"
           onclick={() => onConfirm(face.face_id)}
         >
           <Check size={14} strokeWidth={2.25} />
@@ -78,7 +89,8 @@
       {#if onReassign}
         <button
           class="action-btn reassign"
-          title="Move to another person"
+          title="Move to someone else"
+          aria-label="Move to someone else"
           onclick={() => onReassign(face.face_id)}
         >
           <ArrowLeftRight size={14} strokeWidth={2.25} />
@@ -88,6 +100,7 @@
         <button
           class="action-btn reject"
           title="Reject"
+          aria-label="Reject"
           onclick={() => onReject(face.face_id)}
         >
           <X size={14} strokeWidth={2.25} />

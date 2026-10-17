@@ -57,7 +57,9 @@
 </script>
 
 {#if jobs.count > 0}
-  <div class="indicator" class:expanded role="status" aria-live="polite">
+  <!-- Announce tasks starting and finishing, not every progress tick. -->
+  <span class="sr-only" aria-live="polite">{jobs.count} {jobs.count === 1 ? "task" : "tasks"} running</span>
+  <div class="indicator" class:expanded>
     {#if expanded}
       <header>
         <span class="title">
@@ -87,12 +89,9 @@
                   onclick={() => cancelJob(j)}
                   disabled={cancelling.has(j.id) || j.status !== "running"}
                   aria-label={j.kind === "faces" ? "Pause" : "Cancel"}
-                  title={j.kind === "faces"
-                    ? "Pause - resume later, even after moving the drive to another machine"
-                    : "Cancel"}
+                  title={j.kind === "faces" ? "Pause" : "Cancel"}
                 >
                   <CircleX size={13} strokeWidth={2} />
-                  <span class="sr-only">Cancel</span>
                 </button>
               {/if}
             </div>
@@ -109,9 +108,7 @@
                      for this run. Reflects the configured intent at
                      job start, not per-batch runtime health. -->
                 <span class="chip" data-route={j.embedder_route}
-                  title={j.embedder_route === "bridge"
-                    ? "Embeddings routed to the configured Cloud GPU bridge. Detection still runs locally on every photo."
-                    : "Embeddings running on the local ONNX session (CPU / local GPU). Enable a healthy bridge in Settings to offload them."}>
+                  title={j.embedder_route === "bridge" ? "Using the cloud GPU" : "Using this computer"}>
                   {j.embedder_route === "bridge" ? "Cloud GPU" : "Local CPU"}
                 </span>
               {/if}

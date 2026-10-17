@@ -1,4 +1,4 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { routeCache } from "./routeCache.svelte";
 import { dataRevision } from "./dataRevision.svelte";
 
@@ -103,7 +103,6 @@ class JobsStore {
   jobs = $state<Map<string, Job>>(new Map());
   private installed = false;
   private installPromise: Promise<void> | null = null;
-  private unlisten: UnlistenFn[] = [];
   private suppressedLibraryJobIds = new Set<string>();
   /// Pending "linger then evict" timers, so clearing the library can cancel
   /// them instead of letting them fire against a reset registry.
@@ -281,7 +280,6 @@ class JobsStore {
       this.installed = false;
       throw failed.reason;
     }
-    this.unlisten = unlistens;
     this.installed = true;
   }
 

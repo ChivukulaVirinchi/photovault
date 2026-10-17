@@ -18,9 +18,8 @@ use smriti::services::semantic::{
 use super::bursts::BurstsCompleteDto;
 use super::duplicates::DuplicatesCompleteDto;
 use crate::dto::{
-    DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, IndexChangesDto, JobIdDto,
-    LibraryHandleDto, MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, ReconcileDto,
-    SchemaTooNewDto,
+    DriveDto, ExcludedFolderDto, ExcludedFolderPreviewDto, JobIdDto, LibraryHandleDto,
+    MediaTypeDto, MetadataProgressDto, Page, PhotoSummaryDto, ReconcileDto, SchemaTooNewDto,
 };
 use crate::events::{
     JobProgress, EV_BURSTS_COMPLETE, EV_DUPLICATES_COMPLETE, EV_DUPLICATES_PROGRESS,
@@ -142,33 +141,6 @@ pub async fn library_resolve_path(
         absolute_path: abs.display().to_string(),
         library_session_id: session_id,
         file_hash: photo.file_hash,
-    })
-}
-
-#[tauri::command]
-pub async fn library_detect_changes(state: State<'_, AppState>) -> CommandResult<IndexChangesDto> {
-    let drive_root = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        lib.drive_root.clone()
-    };
-    let db_path = smriti::db::db_path_for(&drive_root);
-    let changes = tauri::async_runtime::spawn_blocking(move || {
-        let conn = smriti::db::open_secondary(&db_path)?;
-        let reindexer = smriti::services::reindexer::Reindexer::new_with_options(
-            smriti::config::AppConfig::load().scan_hidden_folders,
-        );
-        Ok::<_, CommandError>(reindexer.detect_changes(&conn, &drive_root)?)
-    })
-    .await
-    .map_err(|e| CommandError::Internal {
-        message: format!("change detection worker failed: {e}"),
-    })??;
-    Ok(IndexChangesDto {
-        added: changes.added.len() as u64,
-        removed: changes.removed.len() as u64,
-        moved: changes.moved.len() as u64,
-        modified: changes.modified.len() as u64,
     })
 }
 
@@ -1111,15 +1083,6 @@ pub struct CancelJobArgs {
     pub job_id: String,
 }
 
-#[tauri::command]
-pub async fn library_cancel_scan(
-    state: State<'_, AppState>,
-    args: CancelJobArgs,
-) -> CommandResult<()> {
-    state.jobs.lock().await.cancel(&args.job_id);
-    Ok(())
-}
-
 /// Generic job-cancel handler used by the global JobsIndicator's X
 /// button — works for any job_id regardless of domain. Engine workers
 /// that respect the cancel flag (face_processor, scanner, geocoding
@@ -1656,142 +1619,6 @@ fn load_thumbnail_chunk(
     rows.collect()
 }
 
-fn legacy_thumbnail_path(file_hash: &str) -> String {
-    let subdir = &file_hash[..2.min(file_hash.len())];
-    format!(
-        ".photovault/thumbnails/small/v2/{}/{}.jpg",
-        subdir, file_hash
-    )
-}
-
-fn repair_thumbnail_paths(
-    database: &Database,
-    drive_root: &Path,
-    cancel: &std::sync::atomic::AtomicBool,
-) -> CommandResult<usize> {
-    // Incremental sweep: the repair cursor records the highest photo id
-    // whose stored thumbnail path has been verified on disk. Rows only
-    // gain new ids (scan/takeout inserts) or a NULLed path (reindexer
-    // clears it on modification), so verified rows never need rechecking.
-    // `library_force_thumbnail_repair` clears the cursor for a full sweep.
-    let mut last_id: i64 = library_meta_get(&database.conn, "thumbnail_repair_cursor")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    let mut repaired = 0usize;
-    let mut highest_seen = last_id;
-    loop {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            break;
-        }
-        let rows = {
-            let mut stmt = database.conn.prepare(
-                "SELECT id, file_hash, thumbnail_path FROM photos
-                 WHERE id > ?1 AND thumbnail_path IS NOT NULL ORDER BY id LIMIT 512",
-            )?;
-            let rows = stmt
-                .query_map([last_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
-        };
-        if rows.is_empty() {
-            break;
-        }
-        last_id = rows.last().expect("nonempty chunk").0;
-        highest_seen = highest_seen.max(last_id);
-        let stale: Vec<_> = rows
-            .into_iter()
-            .filter_map(|(id, hash, stored)| {
-                let usable = (stored == relative_thumbnail_path(&hash)
-                    || stored == legacy_thumbnail_path(&hash))
-                    && drive_root.join(&stored).is_file();
-                (!usable).then_some(id)
-            })
-            .collect();
-        if stale.is_empty() {
-            continue;
-        }
-        // Filesystem checks happen outside the short write transaction.
-        let tx = database.conn.unchecked_transaction()?;
-        {
-            let mut update = tx.prepare(
-                "UPDATE photos SET thumbnail_path = NULL, thumbnailed = FALSE WHERE id = ?1",
-            )?;
-            for id in stale {
-                repaired += update.execute([id])?;
-            }
-        }
-        tx.commit()?;
-    }
-    // Every row up to `highest_seen` has been verified — even a cancelled
-    // sweep fully processed its last chunk, so the cursor is safe to move.
-    if highest_seen > 0 {
-        library_meta_set(
-            &database.conn,
-            "thumbnail_repair_cursor",
-            &highest_seen.to_string(),
-        );
-    }
-    if repaired > 0 {
-        tracing::info!("Cleared {} stale thumbnail_path rows", repaired);
-    }
-    Ok(repaired)
-}
-
-fn library_meta_get(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM library_meta WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
-    .ok()
-}
-
-fn library_meta_set(conn: &rusqlite::Connection, key: &str, value: &str) {
-    let _ = conn.execute(
-        "INSERT INTO library_meta(key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        rusqlite::params![key, value],
-    );
-}
-
-/// Force a full thumbnail-path repair sweep by clearing the incremental
-/// cursor, then verify every row against the thumbnail cache on disk.
-/// Intended as a manual maintenance action (e.g. after external changes
-/// to `.photovault/thumbnails`).
-#[tauri::command]
-pub async fn library_force_thumbnail_repair(state: State<'_, AppState>) -> CommandResult<u64> {
-    let drive_root = {
-        let lib_guard = state.library.read().await;
-        let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-        lib.drive_root.clone()
-    };
-    let db_path = smriti::db::db_path_for(&drive_root);
-    let repaired = tauri::async_runtime::spawn_blocking(move || {
-        let conn = smriti::db::open_secondary(&db_path)?;
-        let _ = conn.execute(
-            "DELETE FROM library_meta WHERE key = 'thumbnail_repair_cursor'",
-            [],
-        );
-        let database = Database { conn };
-        repair_thumbnail_paths(
-            &database,
-            &drive_root,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-    })
-    .await
-    .map_err(|e| CommandError::Internal {
-        message: format!("thumbnail repair worker failed: {e}"),
-    })??;
-    Ok(repaired as u64)
-}
-
 fn estimate_eta_ms(
     processed: u64,
     total: Option<u64>,
@@ -2186,31 +2013,6 @@ async fn library_is_still_open(app: &AppHandle, db: &Arc<tokio::sync::Mutex<Data
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn repair_handles_multiple_batches_and_cancellation() {
-        let root = tempfile::tempdir().unwrap();
-        let db = Database::open_for_drive(root.path()).unwrap();
-        smriti::db::create_schema(&db.conn).unwrap();
-        db.conn.execute_batch("WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<1025)
-            INSERT INTO photos(id,file_path,file_name,file_hash,file_size,thumbnail_path,thumbnailed)
-            SELECT id, id||'.jpg', id||'.jpg', 'hash'||id, 1, 'missing/'||id||'.jpg', 1 FROM ids;").unwrap();
-        let cancel = std::sync::atomic::AtomicBool::new(true);
-        repair_thumbnail_paths(&db, root.path(), &cancel).unwrap();
-        let count = || {
-            db.conn
-                .query_row(
-                    "SELECT COUNT(*) FROM photos WHERE thumbnail_path IS NOT NULL",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap()
-        };
-        assert_eq!(count(), 1025);
-        cancel.store(false, std::sync::atomic::Ordering::Relaxed);
-        repair_thumbnail_paths(&db, root.path(), &cancel).unwrap();
-        assert_eq!(count(), 0);
-    }
 
     fn thumbnail_test_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

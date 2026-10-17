@@ -19,13 +19,13 @@ Clustering happens in two stages:
 
 1. **Gallery retrieval.** Each new face is compared against the gallery
    of existing clusters using k-nearest-neighbor matching with
-   confidence bands. High-confidence matches auto-assign. Ambiguous
-   matches are queued for review. Low-confidence faces drop to stage 2.
+   confidence bands. High-confidence matches auto-assign. Everything
+   else drops to stage 2.
 2. **Complete-link agglomerative.** The remaining unresolved faces are
    clustered pairwise. If the number of unresolved faces exceeds
    **2,000** in a single pass, stage 2 is skipped for performance and
-   those faces are routed to the ambiguous-review queue or matched
-   against galleries by the rescue pass instead. The cap will be lifted
+   those faces are matched against galleries by the rescue pass
+   instead. The cap will be lifted
    in a future release once HNSW-based approximate clustering replaces
    complete-link.
 

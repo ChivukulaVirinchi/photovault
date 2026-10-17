@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::dto::{AppVersionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto, JobIdDto};
+use crate::dto::{AssetInventoryDto, AssetItemDto, JobIdDto};
 use crate::events::{JobProgress, EV_ASSETS_COMPLETE, EV_ASSETS_PROGRESS, EV_UPDATE_PROGRESS};
 use crate::jobs::{self, emit};
 use crate::state::{AppState, JobKind};
@@ -59,23 +59,6 @@ pub async fn system_asset_download_size(args: AssetSetupArgs) -> CommandResult<u
         0
     };
     Ok(pack + visual)
-}
-
-#[tauri::command]
-pub async fn system_asset_health() -> CommandResult<AssetHealthDto> {
-    let h = tauri::async_runtime::spawn_blocking(smriti::bootstrap::asset_health)
-        .await
-        .map_err(|e| CommandError::Internal {
-            message: format!("asset health worker failed: {e}"),
-        })?;
-    Ok(h.into())
-}
-
-#[tauri::command]
-pub async fn system_app_version() -> CommandResult<AppVersionDto> {
-    Ok(AppVersionDto {
-        version: smriti::services::update_checker::current_version().to_string(),
-    })
 }
 
 #[tauri::command]
@@ -707,11 +690,6 @@ pub(crate) fn select_in_file_manager(path: &std::path::Path) -> std::io::Result<
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct CopiedPathDto {
-    pub path: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct SystemOpenPathArgs {
     pub path: String,
@@ -728,26 +706,6 @@ pub async fn system_open_path(args: SystemOpenPathArgs) -> CommandResult<()> {
     }
     open::that_detached(path)?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn system_copy_path_to_clipboard(
-    state: State<'_, AppState>,
-    args: SystemPhotoIdArgs,
-) -> CommandResult<CopiedPathDto> {
-    // Frontend uses the @tauri-apps/plugin-clipboard-manager to actually
-    // write — this command resolves the absolute path and returns it,
-    // and the plugin handles the OS clipboard. Keeps clipboard-permission
-    // surface narrowly scoped to the frontend layer.
-    let abs = photo_absolute_path(&state, args.photo_id).await?;
-    Ok(CopiedPathDto {
-        path: abs.display().to_string(),
-    })
-}
-
-#[tauri::command]
-pub async fn system_inference_provider() -> CommandResult<String> {
-    Ok(smriti::ml::runtime::active_execution_provider().to_string())
 }
 
 #[derive(Debug, Serialize)]

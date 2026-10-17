@@ -283,13 +283,13 @@
 
 <PageHeader title="Insights">
   {#if data}
-    <select bind:value={year}>
+    <select bind:value={year} aria-label="Year" title="Year">
       <option value={null}>All time</option>
       {#each data.available_years as y}
         <option value={y}>{y}</option>
       {/each}
     </select>
-    <button class="ghost share" onclick={shareLibrary} title="Make a shareable card of this library">
+    <button class="ghost share" onclick={shareLibrary} title="Share a card">
       <Share2 size={14} strokeWidth={1.8} />
       Share your library
     </button>

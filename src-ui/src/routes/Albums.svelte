@@ -18,6 +18,8 @@
 </script>
 
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { trapFocus } from "../lib/actions/trapFocus";
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { albums } from "../lib/api/all";
@@ -367,7 +369,7 @@
     {@const s = previewSugg}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-scrim" role="presentation" onclick={closePreview}>
-      <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+      <div class="modal pv-dialog" role="dialog" aria-label="Suggested album" use:trapFocus aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
         <header>
           <span class="kind mono">{suggestionKindLabel(s.kind)}</span>
           <strong class="title">{s.title}</strong>
@@ -383,6 +385,7 @@
               <a
                 class="m-cell"
                 href="#/photo?id={p.id}"
+                aria-label={photoLabel(p)}
                 use:thumbnailOnVisible={{
                   id: p.id,
                   thumbnailPath: p.thumbnail_path,
@@ -709,7 +712,8 @@
     border-color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent);
   }
-  .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .cover img { width: 100%; height: 100%; object-fit: cover; transition: transform var(--t-slow) var(--ease); }
+  .card:hover .cover img { transform: scale(1.03); }
   .placeholder { color: var(--ink-faint); }
   .meta-chip {
     position: absolute;

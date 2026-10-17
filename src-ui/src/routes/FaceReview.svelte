@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { people, type FaceDetailDto, type ReviewFaceCountDto } from "../lib/api/all";
@@ -89,7 +90,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
     if (busy || !current) {
       if (e.key === "Escape" || e.key === "q" || e.key === "Q") {
         e.preventDefault();
@@ -153,7 +154,7 @@
     </div>
   {:else if !current}
     <div class="empty">
-      <p>Loading…</p>
+      <p class="slow-reveal">Loading…</p>
     </div>
   {:else}
     {@const c = current}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trapFocus } from "../actions/trapFocus";
   import { onMount } from "svelte";
   import { people, type FaceDetailDto } from "../api/all";
   import { commandErrorMessage } from "../api";
@@ -87,9 +88,9 @@
   onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
 >
   <div
-    class="dialog"
+    class="dialog pv-dialog"
     onkeydown={onKey}
-    role="dialog"
+    role="dialog" use:trapFocus
     tabindex="-1"
     aria-modal="true"
     aria-label="Find more like this"
@@ -104,7 +105,7 @@
         class="close-btn"
         onclick={requestClose}
         disabled={busy}
-        aria-label="Close"
+        aria-label="Close" title="Close (Esc)"
       >
         <X size={16} strokeWidth={1.75} />
       </button>

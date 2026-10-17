@@ -225,6 +225,48 @@ pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<Mem
     Ok(all.into_iter().map(MemoryCard::from).collect())
 }
 
+/// [`generate_for_today`], reused while the library is unchanged. Memories,
+/// a memory's detail page and the suggested collages all need today's cards,
+/// and building them scans the whole library, so they're built once and
+/// rebuilt only when the day or the library changes.
+pub fn generate_for_today_cached(
+    conn: &Connection,
+    today: NaiveDate,
+) -> Result<Vec<MemoryCard>, String> {
+    static CACHE: std::sync::Mutex<Option<(String, Vec<MemoryCard>)>> = std::sync::Mutex::new(None);
+    let key = cache_key(conn, today).map_err(|e| format!("Memories cache key failed: {e}"))?;
+    if let Some((cached_key, cards)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *cached_key == key {
+            return Ok(cards.clone());
+        }
+    }
+    let cards = generate_for_today(conn, today)?;
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, cards.clone()));
+    Ok(cards)
+}
+
+/// Changes whenever anything memories are built from changes: photos
+/// (added, trashed, favourited, dated, placed), faces and their people,
+/// names, and hidden people.
+fn cache_key(conn: &Connection, today: NaiveDate) -> SqliteResult<String> {
+    let fingerprint: String = conn.query_row(
+        r#"SELECT
+             (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || total(is_trashed) || ':'
+                     || total(is_favorite) || ':' || count(location_city) || ':' || count(date_taken)
+              FROM photos)
+             || '|' || (SELECT count(*) || ':' || ifnull(max(id), 0) || ':' || total(cluster_id) FROM faces)
+             || '|' || (SELECT ifnull(group_concat(id || '=' || name), '') FROM face_clusters
+                        WHERE name IS NOT NULL)
+             || '|' || (SELECT count(*) || ':' || ifnull(max(id), 0) FROM memory_blocks)"#,
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(format!(
+        "{}|{today}|{fingerprint}",
+        conn.path().unwrap_or("")
+    ))
+}
+
 /// Check whether the library has enough history to justify Memories.
 pub fn library_is_old_enough(conn: &Connection, today: NaiveDate) -> bool {
     let oldest: Option<String> = conn
@@ -1020,6 +1062,17 @@ mod tests {
         conn.execute_batch("UPDATE photos SET file_hash=CAST(id AS TEXT), phash=0")
             .unwrap();
         assert_eq!(surprise_photos(&conn, None, &[]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cached_cards_follow_library_changes() {
+        let conn = fresh_db();
+        insert_photo(&conn, 1, "2022-04-15 10:00:00");
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        assert_eq!(generate_for_today_cached(&conn, today).unwrap().len(), 1);
+        conn.execute("UPDATE photos SET is_trashed = TRUE WHERE id = 1", [])
+            .unwrap();
+        assert!(generate_for_today_cached(&conn, today).unwrap().is_empty());
     }
 
     #[test]

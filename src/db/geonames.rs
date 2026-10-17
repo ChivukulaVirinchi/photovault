@@ -85,16 +85,6 @@ pub fn geonames_db_exists() -> bool {
     geonames_schema_is_current()
 }
 
-/// Schema version stamp. Bump whenever the column layout changes so
-/// `geonames_schema_is_current` can detect a stale on-disk DB and
-/// trigger a rebuild.
-///   v2: added `feature_code` (PPLC / PPLA / PPLA2 / PPL / …). Lets us
-///       prefer real cities over GeoNames "PPL" entries that inherit
-///       a metro-wide population — e.g. Rasapudipalem (PPL, pop
-///       1,728,128 in upstream data) shouldn't outrank Visakhapatnam
-///       (PPLA2, pop 1,063,178).
-pub const GEONAMES_SCHEMA_VERSION: i64 = 2;
-
 /// Returns `true` when the on-disk geonames.db matches the current
 /// schema. False if the file is missing OR built against an older
 /// layout. Callers (asset setup, the geocoder) should rebuild when

@@ -352,56 +352,6 @@ pub fn face_processing_assets_available() -> bool {
             || (config.face_gpu_bridge_enabled && config.face_gpu_bridge_url.is_some()))
 }
 
-pub fn ensure_geonames_db() {
-    use crate::db::geonames::{build_geonames_db, geonames_db_exists, geonames_db_path};
-
-    if geonames_db_exists() {
-        return;
-    }
-
-    let existing_path = geonames_db_path();
-    let root = existing_path
-        .parent()
-        .and_then(Path::parent)
-        .filter(|root| {
-            root.join("data").join("cities1000.txt").is_file()
-                && root.join("data").join("country_codes.txt").is_file()
-        })
-        .map(Path::to_path_buf)
-        .or_else(|| {
-            candidate_asset_roots().into_iter().find(|root| {
-                root.join("data").join("cities1000.txt").is_file()
-                    && root.join("data").join("country_codes.txt").is_file()
-            })
-        })
-        .unwrap_or_else(project_root);
-    let data_dir = root.join("data");
-    let cities = data_dir.join("cities1000.txt");
-    let countries = data_dir.join("country_codes.txt");
-    let db_path = data_dir.join("geonames.db");
-
-    if !cities.exists() || !countries.exists() {
-        tracing::warn!(
-            "GeoNames source files missing (expected {} and {}). Geocoding disabled until provided. Run {}",
-            cities.display(),
-            countries.display(),
-            SETUP_ASSETS_HINT
-        );
-        return;
-    }
-
-    tracing::info!("GeoNames DB not found; building {}", db_path.display());
-
-    match build_geonames_db(&root) {
-        Ok(()) => tracing::info!("GeoNames DB created at {}", db_path.display()),
-        Err(e) => tracing::warn!("Failed to auto-build GeoNames DB: {}", e),
-    }
-}
-
-pub async fn install_asset_pack() -> Result<String, String> {
-    install_feature_assets(AssetFeature::All, |_, _| {}, None).await
-}
-
 pub async fn install_feature_assets<F>(
     feature: AssetFeature,
     mut progress: F,

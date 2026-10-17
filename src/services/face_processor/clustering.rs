@@ -26,7 +26,7 @@ impl FaceProcessor {
         resolver_weights: crate::ml::ResolverWeights,
     ) -> Result<usize, String> {
         let mut assigned_to_existing = 0usize;
-        let mut queued_for_review = 0usize;
+        let mut ambiguous = 0usize;
         let strict_max_distance = clustering_threshold.clamp(0.15, 0.6);
 
         // Stage A: gallery-based retrieval with confidence bands.
@@ -111,14 +111,9 @@ impl FaceProcessor {
                         .insert(*photo_id);
                     assigned_to_existing += 1;
                 }
-                crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
-                    let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
-                    if let Err(e) =
-                        face_repo.enqueue_review(*face_id, top.cluster_id, top.score, ambiguity)
-                    {
-                        tracing::warn!("Failed to enqueue review for face {}: {}", face_id, e);
-                    }
-                    queued_for_review += 1;
+                crate::ml::ConfidenceBand::Ambiguous { .. } => {
+                    // Too close to call; Stage B decides from scratch.
+                    ambiguous += 1;
                 }
                 crate::ml::ConfidenceBand::Low => {
                     // Leave unassigned; Stage B (agglomerative) will handle it.
@@ -126,11 +121,8 @@ impl FaceProcessor {
             }
         }
 
-        if queued_for_review > 0 {
-            tracing::info!(
-                "Queued {} ambiguous faces for user review",
-                queued_for_review
-            );
+        if ambiguous > 0 {
+            tracing::info!("{} ambiguous faces left for Stage B", ambiguous);
         }
 
         // Stage B: complete-link agglomerative clustering on unresolved faces.
@@ -153,8 +145,8 @@ impl FaceProcessor {
         if unresolved.len() > MAX_STAGE_B_INPUT {
             // Legacy path only: skip Stage B; route unresolved faces
             // through the rescue pipeline so they remain visible
-            // (auto-matched against galleries or queued for ambiguous
-            // review) instead of paying the quadratic cost.
+            // (auto-matched against galleries) instead of paying the
+            // quadratic cost.
             tracing::warn!(
                 "Skipping Stage B complete-link clustering: {} unresolved faces exceeds cap of {}. Enable `hnsw_clustering` to remove this cap.",
                 unresolved.len(),
@@ -163,12 +155,11 @@ impl FaceProcessor {
             face_repo
                 .refresh_all_galleries()
                 .map_err(|e| format!("Failed to refresh galleries: {}", e))?;
-            let (rescued, queued) = Self::rescue_orphan_faces(face_repo)?;
+            let rescued = Self::rescue_orphan_faces(face_repo)?;
             tracing::info!(
-                "Clustering (Stage B skipped): {} to-existing, {} rescued, {} queued, from {} unresolved",
+                "Clustering (Stage B skipped): {} to-existing, {} rescued, from {} unresolved",
                 assigned_to_existing,
                 rescued,
-                queued,
                 unresolved.len()
             );
             return Ok(0);
@@ -234,8 +225,8 @@ impl FaceProcessor {
         // Rescue pass: faces that ended up as singletons (not placed into
         // any cluster by Stage A or Stage B) need a second chance. Otherwise
         // they're invisible to the user: they have cluster_id = NULL so they
-        // don't show in People, and nothing queues them for review.
-        let (rescued, queued) = Self::rescue_orphan_faces(face_repo)?;
+        // don't show in People.
+        let rescued = Self::rescue_orphan_faces(face_repo)?;
 
         // Final fallback: any face still without a cluster becomes its own
         // singleton cluster. Catches the "small library, every face unique"
@@ -247,12 +238,11 @@ impl FaceProcessor {
         let singletons_promoted = Self::promote_orphans_to_singletons(face_repo)?;
 
         tracing::info!(
-            "Clustering: {} to-existing, {} new, merged {}, rescued {}, queued {}, singletons {}, from {} unresolved",
+            "Clustering: {} to-existing, {} new, merged {}, rescued {}, singletons {}, from {} unresolved",
             assigned_to_existing,
             clusters_created,
             merged,
             rescued,
-            queued,
             singletons_promoted,
             unresolved.len()
         );
@@ -263,18 +253,15 @@ impl FaceProcessor {
     /// Rescue pass for orphan faces (cluster_id IS NULL after all earlier
     /// stages). For each orphan, k-NN retrieve against existing cluster
     /// galleries with a looser threshold than the first-pass retrieval.
-    /// Classify into three bands:
+    /// Classify:
     ///   - HIGH       (mean top-k sim >= 0.60, 0.08 margin over runner-up):
     ///     auto-assign to best cluster
-    ///   - AMBIGUOUS  (0.45 <= sim < 0.60):
-    ///     enqueue for user review — the review badge will prompt
-    ///     them to resolve without any explicit UI "check now" button
-    ///   - LOW        (< 0.45):
-    ///     leave as orphan; a future scan or better gallery may
-    ///     eventually pick it up
+    ///   - otherwise: leave as orphan; a future scan or better gallery
+    ///     may eventually pick it up, and the singleton pass below
+    ///     keeps it visible meanwhile
     ///
-    /// Returns (auto_rescued, queued_for_review).
-    fn rescue_orphan_faces(face_repo: &FaceRepo) -> Result<(usize, usize), String> {
+    /// Returns the number of rescued faces.
+    fn rescue_orphan_faces(face_repo: &FaceRepo) -> Result<usize, String> {
         // Deliberately looser than first-pass retrieval:
         // first-pass min_similarity = 1.0 - strict_max_distance ~= 0.58.
         // We accept weaker gallery members here because the orphan either
@@ -294,7 +281,7 @@ impl FaceProcessor {
 
         if galleries.is_empty() {
             // No clusters exist -> nothing to match against.
-            return Ok((0, 0));
+            return Ok(0);
         }
 
         let mut gallery_by_cluster: HashMap<i64, Vec<(i64, crate::ml::FaceEmbedding)>> =
@@ -325,7 +312,6 @@ impl FaceProcessor {
             .map_err(|e| format!("Failed to load orphan faces: {}", e))?;
 
         let mut rescued = 0usize;
-        let mut queued = 0usize;
 
         for (face_id, photo_id, embedding) in &orphans {
             // Same-photo conflict + cannot-merge-transitively exclusions.
@@ -365,23 +351,13 @@ impl FaceProcessor {
                         .insert(*photo_id);
                     rescued += 1;
                 }
-                crate::ml::ConfidenceBand::Ambiguous { top, runner_up } => {
-                    let ambiguity = runner_up.as_ref().map(|r| top.score - r.score);
-                    if let Err(e) =
-                        face_repo.enqueue_review(*face_id, top.cluster_id, top.score, ambiguity)
-                    {
-                        tracing::warn!("rescue: enqueue_review failed: {}", e);
-                        continue;
-                    }
-                    queued += 1;
-                }
-                crate::ml::ConfidenceBand::Low => {
+                crate::ml::ConfidenceBand::Ambiguous { .. } | crate::ml::ConfidenceBand::Low => {
                     // Stays an orphan for now.
                 }
             }
         }
 
-        Ok((rescued, queued))
+        Ok(rescued)
     }
 
     /// Promote any face still lacking a cluster assignment into its own
@@ -590,77 +566,6 @@ impl FaceProcessor {
         let dynamic = image::DynamicImage::ImageRgb8(aligned_face.clone());
         let resized = dynamic.resize_exact(80, 80, image::imageops::FilterType::Lanczos3);
         resized.save(path)
-    }
-
-    /// Regenerate missing face crop files from stored bounding box data.
-    pub fn regenerate_missing_crops(drive_path: &Path) -> Result<usize, String> {
-        let db = Database::open_for_drive(drive_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
-        let face_repo = FaceRepo::new(&db.conn);
-
-        let faces_dir = Self::faces_dir(drive_path);
-        if let Err(e) = std::fs::create_dir_all(&faces_dir) {
-            return Err(format!("Failed to create faces directory: {}", e));
-        }
-
-        let all_faces = face_repo
-            .get_all_faces_with_paths()
-            .map_err(|e| format!("Failed to get faces: {}", e))?;
-
-        let mut regenerated = 0usize;
-        for (face_id, file_path, orientation, bbox_x, bbox_y, bbox_w, bbox_h) in &all_faces {
-            let crop_path = faces_dir.join(format!("{}.jpg", face_id));
-            if crop_path.exists() {
-                continue;
-            }
-
-            let full_path =
-                match crate::services::path_util::safe_join_relative(drive_path, file_path) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        tracing::trace!(
-                            "regenerate face crop skipped invalid photo path {}: {}",
-                            file_path,
-                            e
-                        );
-                        continue;
-                    }
-                };
-            let img = match crate::services::image_io::open_image(&full_path) {
-                Ok(img) => apply_exif_orientation(img, *orientation),
-                Err(_) => continue,
-            };
-
-            let (img_w, img_h) = (img.width() as f32, img.height() as f32);
-
-            let px = (bbox_x * img_w) as u32;
-            let py = (bbox_y * img_h) as u32;
-            let pw = (bbox_w * img_w) as u32;
-            let ph = (bbox_h * img_h) as u32;
-
-            let pad_x = (pw as f32 * 0.2) as u32;
-            let pad_y = (ph as f32 * 0.2) as u32;
-            let crop_x = px.saturating_sub(pad_x);
-            let crop_y = py.saturating_sub(pad_y);
-            let crop_w = (pw + 2 * pad_x).min(img.width() - crop_x);
-            let crop_h = (ph + 2 * pad_y).min(img.height() - crop_y);
-
-            if crop_w == 0 || crop_h == 0 {
-                continue;
-            }
-
-            let cropped = img.crop_imm(crop_x, crop_y, crop_w, crop_h);
-            let resized = cropped.resize_exact(80, 80, image::imageops::FilterType::Lanczos3);
-            if resized.save(&crop_path).is_ok() {
-                regenerated += 1;
-            }
-        }
-
-        if regenerated > 0 {
-            tracing::info!("Regenerated {} missing face crop thumbnails", regenerated);
-        }
-
-        Ok(regenerated)
     }
 
     /// Get the face crops directory for a drive.

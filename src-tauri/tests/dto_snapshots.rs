@@ -49,8 +49,7 @@ use smriti::db::album_repo::AlbumRecord;
 use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
 use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
 use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
-use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
-use smriti::db::recent_search_repo::RecentSearch;
+use smriti::db::face_repo::{FaceClusterRecord, FaceDetail};
 use smriti::db::trash_repo::TrashedPhotoRecord;
 use smriti::models::{MediaType, Photo};
 use smriti::services::album_suggestions::DetectedSuggestion;
@@ -67,13 +66,12 @@ use smriti::services::search::{
 use smriti::services::trash::TrashStats;
 
 use smriti_tauri_lib::dto::{
-    AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetHealthDto, AssetInventoryDto, AssetItemDto,
+    AlbumDto, AlbumHitDto, AlbumSuggestionDto, AssetInventoryDto, AssetItemDto,
     BurstGroupSummaryDto, BurstMemberDto, CameraStatDto, CountryStatDto, DetectedBurstGroupDto,
     DetectedDuplicateGroupDto, DetectedSuggestionDto, DriveDto, DuplicateGroupSummaryDto,
     DuplicateMemberDto, FaceDetailDto, InsightsDto, LibraryHealthDto, LocationDto, LocationStatDto,
     MemoryCardDto, PersonDto, PersonHitDto, PersonStatDto, PhotoDto, PhotoSummaryDto, PlaceHitDto,
-    RecentSearchDto, ReviewItemDto, SearchPhotoDto, SearchResultsDto, SettingsDto, TrashStatsDto,
-    TrashedPhotoDto,
+    SearchPhotoDto, SearchResultsDto, SettingsDto, TrashStatsDto, TrashedPhotoDto,
 };
 
 /// Fixed timestamp so date_taken / indexed_at / updated_at don't
@@ -321,21 +319,6 @@ fn person_dto() {
 }
 
 #[test]
-fn review_item_dto() {
-    let item = ReviewItem {
-        queue_id: 9,
-        face_id: 101,
-        candidate_cluster_id: 21,
-        candidate_cluster_name: Some("Asha".into()),
-        candidate_cluster_size: 14,
-        candidate_sample_face_ids: vec![701, 702, 703],
-        score: 0.87,
-    };
-    let dto: ReviewItemDto = item.into();
-    assert_json_snapshot!(dto);
-}
-
-#[test]
 fn face_detail_dto() {
     let detail = FaceDetail {
         face_id: 101,
@@ -491,17 +474,6 @@ fn search_results_dto() {
     assert_json_snapshot!(dto);
 }
 
-#[test]
-fn recent_search_dto() {
-    let recent = RecentSearch {
-        query: "paris 2024".into(),
-        last_used: "2024-01-13T00:00:00Z".into(),
-        use_count: 3,
-    };
-    let dto: RecentSearchDto = recent.into();
-    assert_json_snapshot!(dto);
-}
-
 // ---------- Memories ----------
 
 #[test]
@@ -641,28 +613,6 @@ fn drive_dto() {
         free_space_bytes: Some(500_000_000_000),
     };
     let dto: DriveDto = drive.into();
-    assert_json_snapshot!(dto);
-}
-
-#[test]
-fn asset_health_dto_all_present() {
-    let health = smriti::bootstrap::AssetHealth {
-        missing_face_models: false,
-        missing_onnx_runtime: false,
-        missing_geonames_db: false,
-    };
-    let dto: AssetHealthDto = health.into();
-    assert_json_snapshot!(dto);
-}
-
-#[test]
-fn asset_health_dto_all_missing() {
-    let health = smriti::bootstrap::AssetHealth {
-        missing_face_models: true,
-        missing_onnx_runtime: true,
-        missing_geonames_db: true,
-    };
-    let dto: AssetHealthDto = health.into();
     assert_json_snapshot!(dto);
 }
 

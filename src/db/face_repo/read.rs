@@ -4,9 +4,8 @@ use rusqlite::{params, params_from_iter, Result as SqliteResult};
 
 use crate::ml::FaceEmbedding;
 
-use super::{FaceClusterRecord, FaceDetail, FaceRepo, FaceStatus, GalleryEmbedding, ReviewItem};
+use super::{FaceClusterRecord, FaceDetail, FaceRepo, FaceStatus, GalleryEmbedding};
 
-type FacePathRow = (i64, String, i32, f32, f32, f32, f32);
 /// (photo_id, x, y, width, height), normalised.
 type FaceBoxRow = (i64, f32, f32, f32, f32);
 /// (id, file_path, orientation, taken_ts, file_hash)
@@ -257,37 +256,6 @@ impl<'a> FaceRepo<'a> {
         Ok(photo_ids)
     }
 
-    /// Get all face IDs with bounding boxes and their photo file paths.
-    /// Used for regenerating missing face crops.
-    pub fn get_all_faces_with_paths(&self) -> SqliteResult<Vec<FacePathRow>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT f.id, p.file_path, COALESCE(p.orientation, 1), f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height
-            FROM faces f
-            JOIN photos p ON f.photo_id = p.id
-            "#,
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i32>(2)?,
-                row.get::<_, f32>(3)?,
-                row.get::<_, f32>(4)?,
-                row.get::<_, f32>(5)?,
-                row.get::<_, f32>(6)?,
-            ))
-        })?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-
-        Ok(result)
-    }
-
     /// Find contextual candidate identities from nearby photos in the same folder.
     pub fn get_contextual_cluster_candidates(
         &self,
@@ -414,78 +382,6 @@ impl<'a> FaceRepo<'a> {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
                 other => Err(other),
             })
-    }
-
-    /// Count of unresolved entries in the face review queue.
-    pub fn review_queue_size(&self) -> SqliteResult<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM face_review_queue WHERE resolved_at IS NULL",
-            [],
-            |row| row.get(0),
-        )
-    }
-
-    /// Pull the top-N most informative unresolved review items.
-    ///
-    /// Ordered by ambiguity ascending (closer top-2 scores first = higher
-    /// information gain) then by candidate cluster size descending (resolving
-    /// ambiguity on big clusters propagates to more photos).
-    pub fn get_review_queue_items(&self, limit: usize) -> SqliteResult<Vec<ReviewItem>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT
-                q.id, q.face_id,
-                q.candidate_cluster_id, c.name, c.face_count,
-                q.score
-            FROM face_review_queue q
-            JOIN faces f ON f.id = q.face_id
-            JOIN face_clusters c ON c.id = q.candidate_cluster_id
-            WHERE q.resolved_at IS NULL
-            ORDER BY COALESCE(q.ambiguity, 1.0) ASC, c.face_count DESC
-            LIMIT ?1
-            "#,
-        )?;
-
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok(ReviewItem {
-                queue_id: row.get(0)?,
-                face_id: row.get(1)?,
-                candidate_cluster_id: row.get(2)?,
-                candidate_cluster_name: row.get(3)?,
-                candidate_cluster_size: row.get(4)?,
-                candidate_sample_face_ids: Vec::new(),
-                score: row.get(5)?,
-            })
-        })?;
-
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row?);
-        }
-        drop(stmt);
-
-        // Populate candidate sample face_ids per item (up to 4 best from the cluster).
-        let mut sample_stmt = self.conn.prepare(
-            r#"
-            SELECT id
-            FROM faces
-            WHERE cluster_id = ?1
-            ORDER BY confidence DESC, id ASC
-            LIMIT 4
-            "#,
-        )?;
-        for item in items.iter_mut() {
-            let ids = sample_stmt.query_map(params![item.candidate_cluster_id], |row| {
-                row.get::<_, i64>(0)
-            })?;
-            let mut collected = Vec::new();
-            for id in ids {
-                collected.push(id?);
-            }
-            item.candidate_sample_face_ids = collected;
-        }
-
-        Ok(items)
     }
 
     /// Cluster IDs of the already-assigned faces in the given photo (other
@@ -684,15 +580,6 @@ impl<'a> FaceRepo<'a> {
         Ok(faces)
     }
 
-    /// Count unconfirmed faces in a cluster.
-    pub fn count_unconfirmed_in_cluster(&self, cluster_id: i64) -> SqliteResult<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM faces WHERE cluster_id = ?1 AND user_confirmed = 0",
-            params![cluster_id],
-            |row| row.get(0),
-        )
-    }
-
     /// Count unconfirmed faces across all clusters.
     /// Returns (total_unconfirmed, clusters_with_unconfirmed).
     pub fn count_unconfirmed_global(&self) -> SqliteResult<(i64, i64)> {
@@ -707,13 +594,6 @@ impl<'a> FaceRepo<'a> {
             |row| row.get(0),
         )?;
         Ok((total, cluster_count))
-    }
-
-    /// Return the next batch of unconfirmed faces from the cluster with
-    /// the most pending review work. This keeps the review UI O(1)
-    /// instead of probing every person until it finds one with faces.
-    pub fn next_unconfirmed_face_batch(&self, limit: usize) -> SqliteResult<Vec<FaceDetail>> {
-        self.next_unconfirmed_face_batch_excluding(limit, &[])
     }
 
     /// Return the next review batch while ignoring faces the current UI
@@ -1061,7 +941,7 @@ mod tests {
         insert_face(&conn, 4, 20, 1);
         let repo = FaceRepo::new(&conn);
 
-        let faces = repo.next_unconfirmed_face_batch(10).unwrap();
+        let faces = repo.next_unconfirmed_face_batch_excluding(10, &[]).unwrap();
 
         assert_eq!(
             faces.iter().map(|f| f.face_id).collect::<Vec<_>>(),

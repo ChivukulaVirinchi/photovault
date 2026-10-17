@@ -415,14 +415,6 @@ impl<'a> PhotoRepo<'a> {
         )
     }
 
-    pub fn count_favorites(&self) -> SqliteResult<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM photos WHERE is_favorite = TRUE AND is_trashed = FALSE",
-            [],
-            |row| row.get(0),
-        )
-    }
-
     pub fn favorites_album_summary(&self) -> SqliteResult<Option<FavoriteAlbumSummary>> {
         self.conn.query_row(
             r#"
@@ -1488,87 +1480,6 @@ impl<'a> PhotoRepo<'a> {
                 Ok(rows)
             }
         }
-    }
-
-    /// Cursor-paginated photos in a place (city and/or country, both optional).
-    pub fn list_after_by_place(
-        &self,
-        city: Option<&str>,
-        country: Option<&str>,
-        cursor: Option<(Option<DateTime<Utc>>, i64)>,
-        limit: i64,
-    ) -> SqliteResult<Vec<PhotoLite>> {
-        let mut wheres = vec!["is_trashed = 0".to_string()];
-        if city.is_some() {
-            wheres.push("location_city = ?CITY".to_string());
-        }
-        if country.is_some() {
-            wheres.push("location_country = ?COUNTRY".to_string());
-        }
-        let base_where = wheres.join(" AND ");
-        let base = format!(
-            "SELECT {cols} FROM photos WHERE {w}",
-            cols = PHOTO_LITE_COLUMNS,
-            w = base_where
-        );
-
-        // Build SQL by replacing named tokens with positional placeholders.
-        let mut next = 1usize;
-        let mut bind: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let mut sql = base;
-        if let Some(c) = city {
-            sql = sql.replacen("?CITY", &format!("?{}", next), 1);
-            next += 1;
-            bind.push(Box::new(c.to_string()));
-        }
-        if let Some(c) = country {
-            sql = sql.replacen("?COUNTRY", &format!("?{}", next), 1);
-            next += 1;
-            bind.push(Box::new(c.to_string()));
-        }
-
-        match cursor {
-            Some((Some(d), id)) => {
-                sql.push_str(&format!(
-                    " AND ((date_taken IS NOT NULL AND
-                            (date_taken < ?{a} OR (date_taken = ?{a} AND id < ?{b})))
-                           OR (date_taken IS NULL AND ?{a} IS NULL AND id < ?{b}))
-                       ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
-                       LIMIT ?{c}",
-                    a = next,
-                    b = next + 1,
-                    c = next + 2
-                ));
-                bind.push(Box::new(d.to_rfc3339()));
-                bind.push(Box::new(id));
-                bind.push(Box::new(limit));
-            }
-            Some((None, id)) => {
-                sql.push_str(&format!(
-                    " AND date_taken IS NULL AND id < ?{a}
-                       ORDER BY id DESC LIMIT ?{b}",
-                    a = next,
-                    b = next + 1
-                ));
-                bind.push(Box::new(id));
-                bind.push(Box::new(limit));
-            }
-            None => {
-                sql.push_str(&format!(
-                    " ORDER BY date_taken IS NULL ASC, date_taken DESC, id DESC
-                       LIMIT ?{}",
-                    next
-                ));
-                bind.push(Box::new(limit));
-            }
-        }
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let bind_refs: Vec<&dyn rusqlite::ToSql> = bind.iter().map(|b| &**b).collect();
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(bind_refs), row_to_photo_lite)?
-            .collect::<SqliteResult<Vec<_>>>()?;
-        Ok(rows)
     }
 
     /// Photos within a lat/lng bounding box that have GPS coordinates.

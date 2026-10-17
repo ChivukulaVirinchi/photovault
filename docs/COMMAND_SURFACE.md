@@ -442,13 +442,11 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.close` | `{}` | `()` | for "switch library" flow; flushes pending writes |
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
 | `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; reconciles moved/deleted/edited files first, then adds new ones; emits `scan:progress`, `scan:reconciled`, `scan:complete` |
-| `library.cancel_scan` | `{ job_id: String }` | `()` | flips cancel flag; scan finishes mid-batch |
 | `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
 | `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |
 | `library.pending_metadata_count` | `{}` | `PendingCountDto` | count used for resume prompt |
 | `library.pending_thumbnail_count` | `{}` | `PendingCountDto` | count used for resume prompt |
 | `jobs.cancel` | `{ job_id: String }` | `()` | cancels any registered background job whose backend honors the cancel flag |
-| `library.detect_changes` | `{}` | `IndexChangesDto` | reindexer; preview before applying |
 | `library.apply_changes` | `{ added: bool, removed: bool, moved: bool, modified: bool }` | `ApplyResultDto` | flags choose which categories to apply |
 | `library.exclusions.list` | `{}` | `Vec<ExcludedFolderDto>` | per-library folders skipped by scan/reindex |
 | `library.exclusions.preview` | `{ path: String }` | `ExcludedFolderPreviewDto` | validates selected folder and counts indexed items under it |
@@ -491,11 +489,10 @@ ledger. Re-running the same archive set resumes idempotently.
 | `photos.list_by_album` | `{ album_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_person` | `{ person_id: i64, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.list_by_date` | `{ start: String, end: String, cursor, limit }` | `Page<PhotoSummaryDto>` | inclusive range |
-| `photos.list_by_place` | `{ city: Option<String>, country: Option<String>, cursor, limit }` | `Page<PhotoSummaryDto>` | |
 | `photos.people_in_photo` | `{ photo_id: i64 }` | `Vec<PersonDto>` | |
 | `photos.albums_for_photo` | `{ photo_id: i64 }` | `Vec<AlbumDto>` | for album-picker pre-checked state |
 
-### 3. `people` — face clusters & review queue
+### 3. `people` — face clusters & review
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
@@ -506,23 +503,16 @@ ledger. Re-running the same archive set resumes idempotently.
 | `people.merge` | `{ source_id: i64, target_id: i64 }` | `PersonDto` | returns merged cluster; `Conflict` if same id |
 | `people.delete` | `{ id: i64 }` | `()` | hides/removes a person cluster from user-facing lists |
 | `people.start_processing` | `{ library_session_id?: u64 }` | `{ job_id: String }` | Requires face assets; optional session guard for deferred setup continuation; emits `faces:progress`, `faces:complete` |
-| `people.cancel_processing` | `{ job_id: String }` | `()` | |
 | `people.reset_all` | `{}` | `ResetFacesDto` | destructive reset of faces/clusters before a fresh processing run |
 | `people.reset_clusters` | `{}` | `ResetClustersDto` | drops clusters but keeps detected faces/embeddings |
 | `people.pending_face_count` | `{}` | `PendingFaceCountDto` | count used by Settings/People prompts |
-| `people.clustering_diagnostics` | `{}` | `ClusteringDiagnosticsDto` | support/debug summary for clustering health |
 | `people.face_list` | `{ cursor: Option<String>, limit: Option<u32> }` | `Page<FaceDetailDto>` | paged face list for review/admin surfaces |
 | `people.unclustered_faces` | `{ cursor: Option<String>, limit: Option<u32> }` | `Page<FaceDetailDto>` | unclustered faces for People review prompt |
-| `people.review.queue` | `{ limit: Option<u32> }` | `Vec<ReviewItemDto>` | default 20 |
 | `people.next_unconfirmed_faces` | `{ limit: Option<u32> }` | `Page<FaceDetailDto>` | one batch from the cluster with the most unconfirmed faces; default/max 200 |
-| `people.review.same` | `{ queue_id: i64 }` | `()` | assigns face to candidate cluster |
-| `people.review.different` | `{ queue_id: i64 }` | `()` | records cannot-merge constraint |
-| `people.review.skip` | `{ queue_id: i64 }` | `()` | |
 | `people.review_face_count` | `{}` | `ReviewFaceCountDto` | count for manual face review |
 | `people.face_confirm` | `{ face_id: i64 }` | `()` | confirms current cluster assignment |
 | `people.face_confirm_to_cluster` | `{ face_id: i64, cluster_id: i64 }` | `()` | confirms a face into a specific cluster |
 | `people.face_reject` | `{ face_id: i64, cluster_id: i64 }` | `()` | records that this face does not belong in a cluster |
-| `people.face_hide` | `{ face_id: i64 }` | `()` | hides a face from review/UI |
 | `people.face_reassign` | `{ face_id: i64, cluster_id: i64 }` | `()` | moves a face to another cluster |
 | `people.face_suggest_clusters` | `{ face_id: i64, limit: Option<u32> }` | `Vec<ClusterSuggestionDto>` | suggestions for reassign dialog |
 | `people.k_similar_to_cluster` | `{ cluster_id: i64, k: u32 }` | `Vec<FaceDetailDto>` | nearest face candidates for review |
@@ -539,7 +529,6 @@ ledger. Re-running the same archive set resumes idempotently.
 | `albums.delete` | `{ id: i64 }` | `()` |
 | `albums.add_photos` | `{ id: i64, photo_ids: Vec<i64> }` | `{ added: u32 }` |
 | `albums.remove_photos` | `{ id: i64, photo_ids: Vec<i64> }` | `{ removed: u32 }` |
-| `albums.auto_pick_cover` | `{ id: i64 }` | `AlbumDto` |
 | `albums.export` | `{ album_id: i64, destination_dir: Option<String>, folder_name: Option<String> }` | `{ job_id: String }` |
 | `albums.suggestions.list` | `{ status: Option<SuggestionStatus> }` | `Vec<AlbumSuggestionDto>` |
 | `albums.suggestions.run_detection` | `{ home_city_override: Option<String> }` | `{ job_id: String }` | background job; emits `album_suggestions:progress` and `album_suggestions:complete` |
@@ -698,9 +687,7 @@ root; per-library vectors live under `.photovault/semantic/...`.
 | Command | Args | Returns |
 |---|---|---|
 | `semantic.status` | `{}` | `SemanticStatusDto` |
-| `semantic.install_model` | `{}` | `{ job_id: String }` | emits `semantic:progress`, `semantic:complete` while downloading the visual/text encoders and tokenizer |
 | `semantic.start_indexing` | `{}` | `{ job_id: String }` | resumable; emits `semantic:progress`, `semantic:complete` |
-| `semantic.similar_photos` | `{ photo_id: i64, limit: Option<u32> }` | `Vec<PhotoSummaryDto>` | HNSW nearest-neighbour lookup over indexed visual vectors |
 
 `semantic.start_indexing` requires both the visual search model and ONNX
 Runtime asset pack. It indexes non-trashed photos and videos. Videos
@@ -713,9 +700,6 @@ use their poster thumbnail, so thumbnail generation must have run first.
 | `memories.today` | `{}` | `Vec<MemoryCardDto>` |
 | `memories.surprise` | `{ album_id: Option<i64>, exclude_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` |
 | `memories.detail` | `{ memory_id: String }` | `{ card: MemoryCardDto, photos: Vec<PhotoSummaryDto> }` |
-| `memories.block_person` | `{ person_id: i64 }` | `()` | hides cards prominently featuring this cluster |
-| `memories.unblock_person` | `{ person_id: i64 }` | `()` |
-| `memories.blocked_people` | `{}` | `Vec<PersonDto>` | for settings UI |
 | `memories.save_as_album` | `{ memory_id: String, name: Option<String> }` | `AlbumDto` |
 
 `memories.surprise` selects at most 36 photos from up to 12 days, with
@@ -793,7 +777,6 @@ MapLibre fetches OSM tiles through the shared WebView Cache API. Settings contro
 | Command | Args | Returns |
 |---|---|---|
 | `insights.compute` | `{ year: Option<i32> }` | `InsightsDto` | None = all-time |
-| `insights.invalidate` | `{}` | `()` | client signals stale (after big mutation); server clears its cache |
 
 ### 14. `health`
 
@@ -806,7 +789,6 @@ MapLibre fetches OSM tiles through the shared WebView Cache API. Settings contro
 | Command | Args | Returns |
 |---|---|---|
 | `geocoding.backfill` | `{ force_refresh: bool, library_session_id?: u64 }` | `{ job_id: String }` | resolves GPS-bearing photos; optional session guard for deferred setup continuation; emits a generic `JobProgress` on `geocoding:progress` |
-| `geocoding.resolve_one` | `{ lat: f64, lng: f64 }` | `Option<LocationDto>` | sync, ~1-3ms — used by photo_detail when a specific photo opens |
 
 ### 16. `settings`
 
@@ -844,19 +826,15 @@ struct SettingsDto {
 
 | Command | Args | Returns |
 |---|---|---|
-| `system.asset_health` | `{}` | `AssetHealthDto` |
 | `system.assets_inventory` | `{}` | `AssetInventoryDto` |
 | `system.asset_setup_status` | `{}` | `{ faces: bool, visual: bool, places: bool }` | Local checks only; no model loading or network |
 | `system.asset_download_size` | `{ feature: "all" \| "faces" \| "visual" \| "places" }` | `u64` | Remaining download bytes; resolves the release archive size on explicit setup surfaces |
 | `system.install_assets` | `{ feature?: "all" \| "faces" \| "visual" \| "places" }` | `{ job_id: String }` | Defaults to all. Installs/verifies the selected assets; emits byte-count `assets:progress` and `assets:complete`; visual setup warms search and starts pending indexing. Old releases fall back to the combined archive. |
-| `system.inference_provider` | `{}` | `String` | active inference provider label |
 | `system.test_gpu_bridge` | `{ url: String }` | `BridgeTestResult` | tests the optional user-owned GPU bridge |
 | `system.updates.check` | `{}` | `UpdateStatusDto` | network call |
 | `system.open_in_explorer` | `{ photo_id: i64 }` | `()` | reveals file in OS file manager |
 | `system.share_photo` | `{ photo_id: i64 }` | `{ method: "native" | "clipboard" | "email" }` | opens the native share picker on Windows/macOS; copies a file URI on Linux, falling back to an email attachment |
 | `system.open_path` | `{ path: String }` | `()` | opens an existing folder in the OS file manager |
-| `system.copy_path_to_clipboard` | `{ photo_id: i64 }` | `()` |
-| `system.app_version` | `{}` | `{ version: String, build: String, channel: String }` |
 
 ---
 

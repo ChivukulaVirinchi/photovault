@@ -476,6 +476,15 @@
     }
   }
 
+  /** Ctrl+S saves, Ctrl+C copies. Keys never reach the page behind. */
+  function onKey(event: KeyboardEvent) {
+    event.stopPropagation();
+    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "s") { event.preventDefault(); void save(); }
+    else if (key === "c" && !window.getSelection()?.toString()) { event.preventDefault(); void copy(); }
+  }
+
   let outsidePointer: number | null = null;
   function outside(event: PointerEvent) {
     if (!dialog) return false;
@@ -491,7 +500,7 @@
   onpointerup={(event) => { if (outsidePointer === event.pointerId && outside(event)) close(); outsidePointer = null; }}
   onpointercancel={() => { outsidePointer = null; }}
   onclose={close}
-  onkeydown={(event) => event.stopPropagation()}
+  onkeydown={onKey}
 >
   <header class="head">
     <div>
@@ -504,7 +513,7 @@
         {#if skipped > 0}<span class="skipped">{skipped} {skipped === 1 ? "video" : "videos"} left out.</span>{/if}
       </p>
     </div>
-    <button class="ghost icon" onclick={close} aria-label="Close">
+    <button class="ghost icon" onclick={close} aria-label="Close" title="Close (Esc)">
       <span class="x" aria-hidden="true">×</span>
     </button>
   </header>
@@ -610,10 +619,10 @@
           <span class="where" title={saveLocation.path}>Saves to {saveLocation.label}</span>
         {/if}
       </div>
-      <button class="ghost" onclick={copy} disabled={busy || items.length === 0}>
+      <button class="ghost" onclick={copy} disabled={busy || items.length === 0} title="Copy (Ctrl+C)">
         <Copy size={15} strokeWidth={1.8} /> Copy
       </button>
-      <button class="primary" onclick={save} disabled={busy || items.length === 0}>
+      <button class="primary" onclick={save} disabled={busy || items.length === 0} title="Save (Ctrl+S)">
         <Download size={15} strokeWidth={1.8} /> {busy ? "Working…" : "Save"}
       </button>
     </div>

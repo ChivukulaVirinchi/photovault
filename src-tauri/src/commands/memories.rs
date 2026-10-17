@@ -4,7 +4,7 @@ use chrono::Local;
 use serde::Deserialize;
 use tauri::State;
 
-use crate::dto::{MemoryCardDto, MemoryDetailDto, PersonDto, PhotoSummaryDto};
+use crate::dto::{MemoryCardDto, MemoryDetailDto, PhotoSummaryDto};
 use crate::state::AppState;
 use crate::thumbnail_upgrade::{upgrade_covers_to_medium, CoverInput};
 use crate::{CommandError, CommandResult};
@@ -77,7 +77,7 @@ pub async fn memories_today(state: State<'_, AppState>) -> CommandResult<Vec<Mem
         if !smriti::services::memories::library_is_old_enough(&db.conn, today) {
             return Ok(Vec::new());
         }
-        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
+        let cards = smriti::services::memories::generate_for_today_cached(&db.conn, today)
             .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let dtos: Vec<MemoryCardDto> = cards.into_iter().map(Into::into).collect();
         let inputs = collect_hero_inputs(&db.conn, &dtos)?;
@@ -117,7 +117,7 @@ pub async fn memories_detail(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let today = Local::now().date_naive();
-        let cards = smriti::services::memories::generate_for_today(&db.conn, today)
+        let cards = smriti::services::memories::generate_for_today_cached(&db.conn, today)
             .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
         let card = cards
             .into_iter()
@@ -145,74 +145,7 @@ pub async fn memories_detail(
     Ok(MemoryDetailDto { card: dto, photos })
 }
 
-#[tauri::command]
-pub async fn memories_blocked_people(state: State<'_, AppState>) -> CommandResult<Vec<PersonDto>> {
-    // Returns clusters whose ID appears as a blocked target in `memory_blocks`.
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let conn = &db.conn;
-
-    let mut blocked_ids: Vec<i64> = Vec::new();
-    {
-        let mut stmt =
-            conn.prepare("SELECT target_key FROM memory_blocks WHERE kind = 'person'")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        for r in rows {
-            if let Ok(id) = r?.parse::<i64>() {
-                blocked_ids.push(id);
-            }
-        }
-    }
-    if blocked_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let face_repo = smriti::db::face_repo::FaceRepo::new(conn);
-    let all = face_repo.get_all_clusters()?;
-    Ok(all
-        .into_iter()
-        .filter(|c| blocked_ids.contains(&c.id))
-        .map(Into::into)
-        .collect())
-}
-
 // ---------- mutations ----------
-
-#[derive(Debug, Deserialize)]
-pub struct MemoriesPersonArgs {
-    pub person_id: i64,
-}
-
-#[tauri::command]
-pub async fn memories_block_person(
-    state: State<'_, AppState>,
-    args: MemoriesPersonArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    db.conn.execute(
-        "INSERT OR IGNORE INTO memory_blocks (kind, target_key) VALUES ('person', ?1)",
-        rusqlite::params![args.person_id.to_string()],
-    )?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn memories_unblock_person(
-    state: State<'_, AppState>,
-    args: MemoriesPersonArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    db.conn.execute(
-        "DELETE FROM memory_blocks WHERE kind = 'person' AND target_key = ?1",
-        rusqlite::params![args.person_id.to_string()],
-    )?;
-    Ok(())
-}
 
 #[derive(Debug, Deserialize)]
 pub struct MemoriesSaveAsAlbumArgs {
@@ -232,7 +165,7 @@ pub async fn memories_save_as_album(
     let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
     let db = lib.db.lock().await;
     let today = Local::now().date_naive();
-    let cards = smriti::services::memories::generate_for_today(&db.conn, today)
+    let cards = smriti::services::memories::generate_for_today_cached(&db.conn, today)
         .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
     let card = cards
         .into_iter()

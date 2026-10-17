@@ -21,4 +21,3 @@ export function setHealthCache(key: string, value: LibraryHealthData): void {
   while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
 }
 
-export function clearHealthCache(): void { cache.clear(); }

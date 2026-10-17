@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { trapFocus } from "../lib/actions/trapFocus";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
@@ -204,7 +207,12 @@
       e.preventDefault();
       return;
     }
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "a") {
+      const ids = photos.map((p) => p.id);
+      if (ids.length > 0) { selection.replace(new Set(ids)); e.preventDefault(); }
+      return;
+    }
     if (selection.active()) {
       if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
       else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
@@ -513,7 +521,7 @@
         </button>
         <SurpriseButton albumId={id} label={a.name} disabled={a.photo_count === 0} />
         <button class="ghost export-action" onclick={() => collage.showBest({ albumId: id })}
-          disabled={a.photo_count < 2 || collage.picking} title="A collage of this album's best photos">
+          disabled={a.photo_count < 2 || collage.picking} title="Make a collage">
           <LayoutDashboard size={14} strokeWidth={1.9} />
           Collage
         </button>
@@ -541,6 +549,7 @@
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
         data-photo-id={p.id}
+        aria-label={photoLabel(p)}
         href="#/photo?id={p.id}"
         use:thumbnailOnVisible={{
           id: p.id,
@@ -570,13 +579,13 @@
 
 {#if exportResult}
   <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) exportResult = null; }}>
-    <div class="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+    <div class="export-modal pv-dialog" role="dialog" use:trapFocus tabindex="-1" aria-modal="true" aria-labelledby="export-title">
       <header>
         <div>
           <h2 id="export-title">Album exported</h2>
           <p>{exportResult.message}</p>
         </div>
-        <button class="icon-action ghost" onclick={() => (exportResult = null)} aria-label="Close">
+        <button class="icon-action ghost" onclick={() => (exportResult = null)} aria-label="Close" title="Close (Esc)">
           <X size={15} strokeWidth={2} />
         </button>
       </header>
@@ -599,13 +608,13 @@
 
 {#if confirmingDelete && album}
   <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) confirmingDelete = false; }}>
-    <div class="export-modal" role="dialog" aria-modal="true" aria-labelledby="delete-album-title">
+    <div class="export-modal pv-dialog" role="dialog" use:trapFocus tabindex="-1" aria-modal="true" aria-labelledby="delete-album-title">
       <header>
         <div>
           <h2 id="delete-album-title">Delete album?</h2>
           <p>{album.name}</p>
         </div>
-        <button class="icon-action ghost" onclick={() => (confirmingDelete = false)} aria-label="Close">
+        <button class="icon-action ghost" onclick={() => (confirmingDelete = false)} aria-label="Close" title="Close (Esc)">
           <X size={15} strokeWidth={2} />
         </button>
       </header>

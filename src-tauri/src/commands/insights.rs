@@ -60,13 +60,6 @@ pub async fn insights_compute(
     Ok(data.into())
 }
 
-#[tauri::command]
-pub async fn insights_invalidate(_state: State<'_, AppState>) -> CommandResult<()> {
-    // No server-side cache today — handler exists so the frontend can
-    // signal cache-stale events; future caching layer can hook here.
-    Ok(())
-}
-
 /// Cheap threshold probe so milestone checks don't run the full
 /// insights aggregation on every library open.
 #[tauri::command]

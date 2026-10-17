@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { photoLabel } from "../a11y";
+  import { trapFocus } from "../actions/trapFocus";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import Sparkles from "lucide-svelte/icons/sparkles";
@@ -80,13 +82,13 @@
 
 {#if assistantStore.open}
   <div class="scrim" onclick={() => assistantStore.hide()} aria-hidden="true"></div>
-  <div class="assistant" role="dialog" aria-modal="true" aria-label="Assistant" tabindex="-1" onkeydown={onDialogKey}>
+  <div class="assistant" role="dialog" use:trapFocus aria-modal="true" aria-label="Assistant" tabindex="-1" onkeydown={onDialogKey}>
     <header>
       <div class="title">
         <Sparkles size={16} strokeWidth={1.75} />
         <span>Assistant</span>
       </div>
-      <button class="icon" onclick={() => assistantStore.hide()} aria-label="Close Assistant">
+      <button class="icon" onclick={() => assistantStore.hide()} aria-label="Close" title="Close (Esc)">
         <X size={16} strokeWidth={1.75} />
       </button>
     </header>
@@ -100,7 +102,7 @@
         disabled={busy}
         aria-label="Assistant request"
       />
-      <button class="send" onclick={submit} disabled={busy || !input.trim()} aria-label="Run Assistant">
+      <button class="send" onclick={submit} disabled={busy || !input.trim()} aria-label="Send" title="Send">
         <Send size={15} strokeWidth={1.75} />
       </button>
     </section>
@@ -158,7 +160,7 @@
 
           <div class="samples">
             {#each preview.sample as photo}
-              <a href="#/photo?id={photo.id}" class="sample">
+              <a href="#/photo?id={photo.id}" class="sample" aria-label={photoLabel(photo)}>
                 {#if photo.thumbnail_path}
                   <img src={thumbUrl(libraryStore.driveRoot, photo.thumbnail_path) ?? ""} alt="" />
                 {/if}

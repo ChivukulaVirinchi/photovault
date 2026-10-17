@@ -16,8 +16,7 @@ use smriti::db::album_suggestion_repo::AlbumSuggestionRecord;
 use smriti::db::burst_repo::{BurstGroupMemberRecord, BurstGroupRecord};
 use smriti::db::duplicate_repo::{DuplicateGroupMemberRecord, DuplicateGroupRecord};
 use smriti::db::excluded_folder_repo::ExcludedFolderRecord;
-use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, ReviewItem};
-use smriti::db::recent_search_repo::RecentSearch;
+use smriti::db::face_repo::{FaceClusterRecord, FaceDetail};
 use smriti::db::stack_repo::{PhotoStackMemberRecord, PhotoStackRecord};
 use smriti::db::trash_repo::TrashedPhotoRecord;
 use smriti::models::{MediaType, Photo};
@@ -297,42 +296,6 @@ pub struct PendingFaceCountDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ClusteringDiagnosticsDto {
-    pub faces_detected: usize,
-    pub clusters_created: usize,
-    pub photos_processed: usize,
-    pub rejected_small: usize,
-    pub rejected_lowconf: usize,
-    pub rejected_blurry: usize,
-    pub rejected_yaw: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ReviewItemDto {
-    pub queue_id: i64,
-    pub face_id: i64,
-    pub candidate_cluster_id: i64,
-    pub candidate_cluster_name: Option<String>,
-    pub candidate_cluster_size: i64,
-    pub candidate_sample_face_ids: Vec<i64>,
-    pub score: f32,
-}
-
-impl From<ReviewItem> for ReviewItemDto {
-    fn from(r: ReviewItem) -> Self {
-        Self {
-            queue_id: r.queue_id,
-            face_id: r.face_id,
-            candidate_cluster_id: r.candidate_cluster_id,
-            candidate_cluster_name: r.candidate_cluster_name,
-            candidate_cluster_size: r.candidate_cluster_size,
-            candidate_sample_face_ids: r.candidate_sample_face_ids,
-            score: r.score,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FaceDetailDto {
     pub face_id: i64,
     pub photo_id: i64,
@@ -580,23 +543,6 @@ impl From<UnifiedSearchResults> for SearchResultsDto {
             photo_ids: u.photo_ids,
             photos: u.photos.into_iter().map(Into::into).collect(),
             has_more: u.has_more,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RecentSearchDto {
-    pub query: String,
-    pub last_used: String,
-    pub use_count: i64,
-}
-
-impl From<RecentSearch> for RecentSearchDto {
-    fn from(r: RecentSearch) -> Self {
-        Self {
-            query: r.query,
-            last_used: r.last_used,
-            use_count: r.use_count,
         }
     }
 }
@@ -1122,14 +1068,6 @@ pub struct ExcludedFolderPreviewDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AssetHealthDto {
-    pub missing_face_models: bool,
-    pub missing_onnx_runtime: bool,
-    pub missing_geonames_db: bool,
-    pub summary: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AssetInventoryDto {
     pub install_root: String,
     pub roots: Vec<String>,
@@ -1150,23 +1088,6 @@ pub struct AssetItemDto {
     pub size_bytes: Option<u64>,
     pub path: Option<String>,
     pub note: Option<String>,
-}
-
-impl From<smriti::bootstrap::AssetHealth> for AssetHealthDto {
-    fn from(h: smriti::bootstrap::AssetHealth) -> Self {
-        let summary = h.summary();
-        Self {
-            missing_face_models: h.missing_face_models,
-            missing_onnx_runtime: h.missing_onnx_runtime,
-            missing_geonames_db: h.missing_geonames_db,
-            summary,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AppVersionDto {
-    pub version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1281,14 +1202,6 @@ impl From<&AppConfig> for SettingsDto {
 }
 
 // ---------- index changes (reindexer preview) ----------
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct IndexChangesDto {
-    pub added: u64,
-    pub removed: u64,
-    pub moved: u64,
-    pub modified: u64,
-}
 
 /// Payload of `scan:reconciled`.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

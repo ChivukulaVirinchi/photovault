@@ -1,6 +1,5 @@
 //! People (face clusters) — read-only commands for M1.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -11,8 +10,8 @@ use smriti::db::face_repo::{FaceClusterRecord, FaceDetail, FaceRepo};
 use smriti::db::{db_path_for, open_secondary};
 
 use crate::dto::{
-    ClusterSuggestionDto, ClusteringDiagnosticsDto, FaceDetailDto, JobIdDto, Page,
-    PendingFaceCountDto, PersonDto, ReviewFaceCountDto, ReviewItemDto,
+    ClusterSuggestionDto, FaceDetailDto, JobIdDto, Page, PendingFaceCountDto, PersonDto,
+    ReviewFaceCountDto,
 };
 use crate::events::{EV_FACES_COMPLETE, EV_FACES_PROGRESS};
 use crate::jobs::{self, emit};
@@ -83,49 +82,75 @@ fn clusters_cannot_merge(
     Ok(blocked > 0)
 }
 
+/// Clusters with a face thumbnail resolved for each. `only` limits the
+/// work to one person (detail pages). Fallback faces are looked up only for
+/// clusters whose representative thumbnail is missing, which on a healthy
+/// library is none of them.
 async fn load_clusters_with_thumbnail_paths(
     db: Arc<tokio::sync::Mutex<smriti::db::Database>>,
     drive_root: std::path::PathBuf,
+    only: Option<i64>,
 ) -> CommandResult<Vec<FaceClusterRecord>> {
-    let (mut clusters, fallback_candidates) = {
+    let mut clusters = {
         let db = db.lock().await;
-        let repo = FaceRepo::new(&db.conn);
-        let clusters = repo.get_all_clusters()?;
-        let cluster_ids = clusters.iter().map(|c| c.id).collect::<Vec<_>>();
-        let fallback_candidates =
-            repo.face_thumbnail_candidates(&cluster_ids, FACE_THUMBNAIL_FALLBACK_CANDIDATES)?;
-        (clusters, fallback_candidates)
+        FaceRepo::new(&db.conn).get_all_clusters()?
     };
+    if let Some(id) = only {
+        clusters.retain(|c| c.id == id);
+    }
 
     let faces_dir = drive_root.join(".photovault").join("faces");
-    let (clusters, representative_updates) = tauri::async_runtime::spawn_blocking(move || {
-        let mut representative_updates = Vec::new();
-
-        for cluster in &mut clusters {
-            cluster.face_thumbnail_path = None;
-
-            if let Some(face_id) = cluster.representative_face_id {
-                if faces_dir.join(format!("{face_id}.jpg")).exists() {
-                    cluster.face_thumbnail_path = Some(format!(".photovault/faces/{face_id}.jpg"));
-                    continue;
+    let face_path = |face_id: i64| format!(".photovault/faces/{face_id}.jpg");
+    let (mut clusters, missing) = {
+        let faces_dir = faces_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut missing = Vec::new();
+            for cluster in &mut clusters {
+                cluster.face_thumbnail_path = cluster
+                    .representative_face_id
+                    .filter(|id| faces_dir.join(format!("{id}.jpg")).exists())
+                    .map(face_path);
+                if cluster.face_thumbnail_path.is_none() {
+                    missing.push(cluster.id);
                 }
             }
+            (clusters, missing)
+        })
+        .await
+        .map_err(|e| CommandError::Internal {
+            message: format!("face thumbnail lookup worker failed: {e}"),
+        })?
+    };
+    if missing.is_empty() {
+        return Ok(clusters);
+    }
 
-            if let Some(candidates) = fallback_candidates.get(&cluster.id) {
-                for face_id in candidates {
-                    if faces_dir.join(format!("{face_id}.jpg")).exists() {
-                        cluster.face_thumbnail_path =
-                            Some(format!(".photovault/faces/{face_id}.jpg"));
-                        if cluster.representative_face_id != Some(*face_id) {
-                            cluster.representative_face_id = Some(*face_id);
-                            representative_updates.push((cluster.id, *face_id));
-                        }
-                        break;
-                    }
+    let fallback_candidates = {
+        let db = db.lock().await;
+        FaceRepo::new(&db.conn)
+            .face_thumbnail_candidates(&missing, FACE_THUMBNAIL_FALLBACK_CANDIDATES)?
+    };
+    let (clusters, representative_updates) = tauri::async_runtime::spawn_blocking(move || {
+        let mut representative_updates = Vec::new();
+        for cluster in &mut clusters {
+            if cluster.face_thumbnail_path.is_some() {
+                continue;
+            }
+            let Some(candidates) = fallback_candidates.get(&cluster.id) else {
+                continue;
+            };
+            if let Some(face_id) = candidates
+                .iter()
+                .copied()
+                .find(|id| faces_dir.join(format!("{id}.jpg")).exists())
+            {
+                cluster.face_thumbnail_path = Some(face_path(face_id));
+                if cluster.representative_face_id != Some(face_id) {
+                    cluster.representative_face_id = Some(face_id);
+                    representative_updates.push((cluster.id, face_id));
                 }
             }
         }
-
         (clusters, representative_updates)
     })
     .await
@@ -181,7 +206,7 @@ pub async fn people_list(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         (lib.db.clone(), lib.drive_root.clone())
     };
-    let mut clusters = load_clusters_with_thumbnail_paths(db, drive_root).await?;
+    let mut clusters = load_clusters_with_thumbnail_paths(db, drive_root, None).await?;
     if args.named_only {
         clusters.retain(|c| c.name.is_some() && !c.name.as_deref().unwrap_or("").is_empty());
     }
@@ -202,57 +227,6 @@ pub async fn people_pending_face_count(
     let db = lib.db.lock().await;
     let pending_photos = FaceRepo::new(&db.conn).count_pending_face_processing()?;
     Ok(PendingFaceCountDto { pending_photos })
-}
-
-/// Return face detection diagnostics: cluster count, unclustered count,
-/// and the quality-filter rejection breakdown from the last processing run.
-#[tauri::command]
-pub async fn people_clustering_diagnostics(
-    state: State<'_, AppState>,
-) -> CommandResult<ClusteringDiagnosticsDto> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = FaceRepo::new(&db.conn);
-
-    let clusters = repo.get_all_clusters()?;
-    let total_faces: i64 = db.conn.query_row(
-        "SELECT COUNT(*) FROM faces WHERE user_confirmed >= 0",
-        [],
-        |r| r.get(0),
-    )?;
-    let _unclustered: i64 = db.conn.query_row(
-        "SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL AND user_confirmed >= 0",
-        [],
-        |r| r.get(0),
-    )?;
-    let photos_with_faces: i64 =
-        db.conn
-            .query_row("SELECT COUNT(DISTINCT photo_id) FROM faces", [], |r| {
-                r.get(0)
-            })?;
-
-    // Pull the last-run rejection counts from face_processing_stats.
-    // Missing row → all zeroes (no run has completed yet on this DB).
-    let (rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw): (i64, i64, i64, i64) =
-        db.conn
-            .query_row(
-                "SELECT rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw \
-                 FROM face_processing_stats WHERE id = 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .unwrap_or((0, 0, 0, 0));
-
-    Ok(ClusteringDiagnosticsDto {
-        faces_detected: total_faces as usize,
-        clusters_created: clusters.len(),
-        photos_processed: photos_with_faces as usize,
-        rejected_small: rejected_small.max(0) as usize,
-        rejected_lowconf: rejected_lowconf.max(0) as usize,
-        rejected_blurry: rejected_blurry.max(0) as usize,
-        rejected_yaw: rejected_yaw.max(0) as usize,
-    })
 }
 
 // ---------- face-level commands (Phase B) ----------
@@ -424,24 +398,6 @@ pub async fn people_face_reject(
     } else {
         let cluster_id = current_face_cluster_id(&db.conn, args.face_id)?;
         FaceRepo::new(&db.conn).reject_face_to_unknown(args.face_id, cluster_id)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn people_face_hide(
-    state: State<'_, AppState>,
-    args: FaceActionArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    match FaceRepo::new(&db.conn).hide_face(args.face_id) {
-        Ok(()) => {}
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            return Err(CommandError::not_found("face", args.face_id));
-        }
-        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
@@ -643,15 +599,17 @@ pub async fn people_next_unconfirmed_faces(
     let faces = repo.next_unconfirmed_face_batch_excluding(limit + 1, &excluded_face_ids)?;
     let (faces, has_more) = take_page_probe(faces, limit);
     let cluster_id = faces.first().and_then(|f| f.cluster_id);
+    // Unnamed clusters have a NULL name, so read it as optional.
     let cluster_name: Option<String> = match cluster_id {
         Some(id) => db
             .conn
             .query_row(
                 "SELECT name FROM face_clusters WHERE id = ?1",
                 rusqlite::params![id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?,
+            .optional()?
+            .flatten(),
         None => None,
     };
     let next_cursor = faces.last().map(|f| f.face_id);
@@ -687,7 +645,7 @@ pub async fn people_get(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         (lib.db.clone(), lib.drive_root.clone())
     };
-    let clusters = load_clusters_with_thumbnail_paths(db, drive_root).await?;
+    let clusters = load_clusters_with_thumbnail_paths(db, drive_root, Some(args.id)).await?;
     let c = clusters
         .into_iter()
         .find(|c| c.id == args.id)
@@ -708,25 +666,6 @@ pub async fn people_photo_ids(
         return Err(CommandError::not_found("person", args.id));
     }
     Ok(repo.get_photos_for_cluster(args.id)?)
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct PeopleReviewQueueArgs {
-    pub limit: Option<u32>,
-}
-
-#[tauri::command]
-pub async fn people_review_queue(
-    state: State<'_, AppState>,
-    args: PeopleReviewQueueArgs,
-) -> CommandResult<Vec<ReviewItemDto>> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = FaceRepo::new(&db.conn);
-    let limit = args.limit.unwrap_or(20).clamp(1, 200) as usize;
-    let items = repo.get_review_queue_items(limit)?;
-    Ok(items.into_iter().map(Into::into).collect())
 }
 
 // ---------- mutations ----------
@@ -753,7 +692,7 @@ pub async fn people_rename(
         ensure_face_cluster(&db.conn, args.id)?;
         FaceRepo::new(&db.conn).name_cluster(args.id, &name)?;
     }
-    let clusters = load_clusters_with_thumbnail_paths(db, drive_root).await?;
+    let clusters = load_clusters_with_thumbnail_paths(db, drive_root, Some(args.id)).await?;
     let cluster = clusters
         .into_iter()
         .find(|c| c.id == args.id)
@@ -793,7 +732,7 @@ pub async fn people_merge(
         }
         FaceRepo::new(&db.conn).merge_clusters(args.source_id, args.target_id)?;
     }
-    let clusters = load_clusters_with_thumbnail_paths(db, drive_root).await?;
+    let clusters = load_clusters_with_thumbnail_paths(db, drive_root, Some(args.target_id)).await?;
     let cluster = clusters
         .into_iter()
         .find(|c| c.id == args.target_id)
@@ -816,53 +755,6 @@ pub async fn people_delete(
     let db = lib.db.lock().await;
     ensure_face_cluster(&db.conn, args.id)?;
     FaceRepo::new(&db.conn).delete_cluster(args.id)?;
-    Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PeopleReviewArgs {
-    pub queue_id: i64,
-}
-
-#[tauri::command]
-pub async fn people_review_same(
-    state: State<'_, AppState>,
-    args: PeopleReviewArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    FaceRepo::new(&db.conn).resolve_review_same(args.queue_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn people_review_different(
-    state: State<'_, AppState>,
-    args: PeopleReviewArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    FaceRepo::new(&db.conn).resolve_review_different(args.queue_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn people_review_skip(
-    state: State<'_, AppState>,
-    args: PeopleReviewArgs,
-) -> CommandResult<()> {
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    match FaceRepo::new(&db.conn).resolve_review_skip(args.queue_id) {
-        Ok(()) => {}
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            return Err(CommandError::not_found("face_review_queue", args.queue_id));
-        }
-        Err(e) => return Err(e.into()),
-    }
     Ok(())
 }
 
@@ -954,7 +846,6 @@ pub async fn people_start_processing(
     let app_clone = app.clone();
     let started = job.started_at;
     let job_id_clone = job_id.clone();
-    let stats_drive_root = drive_root.clone();
 
     let cfg = smriti::config::AppConfig::load();
     let model_dir = smriti::bootstrap::model_dir();
@@ -1079,39 +970,6 @@ pub async fn people_start_processing(
             Err(_) => (0, 0, 0, 0),
         };
 
-        // Persist the rejection counts so people_clustering_diagnostics
-        // can answer "why did face_count drop?" after an app restart.
-        // Only on success — failure keeps the previous run's stats.
-        if pipeline_result.is_ok() {
-            let st: tauri::State<AppState> = app_clone.state();
-            let lib_guard = st.library.read().await;
-            if let Some(lib) = lib_guard.as_ref() {
-                if lib.drive_root == stats_drive_root {
-                    let db = lib.db.lock().await;
-                    if let Err(e) = db.conn.execute(
-                        "INSERT INTO face_processing_stats \
-                           (id, rejected_small, rejected_lowconf, rejected_blurry, rejected_yaw, completed_at) \
-                         VALUES (1, ?1, ?2, ?3, ?4, strftime('%s','now')) \
-                         ON CONFLICT(id) DO UPDATE SET \
-                           rejected_small=excluded.rejected_small, \
-                           rejected_lowconf=excluded.rejected_lowconf, \
-                           rejected_blurry=excluded.rejected_blurry, \
-                           rejected_yaw=excluded.rejected_yaw, \
-                           completed_at=excluded.completed_at",
-                        rusqlite::params![
-                            rej_small as i64,
-                            rej_lowconf as i64,
-                            rej_blurry as i64,
-                            rej_yaw as i64,
-                        ],
-                    ) {
-                        tracing::warn!("failed to persist face processing stats: {e}");
-                    }
-                } else {
-                    tracing::info!("face processing stats skipped because library changed");
-                }
-            }
-        }
         emit(
             &app_clone,
             EV_FACES_COMPLETE,
@@ -1150,16 +1008,6 @@ pub async fn people_start_processing(
 #[derive(Debug, Deserialize)]
 pub struct CancelJobArgs {
     pub job_id: String,
-}
-
-#[tauri::command]
-pub async fn people_cancel_processing(
-    state: State<'_, AppState>,
-    args: CancelJobArgs,
-) -> CommandResult<()> {
-    state.jobs.lock().await.cancel(&args.job_id);
-    let _ = Ordering::Relaxed;
-    Ok(())
 }
 
 #[derive(Debug, Serialize)]

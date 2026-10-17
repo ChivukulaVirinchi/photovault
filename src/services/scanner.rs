@@ -107,12 +107,6 @@ impl Default for ScanProgress {
     }
 }
 
-/// Result of a completed scan -- returns the database back to the caller
-pub struct ScanResult {
-    pub database: Database,
-    pub final_progress: ScanProgress,
-}
-
 #[derive(Debug, Clone)]
 pub struct ScanReport {
     pub files_inserted: u64,

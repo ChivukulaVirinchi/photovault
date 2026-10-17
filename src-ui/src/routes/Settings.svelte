@@ -183,7 +183,8 @@
       exclusions = null;
       return;
     }
-    loadHealth();
+    // Health checks every thumbnail on disk; only Developer mode shows it.
+    if (devMode.enabled) loadHealth();
     loadSemanticStatus();
     loadExclusions();
   });
@@ -780,56 +781,60 @@
           onchange={(e) => patch({ scan_on_open: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Check for changes when a library opens</span>
       </label>
-      <label>
-        <span class="label-text">Map tile cache (MB, shared across libraries)</span>
-        <input type="number" min="50" max="10000" value={s.map_cache_limit_mb}
-          onchange={async (e) => {
-            const limit = Number((e.target as HTMLInputElement).value);
-            await patch({ map_cache_limit_mb: limit });
-            try { await setTileCacheLimit(limit); } catch (error) { mapCacheMessage = commandErrorMessage(error); }
-          }} />
-      </label>
-      <button class="ghost" onclick={clearMapTiles}>Clear cached map tiles</button>
-      {#if mapCacheMessage}<p class="hint">{mapCacheMessage}</p>{/if}
+      {#if devMode.enabled}
+        <label>
+          <span class="label-text">Map tile cache (MB, shared across libraries)</span>
+          <input type="number" min="50" max="10000" value={s.map_cache_limit_mb}
+            onchange={async (e) => {
+              const limit = Number((e.target as HTMLInputElement).value);
+              await patch({ map_cache_limit_mb: limit });
+              try { await setTileCacheLimit(limit); } catch (error) { mapCacheMessage = commandErrorMessage(error); }
+            }} />
+        </label>
+        <button class="ghost" onclick={clearMapTiles}>Clear cached map tiles</button>
+        {#if mapCacheMessage}<p class="hint">{mapCacheMessage}</p>{/if}
+      {/if}
       <label class="checkbox">
         <input type="checkbox" checked={s.show_timeline_stacks}
           onchange={(e) => patch({ show_timeline_stacks: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Show stacks in timeline</span>
       </label>
-      <label>
-        <span class="label-text">
-          Thumbnail cache <span class="hint">(per drive, on disk)</span>
-        </span>
-        <span class="number-with-unit">
-          <select
-            value={String(s.thumbnail_cache_gb)}
-            onchange={(e) => patch({ thumbnail_cache_gb: Number((e.target as HTMLSelectElement).value) })}
-          >
-            <option value="1">1 GB</option>
-            <option value="2">2 GB</option>
-            <option value="5">5 GB</option>
-            <option value="10">10 GB</option>
-            <option value="25">25 GB</option>
-          </select>
-          <span class="unit hint mono">on next library open</span>
-        </span>
-      </label>
-      <div class="subsection">
-        <div class="section-heading-row">
-          <div>
-            <h4 class="subsection-title">Capture dates</h4>
-            <p class="hint blurb">
-              Re-read dates for every photo and video using embedded metadata first, filename dates next, and file modified time only as a fallback.
-            </p>
+      {#if devMode.enabled}
+        <label>
+          <span class="label-text">
+            Thumbnail cache <span class="hint">(per drive, on disk)</span>
+          </span>
+          <span class="number-with-unit">
+            <select
+              value={String(s.thumbnail_cache_gb)}
+              onchange={(e) => patch({ thumbnail_cache_gb: Number((e.target as HTMLSelectElement).value) })}
+            >
+              <option value="1">1 GB</option>
+              <option value="2">2 GB</option>
+              <option value="5">5 GB</option>
+              <option value="10">10 GB</option>
+              <option value="25">25 GB</option>
+            </select>
+            <span class="unit hint mono">on next library open</span>
+          </span>
+        </label>
+        <div class="subsection">
+          <div class="section-heading-row">
+            <div>
+              <h4 class="subsection-title">Capture dates</h4>
+              <p class="hint blurb">
+                Re-read dates for every photo and video using embedded metadata first, filename dates next, and file modified time only as a fallback.
+              </p>
+            </div>
+            <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates || !hasLibrary}>
+              {refreshingDates ? "Refreshing dates..." : "Refresh dates"}
+            </button>
           </div>
-          <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates || !hasLibrary}>
-            {refreshingDates ? "Refreshing dates..." : "Refresh dates"}
-          </button>
+          {#if !hasLibrary}
+            <p class="hint blurb">Open a library to refresh capture dates.</p>
+          {/if}
         </div>
-        {#if !hasLibrary}
-          <p class="hint blurb">Open a library to refresh capture dates.</p>
-        {/if}
-      </div>
+      {/if}
       <div class="subsection">
         <div class="section-heading-row">
           <div>
@@ -884,11 +889,13 @@
       <p class="hint blurb">
         Local runtimes, models, and offline data live outside the app binary. Smriti uses these when available and keeps browsing usable when optional assets are missing.
       </p>
-      <div class="asset-actions">
-        <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
-          {assetsBusy ? "Checking..." : "Recheck"}
-        </button>
-      </div>
+      {#if devMode.enabled}
+        <div class="asset-actions">
+          <button class="ghost" onclick={loadAssets} disabled={assetsBusy}>
+            {assetsBusy ? "Checking..." : "Recheck"}
+          </button>
+        </div>
+      {/if}
       <AssetSetup feature="all" />
       <details bind:open={individualSetup}>
         <summary>Enable individual features</summary>
@@ -910,7 +917,7 @@
             {visualSearchStatus}
           </span>
         </div>
-        {#if semanticStatus}
+        {#if semanticStatus && devMode.enabled}
           <div class="semantic-stats" aria-label="Visual search status">
             <span><strong>{semanticStatus.display_name}</strong></span>
             <span class="mono">{semanticStatus.indexed_photos.toLocaleString()} indexed</span>
@@ -918,25 +925,23 @@
             <span class="mono">{semanticStatus.failed_photos.toLocaleString()} failed</span>
             <span class="mono">{formatBytes(semanticStatus.vector_bytes)} vectors</span>
           </div>
-          {#if devMode.enabled}
-            <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
-          {/if}
-          {#if visualSearchMissingRuntime}
-            <p class="hint blurb">Enable visual search to download the runtime and model together.</p>
-          {/if}
-        {:else}
+          <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
+          <div class="asset-actions">
+            <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
+              {semanticRunning ? "Indexing..." : "Index visual search"}
+            </button>
+            <button class="ghost" onclick={recheckVisualSearch} disabled={semanticRunning || assetsBusy}>
+              Recheck visual search
+            </button>
+          </div>
+        {/if}
+        {#if semanticStatus && visualSearchMissingRuntime}
+          <p class="hint blurb">Enable visual search to download the runtime and model together.</p>
+        {:else if !semanticStatus}
           <p class="hint blurb">Open a library to see visual search status.</p>
         {/if}
-        <div class="asset-actions">
-          <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
-            {semanticRunning ? "Indexing..." : "Index visual search"}
-          </button>
-          <button class="ghost" onclick={recheckVisualSearch} disabled={semanticRunning || assetsBusy}>
-            Recheck visual search
-          </button>
-        </div>
       </div>
-      {#if assets && hasExternalAssets(assets)}
+      {#if assets && devMode.enabled && hasExternalAssets(assets)}
         <p class="hint blurb">
           Some assets are being read from another search root. This is normal in development checkouts and portable installs; the table shows the exact active locations.
         </p>
@@ -951,7 +956,7 @@
           </ul>
         </details>
       {/if}
-      {#if assets}
+      {#if assets && devMode.enabled}
         <div class="asset-table" role="table" aria-label="Installed assets">
           <div class="asset-row asset-head" role="row">
             <span role="columnheader">Asset</span>
@@ -978,23 +983,23 @@
       {/if}
     </section>
 
-    <section>
-      <h3 class="section-title">Faces &amp; people</h3>
-      <label>
-        <span class="label-text">Detection confidence</span>
-        <input type="number" min="0.1" max="0.95" step="0.05" value={s.face_detection_confidence}
-          onchange={(e) => patch({ face_detection_confidence: Number((e.target as HTMLInputElement).value) })} />
-      </label>
-      <label>
-        <span class="label-text">Clustering threshold</span>
-        <input type="number" min="0.1" max="0.8" step="0.02" value={s.face_clustering_threshold}
-          onchange={(e) => patch({ face_clustering_threshold: Number((e.target as HTMLInputElement).value) })} />
-      </label>
-      <p class="hint blurb">
-        Tighter clustering threshold = more "different" decisions; looser = more "same".
-        {#if devMode.enabled}Adjust then use Reset clusters below to re-group existing faces.{/if}
-      </p>
-      {#if devMode.enabled}
+    {#if devMode.enabled}
+      <section>
+        <h3 class="section-title">Faces &amp; people</h3>
+        <label>
+          <span class="label-text">Detection confidence</span>
+          <input type="number" min="0.1" max="0.95" step="0.05" value={s.face_detection_confidence}
+            onchange={(e) => patch({ face_detection_confidence: Number((e.target as HTMLInputElement).value) })} />
+        </label>
+        <label>
+          <span class="label-text">Clustering threshold</span>
+          <input type="number" min="0.1" max="0.8" step="0.02" value={s.face_clustering_threshold}
+            onchange={(e) => patch({ face_clustering_threshold: Number((e.target as HTMLInputElement).value) })} />
+        </label>
+        <p class="hint blurb">
+          Tighter clustering threshold = more "different" decisions; looser = more "same".
+          Adjust then use Reset clusters below to re-group existing faces.
+        </p>
         <div class="action-row">
           <button class="ghost danger-soft" onclick={resetFaceClusters} disabled={acting || !hasLibrary}>
             Reset face clusters only
@@ -1003,37 +1008,37 @@
             Run faces from scratch
           </button>
         </div>
-      {/if}
-    </section>
+      </section>
 
-    <section>
-      <h3 class="section-title">Bursts</h3>
-      <label>
-        <span class="label-text">
-          Burst time window
-          <span class="hint">(photos taken within this window are grouped)</span>
-        </span>
-        <span class="number-with-unit">
-          <input
-            type="number"
-            min="1"
-            max="30"
-            value={s.burst_time_window_seconds}
-            onchange={(e) =>
-              patch({
-                burst_time_window_seconds: Number((e.target as HTMLInputElement).value),
-              })}
-          />
-          <span class="unit mono">seconds</span>
-        </span>
-      </label>
-      <p class="hint blurb">
-        Tighter window = only true rapid-fire bursts get grouped.
-        Looser window pulls in slower handheld sequences. Default 3 s
-        matches typical phone burst-mode timing. Re-run "Detect bursts"
-        on the Bursts page after a change.
-      </p>
-    </section>
+      <section>
+        <h3 class="section-title">Bursts</h3>
+        <label>
+          <span class="label-text">
+            Burst time window
+            <span class="hint">(photos taken within this window are grouped)</span>
+          </span>
+          <span class="number-with-unit">
+            <input
+              type="number"
+              min="1"
+              max="30"
+              value={s.burst_time_window_seconds}
+              onchange={(e) =>
+                patch({
+                  burst_time_window_seconds: Number((e.target as HTMLInputElement).value),
+                })}
+            />
+            <span class="unit mono">seconds</span>
+          </span>
+        </label>
+        <p class="hint blurb">
+          Tighter window = only true rapid-fire bursts get grouped.
+          Looser window pulls in slower handheld sequences. Default 3 s
+          matches typical phone burst-mode timing. Re-run "Detect bursts"
+          on the Bursts page after a change.
+        </p>
+      </section>
+    {/if}
 
     <section>
       <h3 class="section-title">Memories &amp; suggestions</h3>
@@ -1074,7 +1079,7 @@
         </button>
         {#if devMode.enabled}
           <button class="ghost danger-soft" onclick={() => backfillGeocoding(true)} disabled={backfilling || !hasLibrary}
-            title="Re-resolve every GPS-tagged photo, overwriting stale matches">
+            title="Redo all place names">
             Refresh all
           </button>
         {/if}

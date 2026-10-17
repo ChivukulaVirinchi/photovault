@@ -232,6 +232,8 @@
           class="pv-photo-cell trash-cell"
           class:sel={selection.has(t.photo_id)}
           data-photo-id={t.photo_id}
+          aria-label={t.original_path.split(/[\\/]/).pop()}
+          aria-pressed={selection.has(t.photo_id)}
           use:thumbnailOnVisible={{
             id: t.photo_id,
             thumbnailPath: t.thumbnail_path,

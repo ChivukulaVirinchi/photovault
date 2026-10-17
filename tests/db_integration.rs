@@ -494,20 +494,6 @@ fn test_photo_with_no_exif() {
 }
 
 #[test]
-fn test_database_maintenance() {
-    let (_temp, db) = setup_db();
-    let repo = PhotoRepo::new(&db.conn);
-
-    repo.insert_batch(&[sample_photo("a.jpg", "h1")]).unwrap();
-
-    // Maintenance should not error
-    db.run_maintenance().unwrap();
-
-    // Integrity check should pass
-    assert!(db.check_integrity().unwrap());
-}
-
-#[test]
 fn test_database_backup() {
     let (temp, db) = setup_db();
     let repo = PhotoRepo::new(&db.conn);

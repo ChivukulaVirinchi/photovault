@@ -58,8 +58,6 @@ impl From<image::ImageError> for AppError {
     }
 }
 
-pub type AppResult<T> = Result<T, AppError>;
-
 impl AppError {
     pub fn recovery_suggestion(&self) -> &str {
         match self {
@@ -76,10 +74,6 @@ impl AppError {
             AppError::Cancelled => "",
             AppError::Other(_) => "Please try again.",
         }
-    }
-
-    pub fn should_notify_user(&self) -> bool {
-        !matches!(self, AppError::Cancelled | AppError::Exif(_))
     }
 
     pub fn is_recoverable(&self) -> bool {

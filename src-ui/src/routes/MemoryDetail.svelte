@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { memories, trash } from "../lib/api/all";
@@ -103,7 +105,12 @@
       .replace(/\b\w/g, (m) => m.toUpperCase());
   }
   function onGlobalKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "a") {
+      const ids = photos.map((p) => p.id);
+      if (ids.length > 0) { selection.replace(new Set(ids)); e.preventDefault(); }
+      return;
+    }
     if (selection.active()) {
       if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
       else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
@@ -219,7 +226,7 @@
         <Play size={15} strokeWidth={2} />
       </button>
       <button class="ghost with-icon" onclick={() => collage.showBest({ photoIds: photos.map((p) => p.id) })}
-        disabled={photos.length < 2 || collage.picking} title="A collage of this memory's best photos">
+        disabled={photos.length < 2 || collage.picking} title="Make a collage">
         <LayoutDashboard size={14} strokeWidth={1.9} />
         Collage
       </button>
@@ -241,6 +248,7 @@
         class="pv-photo-cell"
         class:selected={selection.has(p.id)}
         data-photo-id={p.id}
+        aria-label={photoLabel(p)}
         data-no-marquee
         href="#/photo?id={p.id}"
         use:thumbnailOnVisible={{

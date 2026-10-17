@@ -212,13 +212,11 @@ a {
   transition: text-decoration-color var(--t-fast) var(--ease);
 }
 a:hover            { text-decoration-color: var(--ink); }
-a.no-underline,
-nav a              { text-decoration: none; }
+nav a { text-decoration: none; }
 
 strong { font-weight: 600; color: var(--ink); }
 
 .muted { color: var(--ink-muted); }
-.faint { color: var(--ink-faint); }
 .error { color: var(--hot); font-family: var(--font-mono); font-size: var(--t-sm); }
 
 /* Small-caps mono label — used quietly for counts, dates, paths.
@@ -272,6 +270,25 @@ button:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ghost);
+}
+
+/* Keyboard focus on everything else that can take it: links, tiles, cards,
+   custom controls. Mouse clicks don't show it. */
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="tab"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible,
+select:focus-visible,
+summary:focus-visible,
+canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Photo tiles sit edge to edge, so draw the ring inside them. */
+.pv-photo-cell:focus-visible,
+a.cell:focus-visible {
+  outline-offset: -2px;
 }
 
 /* Primary — bone-on-charcoal in dark, ink-on-cream in light. */
@@ -350,23 +367,11 @@ kbd {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Stagger reserved for first-paint of hero grids only.
-   Cap effective items via inline --i in markup; we cut off after 8. */
-.stagger > * {
-  opacity: 0;
-  animation: rise 360ms var(--ease-out) forwards;
-  animation-delay: calc(min(var(--i, 0), 8) * 32ms);
-}
-
 /* ===== shared grid primitives ==============================
    `.pv-photo-grid` / `.pv-photo-cell` — the canonical photo-tile grid.
    Every route that shows a list of photos (MemoryDetail, AlbumDetail,
-   PersonDetail, Trash, Search, Cull, …) inherits these so the visual
+   PersonDetail, Trash, Search, …) inherits these so the visual
    density matches the Timeline grid. Tweak in one place, not ten.
-
-   `.pv-card-grid` — group / cover cards (Bursts listing, Duplicates
-   listing, Memories listing, Albums listing). Wider tiles for content
-   that needs more room than a square thumbnail.
    ============================================================ */
 .pv-photo-grid {
   display: grid;
@@ -400,8 +405,17 @@ kbd {
 }
 .pv-photo-cell.selected {
   box-shadow: inset 0 0 0 3px var(--accent);
+  background: color-mix(in oklab, var(--accent) 16%, var(--bg-card));
 }
-.pv-photo-cell.selected img { filter: brightness(0.85); }
+.pv-photo-cell img {
+  transition: transform 180ms var(--ease-out), border-radius 180ms var(--ease-out), filter 180ms var(--ease-out);
+}
+/* Selected photos step back from the frame, so a selection reads at a glance. */
+.pv-photo-cell.selected img {
+  filter: brightness(0.85);
+  transform: scale(0.9);
+  border-radius: var(--r-sm);
+}
 .pv-photo-cell > img {
   width: 100%;
   height: 100%;
@@ -417,10 +431,10 @@ kbd {
   z-index: 60;
 }
 
-.pv-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--s-3);
+/* Dialogs settle in instead of snapping open. */
+.pv-dialog { animation: dialog-settle 200ms var(--ease-out); }
+@keyframes dialog-settle {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
 }
 
 /* ===== reduced motion — honour the OS ====================== */
@@ -433,7 +447,6 @@ kbd {
     transition-duration:  0.001ms !important;
     scroll-behavior:      auto !important;
   }
-  .stagger > * { opacity: 1; transform: none; }
 }
 
 /* Loading and failed assets never expose the browser's broken-image glyph. */
@@ -456,3 +469,11 @@ kbd {
   pointer-events: none;
 }
 .pv-photo-cell:has(img[data-image-state="error"])::after { content: "Unavailable"; }
+
+/* Loading text that only appears if loading is actually slow, so fast
+   loads don't flash a message. */
+.slow-reveal {
+  opacity: 0;
+  animation: slow-reveal 0s linear 400ms forwards;
+}
+@keyframes slow-reveal { to { opacity: 1; } }

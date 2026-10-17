@@ -29,8 +29,6 @@ export const library = {
       moved: false,
       modified: false,
     }),
-  cancelScan: (jobId: string) =>
-    call<null>("library_cancel_scan", { job_id: jobId }),
   resolvePath: (photoId: number, forDisplay = false) =>
     call<{ absolute_path: string; library_session_id: number; file_hash: string }>("library_resolve_path", {
       photo_id: photoId,
@@ -55,7 +53,7 @@ export const library = {
   refreshPhotoDates: () => call<JobIdDto>("library_refresh_photo_dates"),
   startThumbnailPass: () => call<JobIdDto>("library_start_thumbnail_pass"),
 
-  // Counts that drive the resume banners on Timeline. Each returns
+  // Counts that decide whether those passes resume on their own. Each returns
   // `{ pending_photos: <i64> }`.
   pendingMetadataCount: () =>
     call<{ pending_photos: number }>("library_pending_metadata_count"),

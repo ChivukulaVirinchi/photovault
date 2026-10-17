@@ -20,6 +20,8 @@
 </script>
 
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount, onDestroy } from "svelte";
   import type { Map as MapInstance, Marker } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
@@ -68,7 +70,6 @@
   let markers: Marker[] = [];
   let markerThumbnailCancels: Array<() => void> = [];
   let pinCount = $state(0);
-  let totalGeotagged = $state<number | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -350,7 +351,6 @@
       if (pins.length >= ALL_PINS_CAP) {
         usingViewportPins = true;
         cluster = null;
-        totalGeotagged = null;
         await loadViewportPins();
         if (disposed) return;
         error = null;
@@ -368,7 +368,6 @@
       });
       sc.load(features);
       cluster = sc;
-      totalGeotagged = features.length;
       renderMarkers();
       error = null;
     } catch (e) {
@@ -504,7 +503,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
     if (drawerOpen && e.key === "Escape") {
       e.preventDefault();
       closeDrawer();
@@ -670,6 +669,7 @@
                 class="cell"
                 type="button"
                 onclick={() => openDrawerPhoto(p.id)}
+                aria-label={photoLabel(p)}
                 use:thumbnailOnVisible={{
                   id: p.id,
                   thumbnailPath: p.thumbnail_path,

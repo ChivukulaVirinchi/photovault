@@ -880,42 +880,11 @@ pub async fn albums_remove_photos(
     })
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AlbumsAutoPickCoverArgs {
-    pub id: i64,
-}
-
-#[tauri::command]
-pub async fn albums_auto_pick_cover(
-    state: State<'_, AppState>,
-    args: AlbumsAutoPickCoverArgs,
-) -> CommandResult<AlbumDto> {
-    if args.id == FAVORITES_ALBUM_ID {
-        return Err(reject_virtual_album("id"));
-    }
-    let lib_guard = state.library.read().await;
-    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
-    let db = lib.db.lock().await;
-    let repo = AlbumRepo::new(&db.conn);
-    repo.auto_pick_cover(args.id)?;
-    fetch_album(&repo, args.id)
-}
-
 // ---------- album suggestions: mutations ----------
 
 #[derive(Debug, Default, Deserialize)]
 pub struct AlbumsSuggestionsRunDetectionArgs {
     pub home_city_override: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SuggestionDiagnosticsDto {
-    pub total_photos_with_date: i64,
-    pub photos_with_city: i64,
-    pub home_city: Option<String>,
-    pub trip_candidates_passed: usize,
-    pub event_windows: usize,
-    pub created: usize,
 }
 
 /// Suggestion-detection complete payload — same fields as the legacy

@@ -6,8 +6,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { call } from "./index";
 import { dataRevision } from "../stores/dataRevision.svelte";
-import { libraryStore } from "../stores/library.svelte";
-import type { AssetHealthDto } from "./types";
 import type {
   AlbumDto,
   AlbumSuggestionDto,
@@ -41,17 +39,7 @@ export const people = {
     })),
   /// Delete a cluster — "not a real person." Faces become unclustered.
   delete: (id: number) => mutate(call<null>("people_delete", { id })),
-  reviewQueue: (limit = 20) =>
-    call<ReviewItem[]>("people_review_queue", { limit }),
-  reviewSame: (queueId: number) =>
-    mutate(call<null>("people_review_same", { queue_id: queueId })),
-  reviewDifferent: (queueId: number) =>
-    mutate(call<null>("people_review_different", { queue_id: queueId })),
-  reviewSkip: (queueId: number) =>
-    mutate(call<null>("people_review_skip", { queue_id: queueId })),
   startProcessing: (librarySessionId?: number) => call<JobIdDto>("people_start_processing", { library_session_id: librarySessionId }),
-  cancelProcessing: (jobId: string) =>
-    call<null>("people_cancel_processing", { job_id: jobId }),
   resetAll: () =>
     mutate(call<{
       photos_reflagged: number;
@@ -103,8 +91,6 @@ export const people = {
       face_id: faceId,
       not_cluster_id: notClusterId ?? null,
     })),
-  faceHide: (faceId: number) =>
-    mutate(call<null>("people_face_hide", { face_id: faceId })),
   faceReassign: (faceId: number, targetClusterId: number) =>
     mutate(call<null>("people_face_reassign", {
       face_id: faceId,
@@ -127,19 +113,7 @@ export const people = {
       limit,
       excluded_face_ids: excludedFaceIds,
     }),
-  clusteringDiagnostics: () =>
-    call<unknown>("people_clustering_diagnostics"),
 };
-
-export interface ReviewItem {
-  queue_id: number;
-  face_id: number;
-  candidate_cluster_id: number;
-  candidate_cluster_name: string | null;
-  candidate_cluster_size: number;
-  candidate_sample_face_ids: number[];
-  score: number;
-}
 
 export interface FaceDetailDto {
   face_id: number;
@@ -314,13 +288,6 @@ export interface SearchResults {
 export const search = {
   query: (q: string, offset = 0, limit = 200) =>
     call<SearchResults>("search_query", { q, offset, limit }),
-  recentList: (limit = 10) =>
-    call<Array<{ query: string; last_used: string; use_count: number }>>(
-      "search_recent_list",
-      { limit },
-    ),
-  recentRemove: (q: string) => call<null>("search_recent_remove", { q }),
-  recentClear: () => call<null>("search_recent_clear"),
 };
 
 // ---------- semantic search ----------
@@ -338,14 +305,7 @@ export interface SemanticStatus {
 
 export const semantic = {
   status: () => call<SemanticStatus>("semantic_status"),
-  warmRuntime: () => call<null>("semantic_warm_runtime"),
-  installModel: () => call<JobIdDto>("semantic_install_model"),
   startIndexing: () => call<JobIdDto>("semantic_start_indexing"),
-  similarPhotos: (photoId: number, limit = 24) =>
-    call<PhotoSummaryDto[]>("semantic_similar_photos", {
-      photo_id: photoId,
-      limit,
-    }),
 };
 
 // ---------- memories ----------
@@ -365,11 +325,6 @@ export const memories = {
     call<{ card: MemoryCard; photos: PhotoSummaryDto[] }>("memories_detail", {
       memory_id: memoryId,
     }),
-  blockedPeople: () => call<PersonDto[]>("memories_blocked_people"),
-  blockPerson: (personId: number) =>
-    call<null>("memories_block_person", { person_id: personId }),
-  unblockPerson: (personId: number) =>
-    call<null>("memories_unblock_person", { person_id: personId }),
   saveAsAlbum: (memoryId: string, name?: string) =>
     call<AlbumDto>("memories_save_as_album", {
       memory_id: memoryId,
@@ -634,11 +589,6 @@ export const map = {
 
 // ---------- geocoding ----------
 export const geocoding = {
-  resolveOne: (lat: number, lng: number) =>
-    call<{ city: string | null; country: string | null } | null>(
-      "geocoding_resolve_one",
-      { lat, lng },
-    ),
   /// Walk every GPS-tagged photo and resolve a place name. Default
   /// fills only NULL rows; `forceRefresh = true` re-resolves all and
   /// clears entries that no longer match (used to flush stale data
@@ -683,7 +633,6 @@ export interface UpdateStatus {
 }
 
 export const systemEx = {
-  assetHealth: () => call<AssetHealthDto>("system_asset_health"),
   assetsInventory: () => call<AssetInventory>("system_assets_inventory"),
     assetSetupStatus: () => call<{ faces: boolean; visual: boolean; places: boolean }>("system_asset_setup_status"),
     assetDownloadSize: (feature: "all" | "faces" | "visual" | "places") => call<number>("system_asset_download_size", { feature }),
@@ -691,10 +640,6 @@ export const systemEx = {
   openInExplorer: (photoId: number) =>
     call<null>("system_open_in_explorer", { photo_id: photoId }),
   openPath: (path: string) => call<null>("system_open_path", { path }),
-  copyPathToClipboard: (photoId: number) =>
-    call<{ path: string }>("system_copy_path_to_clipboard", {
-      photo_id: photoId,
-    }),
   updatesCheck: () => call<UpdateStatus>("system_updates_check"),
   updateInstall: () =>
     call<{ outcome: "installer_launched" | "restart_required" | "release_page" | "package_manager" }>(

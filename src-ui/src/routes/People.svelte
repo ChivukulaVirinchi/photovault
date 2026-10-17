@@ -370,12 +370,12 @@
         </header>
         <div class="singletons-grid">
           {#each liveFaces as f (f.face_id)}
-            <a class="singleton-card" href="#/photo?id={f.photo_id}">
+            <a class="singleton-card" href="#/photo?id={f.photo_id}" aria-label="Photo">
               <div class="singleton-frame">
                 {#if f.thumbnail_path}
                   <img src={thumbUrl(libraryStore.driveRoot, f.thumbnail_path) ?? ""} alt="" />
                 {:else}
-                  <span class="placeholder small">Â·</span>
+                  <span class="placeholder small">·</span>
                 {/if}
               </div>
             </a>
@@ -387,7 +387,7 @@
 
   {#if loading}
     <div class="empty">
-      <p class="working">Loading people...</p>
+      <p class="working slow-reveal">Loading people…</p>
     </div>
   {:else if clusters.length === 0 && !running}
     <div class="empty">
@@ -563,7 +563,9 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: transform var(--t-slow) var(--ease);
   }
+  .card:hover .frame img { transform: scale(1.05); }
   .placeholder {
     color: var(--ink-faint);
   }

@@ -7,7 +7,8 @@
   import Timeline from "./routes/Timeline.svelte";
   import Search from "./routes/Search.svelte";
   import MapView from "./routes/Map.svelte";
-  import Lazy from "./lib/components/Lazy.svelte";
+  import Lazy, { preload } from "./lib/components/Lazy.svelte";
+  import { isTypingTarget, modalOpen } from "./lib/keys";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ToastHost from "./lib/components/ToastHost.svelte";
   import JobsIndicator from "./lib/components/JobsIndicator.svelte";
@@ -24,11 +25,11 @@
   import { slideshow } from "./lib/stores/slideshow.svelte";
   import { assistantStore } from "./lib/stores/assistant.svelte";
   import { assetSetup } from "./lib/stores/assetSetup.svelte";
+  import { library } from "./lib/api/library";
   import SmartSetupDialog from "./lib/components/SmartSetupDialog.svelte";
 
   const loadPeople = () => import("./routes/People.svelte");
   const loadPersonDetail = () => import("./routes/PersonDetail.svelte");
-  const loadPersonReview = () => import("./routes/PersonReview.svelte");
   const loadFaceReview = () => import("./routes/FaceReview.svelte");
   const loadAlbums = () => import("./routes/Albums.svelte");
   const loadAlbumDetail = () => import("./routes/AlbumDetail.svelte");
@@ -111,15 +112,66 @@
       e.preventDefault();
       return;
     }
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (isTypingTarget(e.target)) return;
     if (e.key === "?") { showShortcuts = !showShortcuts; e.preventDefault(); }
-    else if (e.key === "/") { window.location.hash = "/search"; e.preventDefault(); }
-    else if (e.key === "Escape") {
-      if (showShortcuts) { showShortcuts = false; }
-      else if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) { return; }
-      else if (route.path !== "/timeline") { history.back(); }
+    else if (showShortcuts) { if (e.key === "Escape") { showShortcuts = false; e.preventDefault(); } }
+    else if (modalOpen()) { return; }
+    else if (e.key === "/") { focusSearch(); e.preventDefault(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key === ",") { window.location.hash = "/settings"; e.preventDefault(); }
+    else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      const href = tabShortcut(Number(e.key));
+      if (href) { window.location.hash = href; e.preventDefault(); }
+    }
+    else if (e.key === "Escape" && route.path !== "/timeline") {
+      // Pages handle Escape first (clear a selection, close a drawer). This
+      // listener runs before theirs, so decide once the event has finished.
+      setTimeout(() => { if (!e.defaultPrevented && !modalOpen()) history.back(); });
     }
   }
+
+  /** Ctrl+1…9 open the sidebar's pages in order. */
+  function tabShortcut(n: number): string | null {
+    const links = [...document.querySelectorAll<HTMLAnchorElement>("nav a[data-tab]")];
+    return links[n - 1]?.getAttribute("href")?.replace(/^#/, "") ?? null;
+  }
+
+  /** "/" goes to Search and puts the cursor in its box, every time. */
+  function focusSearch() {
+    window.location.hash = "/search";
+    const focus = (tries: number) => {
+      const input = document.querySelector<HTMLInputElement>(".route-panel.active input[type=search], .route-panel.active input.search-input");
+      if (input) { input.focus(); input.select(); }
+      else if (tries > 0) requestAnimationFrame(() => focus(tries - 1));
+    };
+    requestAnimationFrame(() => focus(30));
+  }
+
+  // The window title names the current page, which screen readers announce
+  // on navigation.
+  const PAGE_TITLES: Record<string, string> = {
+    "/timeline": "Timeline", "/people": "People", "/albums": "Albums", "/memories": "Memories",
+    "/search": "Search", "/map": "Map", "/duplicates": "Duplicates", "/bursts": "Bursts",
+    "/insights": "Insights", "/trash": "Trash", "/settings": "Settings", "/photo": "Photo",
+    "/album": "Album", "/memory": "Memory", "/person": "Person", "/duplicate": "Duplicates",
+    "/burst": "Burst", "/review-faces": "Review faces",
+  };
+  $effect(() => {
+    const page = libraryStore.isOpen ? PAGE_TITLES[route.path] : null;
+    document.title = page ? `${page} · Smriti` : "Smriti";
+  });
+
+  // Pages are separate chunks; fetch them while the app is idle so opening
+  // any of them for the first time doesn't wait on a download.
+  $effect(() => {
+    if (!libraryStore.isOpen) return;
+    const warm = () => preload([
+      loadPeople, loadAlbums, loadMemories, loadPhotoDetail, loadAlbumDetail, loadMemoryDetail,
+      loadPersonDetail, loadTrash, loadSettings, loadDuplicates, loadBursts, loadInsights,
+      loadDuplicateDetail, loadBurstDetail, loadFaceReview,
+    ]);
+    const handle = window.requestIdleCallback ? window.requestIdleCallback(warm, { timeout: 3000 }) : window.setTimeout(warm, 1500);
+    return () => (window.cancelIdleCallback ? window.cancelIdleCallback(handle) : window.clearTimeout(handle));
+  });
 
   onMount(() => {
     parseHash();
@@ -220,10 +272,40 @@
     clearTimeout(processingTimer);
     // The post-scan metadata job starts a moment after the scan job ends;
     // wait so faces aren't detected before orientation is known.
-    processingTimer = setTimeout(() => {
+    processingTimer = setTimeout(async () => {
+      if (session !== libraryStore.session) return;
+      if (await resumeLibraryPasses(session)) return;
       if (session === libraryStore.session) void assetSetup.processPending();
     }, 3000);
   });
+
+  /// Metadata and thumbnail passes cut short by a quit, a pause or an
+  /// unplugged drive pick up again on their own: at most once each per
+  /// library open, so photos that keep failing can't restart them in a
+  /// loop. Returns true while metadata runs, since faces wait for it to
+  /// learn each photo's orientation; thumbnails run alongside the rest.
+  const resumedPasses = new Set<string>();
+  async function resumeLibraryPasses(session: number): Promise<boolean> {
+    const passes = [
+      { kind: "metadata", pending: library.pendingMetadataCount, start: library.startMetadataExtraction },
+      { kind: "thumbnails", pending: library.pendingThumbnailCount, start: library.startThumbnailPass },
+    ] as const;
+    for (const pass of passes) {
+      const key = `${session}:${pass.kind}`;
+      if (resumedPasses.has(key) || jobs.isRunning(pass.kind) || jobs.cancelledKinds.has(pass.kind)) continue;
+      resumedPasses.add(key);
+      try {
+        const { pending_photos } = await pass.pending();
+        if (pending_photos === 0 || session !== libraryStore.session) continue;
+        const { job_id } = await pass.start();
+        if (session === libraryStore.session) jobs.register(job_id, pass.kind);
+        if (pass.kind === "metadata") return true;
+      } catch {
+        // Quietly skip; a later scan runs the same passes.
+      }
+    }
+    return false;
+  }
 
 </script>
 
@@ -282,8 +364,6 @@
 
         {#if route.path === "/photo" && positiveIntParam("id") != null}
           <Lazy load={loadPhotoDetail} title="Photo" props={{ id: positiveIntParam("id")!, info: route.params.info === "1" }} />
-        {:else if route.path === "/people/review"}
-          <Lazy load={loadPersonReview} title="Review people" />
         {:else if route.path === "/review-faces"}
           <Lazy load={loadFaceReview} title="Review faces" />
         {:else if route.path === "/person" && positiveIntParam("id") != null}
@@ -332,7 +412,8 @@
     overflow: hidden;
     flex-direction: column;
   }
-  .route-panel.active { display: flex; }
+  .route-panel.active { display: flex; animation: panel-in 160ms var(--ease-out); }
+  @keyframes panel-in { from { opacity: 0; } }
   .no-library-main {
     height: 100vh;
     background: var(--bg);

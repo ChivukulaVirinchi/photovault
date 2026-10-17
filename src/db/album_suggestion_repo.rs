@@ -110,20 +110,6 @@ impl<'a> AlbumSuggestionRepo<'a> {
         Ok(())
     }
 
-    /// Increment seen_count for all pending suggestions by 1.
-    /// Suggestions with seen_count > 10 are auto-expired to 'dismissed'.
-    pub fn increment_seen_counts(&self) -> SqliteResult<()> {
-        self.conn.execute(
-            "UPDATE album_suggestions SET seen_count = seen_count + 1 WHERE status = 'pending'",
-            [],
-        )?;
-        self.conn.execute(
-            "UPDATE album_suggestions SET status = 'dismissed' WHERE status = 'pending' AND seen_count > 10",
-            [],
-        )?;
-        Ok(())
-    }
-
     /// Get all fingerprints (accepted + dismissed) to avoid re-suggesting.
     pub fn get_all_fingerprints(&self) -> SqliteResult<Vec<String>> {
         let mut stmt = self.conn.prepare(

@@ -59,9 +59,6 @@
   const position = $derived(slideshow.position());
   const frontPhoto = $derived(slots[frontIdx].photo);
   const context = $derived(frontPhoto ? memoryContext(frontPhoto) : "");
-  const frontUrl = $derived(slots[frontIdx].url);
-  const backPhoto = $derived(slots[1 - frontIdx].photo);
-  const backUrl = $derived(slots[1 - frontIdx].url);
 
   function bumpChrome() {
     chromeActive = true;
@@ -514,7 +511,7 @@
       <button class="tool" onclick={toggleFullscreen} title="Fullscreen (F)" aria-label="Toggle fullscreen">
         <Maximize2 size={17} strokeWidth={1.8} />
       </button>
-      <button class="tool" onclick={showInTimeline} title="Show in timeline" aria-label="Show current photo in timeline">
+      <button class="tool" onclick={showInTimeline} title="Show in Timeline" aria-label="Show current photo in timeline">
         <LocateFixed size={17} strokeWidth={1.8} />
       </button>
     </div>
@@ -534,10 +531,10 @@
           <Play size={18} strokeWidth={1.9} />
         {/if}
       </button>
-      <button class="control" onclick={goPrev} title="Previous" aria-label="Previous photo">
+      <button class="control" onclick={goPrev} title="Previous (←)" aria-label="Previous photo">
         <ChevronLeft size={18} strokeWidth={1.9} />
       </button>
-      <button class="control" onclick={() => void goNext()} title="Next" aria-label="Next photo">
+      <button class="control" onclick={() => void goNext()} title="Next (→)" aria-label="Next photo">
         <ChevronRight size={18} strokeWidth={1.9} />
       </button>
       <span class="divider"></span>
@@ -555,7 +552,7 @@
         </select>
       </label>
       {#if !surprise}
-      <button class="control" class:on={slideshow.loop} onclick={() => slideshow.toggleLoop()} title="Loop slideshow" aria-label="Toggle loop">
+      <button class="control" class:on={slideshow.loop} aria-pressed={slideshow.loop} onclick={() => slideshow.toggleLoop()} title="Loop" aria-label="Loop">
         {#if slideshow.loop}
           <Repeat1 size={17} strokeWidth={1.8} />
         {:else}

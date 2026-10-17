@@ -13,9 +13,6 @@
   import Settings from "lucide-svelte/icons/settings";
   import ChevronLeft from "lucide-svelte/icons/chevron-left";
   import ChevronRight from "lucide-svelte/icons/chevron-right";
-  import Sun from "lucide-svelte/icons/sun";
-  import Moon from "lucide-svelte/icons/moon";
-  import Monitor from "lucide-svelte/icons/monitor";
   import type { Icon as IconType } from "lucide-svelte";
   import { libraryStore } from "../stores/library.svelte";
   import { settingsStore } from "../stores/settings.svelte";
@@ -59,7 +56,12 @@
   }
 
   const collapsed = $derived(settingsStore.sidebarCollapsed);
-  const theme     = $derived(settingsStore.theme);
+  /** Ctrl+1…9 shortcut number for a page link (the Assistant is a button). */
+  function tabNumber(path: string): number | null {
+    const index = visibleItems.filter((i) => i.path !== "/assistant").findIndex((i) => i.path === path);
+    return index >= 0 && index < 9 ? index + 1 : null;
+  }
+
   const visibleItems = $derived(
     items.filter(
       (item) =>
@@ -68,15 +70,6 @@
           settingsStore.data?.assistant_enabled !== false),
     ),
   );
-
-  function cycleTheme() {
-    const order: Array<"dark" | "light" | "system"> = ["dark", "light", "system"];
-    const next = order[(order.indexOf(theme) + 1) % order.length];
-    settingsStore.update({ theme: next }).catch(() => {});
-  }
-
-  const ThemeIcon = $derived(theme === "light" ? Sun : theme === "dark" ? Moon : Monitor);
-  const themeLabel = $derived(theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System");
 
   /// Arrow-key roving focus for nav items. ↑/↓ wrap; Home/End jump to ends.
   /// Enter on a focused link is handled by the browser (anchor activation).
@@ -160,6 +153,7 @@
   <nav onkeydown={onNavKey}>
     {#each visibleItems as item (item.path)}
       {@const Icon = item.icon}
+      {@const n = tabNumber(item.path)}
       {#if item.path === "/assistant"}
         <button
           class="nav-action"
@@ -173,8 +167,10 @@
       {:else}
         <a
           href="#{item.path}"
+          data-tab
           class:active={isActive(item.path)}
-          title={collapsed ? item.label : ""}
+          aria-current={isActive(item.path) ? "page" : undefined}
+          title={n ? `${item.label} (Ctrl+${n})` : item.path === "/settings" ? "Settings (Ctrl+,)" : item.label}
         >
           <Icon class="nav-icon" size={16} strokeWidth={1.75} />
           <span class="label">{item.label}</span>
@@ -183,31 +179,23 @@
     {/each}
   </nav>
 
-  <footer>
-    {#if !collapsed && libraryStore.driveRoot}
-      <div class="lib" title={libraryStore.driveRoot}>
-        <span class="lib-name">{shortRoot(libraryStore.driveRoot)}</span>
-        <span class="lib-count mono">
-          {libraryStore.photoCount.toLocaleString()}
-        </span>
-      </div>
-    {/if}
-    <div class="footer-actions">
-      <button
-        class="icon-btn"
-        onclick={cycleTheme}
-        aria-label="Cycle theme — currently {themeLabel}"
-        title="Theme: {themeLabel}"
-      >
-        <ThemeIcon size={14} strokeWidth={1.75} />
-      </button>
-      {#if !collapsed}
+  {#if !collapsed}
+    <footer>
+      {#if libraryStore.driveRoot}
+        <div class="lib" title={libraryStore.driveRoot}>
+          <span class="lib-name">{shortRoot(libraryStore.driveRoot)}</span>
+          <span class="lib-count mono">
+            {libraryStore.photoCount.toLocaleString()}
+          </span>
+        </div>
+      {/if}
+      <div class="footer-actions">
         <button class="ghost switch" onclick={() => libraryStore.close()}>
           Switch library
         </button>
-      {/if}
-    </div>
-  </footer>
+      </div>
+    </footer>
+  {/if}
 </aside>
 
 <style>
@@ -357,7 +345,9 @@
     width: 2px;
     background: var(--accent);
     border-radius: 1px;
+    animation: nav-mark 240ms var(--ease-out);
   }
+  @keyframes nav-mark { from { transform: scaleY(0); } }
   .sidebar.collapsed nav a.active::before,
   .sidebar.collapsed nav .nav-action.active::before {
     left: -6px;
@@ -375,7 +365,6 @@
     flex-direction: column;
     gap: var(--s-2);
   }
-  .sidebar.collapsed footer { align-items: center; }
 
   .lib {
     display: flex;
@@ -405,34 +394,6 @@
     align-items: center;
     padding: 0 var(--s-2);
   }
-  .sidebar.collapsed .footer-actions {
-    flex-direction: column;
-    padding: 0;
-  }
-
-  .icon-btn {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    background: transparent;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    color: var(--ink-soft);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: color var(--t-fast) var(--ease),
-                border-color var(--t-fast) var(--ease),
-                background var(--t-fast) var(--ease);
-  }
-  .icon-btn:hover {
-    color: var(--ink);
-    border-color: var(--ink-faint);
-    background: var(--bg-card);
-  }
-
   .switch {
     flex: 1;
     font-size: var(--t-sm);

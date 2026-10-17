@@ -201,11 +201,3 @@ strip = true
 
 # Bundle configuration moved to src-tauri/tauri.conf.json — Tauri's
 # bundler owns .deb, AppImage, .msi, and .dmg packaging now.
-
-[dev-dependencies]
-# `insta` provides inline snapshot tests. Used by integration tests
-# under `tests/` and by `src-tauri/tests/dto_snapshots.rs` to catch
-# accidental breakage of the wire-format contract between Rust and
-# the Svelte frontend. Reviewers update snapshots with the CLI
-# `cargo insta review`.
-insta = { version = "1", features = ["json"] }

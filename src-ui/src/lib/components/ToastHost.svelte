@@ -35,7 +35,7 @@
       {#if t.kind === "undo" && t.onUndo}
         <button class="undo" onclick={() => handleUndo(t.id, t.onUndo)} disabled={undoing.has(t.id)}>Undo</button>
       {/if}
-      <button class="close" onclick={() => toasts.dismiss(t.id)} aria-label="Dismiss">
+      <button class="close" onclick={() => toasts.dismiss(t.id)} aria-label="Dismiss" title="Dismiss">
         <X size={13} strokeWidth={1.75} />
       </button>
     </div>

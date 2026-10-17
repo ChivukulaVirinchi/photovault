@@ -23,6 +23,8 @@
 </script>
 
 <script lang="ts">
+  import { photoLabel } from "../lib/a11y";
+  import { ignoreShortcut } from "../lib/keys";
   import { onMount } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
@@ -371,7 +373,12 @@
 
   function onGlobalKey(e: KeyboardEvent) {
     if (inInactivePanel(pageEl)) return;
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (ignoreShortcut(e)) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "a") {
+      const ids = visiblePhotoIds;
+      if (ids.length > 0) { selection.replace(new Set(ids)); e.preventDefault(); }
+      return;
+    }
     if (!selection.active()) return;
     if (e.key === "Escape") { selection.clear(); e.preventDefault(); }
     else if (e.key === "Delete" || e.key === "Backspace") { bulkTrash(); e.preventDefault(); }
@@ -484,6 +491,8 @@
       oncompositionend={() => { composing = false; onInput(); }}
       onkeydown={(event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); void run(); } }}
       placeholder="Search photos, people, places, and albums"
+      class="search-input"
+      aria-label="Search"
     />
     {#if loading}<span class="loading mono">…</span>{/if}
     {#if q}
@@ -589,6 +598,7 @@
               class="pv-photo-cell"
               class:selected={selection.has(p.photo_id)}
               data-photo-id={p.photo_id}
+              aria-label={photoLabel(p)}
               href="#/photo?id={p.photo_id}"
               onclick={(e) => onCellClick(e, p.photo_id)}
               use:thumbnailOnVisible={{

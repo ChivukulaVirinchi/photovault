@@ -10,6 +10,7 @@ use super::FaceEmbedding;
 // HNSW deliberately randomizes graph levels. Exact complete-link clustering
 // is affordable for small batches and makes repeated runs stable; large
 // libraries retain the O(n log n) path.
+#[cfg(feature = "hnsw_clustering")]
 const EXACT_CLUSTER_LIMIT: usize = 256;
 
 #[derive(Debug, Clone)]

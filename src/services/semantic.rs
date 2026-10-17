@@ -4,14 +4,13 @@
 //! high-volume embedding payload lives in `.photovault/semantic/...`
 //! beside thumbnails and other per-library cache data.
 
-use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::{DynamicImage, ImageBuffer, Rgb};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
@@ -358,15 +357,6 @@ impl SemanticSearchService {
         Ok(())
     }
 
-    pub fn mark_indexed(
-        &self,
-        conn: &mut Connection,
-        photo_id: i64,
-        vector: &[f32],
-    ) -> rusqlite::Result<()> {
-        self.record_index_batch(conn, &[(photo_id, vector.to_vec())], &[])
-    }
-
     pub fn index_next_batch(
         &self,
         conn: &mut Connection,
@@ -461,17 +451,6 @@ impl SemanticSearchService {
         tx.commit()
     }
 
-    pub fn search_text(
-        &self,
-        conn: &Connection,
-        runner: &mut SemanticModelRunner,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SemanticCandidate>, String> {
-        let vector = runner.embed_text(query)?;
-        self.search_vector(conn, &vector, limit)
-    }
-
     pub fn search_text_cached(
         &self,
         conn: &Connection,
@@ -482,37 +461,6 @@ impl SemanticSearchService {
     ) -> Result<Vec<SemanticCandidate>, String> {
         let vector = runner.embed_text(query)?;
         self.search_vector_cached(conn, cache, &vector, limit)
-    }
-
-    pub fn similar_to_photo(
-        &self,
-        conn: &Connection,
-        photo_id: i64,
-        limit: usize,
-    ) -> Result<Vec<SemanticCandidate>, String> {
-        let Some(vector) = self.vector_for_photo(conn, photo_id)? else {
-            return Ok(Vec::new());
-        };
-        let mut out = self.search_vector(conn, &vector, limit + 1)?;
-        out.retain(|c| c.photo_id != photo_id);
-        out.truncate(limit);
-        Ok(out)
-    }
-
-    pub fn similar_to_photo_cached(
-        &self,
-        conn: &Connection,
-        cache: &mut SemanticIndexCache,
-        photo_id: i64,
-        limit: usize,
-    ) -> Result<Vec<SemanticCandidate>, String> {
-        let Some(vector) = self.vector_for_photo(conn, photo_id)? else {
-            return Ok(Vec::new());
-        };
-        let mut out = self.search_vector_cached(conn, cache, &vector, limit + 1)?;
-        out.retain(|c| c.photo_id != photo_id);
-        out.truncate(limit);
-        Ok(out)
     }
 
     pub fn search_vector_cached(
@@ -543,17 +491,14 @@ impl SemanticSearchService {
             .unwrap_or_default())
     }
 
-    pub fn search_vector(
+    #[cfg(test)]
+    fn search_vector(
         &self,
         conn: &Connection,
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticCandidate>, String> {
-        if query.len() != SEMANTIC_DIM {
-            return Ok(Vec::new());
-        }
-        let index = self.build_vector_index(conn)?;
-        Ok(index.search(query, limit))
+        Ok(self.build_vector_index(conn)?.search(query, limit))
     }
 
     fn build_vector_index(&self, conn: &Connection) -> Result<SemanticVectorIndex, String> {
@@ -570,11 +515,13 @@ impl SemanticSearchService {
         Ok(SemanticVectorIndex { photo_ids, vectors })
     }
 
+    #[cfg(test)]
     fn vector_for_photo(
         &self,
         conn: &Connection,
         photo_id: i64,
     ) -> Result<Option<Vec<f32>>, String> {
+        use rusqlite::OptionalExtension;
         let row: Option<(i64, i64)> = conn
             .query_row(
                 "SELECT vector_offset, vector_dim
@@ -912,6 +859,7 @@ impl VectorStore {
         Ok(offsets)
     }
 
+    #[cfg(test)]
     fn read(&self, offset: u64, dim: usize) -> std::io::Result<Vec<f32>> {
         let mut file = File::open(self.vector_path())?;
         Self::read_from(&mut file, offset, dim)
@@ -1080,13 +1028,6 @@ where
     let completed = completed_before + asset.expected_size;
     progress(asset.stage, completed, Some(total_bytes));
     Ok(completed)
-}
-pub fn semantic_ids_by_score(candidates: &[SemanticCandidate]) -> HashMap<i64, usize> {
-    candidates
-        .iter()
-        .enumerate()
-        .map(|(idx, c)| (c.photo_id, idx))
-        .collect()
 }
 
 pub fn relevant_text_search_candidates(

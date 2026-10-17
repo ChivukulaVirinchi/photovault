@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trapFocus } from "../actions/trapFocus";
   import { onMount } from "svelte";
   import { people } from "../api/all";
   import { commandErrorMessage } from "../api";
@@ -89,7 +90,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
-  <div class="dialog" onkeydown={onKey} role="dialog" tabindex="-1" aria-modal="true" aria-label="Merge person">
+  <div class="dialog pv-dialog" onkeydown={onKey} role="dialog" use:trapFocus tabindex="-1" aria-modal="true" aria-label="Merge person">
     <header>
       <h3>Merge {source.name ?? `Person ${source.id}`} into…</h3>
       <p class="hint">Pick the person this is the same as. Faces and identities will combine into the chosen target.</p>

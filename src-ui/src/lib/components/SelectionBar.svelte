@@ -36,7 +36,7 @@
 
   {#if count >= 2}
     <button class="action" onclick={() => collage.show(selection.list())} disabled={count > MAX_PHOTOS}
-      title={count > MAX_PHOTOS ? `Collages hold up to ${MAX_PHOTOS} photos` : "Make a collage"}>
+      title={count > MAX_PHOTOS ? `Up to ${MAX_PHOTOS} photos` : "Make a collage"}>
       <LayoutDashboard size={15} strokeWidth={1.75} />
       <span>Collage</span>
     </button>
@@ -47,7 +47,7 @@
   </button>
 
   {#if onRemoveFromAlbum}
-    <button class="action" onclick={onRemoveFromAlbum} title="Remove from this album">
+    <button class="action" onclick={onRemoveFromAlbum} title="Remove from album">
       <FolderMinus size={15} strokeWidth={1.75} />
       <span>Remove from album</span>
     </button>

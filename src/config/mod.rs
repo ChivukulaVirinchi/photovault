@@ -449,13 +449,6 @@ impl AppConfig {
             .join("photovault")
             .join("config.json")
     }
-
-    /// Add drive to remembered list.
-    pub fn remember_drive(&mut self, path: PathBuf) {
-        if !self.remembered_drives.contains(&path) {
-            self.remembered_drives.push(path);
-        }
-    }
 }
 
 pub fn is_allowed_assistant_url(value: &str) -> bool {

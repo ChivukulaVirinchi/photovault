@@ -173,7 +173,7 @@
   {/if}
   {#if loading}
     <div class="empty">
-      <p>Loading memories...</p>
+      <p class="slow-reveal">Loading memories…</p>
     </div>
   {:else if cards.length === 0}
     <div class="empty">
