@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-19
+
 ### Added
 - Collages: select 2–9 photos, pick a layout, shape and border, drag to
   reframe or swap. Saves to Pictures › Smriti Collages.
@@ -40,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   photos once those features are installed. Cancelling either one pauses it
   until you start it again.
 
+- Libraries on a NAS or network share (#31). Smriti recognises SMB/CIFS,
+  NFS and similar shares (UNC paths and mapped drives on Windows, network
+  and FUSE mounts on Linux, smbfs/nfs/afpfs on macOS) and keeps the
+  database in a mode that is safe there: rollback journal, full sync, no
+  memory mapping. The catalog stays next to the photos. For shares it
+  doesn't recognise, Settings › Library › "Library is on a network drive
+  (NAS)" turns the mode on; the choice travels with the library. Libraries
+  on local and USB drives are unchanged.
+- Trips, events, gatherings and memories get titles written from their
+  facts (place, season, people) with a short context line, and collage
+  cards say why their photos were picked.
+- Ctrl+1–9 jumps between pages and Ctrl+, opens Settings; tooltips show
+  their shortcut.
+
 ### Changed
 - Rescans skip files that are already indexed instead of re-reading every file,
   so checking an unchanged library costs one folder walk.
@@ -72,10 +88,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The website no longer loads Google Analytics, and its network disclosure now
   lists all six kinds of request, matching `PRIVACY.md`.
 
+- Pages open faster: album and person covers no longer wait for sharper
+  thumbnails, Memories is built once per day, a person's page looks up only
+  their own faces, and pages preload while the app is idle.
+- Simpler interface: the theme lives only in Settings, technical settings sit
+  behind Developer mode, and interrupted metadata or thumbnail passes resume
+  on their own instead of asking.
+- The Date format setting now applies everywhere, and counts, sizes and page
+  headers are consistent across pages.
+- One logo everywhere: the app, website, docs and share cards draw the same
+  wordmark, with the dot on the final "i".
+- Refreshed website: new introduction, a demo video, new screenshots and
+  layouts that fit phones through 4K screens.
+
 ### Removed
 - AVIF files are no longer indexed: no bundled decoder could read them, so
   they only ever showed as broken tiles. Ones indexed before are left as they
   are (never trashed by the library check).
+
+- The viewer's zoom buttons and "Show in folder" button (zoom still works
+  with the wheel and pinch), and the unreachable "Review people" page.
 
 ### Fixed
 - Updates take the right path for setup.exe and Linux package installs.
@@ -94,6 +126,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Missing face assets no longer start a misleading detection job.
 - Fresh libraries create performance indexes after schema initialization.
 - Linux AppImages bundle the GStreamer media framework for video playback.
+- Keyboard shortcuts no longer reach the page behind an open dialog or the
+  viewer, dialogs keep focus inside them, and focused controls show a
+  visible ring. Photo tiles are named for screen readers.
+- Review faces no longer fails when the next person has no name.
+
+### Security
+- Updated `zip` to 9.0 (archive extraction could write symlinks outside the
+  destination folder), `rustls` to 0.23.46 and `quinn-proto` to 0.11.19 for
+  the RUSTSEC advisories published in October 2026.
 
 ## [0.4.0] — 2026-09-28
 
