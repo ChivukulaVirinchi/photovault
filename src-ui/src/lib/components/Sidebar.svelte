@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { LOGOMARK, LOGO_OCHRE, WORDMARK } from "../logo";
   import Clock from "lucide-svelte/icons/clock";
   import Users from "lucide-svelte/icons/users";
   import FolderOpen from "lucide-svelte/icons/folder-open";
@@ -104,7 +105,7 @@
       {/if}
     </button>
     {#if collapsed}
-      <!-- Square logomark: lowercase italic "s" + ochre tittle. Uses
+      <!-- Square logomark: italic "s" + ochre dot, as on the app icon. Uses
            currentColor so the text follows the sidebar's --ink — fixes
            the dark-mode invisibility the external <img> SVG had. -->
       <svg
@@ -113,36 +114,19 @@
         role="img"
         aria-label="Smriti"
       >
-        <text
-          x="20"
-          y="78"
-          font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
-          font-style="italic"
-          font-weight="500"
-          font-size="84"
-          fill="currentColor"
-        >s</text>
-        <circle cx="78" cy="32" r="7" fill="#c89968" />
+        <path d={LOGOMARK.d} fill="currentColor" />
+        <circle cx={LOGOMARK.dot.cx} cy={LOGOMARK.dot.cy} r={LOGOMARK.dot.r} fill={LOGO_OCHRE} />
       </svg>
     {:else}
       <div class="brand">
         <svg
           class="brand-wordmark"
-          viewBox="0 0 320 100"
+          viewBox="0 0 {WORDMARK.width} {WORDMARK.height}"
           role="img"
           aria-label="Smriti"
         >
-          <text
-            x="20"
-            y="68"
-            font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
-            font-style="italic"
-            font-weight="500"
-            font-size="64"
-            fill="currentColor"
-            letter-spacing="0.5"
-          >smriti</text>
-          <circle cx="195" cy="22" r="6" fill="#c89968" />
+          <path d={WORDMARK.d} fill="currentColor" />
+          <circle cx={WORDMARK.dot.cx} cy={WORDMARK.dot.cy} r={WORDMARK.dot.r} fill={LOGO_OCHRE} />
         </svg>
         <span class="brand-tagline">Photo library</span>
       </div>

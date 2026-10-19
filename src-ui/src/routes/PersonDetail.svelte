@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { photoLabel } from "../lib/a11y";
   import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
@@ -384,42 +385,42 @@
 {#if person}
   {@const p = person}
   <div class="hero">
-    <div class="portrait">
-      {#if p.representative_thumbnail_path}
-        <img src={thumbUrl(libraryStore.driveRoot, p.representative_thumbnail_path) ?? ""} alt="" />
-      {/if}
-    </div>
-    <div class="hero-body">
-      <DetailHeader backHref="#/people" backLabel="People">
-        {#snippet title()}
-          {#if editing}
-            <!-- svelte-ignore a11y_autofocus -->
-            <input bind:value={editName} onkeydown={onEditKey} placeholder="Name them" autofocus />
-          {:else}
-            <h1>{p.name ?? "Unnamed"}</h1>
-          {/if}
-        {/snippet}
-        {#snippet subtitle()}
-          <span class="mono">{p.photo_count} photos</span>
-        {/snippet}
-        {#snippet actions()}
-          {#if editing}
-            <button class="primary" onclick={save} disabled={actionBusy}>Save</button>
-            <button class="ghost" onclick={() => (editing = false)} disabled={actionBusy}>Cancel</button>
-          {:else}
-            <button class="ghost" onclick={() => (editing = true)} disabled={actionBusy}>
-              {p.name ? "Rename" : "Name them"}
-            </button>
-            <button class="ghost" onclick={() => (showMergeDialog = true)} disabled={actionBusy}>Merge…</button>
-            <button class="ghost" onclick={() => (showKSimilarDialog = true)} disabled={actionBusy}>
-              <Search size={14} strokeWidth={1.75} />
-              Find more like this
-            </button>
-            <button class="danger" onclick={notAPerson} disabled={actionBusy}>Not a person</button>
-          {/if}
-        {/snippet}
-      </DetailHeader>
-    </div>
+    <DetailHeader backHref="#/people" backLabel="People">
+      {#snippet title()}
+        <div class="name-row">
+          <div class="portrait">
+            {#if p.representative_thumbnail_path}
+              <img src={thumbUrl(libraryStore.driveRoot, p.representative_thumbnail_path) ?? ""} alt="" />
+            {/if}
+          </div>
+          <div class="name-block">
+            {#if editing}
+              <!-- svelte-ignore a11y_autofocus -->
+              <input bind:value={editName} onkeydown={onEditKey} placeholder="Name them" autofocus />
+            {:else}
+              <h1>{p.name ?? "Unnamed"}</h1>
+            {/if}
+            <span class="photo-count mono">{countOf(p.photo_count, "photo")}</span>
+          </div>
+        </div>
+      {/snippet}
+      {#snippet actions()}
+        {#if editing}
+          <button class="primary" onclick={save} disabled={actionBusy}>Save</button>
+          <button class="ghost" onclick={() => (editing = false)} disabled={actionBusy}>Cancel</button>
+        {:else}
+          <button class="ghost" onclick={() => (editing = true)} disabled={actionBusy}>
+            {p.name ? "Rename" : "Name them"}
+          </button>
+          <button class="ghost" onclick={() => (showMergeDialog = true)} disabled={actionBusy}>Merge…</button>
+          <button class="ghost" onclick={() => (showKSimilarDialog = true)} disabled={actionBusy}>
+            <Search size={14} strokeWidth={1.75} />
+            Find more like this
+          </button>
+          <button class="danger" onclick={notAPerson} disabled={actionBusy}>Not a person</button>
+        {/if}
+      {/snippet}
+    </DetailHeader>
   </div>
 {/if}
 
@@ -528,25 +529,35 @@
 {/if}
 
 <style>
-  .hero {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: stretch;
-    border-bottom: 1px solid var(--line-soft);
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    min-width: 0;
   }
-  .hero-body :global(.detail-header) {
-    border-bottom: none;
+  .name-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .photo-count {
+    font-size: var(--t-sm);
+    color: var(--ink-muted);
   }
   .portrait {
-    width: 88px;
-    height: 88px;
+    width: 56px;
+    height: 56px;
     border-radius: 50%;
     overflow: hidden;
     background: var(--bg-card);
     border: 1px solid var(--line);
-    margin: var(--s-4) 0 var(--s-4) var(--s-7);
-    align-self: center;
     flex-shrink: 0;
+  }
+  .hero :global(.actions button) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
   .portrait img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -612,10 +623,6 @@
   }
 
   @media (max-width: 720px) {
-    .hero { grid-template-columns: 1fr; }
-    .portrait {
-      margin: var(--s-4) auto 0;
-      width: 72px; height: 72px;
-    }
+    .portrait { width: 44px; height: 44px; }
   }
 </style>

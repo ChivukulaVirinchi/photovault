@@ -18,6 +18,7 @@
  */
 
 import type { InsightsData } from "./api/all";
+import { WORDMARK } from "./logo";
 
 export const CARD_WIDTH = 1080;
 export const CARD_HEIGHT = 1350;
@@ -304,13 +305,7 @@ export function renderShareCard(
   ctx.stroke();
 
   // ---- wordmark ----------------------------------------------------------
-  ctx.font = MONO(22, 500);
-  ctx.fillStyle = theme.inkMuted;
-  const markWidth = drawTracked(ctx, "SMRITI", MARGIN, 112, 6);
-  ctx.fillStyle = theme.accent;
-  ctx.beginPath();
-  ctx.arc(MARGIN + markWidth + 15, 105, 4, 0, Math.PI * 2);
-  ctx.fill();
+  drawWordmark(ctx, MARGIN, 78, 40, theme.ink, theme.accent);
 
   ctx.font = MONO(16, 500);
   ctx.fillStyle = theme.inkFaint;
@@ -451,4 +446,19 @@ export function renderShareCard(
 
   ctx.restore();
   return cells;
+}
+
+/** The Smriti wordmark, `height` px tall with its top-left at (x, y). */
+function drawWordmark(ctx: CanvasRenderingContext2D, x: number, y: number, height: number, ink: string, dot: string) {
+  const scale = height / WORDMARK.height;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.fillStyle = ink;
+  ctx.fill(new Path2D(WORDMARK.d));
+  ctx.fillStyle = dot;
+  ctx.beginPath();
+  ctx.arc(WORDMARK.dot.cx, WORDMARK.dot.cy, WORDMARK.dot.r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }

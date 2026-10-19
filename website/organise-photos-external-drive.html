@@ -12,7 +12,7 @@
   <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
   <meta name="theme-color" content="#fafaf8" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0f1015" media="(prefers-color-scheme: dark)" />
-  <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
+  <link rel="icon" type="image/svg+xml" href="./smriti-mark.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=Fraunces:ital,opsz,wght@1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -43,7 +43,7 @@
     }
     .shell { max-width: 760px; margin: 0 auto; padding: 1.4rem 1.5rem 5rem; }
     .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 2.5rem; }
-    .brand { width: 118px; color: var(--ink); }
+    .brand { width: 88px; color: var(--ink); }
     .brand svg { width: 100%; height: auto; display: block; }
     .brand .wordmark { fill: currentColor; }
     .eyebrow {
@@ -99,6 +99,16 @@
       font-family: "JetBrains Mono", monospace; font-size: 0.68rem;
       letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint);
     }
+  
+    /* Grow gently on large screens; keep tables and code inside small ones. */
+    @media (min-width: 1600px) {
+      html { font-size: clamp(100%, 0.3vw + 0.55rem, 125%); }
+      .shell { max-width: 48rem; }
+    }
+    @media (max-width: 640px) {
+      table { display: block; overflow-x: auto; }
+      code { overflow-wrap: anywhere; }
+    }
   </style>
   <script>
     (function () {
@@ -113,8 +123,9 @@
   <div class="shell">
     <div class="topbar">
       <a class="brand" href="./" aria-label="Smriti home">
-        <svg viewBox="0 0 320 100" role="img" aria-hidden="true">
-          <text class="wordmark" x="0" y="72" font-family="Bricolage Grotesque, serif" font-size="76" letter-spacing="-3">Smriti</text>
+        <svg viewBox="0 0 140.8 44.2" role="img" aria-hidden="true">
+          <path class="wordmark" d="M8.1 42.1Q5.5 42.1 3.7 40.9Q1.8 39.7 2.1 37.9Q2.2 36.9 2.9 36.4Q3.5 35.9 4.3 35.9Q5.3 35.9 5.8 36.6Q6.3 37.3 6.8 38.2Q7.3 39 8.1 39.7Q8.9 40.4 10.4 40.4Q11.9 40.4 12.8 39.6Q13.7 38.7 13.9 37Q14.2 35 13.3 33.6Q12.4 32.1 11 30.9Q9.6 29.8 8.2 28.6Q6.7 27.4 5.9 25.9Q5.1 24.4 5.5 22.4Q5.9 20.5 7.2 19.1Q8.5 17.7 10.4 16.9Q12.3 16.1 14.4 16.1Q16.9 16.1 18.5 17Q20.1 18 19.9 19.4Q19.7 20.5 19 21Q18.3 21.5 17.6 21.5Q16.5 21.5 15.9 20.9Q15.4 20.3 15 19.5Q14.6 18.7 13.9 18.2Q13.2 17.6 11.9 17.6Q10.7 17.6 9.9 18.2Q9.1 18.9 8.9 20Q8.6 21.8 9.5 23.2Q10.3 24.6 11.8 25.8Q13.2 27.1 14.7 28.3Q16.1 29.6 16.9 31.1Q17.8 32.6 17.4 34.7Q17.1 36.5 15.8 38.2Q14.6 39.9 12.6 41Q10.6 42.1 8.1 42.1ZM56.7 42Q54.9 42 54.4 40.5Q54 39 54.5 35.7L56.4 25.5Q57 22.1 56.5 20.4Q56.1 18.7 54.5 18.7Q52.6 18.7 50.5 21.2Q48.5 23.7 46.6 28.7Q44.8 33.5 43.5 40.2L43.4 40.8Q43.3 41.9 40.9 41.9Q39.9 41.9 39.6 41.8Q39.2 41.7 39.2 41.5Q39.2 41.3 39.6 39.7Q40 38.2 40.2 36.7L42.3 25.5Q42.8 22 42.4 20.3Q41.9 18.7 40.3 18.7Q38.5 18.7 36.4 21.3Q34.3 23.9 32.4 28.9Q30.7 33.5 29.5 39.9L29.3 40.8Q29.1 41.9 26.8 41.9Q25.7 41.9 25.4 41.8Q25.1 41.7 25.1 41.5Q25.1 41.3 25.5 39.8Q25.8 38.4 26.1 36.9L28.7 22.4Q29.2 19.6 28.2 18.9Q28 18.8 27.7 18.8Q27 18.8 25.9 19.5Q24.8 20.3 23.4 21.6Q23.4 21.8 23.2 21.8Q23.1 21.8 23 21.6Q22.7 21.3 22.9 21.1Q25.2 18.6 27 17.3Q28.8 16.1 30.5 16.1Q32.3 16.1 32.8 17.5Q33.2 18.9 32.7 22.1L31.5 28.6Q31.7 28.2 31.9 27.6Q34.1 22.1 36.9 19Q39.7 15.9 42.8 15.9Q45.3 15.9 46.3 17.8Q47.2 19.8 46.4 24.2L45.6 28.5Q45.8 28 46 27.6Q48.2 21.9 51 18.9Q53.8 15.9 56.9 15.9Q59.5 15.9 60.4 17.8Q61.3 19.8 60.5 24.3L58.4 35.7Q58.1 37.6 58.4 38.4Q58.7 39.2 59.4 39.2Q60.1 39.2 61.1 38.5Q62.1 37.7 63.4 36.5Q63.6 36.2 63.9 36.5Q64.1 36.7 63.9 37Q61.8 39.4 60.1 40.7Q58.4 42 56.7 42ZM73.1 40.8Q72.9 41.9 70.6 41.9Q69.6 41.9 69.3 41.8Q68.9 41.7 68.9 41.5Q68.9 41.3 69.3 39.7Q69.6 38.2 69.9 36.7L72.2 24.1Q72.6 21.9 72.5 20.9Q72.4 19.8 72 19.3Q71.6 18.8 71 18.8Q70.3 18.8 69.3 19.5Q68.3 20.3 67.3 21.2Q67.1 21.4 66.8 21.2Q66.6 20.9 66.8 20.7Q68.8 18.4 70.5 17.2Q72.3 16.1 73.9 16.1Q75.1 16.1 75.8 16.8Q76.5 17.5 76.6 19.2Q76.7 20.9 76.2 23.7L74.8 31.2Q75.3 29.4 76 27.7Q77.1 24.5 78.5 21.9Q79.8 19.3 81.3 17.7Q82.7 16.1 84.2 16.1Q85.1 16.1 86.1 16.6Q87 17.1 87.6 17.9Q88.1 18.7 87.9 19.8Q87.8 20.6 87.2 21.2Q86.6 21.8 85.6 21.8Q84.7 21.8 84.1 21.2Q83.6 20.7 83.2 20.2Q82.8 19.7 82.1 19.7Q81.2 19.7 80.2 21.2Q79.2 22.6 78.1 25Q77 27.4 76 30.2Q75 33.1 74.2 35.8Q73.5 38.5 73.2 40.6ZM95 42Q93.3 42 92.8 40.5Q92.2 39.1 92.9 35.7L95.5 22.4Q96.1 19.6 95.2 19Q94.9 18.8 94.5 18.8Q93.8 18.8 92.7 19.5Q91.6 20.3 90.3 21.6Q90.2 21.8 90.1 21.8Q90 21.8 89.8 21.6Q89.7 21.4 89.7 21.3Q89.7 21.2 89.8 21.1Q92 18.6 93.8 17.3Q95.6 16.1 97.3 16.1Q99.1 16.1 99.6 17.5Q100.1 18.9 99.4 22.1L96.8 35.7Q96.4 37.6 96.8 38.4Q97.1 39.2 97.8 39.2Q98.5 39.2 99.5 38.5Q100.6 37.8 101.8 36.5Q101.9 36.4 102.1 36.4Q102.2 36.4 102.3 36.5Q102.5 36.7 102.5 36.9Q102.5 37 102.3 37Q100.3 39.5 98.5 40.7Q96.8 42 95 42ZM99.1 8.8Q97.7 8.8 96.9 8.1Q96.1 7.3 96.1 5.8Q96.1 4.5 96.9 3.7Q97.7 2.9 99.1 2.9Q100.6 2.9 101.4 3.7Q102.1 4.5 102.1 5.8Q102.1 8.8 99.1 8.8ZM112.3 42.2Q111 42.2 109.8 41.7Q108.6 41.2 108 39.9Q107.4 38.6 107.8 36.3L110.5 21.8Q111 19.5 110.6 18.9Q110.2 18.4 108.3 18.4Q108.3 18.4 108.2 18.3Q108.1 18.2 108.1 17.9Q108.2 17.5 108.4 17.5Q110.9 17.5 112.6 16Q114.3 14.5 115.1 12.3Q115.1 12.1 115.7 12.2Q116.1 12.2 116.1 12.3Q116.1 12.4 116.1 12.4L115.2 17.3Q116.5 17.3 117.9 17.2Q119.7 17.1 121.2 17Q122.7 16.8 123.3 16.8Q123.6 16.8 123.7 17Q123.8 17.2 123.8 17.5Q123.6 18 123 18.8Q122.3 19.6 121.6 19.6Q121.5 19.6 120.3 19.4Q119 19.3 117.4 19.1Q116.1 19 115 18.9L112.2 34.6Q111.7 37.1 112.5 38.3Q113.2 39.4 115.2 39.4Q116.8 39.4 118.3 38.6Q119.7 37.9 121.1 36.7Q121.3 36.6 121.5 36.9Q121.8 37.1 121.6 37.2Q118.7 39.9 116.5 41Q114.3 42.2 112.3 42.2ZM130.8 42Q129.1 42 128.6 40.5Q128 39.1 128.7 35.7L131.4 22.4Q131.9 19.6 131 19Q130.7 18.8 130.3 18.8Q129.6 18.8 128.5 19.5Q127.4 20.3 126.1 21.6Q126 21.8 125.9 21.8Q125.8 21.8 125.6 21.6Q125.5 21.4 125.5 21.3Q125.5 21.2 125.6 21.1Q127.8 18.6 129.6 17.3Q131.4 16.1 133.1 16.1Q134.9 16.1 135.4 17.5Q135.9 18.9 135.3 22.1L132.6 35.7Q132.3 37.6 132.6 38.4Q132.9 39.2 133.6 39.2Q134.3 39.2 135.4 38.5Q136.4 37.8 137.6 36.5Q137.8 36.4 137.9 36.4Q138 36.4 138.1 36.5Q138.3 36.7 138.3 36.9Q138.3 37 138.1 37Q136.1 39.5 134.3 40.7Q132.6 42 130.8 42Z" />
+          <circle cx="134.9" cy="5.9" r="3.9" fill="#c89968" />
         </svg>
       </a>
       <a class="btn btn--ghost" href="./#download">Download</a>
@@ -195,9 +206,9 @@
         The library is defined by the folder you choose.
       </li>
       <li>
-        <strong>Press "Scan now"</strong> on the timeline. Nothing happens
-        automatically — this catches everyone out. The scanner reads EXIF from
-        each file, generates thumbnails and records everything in the catalog.
+        <strong>Let the first scan run.</strong> It starts on its own: the
+        scanner reads EXIF from each file, generates thumbnails and records
+        everything in the catalog. You can browse while it works.
       </li>
       <li>
         <strong>Leave the drive alone afterwards.</strong> The catalog now lives
@@ -263,8 +274,9 @@
         enclosure is the single biggest factor in how long the first scan takes.
       </li>
       <li>
-        <strong>Index once, then scan incrementally.</strong> Later scans only
-        look at what changed, so they take seconds to minutes.
+        <strong>Index once, then catch up.</strong> Each time you open the
+        library, Smriti only looks at what changed, so it takes seconds to
+        minutes.
       </li>
       <li>
         <strong>One drive, one library.</strong> Several drives can each carry

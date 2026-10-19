@@ -198,7 +198,7 @@ pub async fn collage_suggestions(
                 .collect();
             out.push(CollageSuggestionDto {
                 key: suggestion.source.key(),
-                eyebrow: suggestion.source.eyebrow().into(),
+                eyebrow: suggestion.eyebrow,
                 title: suggestion.title,
                 photos,
             });

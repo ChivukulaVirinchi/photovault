@@ -621,7 +621,7 @@
 
 <PageHeader title="Map">
   <span class="visible-count mono">
-    {pinCount.toLocaleString()}<span class="muted"> visible</span>
+    {pinCount.toLocaleString()}{" "}<span class="muted">visible</span>
   </span>
   {#if loading}<span class="loading mono">⋯</span>{/if}
   <button class="ghost" onclick={fitToContent}>Reset</button>

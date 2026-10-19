@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { routeCache } from "../lib/stores/routeCache.svelte";
@@ -298,7 +299,7 @@
 </script>
 
 <PageHeader title="People">
-  <span class="count mono">{mainClusters.length}<span class="muted"> people</span></span>
+  <span class="count mono">{clusters.length.toLocaleString()}{" "}<span class="muted">{clusters.length === 1 ? "person" : "people"}</span></span>
   {#if running && facesJob}
     <span class="run-status mono">
       {facesJob.processed.toLocaleString()}{facesJob.total ? ` / ${facesJob.total.toLocaleString()}` : ""}
@@ -412,7 +413,7 @@
             </div>
             <div class="caption">
               <strong class="name">{c.name ?? "Unnamed"}</strong>
-              <span class="count mono">{c.photo_count} photos</span>
+              <span class="count mono">{countOf(c.photo_count, "photo")}</span>
             </div>
           </a>
         {/each}
@@ -420,7 +421,7 @@
     {/if}
 
     {#if singletons.length > 0}
-      <section class="singletons">
+      <section class="singletons" class:alone={mainClusters.length === 0}>
         <header class="singletons-head">
           <h3 class="singletons-title">
             Faces seen only once
@@ -617,6 +618,11 @@
     margin-top: var(--s-8);
     padding-top: var(--s-5);
     border-top: 1px solid var(--line-soft);
+  }
+  .singletons.alone {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
   }
   .singletons-head {
     margin-bottom: var(--s-4);

@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::services::story;
 use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::{params, Connection, Result as SqliteResult};
 
@@ -119,8 +120,7 @@ pub struct Memory {
 #[derive(Debug, Clone)]
 pub struct MemoryCard {
     pub id: MemoryId,
-    /// Kind tag — used by tests and reserved for future filter UI.
-    #[allow(dead_code)]
+    /// What kind of memory this is; collage suggestions say why from it.
     pub kind: MemoryKind,
     pub title: String,
     pub hero_photo_id: i64,
@@ -222,7 +222,35 @@ pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<Mem
         all.truncate(MAX_CARDS);
     }
 
+    // Titles last, so only the cards shown pay for the lookups.
+    let home = crate::services::album_suggestions::detect_home_city(conn, None)
+        .map(|(city, country, _, _)| (city, country));
+    for memory in &mut all {
+        retitle(conn, memory, today, &home);
+    }
+
     Ok(all.into_iter().map(MemoryCard::from).collect())
+}
+
+/// Swap a generic title for one that says where or who, when the photos
+/// make that clear: "Three years ago today, in Bern", "Bern, October 2023".
+fn retitle(
+    conn: &Connection,
+    memory: &mut Memory,
+    today: NaiveDate,
+    home: &Option<(String, String)>,
+) {
+    let facts = || story::Facts::gather_with_home(conn, &memory.photo_ids, home.clone());
+    memory.title = match memory.kind {
+        MemoryKind::OnThisDay | MemoryKind::FallbackWindow => {
+            story::looking_back(&story::spelled(&memory.title), &facts())
+        }
+        MemoryKind::SeasonalRecap => {
+            story::month_back(story::month_name(today.month()), memory.year, &facts())
+        }
+        MemoryKind::YearRecap => story::year_back(memory.year, &facts()),
+        MemoryKind::PersonStory | MemoryKind::PlaceStory => return,
+    };
 }
 
 /// [`generate_for_today`], reused while the library is unchanged. Memories,

@@ -20,6 +20,7 @@
 </script>
 
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { photoLabel } from "../lib/a11y";
   import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
@@ -1512,7 +1513,7 @@
     {#if libraryStore.missingHeldBack > 0}
       <div class="resume-banner">
         <span class="msg">
-          {libraryStore.missingHeldBack.toLocaleString()} photos are no longer on disk. If a folder
+          {countOf(libraryStore.missingHeldBack, "photo")} {libraryStore.missingHeldBack === 1 ? "is" : "are"} no longer on disk. If a folder
           or drive is disconnected, reconnect it and check again. Otherwise they can go to Trash.
         </span>
         <button class="primary" onclick={() => libraryStore.trashMissing()}>Move to Trash</button>

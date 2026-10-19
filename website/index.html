@@ -25,7 +25,9 @@
             property="og:description"
             content="A photo library that stays on your machine. No cloud, no account, no server to run."
         />
-        <meta property="og:image" content="./og.png" />
+        <meta property="og:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
         <meta
             property="og:url"
             content="https://chivukulavirinchi.github.io/photovault/"
@@ -36,9 +38,9 @@
             name="twitter:description"
             content="A photo library that stays on your machine."
         />
-        <meta name="twitter:image" content="./og.png" />
+        <meta name="twitter:image" content="https://chivukulavirinchi.github.io/photovault/og.png" />
 
-        <link rel="icon" type="image/svg+xml" href="./smriti-logo.svg" />
+        <link rel="icon" type="image/svg+xml" href="./smriti-mark.svg" />
         <link
             rel="canonical"
             href="https://chivukulavirinchi.github.io/photovault/"
@@ -439,7 +441,7 @@
                 color: var(--ink);
             }
             .brand-logo {
-                width: 112px;
+                width: 84px;
                 height: auto;
                 display: block;
                 color: var(--ink);
@@ -572,11 +574,13 @@
 
             /* ===== Fold 1 — HERO ======================================= */
             .hero {
-                padding: var(--s-9) 0 var(--s-10);
-                display: grid;
-                grid-template-columns: 5fr 7fr;
-                gap: var(--s-8);
-                align-items: center;
+                padding: var(--s-8) 0 var(--s-9);
+            }
+            .hero-left {
+                max-width: 920px;
+            }
+            .hero-right {
+                margin-top: var(--s-8);
             }
 
             .hero-eyebrow {
@@ -592,7 +596,7 @@
                 text-transform: uppercase;
                 color: var(--ink-muted);
                 font-weight: 500;
-                margin-bottom: var(--s-6);
+                margin-bottom: var(--s-5);
             }
             .hero-eyebrow .dot {
                 width: 5px;
@@ -617,7 +621,7 @@
             }
 
             .hero-sanskrit {
-                margin-top: var(--s-5);
+                margin-top: var(--s-4);
                 font-family: var(--font-editorial);
                 font-style: italic;
                 font-size: 1.2rem;
@@ -634,8 +638,8 @@
             }
 
             .hero-lead {
-                margin-top: var(--s-6);
-                max-width: 44ch;
+                margin-top: var(--s-5);
+                max-width: 58ch;
                 color: var(--ink-soft);
                 font-size: var(--t-lg);
                 line-height: 1.55;
@@ -647,7 +651,7 @@
                 gap: var(--s-3);
                 align-items: center;
                 flex-wrap: wrap;
-                margin-top: var(--s-7);
+                margin-top: var(--s-6);
             }
             .hero-meta {
                 margin-top: var(--s-4);
@@ -660,6 +664,30 @@
             .hero-meta .sep {
                 margin: 0 0.6rem;
                 opacity: 0.6;
+            }
+            .hero-promises {
+                list-style: none;
+                padding: 0;
+                margin: var(--s-5) 0 0;
+                display: flex;
+                flex-wrap: wrap;
+                gap: var(--s-2) var(--s-6);
+                color: var(--ink);
+                font-size: var(--t-base);
+            }
+            .hero-promises li {
+                display: flex;
+                align-items: baseline;
+                gap: var(--s-3);
+            }
+            .hero-promises li::before {
+                content: "";
+                flex: none;
+                width: 0.55rem;
+                height: 0.3rem;
+                border-left: 1.5px solid var(--accent);
+                border-bottom: 1.5px solid var(--accent);
+                transform: translateY(-0.2rem) rotate(-45deg);
             }
             .hero-feature {
                 margin-top: var(--s-4);
@@ -677,7 +705,7 @@
                     0 30px 80px -30px rgba(20, 24, 35, 0.18),
                     0 8px 24px -8px rgba(20, 24, 35, 0.12);
                 background: var(--bg-card);
-                aspect-ratio: 16 / 10;
+                aspect-ratio: 1280 / 698;
             }
             .hero-media img,
             .hero-media video {
@@ -685,27 +713,6 @@
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
-            }
-            .hero-media-placeholder {
-                position: absolute;
-                inset: 0;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                gap: var(--s-3);
-                color: var(--ink-faint);
-                font-family: var(--font-mono);
-                font-size: var(--t-xs);
-                letter-spacing: 0.14em;
-                text-transform: uppercase;
-                background: repeating-linear-gradient(
-                    45deg,
-                    transparent,
-                    transparent 11px,
-                    var(--line-hair) 11px,
-                    var(--line-hair) 12px
-                );
             }
             .hero-media-corner {
                 position: absolute;
@@ -758,12 +765,41 @@
                 color: var(--accent-deep);
                 font-weight: 400;
             }
-            .wedge-rule {
-                width: 60px;
-                height: 1px;
-                background: var(--accent);
-                margin: var(--s-6) 0;
-                opacity: 0.7;
+            .wedge-body--steps {
+                max-width: var(--container);
+            }
+            .wedge-steps {
+                list-style: none;
+                padding: 0;
+                margin: var(--s-7) 0 0;
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: var(--s-6);
+            }
+            .wedge-steps li {
+                border-top: 1px solid var(--line);
+                padding-top: var(--s-5);
+            }
+            .wedge-steps .step-num {
+                font-family: var(--font-mono);
+                font-size: var(--t-2xs);
+                letter-spacing: 0.18em;
+                color: var(--accent);
+            }
+            .wedge-steps h3 {
+                margin: var(--s-3) 0 var(--s-2);
+                font-size: var(--t-lg);
+                font-weight: 500;
+                color: var(--ink);
+            }
+            .wedge-body .wedge-steps p {
+                margin: 0;
+                font-size: var(--t-base);
+                color: var(--ink-soft);
+            }
+            .wedge-body .wedge-coda {
+                margin-top: var(--s-8);
+                max-width: 60ch;
             }
 
             /* ===== Fold 3 — FACE CLUSTERING DEMO ====================== */
@@ -1177,7 +1213,7 @@
                 overflow-x: auto;
                 border-radius: var(--r-lg);
             }
-            .compare {
+            table.compare {
                 width: 100%;
                 border-collapse: separate;
                 border-spacing: 0;
@@ -2203,7 +2239,7 @@
                 align-items: start;
             }
             .footer-brand .brand-logo {
-                width: 136px;
+                width: 104px;
             }
             .footer-brand p {
                 max-width: 40ch;
@@ -2281,6 +2317,9 @@
                 .feature-grid,
                 .download-grid {
                     grid-template-columns: repeat(2, 1fr);
+                }
+                .wedge-steps {
+                    grid-template-columns: 1fr;
                 }
                 .footer-grid {
                     grid-template-columns: 1fr;
@@ -2456,6 +2495,9 @@
             }
             .hero-left > *:nth-child(7) {
                 animation-delay: 560ms;
+            }
+            .hero-left > *:nth-child(8) {
+                animation-delay: 640ms;
             }
             .hero-right {
                 animation-delay: 360ms;
@@ -3715,6 +3757,75 @@
                     transform: none !important;
                 }
             }
+
+            /* ===== screen-size refinements ===========================
+               Kept last so they win over the section styles above. */
+
+            /* Large screens: the column, type and spacing grow with the
+               window (capped), and the hero sits side by side so the
+               demo doesn't take over the screen. */
+            @media (min-width: 1600px) {
+                html {
+                    font-size: clamp(100%, 0.3vw + 0.55rem, 125%);
+                }
+                :root {
+                    --container: min(78vw, 1640px);
+                }
+            }
+            @media (min-width: 1700px) {
+                .hero {
+                    display: grid;
+                    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+                    gap: var(--s-8);
+                    align-items: center;
+                }
+                .hero-right {
+                    margin-top: 0;
+                }
+                h1.hero-title {
+                    font-size: clamp(3.4rem, 3.4vw, 4.4rem);
+                }
+                .hero-promises {
+                    flex-direction: column;
+                }
+            }
+
+            /* Small screens. */
+            @media (max-width: 980px) {
+                .agent-card {
+                    grid-template-columns: minmax(0, 1fr);
+                }
+            }
+            @media (max-width: 640px) {
+                .network-row {
+                    grid-template-columns: 36px minmax(0, 1fr);
+                    gap: var(--s-3);
+                }
+                .network-num {
+                    font-size: var(--t-2xl);
+                }
+                .network-body,
+                .network-switch {
+                    min-width: 0;
+                    overflow-wrap: anywhere;
+                }
+                .hero-cta .btn {
+                    flex: 1 1 auto;
+                    justify-content: center;
+                }
+                .download-primary {
+                    flex-direction: column;
+                    align-items: stretch;
+                }
+                .download-primary .btn {
+                    justify-content: center;
+                }
+                .trips-months {
+                    grid-template-columns: repeat(12, minmax(0, 1fr));
+                    letter-spacing: 0;
+                    overflow: hidden;
+                }
+            }
         </style>
     </head>
     <body>
@@ -3723,12 +3834,9 @@
         <header class="topbar">
             <div class="container topbar-inner">
                 <a class="brand plain" href="#" aria-label="Smriti — home">
-                    <svg class="brand-logo" viewBox="0 0 320 100" role="img" aria-label="Smriti">
-                        <text class="wordmark" x="20" y="68"
-                            font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
-                            font-style="italic" font-weight="500" font-size="64"
-                            letter-spacing="0.5">smriti</text>
-                        <circle cx="195" cy="22" r="6" fill="#c89968" />
+                    <svg class="brand-logo" viewBox="0 0 140.8 44.2" role="img" aria-label="Smriti">
+                        <path class="wordmark" d="M8.1 42.1Q5.5 42.1 3.7 40.9Q1.8 39.7 2.1 37.9Q2.2 36.9 2.9 36.4Q3.5 35.9 4.3 35.9Q5.3 35.9 5.8 36.6Q6.3 37.3 6.8 38.2Q7.3 39 8.1 39.7Q8.9 40.4 10.4 40.4Q11.9 40.4 12.8 39.6Q13.7 38.7 13.9 37Q14.2 35 13.3 33.6Q12.4 32.1 11 30.9Q9.6 29.8 8.2 28.6Q6.7 27.4 5.9 25.9Q5.1 24.4 5.5 22.4Q5.9 20.5 7.2 19.1Q8.5 17.7 10.4 16.9Q12.3 16.1 14.4 16.1Q16.9 16.1 18.5 17Q20.1 18 19.9 19.4Q19.7 20.5 19 21Q18.3 21.5 17.6 21.5Q16.5 21.5 15.9 20.9Q15.4 20.3 15 19.5Q14.6 18.7 13.9 18.2Q13.2 17.6 11.9 17.6Q10.7 17.6 9.9 18.2Q9.1 18.9 8.9 20Q8.6 21.8 9.5 23.2Q10.3 24.6 11.8 25.8Q13.2 27.1 14.7 28.3Q16.1 29.6 16.9 31.1Q17.8 32.6 17.4 34.7Q17.1 36.5 15.8 38.2Q14.6 39.9 12.6 41Q10.6 42.1 8.1 42.1ZM56.7 42Q54.9 42 54.4 40.5Q54 39 54.5 35.7L56.4 25.5Q57 22.1 56.5 20.4Q56.1 18.7 54.5 18.7Q52.6 18.7 50.5 21.2Q48.5 23.7 46.6 28.7Q44.8 33.5 43.5 40.2L43.4 40.8Q43.3 41.9 40.9 41.9Q39.9 41.9 39.6 41.8Q39.2 41.7 39.2 41.5Q39.2 41.3 39.6 39.7Q40 38.2 40.2 36.7L42.3 25.5Q42.8 22 42.4 20.3Q41.9 18.7 40.3 18.7Q38.5 18.7 36.4 21.3Q34.3 23.9 32.4 28.9Q30.7 33.5 29.5 39.9L29.3 40.8Q29.1 41.9 26.8 41.9Q25.7 41.9 25.4 41.8Q25.1 41.7 25.1 41.5Q25.1 41.3 25.5 39.8Q25.8 38.4 26.1 36.9L28.7 22.4Q29.2 19.6 28.2 18.9Q28 18.8 27.7 18.8Q27 18.8 25.9 19.5Q24.8 20.3 23.4 21.6Q23.4 21.8 23.2 21.8Q23.1 21.8 23 21.6Q22.7 21.3 22.9 21.1Q25.2 18.6 27 17.3Q28.8 16.1 30.5 16.1Q32.3 16.1 32.8 17.5Q33.2 18.9 32.7 22.1L31.5 28.6Q31.7 28.2 31.9 27.6Q34.1 22.1 36.9 19Q39.7 15.9 42.8 15.9Q45.3 15.9 46.3 17.8Q47.2 19.8 46.4 24.2L45.6 28.5Q45.8 28 46 27.6Q48.2 21.9 51 18.9Q53.8 15.9 56.9 15.9Q59.5 15.9 60.4 17.8Q61.3 19.8 60.5 24.3L58.4 35.7Q58.1 37.6 58.4 38.4Q58.7 39.2 59.4 39.2Q60.1 39.2 61.1 38.5Q62.1 37.7 63.4 36.5Q63.6 36.2 63.9 36.5Q64.1 36.7 63.9 37Q61.8 39.4 60.1 40.7Q58.4 42 56.7 42ZM73.1 40.8Q72.9 41.9 70.6 41.9Q69.6 41.9 69.3 41.8Q68.9 41.7 68.9 41.5Q68.9 41.3 69.3 39.7Q69.6 38.2 69.9 36.7L72.2 24.1Q72.6 21.9 72.5 20.9Q72.4 19.8 72 19.3Q71.6 18.8 71 18.8Q70.3 18.8 69.3 19.5Q68.3 20.3 67.3 21.2Q67.1 21.4 66.8 21.2Q66.6 20.9 66.8 20.7Q68.8 18.4 70.5 17.2Q72.3 16.1 73.9 16.1Q75.1 16.1 75.8 16.8Q76.5 17.5 76.6 19.2Q76.7 20.9 76.2 23.7L74.8 31.2Q75.3 29.4 76 27.7Q77.1 24.5 78.5 21.9Q79.8 19.3 81.3 17.7Q82.7 16.1 84.2 16.1Q85.1 16.1 86.1 16.6Q87 17.1 87.6 17.9Q88.1 18.7 87.9 19.8Q87.8 20.6 87.2 21.2Q86.6 21.8 85.6 21.8Q84.7 21.8 84.1 21.2Q83.6 20.7 83.2 20.2Q82.8 19.7 82.1 19.7Q81.2 19.7 80.2 21.2Q79.2 22.6 78.1 25Q77 27.4 76 30.2Q75 33.1 74.2 35.8Q73.5 38.5 73.2 40.6ZM95 42Q93.3 42 92.8 40.5Q92.2 39.1 92.9 35.7L95.5 22.4Q96.1 19.6 95.2 19Q94.9 18.8 94.5 18.8Q93.8 18.8 92.7 19.5Q91.6 20.3 90.3 21.6Q90.2 21.8 90.1 21.8Q90 21.8 89.8 21.6Q89.7 21.4 89.7 21.3Q89.7 21.2 89.8 21.1Q92 18.6 93.8 17.3Q95.6 16.1 97.3 16.1Q99.1 16.1 99.6 17.5Q100.1 18.9 99.4 22.1L96.8 35.7Q96.4 37.6 96.8 38.4Q97.1 39.2 97.8 39.2Q98.5 39.2 99.5 38.5Q100.6 37.8 101.8 36.5Q101.9 36.4 102.1 36.4Q102.2 36.4 102.3 36.5Q102.5 36.7 102.5 36.9Q102.5 37 102.3 37Q100.3 39.5 98.5 40.7Q96.8 42 95 42ZM99.1 8.8Q97.7 8.8 96.9 8.1Q96.1 7.3 96.1 5.8Q96.1 4.5 96.9 3.7Q97.7 2.9 99.1 2.9Q100.6 2.9 101.4 3.7Q102.1 4.5 102.1 5.8Q102.1 8.8 99.1 8.8ZM112.3 42.2Q111 42.2 109.8 41.7Q108.6 41.2 108 39.9Q107.4 38.6 107.8 36.3L110.5 21.8Q111 19.5 110.6 18.9Q110.2 18.4 108.3 18.4Q108.3 18.4 108.2 18.3Q108.1 18.2 108.1 17.9Q108.2 17.5 108.4 17.5Q110.9 17.5 112.6 16Q114.3 14.5 115.1 12.3Q115.1 12.1 115.7 12.2Q116.1 12.2 116.1 12.3Q116.1 12.4 116.1 12.4L115.2 17.3Q116.5 17.3 117.9 17.2Q119.7 17.1 121.2 17Q122.7 16.8 123.3 16.8Q123.6 16.8 123.7 17Q123.8 17.2 123.8 17.5Q123.6 18 123 18.8Q122.3 19.6 121.6 19.6Q121.5 19.6 120.3 19.4Q119 19.3 117.4 19.1Q116.1 19 115 18.9L112.2 34.6Q111.7 37.1 112.5 38.3Q113.2 39.4 115.2 39.4Q116.8 39.4 118.3 38.6Q119.7 37.9 121.1 36.7Q121.3 36.6 121.5 36.9Q121.8 37.1 121.6 37.2Q118.7 39.9 116.5 41Q114.3 42.2 112.3 42.2ZM130.8 42Q129.1 42 128.6 40.5Q128 39.1 128.7 35.7L131.4 22.4Q131.9 19.6 131 19Q130.7 18.8 130.3 18.8Q129.6 18.8 128.5 19.5Q127.4 20.3 126.1 21.6Q126 21.8 125.9 21.8Q125.8 21.8 125.6 21.6Q125.5 21.4 125.5 21.3Q125.5 21.2 125.6 21.1Q127.8 18.6 129.6 17.3Q131.4 16.1 133.1 16.1Q134.9 16.1 135.4 17.5Q135.9 18.9 135.3 22.1L132.6 35.7Q132.3 37.6 132.6 38.4Q132.9 39.2 133.6 39.2Q134.3 39.2 135.4 38.5Q136.4 37.8 137.6 36.5Q137.8 36.4 137.9 36.4Q138 36.4 138.1 36.5Q138.3 36.7 138.3 36.9Q138.3 37 138.1 37Q136.1 39.5 134.3 40.7Q132.6 42 130.8 42Z" />
+<circle cx="134.9" cy="5.9" r="3.9" fill="#c89968" />
                     </svg>
                     <span class="brand-script" aria-hidden="true">स्मृति</span>
                 </a>
@@ -3794,20 +3902,25 @@
             <section class="container hero" aria-labelledby="hero-title">
                 <div class="hero-left">
                     <span class="hero-eyebrow"
-                        ><span class="dot"></span>Photo library · fully
-                        local</span
+                        ><span class="dot"></span>Free · Private · Works
+                        offline</span
                     >
                     <h1 class="hero-title display" id="hero-title">
-                        Photos without a&nbsp;<em>server.</em>
+                        Your photos, sorted.<br /><em>Nothing uploaded.</em>
                     </h1>
                     <p class="hero-sanskrit">
                         <span class="deva">स्मृति</span>· remembered
                     </p>
                     <p class="hero-lead">
-                        Smriti indexes any drive, recognises faces on-device,
-                        and surfaces memories — without leaving your machine. No
-                        account, no cloud, no server humming in a closet.
+                        Faces, search, memories and maps for the photos already
+                        on your computer or external drive. The smart parts of
+                        Google Photos, without handing your library to anyone.
                     </p>
+                    <ul class="hero-promises">
+                        <li>Every photo of someone you love, in one click</li>
+                        <li>Search the way you remember: “beach 2019”</li>
+                        <li>Your originals never move, change or leave</li>
+                    </ul>
                     <div class="hero-cta">
                         <a
                             class="btn btn--primary"
@@ -3820,10 +3933,8 @@
                         >
                     </div>
                     <p class="hero-meta">
-                        Apache-2.0<span class="sep">·</span>Free forever<span
-                            class="sep"
-                            >·</span
-                        >No sign-up
+                        Windows · macOS · Linux<span class="sep">·</span>Free
+                        forever<span class="sep">·</span>No account
                     </p>
                     <p class="hero-feature">
                         Featured on
@@ -3836,49 +3947,69 @@
                 <div class="hero-right">
                     <figure
                         class="hero-media"
-                        aria-label="Smriti in motion — 30 second loop"
+                        aria-label="A 45-second tour of Smriti"
                     >
                         <span class="hero-media-corner">live demo</span>
-                        <img
-                            src="./featured.gif"
-                            alt="A 30-second loop of Smriti: indexing a folder, browsing the timeline, clustering faces, exploring the map, searching, and entering the slideshow."
-                            onerror="
-                                this.style.display = 'none';
-                                this.nextElementSibling.style.display = 'flex';
-                            "
-                        />
-                        <div
-                            class="hero-media-placeholder"
-                            style="display: none"
+                        <video
+                            autoplay
+                            muted
+                            loop
+                            playsinline
+                            preload="auto"
+                            poster="./featured-poster.jpg"
+                            aria-label="A tour of Smriti: scrolling the timeline, a photo and its details, searching for beach, people, a collage made for you, a memory, the map and an album."
                         >
-                            featured.gif
-                        </div>
+                            <source src="./featured.mp4" type="video/mp4" />
+                            <img
+                                src="./featured.webp"
+                                alt="A tour of Smriti: the timeline, a photo, search, people, a collage, a memory, the map and an album."
+                            />
+                        </video>
                     </figure>
                 </div>
             </section>
 
-            <!-- ============ FOLD 2 — WEDGE ============ -->
+            <!-- ============ FOLD 2 — HOW IT WORKS ============ -->
             <section class="wedge" aria-labelledby="wedge-title">
-                <div class="container container--narrow wedge-body">
-                    <span class="label">01 — Why Smriti exists</span>
+                <div class="container wedge-body wedge-body--steps">
+                    <span class="label">01 — How it works</span>
                     <h2 id="wedge-title" class="display">
-                        Most photo apps want to be a <em>service</em>. Smriti
-                        wants to be a <em>tool</em>.
+                        Point it at your photos. <em>It does the sorting.</em>
                     </h2>
-                    <div class="wedge-rule"></div>
-                    <p>
-                        The cloud apps want a login, a sync daemon, a monthly
-                        fee, a server you maintain. They want your photos to be
-                        content they process — endlessly, in the background, on
-                        a machine that runs all year so you can check in twice.
-                    </p>
-                    <p>
-                        Smriti is none of that. Open the app, browse, close it.
-                        Your library is <em>finished work</em>, not a stream
-                        that needs draining. When the app is closed, nothing
-                        runs. When the app is open, the photos are already where
-                        they were — on your drive, in their folders, exactly as
-                        you left them.
+                    <ol class="wedge-steps">
+                        <li>
+                            <span class="step-num">01</span>
+                            <h3>Choose a folder or a drive</h3>
+                            <p>
+                                Your photos stay exactly where they are. Nothing
+                                is copied, moved or renamed, even at 200,000
+                                photos.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="step-num">02</span>
+                            <h3>Smriti sorts them on your computer</h3>
+                            <p>
+                                Faces grouped into people, places named, dates
+                                fixed, duplicates and bursts found. No upload,
+                                no account.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="step-num">03</span>
+                            <h3>Find and relive anything</h3>
+                            <p>
+                                Search, browse a person or a trip, and find new
+                                memories and collages each time you open it, even
+                                on a plane.
+                            </p>
+                        </li>
+                    </ol>
+                    <p class="wedge-coda">
+                        Most photo apps want to be a <em>service</em>. Smriti is
+                        a <em>tool</em>: nothing runs when it's closed, there's
+                        no subscription, and the whole library travels with the
+                        drive.
                     </p>
                 </div>
             </section>
@@ -3975,7 +4106,7 @@
                     <article class="feature">
                         <div class="feature-media">
                             <img
-                                src="./shot-timeline.png"
+                                src="./shot-timeline.jpg"
                                 alt="Smriti timeline view showing a scrollable grid of photo thumbnails with a sticky year header"
                                 onerror="
                                     this.style.display = 'none';
@@ -3987,7 +4118,7 @@
                                 class="feature-media-placeholder"
                                 style="display: none"
                             >
-                                shot-timeline.png
+                                shot-timeline.jpg
                             </div>
                         </div>
                         <h3 class="display">Bring 200,000 photos in.</h3>
@@ -4002,7 +4133,7 @@
                     <article class="feature">
                         <div class="feature-media">
                             <img
-                                src="./shot-people.png"
+                                src="./shot-people.jpg"
                                 alt="Smriti people view showing a grid of clustered face thumbnails grouped by person"
                                 onerror="
                                     this.style.display = 'none';
@@ -4014,7 +4145,7 @@
                                 class="feature-media-placeholder"
                                 style="display: none"
                             >
-                                shot-people.png
+                                shot-people.jpg
                             </div>
                         </div>
                         <h3 class="display">Name a face once.</h3>
@@ -4029,7 +4160,7 @@
                     <article class="feature">
                         <div class="feature-media">
                             <img
-                                src="./shot-map.png"
+                                src="./shot-map.jpg"
                                 alt="Smriti map view showing photo clusters plotted on a geographic map"
                                 onerror="
                                     this.style.display = 'none';
@@ -4041,7 +4172,7 @@
                                 class="feature-media-placeholder"
                                 style="display: none"
                             >
-                                shot-map.png
+                                shot-map.jpg
                             </div>
                         </div>
                         <h3 class="display">See where you've actually been.</h3>
@@ -4156,9 +4287,9 @@
                         </div>
                         <h3 class="display">Get reminded, not pestered.</h3>
                         <p>
-                            "This day, N years ago" surfaces when you open the
-                            app. Never a notification. Never a curated highlight
-                            reel.
+                            "This day, N years ago" and a few collages made
+                            from your photos, waiting when you open the app.
+                            Never a notification.
                         </p>
                     </article>
 
@@ -4234,8 +4365,8 @@
                         </div>
                         <h3 class="display">Cull the obvious junk.</h3>
                         <p>
-                            Duplicates, bursts, near-duplicates surfaced in one
-                            place. One-click cleanup. Trash, not delete —
+                            Exact duplicates and bursts, side by side. Keep the
+                            best, trash the rest — Trash, not delete, so you can
                             restore if you change your mind.
                         </p>
                     </article>
@@ -5438,8 +5569,7 @@
                             <code>tile.openstreetmap.org</code>
                         </div>
                         <span class="network-switch"
-                            >Disable: avoid the Map view, or cap the cache in
-                            Settings</span
+                            >Disable: avoid the Map view</span
                         >
                     </li>
                     <li class="network-row">
@@ -5725,12 +5855,9 @@
             <div class="container">
                 <div class="footer-grid">
                     <div class="footer-brand">
-                        <svg class="brand-logo" viewBox="0 0 320 100" role="img" aria-label="Smriti">
-                            <text class="wordmark" x="20" y="68"
-                                font-family="'Cormorant Garamond', Cormorant, 'Iowan Old Style', Garamond, 'Times New Roman', serif"
-                                font-style="italic" font-weight="500" font-size="64"
-                                letter-spacing="0.5">smriti</text>
-                            <circle cx="195" cy="22" r="6" fill="#c89968" />
+                        <svg class="brand-logo" viewBox="0 0 140.8 44.2" role="img" aria-label="Smriti">
+                            <path class="wordmark" d="M8.1 42.1Q5.5 42.1 3.7 40.9Q1.8 39.7 2.1 37.9Q2.2 36.9 2.9 36.4Q3.5 35.9 4.3 35.9Q5.3 35.9 5.8 36.6Q6.3 37.3 6.8 38.2Q7.3 39 8.1 39.7Q8.9 40.4 10.4 40.4Q11.9 40.4 12.8 39.6Q13.7 38.7 13.9 37Q14.2 35 13.3 33.6Q12.4 32.1 11 30.9Q9.6 29.8 8.2 28.6Q6.7 27.4 5.9 25.9Q5.1 24.4 5.5 22.4Q5.9 20.5 7.2 19.1Q8.5 17.7 10.4 16.9Q12.3 16.1 14.4 16.1Q16.9 16.1 18.5 17Q20.1 18 19.9 19.4Q19.7 20.5 19 21Q18.3 21.5 17.6 21.5Q16.5 21.5 15.9 20.9Q15.4 20.3 15 19.5Q14.6 18.7 13.9 18.2Q13.2 17.6 11.9 17.6Q10.7 17.6 9.9 18.2Q9.1 18.9 8.9 20Q8.6 21.8 9.5 23.2Q10.3 24.6 11.8 25.8Q13.2 27.1 14.7 28.3Q16.1 29.6 16.9 31.1Q17.8 32.6 17.4 34.7Q17.1 36.5 15.8 38.2Q14.6 39.9 12.6 41Q10.6 42.1 8.1 42.1ZM56.7 42Q54.9 42 54.4 40.5Q54 39 54.5 35.7L56.4 25.5Q57 22.1 56.5 20.4Q56.1 18.7 54.5 18.7Q52.6 18.7 50.5 21.2Q48.5 23.7 46.6 28.7Q44.8 33.5 43.5 40.2L43.4 40.8Q43.3 41.9 40.9 41.9Q39.9 41.9 39.6 41.8Q39.2 41.7 39.2 41.5Q39.2 41.3 39.6 39.7Q40 38.2 40.2 36.7L42.3 25.5Q42.8 22 42.4 20.3Q41.9 18.7 40.3 18.7Q38.5 18.7 36.4 21.3Q34.3 23.9 32.4 28.9Q30.7 33.5 29.5 39.9L29.3 40.8Q29.1 41.9 26.8 41.9Q25.7 41.9 25.4 41.8Q25.1 41.7 25.1 41.5Q25.1 41.3 25.5 39.8Q25.8 38.4 26.1 36.9L28.7 22.4Q29.2 19.6 28.2 18.9Q28 18.8 27.7 18.8Q27 18.8 25.9 19.5Q24.8 20.3 23.4 21.6Q23.4 21.8 23.2 21.8Q23.1 21.8 23 21.6Q22.7 21.3 22.9 21.1Q25.2 18.6 27 17.3Q28.8 16.1 30.5 16.1Q32.3 16.1 32.8 17.5Q33.2 18.9 32.7 22.1L31.5 28.6Q31.7 28.2 31.9 27.6Q34.1 22.1 36.9 19Q39.7 15.9 42.8 15.9Q45.3 15.9 46.3 17.8Q47.2 19.8 46.4 24.2L45.6 28.5Q45.8 28 46 27.6Q48.2 21.9 51 18.9Q53.8 15.9 56.9 15.9Q59.5 15.9 60.4 17.8Q61.3 19.8 60.5 24.3L58.4 35.7Q58.1 37.6 58.4 38.4Q58.7 39.2 59.4 39.2Q60.1 39.2 61.1 38.5Q62.1 37.7 63.4 36.5Q63.6 36.2 63.9 36.5Q64.1 36.7 63.9 37Q61.8 39.4 60.1 40.7Q58.4 42 56.7 42ZM73.1 40.8Q72.9 41.9 70.6 41.9Q69.6 41.9 69.3 41.8Q68.9 41.7 68.9 41.5Q68.9 41.3 69.3 39.7Q69.6 38.2 69.9 36.7L72.2 24.1Q72.6 21.9 72.5 20.9Q72.4 19.8 72 19.3Q71.6 18.8 71 18.8Q70.3 18.8 69.3 19.5Q68.3 20.3 67.3 21.2Q67.1 21.4 66.8 21.2Q66.6 20.9 66.8 20.7Q68.8 18.4 70.5 17.2Q72.3 16.1 73.9 16.1Q75.1 16.1 75.8 16.8Q76.5 17.5 76.6 19.2Q76.7 20.9 76.2 23.7L74.8 31.2Q75.3 29.4 76 27.7Q77.1 24.5 78.5 21.9Q79.8 19.3 81.3 17.7Q82.7 16.1 84.2 16.1Q85.1 16.1 86.1 16.6Q87 17.1 87.6 17.9Q88.1 18.7 87.9 19.8Q87.8 20.6 87.2 21.2Q86.6 21.8 85.6 21.8Q84.7 21.8 84.1 21.2Q83.6 20.7 83.2 20.2Q82.8 19.7 82.1 19.7Q81.2 19.7 80.2 21.2Q79.2 22.6 78.1 25Q77 27.4 76 30.2Q75 33.1 74.2 35.8Q73.5 38.5 73.2 40.6ZM95 42Q93.3 42 92.8 40.5Q92.2 39.1 92.9 35.7L95.5 22.4Q96.1 19.6 95.2 19Q94.9 18.8 94.5 18.8Q93.8 18.8 92.7 19.5Q91.6 20.3 90.3 21.6Q90.2 21.8 90.1 21.8Q90 21.8 89.8 21.6Q89.7 21.4 89.7 21.3Q89.7 21.2 89.8 21.1Q92 18.6 93.8 17.3Q95.6 16.1 97.3 16.1Q99.1 16.1 99.6 17.5Q100.1 18.9 99.4 22.1L96.8 35.7Q96.4 37.6 96.8 38.4Q97.1 39.2 97.8 39.2Q98.5 39.2 99.5 38.5Q100.6 37.8 101.8 36.5Q101.9 36.4 102.1 36.4Q102.2 36.4 102.3 36.5Q102.5 36.7 102.5 36.9Q102.5 37 102.3 37Q100.3 39.5 98.5 40.7Q96.8 42 95 42ZM99.1 8.8Q97.7 8.8 96.9 8.1Q96.1 7.3 96.1 5.8Q96.1 4.5 96.9 3.7Q97.7 2.9 99.1 2.9Q100.6 2.9 101.4 3.7Q102.1 4.5 102.1 5.8Q102.1 8.8 99.1 8.8ZM112.3 42.2Q111 42.2 109.8 41.7Q108.6 41.2 108 39.9Q107.4 38.6 107.8 36.3L110.5 21.8Q111 19.5 110.6 18.9Q110.2 18.4 108.3 18.4Q108.3 18.4 108.2 18.3Q108.1 18.2 108.1 17.9Q108.2 17.5 108.4 17.5Q110.9 17.5 112.6 16Q114.3 14.5 115.1 12.3Q115.1 12.1 115.7 12.2Q116.1 12.2 116.1 12.3Q116.1 12.4 116.1 12.4L115.2 17.3Q116.5 17.3 117.9 17.2Q119.7 17.1 121.2 17Q122.7 16.8 123.3 16.8Q123.6 16.8 123.7 17Q123.8 17.2 123.8 17.5Q123.6 18 123 18.8Q122.3 19.6 121.6 19.6Q121.5 19.6 120.3 19.4Q119 19.3 117.4 19.1Q116.1 19 115 18.9L112.2 34.6Q111.7 37.1 112.5 38.3Q113.2 39.4 115.2 39.4Q116.8 39.4 118.3 38.6Q119.7 37.9 121.1 36.7Q121.3 36.6 121.5 36.9Q121.8 37.1 121.6 37.2Q118.7 39.9 116.5 41Q114.3 42.2 112.3 42.2ZM130.8 42Q129.1 42 128.6 40.5Q128 39.1 128.7 35.7L131.4 22.4Q131.9 19.6 131 19Q130.7 18.8 130.3 18.8Q129.6 18.8 128.5 19.5Q127.4 20.3 126.1 21.6Q126 21.8 125.9 21.8Q125.8 21.8 125.6 21.6Q125.5 21.4 125.5 21.3Q125.5 21.2 125.6 21.1Q127.8 18.6 129.6 17.3Q131.4 16.1 133.1 16.1Q134.9 16.1 135.4 17.5Q135.9 18.9 135.3 22.1L132.6 35.7Q132.3 37.6 132.6 38.4Q132.9 39.2 133.6 39.2Q134.3 39.2 135.4 38.5Q136.4 37.8 137.6 36.5Q137.8 36.4 137.9 36.4Q138 36.4 138.1 36.5Q138.3 36.7 138.3 36.9Q138.3 37 138.1 37Q136.1 39.5 134.3 40.7Q132.6 42 130.8 42Z" />
+<circle cx="134.9" cy="5.9" r="3.9" fill="#c89968" />
                         </svg>
                         <p>
                             A photo library that stays on your machine.
@@ -6623,6 +6750,16 @@
                 // ============ Year ============
                 var yEl = document.getElementById("year");
                 if (yEl) yEl.textContent = new Date().getFullYear();
+
+                // ============ Hero tour: respect reduced motion ============
+                var heroVideo = document.querySelector(".hero-media video");
+                if (
+                    heroVideo &&
+                    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ) {
+                    heroVideo.removeAttribute("autoplay");
+                    heroVideo.pause();
+                }
 
                 // ============ Theme toggle ============
                 var root = document.documentElement;

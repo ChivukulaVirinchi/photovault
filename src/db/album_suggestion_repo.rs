@@ -111,6 +111,14 @@ impl<'a> AlbumSuggestionRepo<'a> {
     }
 
     /// Get all fingerprints (accepted + dismissed) to avoid re-suggesting.
+    /// Update the title of a pending suggestion; decided ones keep theirs.
+    pub fn retitle_pending(&self, fingerprint: &str, title: &str) -> SqliteResult<usize> {
+        self.conn.execute(
+            "UPDATE album_suggestions SET title = ?2 WHERE fingerprint = ?1 AND status = 'pending'",
+            rusqlite::params![fingerprint, title],
+        )
+    }
+
     pub fn get_all_fingerprints(&self) -> SqliteResult<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT fingerprint FROM album_suggestions WHERE status IN ('accepted', 'dismissed', 'pending')",

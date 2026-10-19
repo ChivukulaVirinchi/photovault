@@ -5,6 +5,7 @@ import type { InsightsData } from "./api/all";
 
 describe("share card month hit regions", () => {
   it("returns the exact painted cells with full month, year and count labels", () => {
+    vi.stubGlobal("Path2D", class {}); // jsdom has no Path2D (used by the wordmark)
     const painted: number[][] = [];
     const context = new Proxy({
       measureText: (text: string) => ({ width: text.length * 8 }),

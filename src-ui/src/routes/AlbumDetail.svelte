@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf, dateRange } from "../lib/format";
   import { photoLabel } from "../lib/a11y";
   import { trapFocus } from "../lib/actions/trapFocus";
   import { ignoreShortcut } from "../lib/keys";
@@ -445,7 +446,7 @@
 
   function fmtRange(s: string | null, e: string | null): string {
     if (!s || !e) return "";
-    return `${new Date(s).toLocaleDateString()} → ${new Date(e).toLocaleDateString()}`;
+    return dateRange(s, e);
   }
 
   function startAlbumSlideshow() {
@@ -506,7 +507,7 @@
       {/if}
     {/snippet}
     {#snippet subtitle()}
-      <span class="mono">{a.photo_count} photos</span>
+      <span class="mono">{countOf(a.photo_count, "photo")}</span>
       {#if a.date_range_start && a.date_range_end}
         <span class="mono dim">{fmtRange(a.date_range_start, a.date_range_end)}</span>
       {/if}

@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/smriti-logo-dark.svg">
-    <img src="docs/smriti-logo.svg" alt="Smriti" width="240">
+    <img src="docs/smriti-logo.svg" alt="Smriti" width="180">
   </picture>
 
   <h2><em>Photos without a server.</em></h2>
@@ -39,7 +39,7 @@
   </p>
 
   <a href="https://chivukulavirinchi.github.io/photovault/">
-    <img src="website/featured.gif" alt="Smriti in motion — 30 second loop showing indexing, timeline, face clustering, map, search, and slideshow" width="820">
+    <img src="website/featured.webp" alt="A tour of Smriti: the timeline, a photo, search, people, a collage, a memory, the map and an album" width="820">
   </a>
 
   <p>
@@ -75,15 +75,15 @@ on your drive, in their folders, exactly as you left them.
 |---|---|
 | **Bring 200,000 photos in.** Point Smriti at a folder or drive. It indexes in place — never copies, never moves your originals. | **Name a face once.** On-device face recognition groups every photo of that person across your whole library. No cloud round-trip. |
 | **See where you've actually been.** Every geotagged photo plotted on a map. Click a cluster to drill into a place. Tile cache lives on your drive. | **Find that photo of grandma in 2018.** Unified search across people, albums, places, dates. Three filters, one result. Milliseconds on 250K libraries. |
-| **Get reminded, not pestered.** "This day, N years ago" surfaces when you open the app. Never a notification. Never a curated highlight reel. | **Cull the obvious junk.** Duplicates, bursts, near-duplicates surfaced in one place. One-click cleanup. Trash, not delete — restore if you change your mind. |
+| **Get reminded, not pestered.** "This day, N years ago" and a few collages made from your photos, waiting when you open the app. Never a notification. | **Cull the obvious junk.** Exact duplicates and bursts, side by side. Keep the best, trash the rest — Trash, not delete, so you can restore if you change your mind. |
 
 ## See it
 
 <table>
   <tr>
-    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-timeline.png" alt="Smriti timeline view"></a></td>
-    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-people.png" alt="Smriti people view"></a></td>
-    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-map.png" alt="Smriti map view"></a></td>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-timeline.jpg" alt="Smriti timeline view"></a></td>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-people.jpg" alt="Smriti people view"></a></td>
+    <td width="33%"><a href="https://chivukulavirinchi.github.io/photovault/"><img src="website/shot-map.jpg" alt="Smriti map view"></a></td>
   </tr>
   <tr>
     <td align="center"><sub><strong>Timeline</strong><br>20+ years of photos, sticky year headers, viewport-driven thumbs.</sub></td>

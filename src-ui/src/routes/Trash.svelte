@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf, formatBytes } from "../lib/format";
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { trash } from "../lib/api/all";
@@ -125,7 +126,7 @@
   async function deleteForever() {
     if (selectedTrashCount === 0 || actionBusy) return;
     const ids = selectedTrashIds;
-    if (!confirm(`Permanently delete ${ids.length} photos? This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete ${countOf(ids.length, "photo")}? This cannot be undone.`)) return;
     const seq = loadSeq;
     try {
       actionBusy = true;
@@ -198,13 +199,13 @@
 </script>
 
 <PageHeader title="Trash">
-  {#if stats}
+  {#if stats && stats.count > 0}
     <span class="count mono">
-      {stats.count}<span class="muted"> · {(stats.total_size / 1024 / 1024).toFixed(0)} MB</span>
+      {stats.count.toLocaleString()}{" "}<span class="muted">{stats.count === 1 ? "photo" : "photos"} · {formatBytes(stats.total_size)}</span>
     </span>
   {/if}
   <button onclick={restore} disabled={selectedTrashCount === 0 || actionBusy}>
-    Restore <span class="mono">{selectedTrashCount}</span>
+    Restore{#if selectedTrashCount > 0}{" "}<span class="mono">{selectedTrashCount}</span>{/if}
   </button>
   <button class="danger" onclick={deleteForever} disabled={selectedTrashCount === 0 || actionBusy}>Delete forever</button>
   <button class="danger" onclick={emptyTrash} disabled={items.length === 0 || actionBusy}>Empty</button>

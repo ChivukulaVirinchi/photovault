@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf } from "../format";
   import X from "lucide-svelte/icons/x";
   import type { CollageSuggestion, CollageSuggestionPhoto } from "../api/all";
   import {
@@ -113,7 +114,7 @@
       <div class="caption">
         <span class="eyebrow mono">{suggestion.eyebrow}</span>
         <span class="title">{suggestion.title}</span>
-        <span class="count mono">{suggestion.photos.length} photos</span>
+        <span class="count mono">{countOf(suggestion.photos.length, "photo")}</span>
       </div>
     </button>
     <button class="dismiss" onclick={ondismiss} title="Not this one" aria-label="Don't suggest this collage again">

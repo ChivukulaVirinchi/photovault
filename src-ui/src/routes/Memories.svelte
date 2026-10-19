@@ -14,6 +14,7 @@
 </script>
 
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { onMount } from "svelte";
   import { commandErrorMessage } from "../lib/api";
   import { collageApi, memories } from "../lib/api/all";
@@ -200,7 +201,7 @@
             <div class="caption">
               <span class="kind mono">{memoryKindLabel(c.kind)}</span>
               <h3>{c.title}</h3>
-              <span class="count mono">{c.photo_count} photos</span>
+              <span class="count mono">{countOf(c.photo_count, "photo")}</span>
             </div>
           </div>
         </a>

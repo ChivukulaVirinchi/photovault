@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
@@ -213,7 +214,7 @@
 </script>
 
 <PageHeader title="Bursts">
-  <span class="count mono">{groups.length}<span class="muted"> groups</span></span>
+  <span class="count mono">{groups.length.toLocaleString()}{" "}<span class="muted">{groups.length === 1 ? "burst" : "bursts"}</span></span>
   {#if running && burstsJob && burstsJob.total}
     <span class="run-status mono">
       {burstsJob.processed.toLocaleString()} / {burstsJob.total.toLocaleString()}
@@ -247,7 +248,7 @@
           <header class="card-head">
             <a href="#/burst?id={g.id}" class="head-link">
               <span class="when">{fmtTime(g.start_time)}</span>
-              <span class="badge mono">{g.photo_count} shots</span>
+              <span class="badge mono">{countOf(g.photo_count, "shot")}</span>
             </a>
           </header>
           <!--
@@ -360,9 +361,9 @@
   }
   .strip {
     display: flex;
-    gap: 2px;
+    gap: 4px;
     overflow-x: auto;
-    padding: 2px;
+    padding: var(--s-3) var(--s-4);
     scrollbar-width: thin;
   }
   .strip-cell {

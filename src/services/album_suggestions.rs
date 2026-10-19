@@ -3,11 +3,12 @@
 //! Analyses photo metadata (location, time, faces) to propose trip and event
 //! albums that the user can accept, dismiss, or ignore.
 
+use crate::services::story;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::{Datelike, NaiveDate, Timelike, Utc};
+use chrono::NaiveDate;
 use rusqlite::{params, Connection};
 
 use crate::db::album_suggestion_repo::AlbumSuggestionRepo;
@@ -401,19 +402,12 @@ pub fn detect_trips(
             continue;
         }
 
-        let stops = compact_stops(&span.stops);
-        let destination = trip_destination(&stops);
-        let people = top_named_people(conn, &photo_ids, 2);
-        let lead = if people.is_empty() {
-            if stops.len() > 1 {
-                format!("A journey through {destination}")
-            } else {
-                format!("Time away in {destination}")
-            }
-        } else {
-            format!("{destination} with {}", join_names(&people))
-        };
-        let title = format!("{lead}  ·  {}", format_date_range(start, end));
+        let facts = story::Facts::gather_with_home(
+            conn,
+            &photo_ids,
+            home_place.map(|(city, country)| (city.to_string(), country.to_string())),
+        );
+        let title = story::trip(conn, &facts).joined();
 
         let fp = compute_fingerprint(&photo_ids);
         let cover = pick_cover(conn, &photo_ids);
@@ -448,108 +442,6 @@ fn photos_in_date_envelope(conn: &Connection, start: NaiveDate, end: NaiveDate) 
     )
     .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
     .unwrap_or_default()
-}
-
-fn compact_stops(stops: &[(String, String)]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for stop in stops {
-        if !out.contains(stop) {
-            out.push(stop.clone());
-        }
-    }
-    out
-}
-
-fn trip_destination(stops: &[(String, String)]) -> String {
-    let cities: Vec<&str> = stops.iter().map(|(city, _)| city.as_str()).collect();
-    if cities.len() <= 3 {
-        return join_words(&cities);
-    }
-    let countries: HashSet<&str> = stops
-        .iter()
-        .map(|(_, country)| country.as_str())
-        .filter(|country| !country.is_empty())
-        .collect();
-    if countries.len() == 1 {
-        return countries
-            .into_iter()
-            .next()
-            .unwrap_or("your journey")
-            .to_string();
-    }
-    format!("{} and {} more stops", cities[0], cities.len() - 1)
-}
-
-fn join_words(words: &[&str]) -> String {
-    match words {
-        [] => "your journey".to_string(),
-        [one] => (*one).to_string(),
-        [first, second] => format!("{first} & {second}"),
-        _ => format!("{}, {} & {}", words[0], words[1], words[2]),
-    }
-}
-
-fn join_names(names: &[String]) -> String {
-    let words: Vec<&str> = names.iter().map(String::as_str).collect();
-    join_words(&words)
-}
-
-fn format_date_range(start: NaiveDate, end: NaiveDate) -> String {
-    if start == end {
-        return start.format("%b %-d, %Y").to_string();
-    }
-    if start.year() == end.year() && start.month() == end.month() {
-        format!(
-            "{} – {}, {}",
-            start.format("%b %-d"),
-            end.format("%-d"),
-            start.format("%Y")
-        )
-    } else if start.year() == end.year() {
-        format!("{} – {}", start.format("%b %-d"), end.format("%b %-d, %Y"))
-    } else {
-        format!(
-            "{} – {}",
-            start.format("%b %-d, %Y"),
-            end.format("%b %-d, %Y")
-        )
-    }
-}
-
-fn top_named_people(conn: &Connection, photo_ids: &[i64], limit: usize) -> Vec<String> {
-    if photo_ids.is_empty() || limit == 0 {
-        return Vec::new();
-    }
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for chunk in photo_ids.chunks(900) {
-        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            r#"SELECT fc.name, COUNT(DISTINCT f.photo_id)
-               FROM faces f
-               JOIN face_clusters fc ON fc.id = f.cluster_id
-               WHERE f.photo_id IN ({placeholders})
-                 AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
-               GROUP BY fc.id, fc.name"#
-        );
-        let Ok(mut stmt) = conn.prepare(&sql) else {
-            return Vec::new();
-        };
-        let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-        }) else {
-            return Vec::new();
-        };
-        for row in rows.flatten() {
-            *counts.entry(row.0).or_default() += row.1;
-        }
-    }
-    let mut ranked: Vec<_> = counts.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ranked
-        .into_iter()
-        .take(limit)
-        .map(|(name, _)| name)
-        .collect()
 }
 
 fn curate_story_photos(conn: &Connection, photo_ids: &[i64]) -> Vec<i64> {
@@ -724,46 +616,7 @@ pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<De
             continue;
         }
 
-        // Title: derive from location or date
-        let primary_city = window
-            .iter()
-            .filter_map(|p| p.city.as_ref())
-            .fold(HashMap::new(), |mut acc, c| {
-                *acc.entry(c.clone()).or_insert(0usize) += 1;
-                acc
-            })
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(c, _)| c);
-
-        let first_ts = window.first().map(|p| p.ts).unwrap_or(0);
-        let date = chrono::DateTime::from_timestamp(first_ts, 0)
-            .map(|dt| dt.format("%b %d, %Y").to_string())
-            .unwrap_or_else(|| "Event".to_string());
-
-        let people = top_named_people(conn, &ids, 2);
-        let daypart = chrono::DateTime::from_timestamp(first_ts, 0)
-            .map(|dt| match dt.hour() {
-                5..=11 => "A morning",
-                12..=16 => "An afternoon",
-                17..=21 => "An evening",
-                _ => "A night",
-            })
-            .unwrap_or("A day");
-        let title = if !people.is_empty() {
-            if let Some(city) = primary_city.as_ref() {
-                format!(
-                    "{daypart} in {city} with {}  ·  {date}",
-                    join_names(&people)
-                )
-            } else {
-                format!("Time with {}  ·  {date}", join_names(&people))
-            }
-        } else if let Some(city) = primary_city {
-            format!("{daypart} in {city}  ·  {date}")
-        } else {
-            format!("A day worth keeping  ·  {date}")
-        };
+        let title = story::moment(&story::Facts::gather(conn, &ids)).joined();
 
         let fp = compute_fingerprint(&ids);
         let cover = pick_cover(conn, &ids);
@@ -833,24 +686,6 @@ pub fn detect_gatherings(
     if rows.is_empty() {
         return Vec::new();
     }
-
-    // Cluster names lookup — used to title the resulting album.
-    let cluster_names: HashMap<i64, Option<String>> = {
-        let mut s = match conn.prepare("SELECT id, name FROM face_clusters") {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        s.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .and_then(|iter| iter.collect::<rusqlite::Result<HashMap<_, _>>>())
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                "album people-gathering detection continuing without cluster names: {e}"
-            );
-            HashMap::new()
-        })
-    };
 
     // Sliding-window grouping by day bucket. Two consecutive days (or
     // a Sat→Sun) get fused into one gathering when they share clusters.
@@ -923,41 +758,7 @@ pub fn detect_gatherings(
             continue;
         }
 
-        // Pick the 1-2 most-photographed clusters in the window for
-        // the title. Counting requires a second pass over rows in the
-        // window range — cheap, the window is small.
-        let mut counts: HashMap<i64, usize> = HashMap::new();
-        for (pid, _, cid) in &rows {
-            if w.photo_ids.contains(pid) {
-                *counts.entry(*cid).or_insert(0) += 1;
-            }
-        }
-        let mut sorted: Vec<(i64, usize)> = counts.into_iter().collect();
-        sorted.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
-        let top_names: Vec<String> = sorted
-            .iter()
-            .take(2)
-            .filter_map(|(cid, _)| cluster_names.get(cid).and_then(|n| n.clone()))
-            .collect();
-
-        // Build a date suffix from the window's actual span.
-        let start_dt = chrono::DateTime::<Utc>::from_timestamp(w.start_ts, 0);
-        let end_dt = chrono::DateTime::<Utc>::from_timestamp(w.end_ts, 0);
-        let date_part = match (start_dt, end_dt) {
-            (Some(s), Some(e)) if s.date_naive() == e.date_naive() => {
-                s.format("%b %-d, %Y").to_string()
-            }
-            (Some(s), Some(e)) => format!("{} – {}", s.format("%b %-d"), e.format("%b %-d, %Y")),
-            _ => String::from("—"),
-        };
-
-        let title = if top_names.is_empty() {
-            format!("Gathering · {}", date_part)
-        } else if top_names.len() == 1 {
-            format!("Time with {} · {}", top_names[0], date_part)
-        } else {
-            format!("{} & {} · {}", top_names[0], top_names[1], date_part)
-        };
+        let title = story::gathering(&story::Facts::gather(conn, &w.photo_ids)).joined();
 
         let cover_photo_id = pick_cover(conn, &w.photo_ids);
         let fingerprint = compute_fingerprint(&w.photo_ids);
@@ -1184,6 +985,9 @@ pub fn detect_suggestions_with_diagnostics_cancel(
         }
         if existing_fps.contains(&s.fingerprint) {
             diag.skipped_existing_fingerprint += 1;
+            // Keep a still-pending suggestion's title current, e.g. after a
+            // person is named.
+            let _ = repo.retitle_pending(&s.fingerprint, &s.title);
             continue;
         }
         match repo.insert(
@@ -1357,7 +1161,9 @@ mod tests {
 
         assert_eq!(suggestions.len(), 1);
         let trip = &suggestions[0];
-        assert!(trip.title.contains("Jaipur, Jodhpur & Udaipur"));
+        assert!(trip
+            .title
+            .starts_with("Jaipur, Jodhpur and Udaipur  ·  Mar 1 – 12, 2024"));
         assert!(trip.photo_ids.contains(&unlocated_id));
         assert_eq!(trip.photo_ids.len(), 25);
     }

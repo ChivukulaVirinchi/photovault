@@ -18,6 +18,7 @@
 </script>
 
 <script lang="ts">
+  import { countOf, dateRange } from "../lib/format";
   import { photoLabel } from "../lib/a11y";
   import { trapFocus } from "../lib/actions/trapFocus";
   import { onMount } from "svelte";
@@ -197,10 +198,17 @@
   }
 
   function suggestionKindLabel(kind: string): string {
-    if (kind === "trip") return "Journey";
+    if (kind === "trip") return "Trip";
     if (kind === "gathering") return "Together";
-    if (kind === "event") return "A moment worth keeping";
+    if (kind === "event") return "A day out";
     return kind;
+  }
+  /** Suggestions store "title  ·  dates"; show them on two lines. */
+  function splitTitle(stored: string): { title: string; context: string } {
+    const at = stored.indexOf("  ·  ");
+    return at < 0
+      ? { title: stored, context: "" }
+      : { title: stored.slice(0, at), context: stored.slice(at + 5) };
   }
   function closePreview() {
     previewSeq++;
@@ -303,7 +311,7 @@
 </script>
 
 <PageHeader title="Albums">
-  <span class="count mono">{list.length}<span class="muted"> albums</span></span>
+  <span class="count mono">{list.length.toLocaleString()}{" "}<span class="muted">{list.length === 1 ? "album" : "albums"}</span></span>
   <button class="ghost" onclick={runDetection} disabled={detecting || detectBusy}>
     {detecting || detectBusy ? "Detecting…" : "Detect"}
   </button>
@@ -328,10 +336,11 @@
       </div>
       <div class="suggest-grid">
         {#each suggestions as s (s.id)}
+          {@const t = splitTitle(s.title)}
           <button
             class="suggestion"
             onclick={() => openPreview(s)}
-            aria-label="Preview suggestion {s.title}"
+            aria-label="Preview suggestion {splitTitle(s.title).title}"
             use:thumbnailOnVisible={{
               id: s.cover_photo_id ?? 0,
               thumbnailPath: s.cover_thumbnail_path,
@@ -343,8 +352,9 @@
             {/if}
             <div class="body">
               <span class="kind mono">{suggestionKindLabel(s.kind)}</span>
-              <strong class="title">{s.title}</strong>
-              <span class="muted small">{s.photo_ids.length} photos · click to preview</span>
+              <strong class="title">{t.title}</strong>
+              {#if t.context}<span class="context small">{t.context}</span>{/if}
+              <span class="muted small">{countOf(s.photo_ids.length, "photo")} · click to preview</span>
             </div>
           </button>
         {/each}
@@ -367,13 +377,14 @@
 
   {#if previewSugg}
     {@const s = previewSugg}
+    {@const t = splitTitle(s.title)}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-scrim" role="presentation" onclick={closePreview}>
       <div class="modal pv-dialog" role="dialog" aria-label="Suggested album" use:trapFocus aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
         <header>
           <span class="kind mono">{suggestionKindLabel(s.kind)}</span>
-          <strong class="title">{s.title}</strong>
-          <span class="muted small">{s.photo_ids.length} photos</span>
+          <strong class="title">{t.title}</strong>
+          <span class="muted small">{t.context ? `${t.context} · ` : ""}{countOf(s.photo_ids.length, "photo")}</span>
         </header>
         <div class="preview-grid">
           {#if previewLoading}
@@ -455,8 +466,7 @@
           <strong class="title">{a.name}</strong>
           {#if a.date_range_start && a.date_range_end}
             <span class="dates mono small">
-              {new Date(a.date_range_start).toLocaleDateString()}
-              — {new Date(a.date_range_end).toLocaleDateString()}
+              {dateRange(a.date_range_start, a.date_range_end)}
             </span>
           {/if}
         </a>
@@ -550,6 +560,9 @@
   .suggestion .title {
     font-size: var(--t-base);
     font-weight: 600;
+  }
+  .suggestion .context {
+    color: var(--ink-soft);
   }
 
   /* ----- preview modal ----- */

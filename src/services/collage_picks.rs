@@ -11,7 +11,8 @@ use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, params_from_iter, Connection, Result as SqliteResult};
 
 use crate::db::album_suggestion_repo::AlbumSuggestionRepo;
-use crate::services::memories::MemoryCard;
+use crate::services::memories::{MemoryCard, MemoryKind};
+use crate::services::story;
 
 /// The largest collage the auto picker builds. Busier frames stop reading
 /// as one picture at the sizes collages are shared at.
@@ -337,7 +338,7 @@ fn clashes(candidates: &[Candidate], picks: &[usize], i: usize, level: Repeat) -
 /// Where a suggested collage's photos come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuggestionSource {
-    Memory { id: String },
+    Memory { id: String, kind: MemoryKind },
     AlbumSuggestion { kind: String, fingerprint: String },
     Album { id: i64 },
     Favourites,
@@ -347,21 +348,37 @@ impl SuggestionSource {
     /// Stable key, also used to remember a dismissal.
     pub fn key(&self) -> String {
         match self {
-            Self::Memory { id } => format!("memory:{id}"),
+            Self::Memory { id, .. } => format!("memory:{id}"),
             Self::AlbumSuggestion { fingerprint, .. } => format!("suggestion:{fingerprint}"),
             Self::Album { id } => format!("album:{id}"),
             Self::Favourites => "favourites".into(),
         }
     }
 
-    /// A short line above the title, saying where the photos are from.
-    pub fn eyebrow(&self) -> &'static str {
+    /// A short line above the title saying why this collage was made:
+    /// "On this day", "Your trip · Dec 2023", "Your album · 2019 – 2023".
+    fn eyebrow(&self, conn: &Connection, ids: &[i64]) -> String {
+        let when = || story::span_label(conn, ids);
+        let with_when = |lead: &str| match when() {
+            Some(when) => format!("{lead} · {when}"),
+            None => lead.to_string(),
+        };
         match self {
-            Self::Memory { .. } => "From your memories",
-            Self::AlbumSuggestion { kind, .. } if kind == "trip" => "From a trip",
-            Self::AlbumSuggestion { .. } => "From a day out",
-            Self::Album { .. } => "From your albums",
-            Self::Favourites => "From your favourites",
+            Self::Memory { kind, .. } => match kind {
+                MemoryKind::OnThisDay => "On this day".into(),
+                MemoryKind::FallbackWindow => "This week, years ago".into(),
+                MemoryKind::SeasonalRecap => "This month, years ago".into(),
+                MemoryKind::PersonStory => "Through the years".into(),
+                MemoryKind::PlaceStory => "A place you keep going back to".into(),
+                MemoryKind::YearRecap => "A year to remember".into(),
+            },
+            Self::AlbumSuggestion { kind, .. } => with_when(match kind.as_str() {
+                "trip" => "Your trip",
+                "gathering" => "Together",
+                _ => "A day out",
+            }),
+            Self::Album { .. } => with_when("Your album"),
+            Self::Favourites => "Starred by you".into(),
         }
     }
 }
@@ -370,6 +387,8 @@ impl SuggestionSource {
 pub struct CollageSuggestion {
     pub source: SuggestionSource,
     pub title: String,
+    /// Why it was suggested, shown above the title.
+    pub eyebrow: String,
     /// In collage order: the feature photo first.
     pub photo_ids: Vec<i64>,
 }
@@ -393,6 +412,7 @@ pub fn suggestions_for_today(
         (
             SuggestionSource::Memory {
                 id: card.id.clone(),
+                kind: card.kind,
             },
             card.title.clone(),
             card.photo_ids.clone(),
@@ -406,7 +426,8 @@ pub fn suggestions_for_today(
                 kind: suggestion.kind,
                 fingerprint: suggestion.fingerprint,
             },
-            suggestion.title,
+            // Stored as "title  ·  dates"; the dates move to the eyebrow.
+            story::split(&suggestion.title).0.to_string(),
             ids,
         ));
     }
@@ -420,7 +441,7 @@ pub fn suggestions_for_today(
     sources.extend(memory_sources);
     sources.push((
         SuggestionSource::Favourites,
-        "Favourites".into(),
+        "Your favourites".into(),
         favourite_ids(conn)?,
     ));
 
@@ -462,6 +483,7 @@ pub fn suggestions_for_today(
             out.push(CollageSuggestion {
                 source: source.clone(),
                 title: title.clone(),
+                eyebrow: source.eyebrow(conn, ids),
                 photo_ids,
             });
         }

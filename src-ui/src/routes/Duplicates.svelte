@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatBytes } from "../lib/format";
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
@@ -203,9 +204,11 @@
 </script>
 
 <PageHeader title="Duplicates">
-  <span class="waste mono">
-    {(wasted / 1024 / 1024).toFixed(0)}<span class="muted"> MB potentially wasted</span>
-  </span>
+  {#if wasted > 0}
+    <span class="waste mono">
+      {formatBytes(wasted)}{" "}<span class="muted">could be freed</span>
+    </span>
+  {/if}
   {#if running && dupJob && dupJob.total}
     <span class="run-status mono">
       {dupJob.processed.toLocaleString()} / {dupJob.total.toLocaleString()}

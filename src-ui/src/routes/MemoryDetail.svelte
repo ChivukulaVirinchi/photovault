@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { countOf } from "../lib/format";
   import { photoLabel } from "../lib/a11y";
   import { ignoreShortcut } from "../lib/keys";
   import { onMount, tick } from "svelte";
@@ -218,7 +219,7 @@
       <h1>{c.title}</h1>
     {/snippet}
     {#snippet subtitle()}
-      <span class="mono">{c.photo_count} photos</span>
+      <span class="mono">{countOf(c.photo_count, "photo")}</span>
       <span class="kind">{memoryKindLabel(c.kind)}</span>
     {/snippet}
     {#snippet actions()}

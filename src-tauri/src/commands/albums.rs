@@ -1088,7 +1088,10 @@ pub async fn albums_suggestions_accept(
         .ok_or_else(|| CommandError::not_found("album_suggestion", args.id))?;
 
     let album_repo = AlbumRepo::new(&db.conn);
-    let name = args.name.unwrap_or(s.title.clone());
+    // Stored as "title  ·  dates"; the album is named after the title.
+    let name = args
+        .name
+        .unwrap_or_else(|| smriti::services::story::split(&s.title).0.to_string());
     if is_reserved_album_name(&name) {
         return Err(CommandError::Validation {
             field: "name".into(),

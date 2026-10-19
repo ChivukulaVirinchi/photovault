@@ -24,7 +24,8 @@
     border-bottom: 1px solid var(--line-soft);
     background: var(--bg);
     flex-shrink: 0;
-    min-height: 60px;
+    /* Same height whether or not the page has header buttons. */
+    min-height: 67px;
   }
   .title {
     font-size: var(--t-xl);
@@ -40,6 +41,11 @@
     gap: var(--s-2);
     align-items: center;
     flex-shrink: 0;
+  }
+  /* Selects match the header buttons. */
+  .actions :global(select) {
+    font-size: var(--t-sm);
+    padding-block: 7px;
   }
   @media (max-width: 720px) {
     .page-header {
