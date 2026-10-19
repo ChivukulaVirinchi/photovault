@@ -28,6 +28,7 @@ pub mod face_repo;
 pub mod geonames;
 pub mod inferred_identity_repo;
 pub mod migrations;
+pub mod network_drive;
 pub mod photo_repo;
 pub mod schema;
 pub mod stack_repo;

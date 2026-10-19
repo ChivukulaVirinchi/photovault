@@ -441,6 +441,8 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.compat_photos_list` | `{ offset: u32, limit: Option<u32> }` | `Page<PhotoSummaryDto>` | read-only preview for schema-too-new libraries; reads only stable `photos` columns, never generates thumbnails or mutates the DB |
 | `library.close` | `{}` | `()` | for "switch library" flow; flushes pending writes |
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
+| `library.network_drive_get` | `{}` | `Option<NetworkDriveDto>` | `{ detected: bool, forced: bool }` for the open library; `None` when closed |
+| `library.network_drive_set` | `{ forced: bool }` | `NetworkDriveDto` | writes or removes `.photovault/network-drive`; takes effect when the library reopens |
 | `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; reconciles moved/deleted/edited files first, then adds new ones; emits `scan:progress`, `scan:reconciled`, `scan:complete` |
 | `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
 | `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |

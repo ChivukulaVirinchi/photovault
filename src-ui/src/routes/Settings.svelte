@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatBytes } from "../lib/format";
   import { onMount } from "svelte";
   import { clearTileCache, setTileCacheLimit, tileCacheStats } from "../lib/tile-cache-storage";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -17,7 +18,7 @@
   import { commandErrorMessage } from "../lib/api";
   import { updates } from "../lib/stores/updates.svelte";
   import type { AssetInventory, AssetItem, LibraryHealthData, SemanticStatus, Settings } from "../lib/api/all";
-  import type { ExcludedFolderDto } from "../lib/api/types";
+  import type { ExcludedFolderDto, NetworkDriveDto } from "../lib/api/types";
 
   let saving = $state(false);
   let mapCacheMessage = $state("");
@@ -46,6 +47,9 @@
   let assetsSeq = 0;
   let semanticSeq = 0;
   let exclusionsSeq = 0;
+  let networkDrive = $state<NetworkDriveDto | null>(null);
+  let networkSwitching = $state(false);
+  let networkSeq = 0;
   let bridgeSeq = 0;
   let healthSeq = 0;
   let saveSeq = 0;
@@ -167,6 +171,7 @@
       assetsSeq += 1;
       semanticSeq += 1;
       exclusionsSeq += 1;
+      networkSeq += 1;
       bridgeSeq += 1;
       healthSeq += 1;
     };
@@ -178,15 +183,18 @@
       healthSeq += 1;
       semanticSeq += 1;
       exclusionsSeq += 1;
+      networkSeq += 1;
       healthData = null;
       semanticStatus = null;
       exclusions = null;
+      networkDrive = null;
       return;
     }
     // Health checks every thumbnail on disk; only Developer mode shows it.
     if (devMode.enabled) loadHealth();
     loadSemanticStatus();
     loadExclusions();
+    loadNetworkDrive();
   });
 
   let toastedAssetIds = new Set<string>();
@@ -437,6 +445,34 @@
     }
   }
 
+  async function loadNetworkDrive() {
+    const seq = ++networkSeq;
+    try {
+      const next = await library.networkDrive.get();
+      if (mounted && seq === networkSeq) networkDrive = next;
+    } catch {
+      if (mounted && seq === networkSeq) networkDrive = null;
+    }
+  }
+
+  /// The database mode is chosen when a library opens, so switching
+  /// reopens the library.
+  async function setNetworkDrive(forced: boolean) {
+    const root = libraryStore.driveRoot;
+    if (!root || networkSwitching) return;
+    networkSwitching = true;
+    try {
+      networkDrive = await library.networkDrive.set(forced);
+      await library.close();
+      await libraryStore.open(root);
+    } catch (e) {
+      toasts.error(`Couldn't switch network drive mode: ${commandErrorMessage(e)}`);
+      void loadNetworkDrive();
+    } finally {
+      if (mounted) networkSwitching = false;
+    }
+  }
+
   async function addExclusion() {
     if (exclusionsActing || !hasLibrary) return;
     const root = libraryStore.driveRoot;
@@ -494,18 +530,6 @@
     } finally {
       if (sameVisibleLibrary(root)) exclusionsActing = false;
     }
-  }
-
-  function formatBytes(bytes: number | null | undefined): string {
-    if (!bytes) return "-";
-    const units = ["B", "KB", "MB", "GB"];
-    let value = bytes;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-      value /= 1024;
-      unit += 1;
-    }
-    return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
   }
 
   function installedCount(items: AssetItem[]): number {
@@ -781,6 +805,19 @@
           onchange={(e) => patch({ scan_on_open: (e.target as HTMLInputElement).checked })} />
         <span class="label-text">Check for changes when a library opens</span>
       </label>
+      {#if networkDrive}
+        <label class="checkbox">
+          <input type="checkbox" checked={networkDrive.detected || networkDrive.forced}
+            disabled={networkDrive.detected || networkSwitching}
+            onchange={(e) => setNetworkDrive((e.target as HTMLInputElement).checked)} />
+          <span class="label-text">Library is on a network drive (NAS)</span>
+        </label>
+        <p class="hint blurb">
+          {networkDrive.detected
+            ? "Detected automatically. Smriti keeps its database in a mode that is safe on network shares."
+            : "Turn on if this library is on a NAS or network share that Smriti didn't recognise."}
+        </p>
+      {/if}
       {#if devMode.enabled}
         <label>
           <span class="label-text">Map tile cache (MB, shared across libraries)</span>

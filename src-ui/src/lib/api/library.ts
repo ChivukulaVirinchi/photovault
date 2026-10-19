@@ -6,6 +6,7 @@ import type {
   JobIdDto,
   LibraryHandleDto,
   LibraryOpenResult,
+  NetworkDriveDto,
   Page,
   PhotoSummaryDto,
 } from "./types";
@@ -18,6 +19,14 @@ export const library = {
   compatPhotos: (offset: number, limit = 100) =>
     call<Page<PhotoSummaryDto>>("library_compat_photos_list", { offset, limit }),
   close: () => call<null>("library_close"),
+  /// Libraries on a NAS use a network-safe database mode. Detected
+  /// automatically; `set` covers shares that look local. Takes effect when
+  /// the library reopens.
+  networkDrive: {
+    get: () => call<NetworkDriveDto | null>("library_network_drive_get"),
+    set: (forced: boolean) =>
+      call<NetworkDriveDto>("library_network_drive_set", { forced }),
+  },
   startScan: (scanHidden?: boolean) =>
     call<JobIdDto>("library_start_scan", { scan_hidden_folders: scanHidden }),
   /// Trash every indexed photo whose file is no longer on disk. Used to

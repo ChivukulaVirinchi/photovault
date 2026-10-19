@@ -42,6 +42,14 @@ export interface SchemaTooNewInfo {
   max_supported: number;
 }
 
+/// Whether the open library's database runs in network-drive mode.
+export interface NetworkDriveDto {
+  /// Smriti recognised the library's folder as a network share.
+  detected: boolean;
+  /// The user turned network-drive mode on for this library.
+  forced: boolean;
+}
+
 export interface ExcludedFolderDto {
   relative_path: string;
   indexed_count: number;

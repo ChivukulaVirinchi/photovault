@@ -68,11 +68,28 @@ SQLite is opened with **WAL mode** for concurrent read-while-write
 performance. Smriti spawns one writer task and many reader tasks.
 The async scanner and frontend reads coexist through the WAL.
 
+### Network shares
+
+WAL keeps its index in shared memory (`-shm`), which does not work over
+SMB or NFS. A library on a network filesystem therefore opens with the
+rollback journal (`journal_mode=DELETE`), `synchronous=FULL`, no memory
+mapping and a longer busy timeout (`src/db/network_drive.rs`). Detection
+is automatic (Windows: UNC paths and mapped drives; Linux: the mount's
+filesystem type, including named FUSE mounts; macOS: `smbfs`, `nfs`,
+`afpfs` and similar). For shares the detector misses, Settings → Library
+→ "Library is on a network drive" writes a `.photovault/network-drive`
+marker that travels with the library. The journal mode is stored in the
+database file and set by the connection that opens the library; the
+background connections follow the file. A library moved between a NAS
+and a local disk switches modes on its next open. One computer at a time
+should have a network library open.
+
 ## Backup
 
 The library folder including `.photovault/` is the entire database.
-Standard file-level backup works. SQLite is robust to crash — WAL
-ensures the DB stays consistent across power loss.
+Standard file-level backup works. SQLite is robust to crash — the WAL
+(or, on network shares, the rollback journal) keeps the DB consistent
+across power loss.
 
 ## See also
 
