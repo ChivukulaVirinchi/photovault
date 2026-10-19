@@ -43,6 +43,8 @@ pub fn run() {
             commands::library::library_exclusions_remove,
             commands::library::library_open,
             commands::library::library_close,
+            commands::library::library_network_drive_get,
+            commands::library::library_network_drive_set,
             commands::library::library_compat_photos_list,
             commands::library::library_apply_changes,
             commands::library::library_start_scan,

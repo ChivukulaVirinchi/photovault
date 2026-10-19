@@ -635,6 +635,11 @@ fn preflight_schema_too_new(drive_root: &Path) -> CommandResult<Option<(i32, i32
     }
 
     let conn = rusqlite::Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if smriti::db::network_drive::network_drive(drive_root).active() {
+        // A WAL index left on a share may be unusable; keep it in private
+        // memory (see `network_drive`). The lock goes with the connection.
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+    }
     let version = match smriti::db::migrations::get_schema_version(&conn) {
         Ok(version) => version,
         Err(rusqlite::Error::SqliteFailure(_, Some(message)))
@@ -767,6 +772,69 @@ pub async fn library_close(state: State<'_, AppState>) -> CommandResult<()> {
     }
     state.assistant.lock().await.sessions.clear();
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct NetworkDriveDto {
+    /// The library sits on a network share Smriti recognised by itself.
+    pub detected: bool,
+    /// The user turned network-drive mode on for this library.
+    pub forced: bool,
+}
+
+/// Network-drive mode of the open library, or None when none is open.
+#[tauri::command]
+pub async fn library_network_drive_get(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<NetworkDriveDto>> {
+    let Some(drive_root) = open_drive_root(&state).await else {
+        return Ok(None);
+    };
+    network_drive_status(drive_root).await.map(Some)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibraryNetworkDriveSetArgs {
+    pub forced: bool,
+}
+
+/// Turn network-drive mode on or off for the open library. The caller
+/// reopens the library so the database switches journal mode.
+#[tauri::command]
+pub async fn library_network_drive_set(
+    state: State<'_, AppState>,
+    args: LibraryNetworkDriveSetArgs,
+) -> CommandResult<NetworkDriveDto> {
+    let drive_root = open_drive_root(&state)
+        .await
+        .ok_or(CommandError::LibraryClosed)?;
+    smriti::db::network_drive::set_forced(&drive_root, args.forced)?;
+    network_drive_status(drive_root).await
+}
+
+async fn open_drive_root(state: &State<'_, AppState>) -> Option<PathBuf> {
+    state
+        .library
+        .read()
+        .await
+        .as_ref()
+        .map(|lib| lib.drive_root.clone())
+}
+
+async fn network_drive_status(drive_root: PathBuf) -> CommandResult<NetworkDriveDto> {
+    // Filesystem queries on a dropped share can block; keep them off the
+    // async runtime.
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        smriti::db::network_drive::network_drive(&drive_root)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        message: format!("network drive check failed: {e}"),
+    })?;
+    Ok(NetworkDriveDto {
+        detected: status.detected,
+        forced: status.forced,
+    })
 }
 
 #[derive(Debug, Default, Deserialize)]

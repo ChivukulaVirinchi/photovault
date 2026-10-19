@@ -53,15 +53,20 @@ pub fn db_path_for(drive_root: &Path) -> PathBuf {
 
 /// Open a fresh connection to an existing Smriti database.
 ///
-/// Configures the same WAL / cache pragmas as `open_for_drive` so
-/// background detection tasks see the same performance profile.
+/// Configures the same pragmas as `open_for_drive` so background
+/// detection tasks see the same performance profile. The journal mode
+/// was chosen when the library opened; this connection follows the file
+/// rather than detecting the drive again.
 /// Returns an error if the path doesn't exist or can't be opened.
 pub fn open_secondary(db_path: &Path) -> Result<Connection, DatabaseError> {
     let conn = Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    Database::configure_connection(&conn)?;
+    // Reading the journal mode can meet another connection's commit.
+    conn.busy_timeout(std::time::Duration::from_secs(15))?;
+    let journal: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    Database::configure_connection(&conn, !journal.eq_ignore_ascii_case("wal"))?;
     Ok(conn)
 }
 
@@ -89,19 +94,26 @@ impl Database {
         let db_path = metadata_dir.join("photovault.db");
         let conn = Connection::open(&db_path)?;
 
-        // Configure SQLite for optimal performance
-        Self::configure_connection(&conn)?;
+        let network = super::network_drive::network_drive(&drive_root).active();
+        Self::configure_connection(&conn, network)?;
+        Self::set_journal_mode(&conn, network)?;
 
         Ok(Self { conn })
     }
 
-    /// Configure SQLite connection for optimal performance
-    pub(crate) fn configure_connection(conn: &Connection) -> SqliteResult<()> {
-        // Write-Ahead Logging for better concurrent read performance
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+    /// Configure SQLite connection for optimal performance. `network`
+    /// selects the profile for a library on a network share (see
+    /// `network_drive`).
+    pub(crate) fn configure_connection(conn: &Connection, network: bool) -> SqliteResult<()> {
+        // Wait for a busy lock instead of failing immediately. Without
+        // this, two writers (e.g. face-processor writer thread + scanner
+        // upserts during a re-index) surface SQLITE_BUSY to the user
+        // instead of retrying. Network round-trips hold locks longer.
+        conn.pragma_update(None, "busy_timeout", if network { 15000 } else { 5000 })?;
 
-        // Balance between safety and speed
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Balance between safety and speed. Without WAL, NORMAL can lose
+        // a commit on power loss, so the network profile syncs fully.
+        conn.pragma_update(None, "synchronous", if network { "FULL" } else { "NORMAL" })?;
 
         // 64MB cache
         conn.pragma_update(None, "cache_size", -64000)?;
@@ -109,18 +121,42 @@ impl Database {
         // Temp tables in memory
         conn.pragma_update(None, "temp_store", "MEMORY")?;
 
-        // Memory-map up to 256MB
-        conn.pragma_update(None, "mmap_size", 268435456)?;
+        // Memory-map up to 256MB. Never over a network: another client's
+        // writes would not show up in the mapped pages.
+        conn.pragma_update(None, "mmap_size", if network { 0 } else { 268435456 })?;
 
         // Foreign key enforcement
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
-        // Wait up to 5 seconds for a busy lock instead of failing
-        // immediately. Without this, two writers (e.g. face-processor
-        // writer thread + scanner upserts during a re-index) surface
-        // SQLITE_BUSY to the user instead of retrying.
-        conn.pragma_update(None, "busy_timeout", 5000)?;
+        Ok(())
+    }
 
+    /// WAL for concurrent reads on local disks; the rollback journal on
+    /// network shares, where WAL's shared-memory index does not work.
+    /// The mode is stored in the file, so a library moved between a NAS
+    /// and a local disk switches on its next open.
+    fn set_journal_mode(conn: &Connection, network: bool) -> SqliteResult<()> {
+        if !network {
+            return conn.pragma_update(None, "journal_mode", "WAL");
+        }
+        // Leaving WAL reads the WAL index, which on a share may be
+        // unusable. EXCLUSIVE locking keeps that index in private memory
+        // instead; normal locking returns afterwards so background
+        // connections can share the file.
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        let switched = conn.query_row("PRAGMA journal_mode = DELETE", [], |row| {
+            row.get::<_, String>(0)
+        });
+        conn.pragma_update(None, "locking_mode", "NORMAL")?;
+        // The exclusive lock is released on the next access.
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |_| Ok(()))?;
+        match switched {
+            Ok(mode) if mode.eq_ignore_ascii_case("delete") => {}
+            // Still usable, just without the safer journal. Retried on the
+            // next open.
+            Ok(mode) => tracing::warn!("network library stays in {mode} journal mode"),
+            Err(e) => tracing::warn!("network library could not leave WAL mode: {e}"),
+        }
         Ok(())
     }
 

@@ -690,9 +690,12 @@ fn extract_asset_archive(archive_path: &Path, destination: &Path) -> Result<(), 
         if expanded_bytes > MAX_ASSET_PACK_EXPANDED_BYTES {
             return Err("Asset zip expands beyond the 2 GiB safety limit".to_string());
         }
-        let enclosed = file
-            .enclosed_name()
-            .ok_or_else(|| format!("Unsafe path in zip entry: {}", file.name()))?;
+        let enclosed = file.enclosed_name().ok_or_else(|| {
+            format!(
+                "Unsafe path in zip entry: {}",
+                String::from_utf8_lossy(file.name_raw())
+            )
+        })?;
 
         let out_path = destination.join(enclosed);
         if file.is_dir() {

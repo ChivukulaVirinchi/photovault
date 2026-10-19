@@ -492,9 +492,13 @@ fn inspect_archives(
             if entry.is_dir() {
                 continue;
             }
-            let enclosed = entry
-                .enclosed_name()
-                .ok_or_else(|| format!("Unsafe path in {}: {}", path.display(), entry.name()))?;
+            let enclosed = entry.enclosed_name().ok_or_else(|| {
+                format!(
+                    "Unsafe path in {}: {}",
+                    path.display(),
+                    String::from_utf8_lossy(entry.name_raw())
+                )
+            })?;
             let logical_path = normalize_zip_path(&enclosed);
             let Some(relative_google_path) = google_photos_relative(&logical_path) else {
                 continue;
