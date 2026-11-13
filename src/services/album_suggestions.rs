@@ -70,6 +70,28 @@ fn parse_date_prefix(date_str: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_str.get(..10)?, "%Y-%m-%d").ok()
 }
 
+/// People who matter to the user: ones they've named, or who turn up on at
+/// least three different days. Strangers in a crowd are neither, so they
+/// don't make a busy afternoon look like a gathering. A CTE named `known`.
+pub(crate) const KNOWN_PEOPLE_CTE: &str = "known AS MATERIALIZED (
+    SELECT f.cluster_id FROM faces f
+    JOIN photos p ON p.id = f.photo_id
+    JOIN face_clusters c ON c.id = f.cluster_id
+    WHERE p.is_trashed = FALSE AND f.user_confirmed >= 0
+    GROUP BY f.cluster_id
+    HAVING MAX(COALESCE(TRIM(c.name), '') != '') = 1
+        OR COUNT(DISTINCT substr(p.date_taken, 1, 10)) >= 3)";
+
+/// A suggestion overlapping one the user already decided on (or one still
+/// waiting) by at least this share of the smaller set is the same moment.
+const SAME_MOMENT_OVERLAP: f64 = 0.5;
+
+fn overlaps(a: &HashSet<i64>, b: &[i64]) -> bool {
+    let shared = b.iter().filter(|id| a.contains(id)).count();
+    let smaller = a.len().min(b.len()).max(1);
+    shared as f64 / smaller as f64 >= SAME_MOMENT_OVERLAP
+}
+
 /// Compute a stable fingerprint from a sorted set of photo IDs.
 /// Uses std DefaultHasher for speed (no crypto needed).
 pub fn compute_fingerprint(photo_ids: &[i64]) -> String {
@@ -132,6 +154,28 @@ pub fn pick_cover(conn: &Connection, photo_ids: &[i64]) -> Option<i64> {
 
 /// Determine the user's "home city" — the city with the most distinct photo-weeks.
 /// Returns (city, country, centroid_lat, centroid_lng) or None.
+/// The home city set in Settings, if any. The app sets it at start and
+/// whenever the setting changes, so every feature agrees on where home is.
+static HOME_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn set_home_override(city: Option<String>) {
+    *HOME_OVERRIDE.write().unwrap_or_else(|e| e.into_inner()) =
+        city.filter(|c| !c.trim().is_empty());
+}
+
+pub fn home_override() -> Option<String> {
+    HOME_OVERRIDE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Where home is: the city set in Settings, or else the one with the most
+/// weeks of photos. Trips, memories and titles all use this.
+pub fn home(conn: &Connection) -> Option<(String, String, f64, f64)> {
+    detect_home_city(conn, home_override().as_deref())
+}
+
 pub fn detect_home_city(
     conn: &Connection,
     override_city: Option<&str>,
@@ -489,13 +533,16 @@ fn curate_story_photos(conn: &Connection, photo_ids: &[i64]) -> Vec<i64> {
 pub fn detect_events(conn: &Connection, trip_photo_ids: &HashSet<i64>) -> Vec<DetectedSuggestion> {
     // Query all photos with date_taken, ordered chronologically
     let rows: Vec<(i64, String, Option<String>, Option<i64>)> = {
-        let mut stmt = match conn.prepare(
-            r#"SELECT p.id, p.date_taken, p.location_city,
-                      (SELECT f.cluster_id FROM faces f WHERE f.photo_id = p.id AND f.cluster_id IS NOT NULL LIMIT 1)
+        let mut stmt = match conn.prepare(&format!(
+            r#"WITH {KNOWN_PEOPLE_CTE}
+               SELECT p.id, p.date_taken, p.location_city,
+                      (SELECT f.cluster_id FROM faces f
+                       WHERE f.photo_id = p.id AND f.cluster_id IN (SELECT cluster_id FROM known)
+                       LIMIT 1)
                FROM photos p
                WHERE p.date_taken IS NOT NULL AND p.is_trashed = FALSE
                ORDER BY p.date_taken"#,
-        ) {
+        )) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
@@ -650,8 +697,9 @@ pub fn detect_gatherings(
 ) -> Vec<DetectedSuggestion> {
     // Pull every photo that has at least one face assigned to a cluster,
     // ordered by date. Group key is the day bucket (UTC date).
-    let mut stmt = match conn.prepare(
+    let mut stmt = match conn.prepare(&format!(
         r#"
+        WITH {KNOWN_PEOPLE_CTE}
         SELECT DISTINCT
             p.id,
             CAST(strftime('%s', p.date_taken) AS INTEGER) AS ts,
@@ -660,10 +708,10 @@ pub fn detect_gatherings(
         JOIN faces  f ON f.photo_id = p.id
         WHERE p.is_trashed = FALSE
           AND p.date_taken IS NOT NULL
-          AND f.cluster_id IS NOT NULL
+          AND f.cluster_id IN (SELECT cluster_id FROM known)
         ORDER BY p.date_taken
         "#,
-    ) {
+    )) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -819,6 +867,10 @@ pub fn detect_suggestions_with_diagnostics_cancel(
         .unwrap_or_default()
         .into_iter()
         .collect();
+    // Every earlier suggestion's photos, by kind: a changed version of a
+    // suggestion the user dismissed (one photo more or less) stays
+    // dismissed, and a waiting one isn't offered twice.
+    let earlier = repo.photo_sets_by_kind().unwrap_or_default();
 
     if diag.total_photos_with_date < 20 {
         tracing::info!(
@@ -983,7 +1035,10 @@ pub fn detect_suggestions_with_diagnostics_cancel(
         if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             break;
         }
-        if existing_fps.contains(&s.fingerprint) {
+        let same_moment = earlier
+            .iter()
+            .any(|(kind, set)| *kind == s.kind && overlaps(set, &s.photo_ids));
+        if existing_fps.contains(&s.fingerprint) || same_moment {
             diag.skipped_existing_fingerprint += 1;
             // Keep a still-pending suggestion's title current, e.g. after a
             // person is named.
@@ -1208,6 +1263,31 @@ mod tests {
 
         let (suggestions, _diag) = detect_suggestions_with_diagnostics_cancel(&conn, None, None);
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn a_changed_version_of_a_moment_counts_as_the_same_moment() {
+        let dismissed: HashSet<i64> = (1..=20).collect();
+        // One photo more, one photo less: still the trip the user said no to.
+        assert!(overlaps(&dismissed, &(1..=21).collect::<Vec<_>>()));
+        assert!(overlaps(&dismissed, &(2..=20).collect::<Vec<_>>()));
+        // A different weekend that shares a couple of photos is not.
+        assert!(!overlaps(&dismissed, &(19..=40).collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn dismissals_outlive_cleanup() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::create_schema(&conn).unwrap();
+        let repo = AlbumSuggestionRepo::new(&conn);
+        let dismissed = repo.insert("trip", "Goa", &[1, 2], None, "a").unwrap();
+        let accepted = repo.insert("trip", "Pune", &[3, 4], None, "b").unwrap();
+        repo.dismiss(dismissed).unwrap();
+        repo.accept(accepted).unwrap();
+        conn.execute("UPDATE album_suggestions SET created_at = '2000-01-01'", [])
+            .unwrap();
+        assert_eq!(repo.cleanup_old(180).unwrap(), 1);
+        assert_eq!(repo.get_all_fingerprints().unwrap(), vec!["a".to_string()]);
     }
 
     #[test]

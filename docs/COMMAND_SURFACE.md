@@ -443,6 +443,7 @@ The library is *closed* until `library.open` succeeds. Most other commands fail 
 | `library.current` | `{}` | `Option<LibraryHandleDto>` | what's currently open |
 | `library.network_drive_get` | `{}` | `Option<NetworkDriveDto>` | `{ detected: bool, forced: bool }` for the open library; `None` when closed |
 | `library.network_drive_set` | `{ forced: bool }` | `NetworkDriveDto` | writes or removes `.photovault/network-drive`; takes effect when the library reopens |
+| `library.ui_state` | `{ key: String, value?: Option<String> }` | `Option<String>` | a small remembered UI choice for the open library (e.g. a dismissed banner); `value` sets it, `null` forgets it |
 | `library.start_scan` | `{ scan_hidden_folders?: bool }` | `{ job_id: String }` | defaults to saved settings; reconciles moved/deleted/edited files first, then adds new ones; emits `scan:progress`, `scan:reconciled`, `scan:complete` |
 | `library.start_metadata_extraction` | `{}` | `{ job_id: String }` | resumes pending metadata extraction; emits `metadata:progress`, `metadata:complete` |
 | `library.start_thumbnail_pass` | `{}` | `{ job_id: String }` | resumes pending thumbnail generation; emits `thumbnails:progress`, `thumbnails:complete` |
@@ -502,8 +503,10 @@ ledger. Re-running the same archive set resumes idempotently.
 | `people.get` | `{ id: i64 }` | `PersonDto` | |
 | `people.photo_ids` | `{ id: i64 }` | `Vec<i64>` | bounded navigation set for person detail |
 | `people.rename` | `{ id: i64, name: Option<String> }` | `PersonDto` | None = clear name |
-| `people.merge` | `{ source_id: i64, target_id: i64 }` | `PersonDto` | returns merged cluster; `Conflict` if same id |
-| `people.delete` | `{ id: i64 }` | `()` | hides/removes a person cluster from user-facing lists |
+| `people.merge` | `{ source_id: i64, target_id: i64 }` | `{ person: PersonDto, undo: MergeUndoDto }` | returns merged cluster and what `unmerge` needs; `Conflict` if same id or marked different |
+| `people.unmerge` | `MergeUndoDto` | `()` | restores the source person and its faces; the pair is never merged again |
+| `people.memories_hidden` | `{ id: i64, hidden: Option<bool> }` | `bool` | whether the person is kept out of Memories and collage suggestions; `hidden` changes it first |
+| `people.delete` | `{ id: i64 }` | `()` | removes a person; their faces are set aside and never regrouped |
 | `people.start_processing` | `{ library_session_id?: u64 }` | `{ job_id: String }` | Requires face assets; optional session guard for deferred setup continuation; emits `faces:progress`, `faces:complete` |
 | `people.reset_all` | `{}` | `ResetFacesDto` | destructive reset of faces/clusters before a fresh processing run |
 | `people.reset_clusters` | `{}` | `ResetClustersDto` | drops clusters but keeps detected faces/embeddings |
@@ -515,6 +518,8 @@ ledger. Re-running the same archive set resumes idempotently.
 | `people.face_confirm` | `{ face_id: i64 }` | `()` | confirms current cluster assignment |
 | `people.face_confirm_to_cluster` | `{ face_id: i64, cluster_id: i64 }` | `()` | confirms a face into a specific cluster |
 | `people.face_reject` | `{ face_id: i64, cluster_id: i64 }` | `()` | records that this face does not belong in a cluster |
+| `people.face_ignore` | `{ face_id: i64 }` | `()` | "not a face": the detection leaves its person and is never grouped again |
+| `people.face_skip` | `{ face_id: i64 }` | `()` | "not sure" in review: the face stops coming up for review |
 | `people.face_reassign` | `{ face_id: i64, cluster_id: i64 }` | `()` | moves a face to another cluster |
 | `people.face_suggest_clusters` | `{ face_id: i64, limit: Option<u32> }` | `Vec<ClusterSuggestionDto>` | suggestions for reassign dialog |
 | `people.k_similar_to_cluster` | `{ cluster_id: i64, k: u32 }` | `Vec<FaceDetailDto>` | nearest face candidates for review |
@@ -703,6 +708,8 @@ use their poster thumbnail, so thumbnail generation must have run first.
 | `memories.surprise` | `{ album_id: Option<i64>, exclude_ids: Vec<i64> }` | `Vec<PhotoSummaryDto>` |
 | `memories.detail` | `{ memory_id: String }` | `{ card: MemoryCardDto, photos: Vec<PhotoSummaryDto> }` |
 | `memories.save_as_album` | `{ memory_id: String, name: Option<String> }` | `AlbumDto` |
+| `memories.hide` | `{ memory_id: String }` | `String` | hides the moment (a day, month, year, person or place story) for good; returns the key `unhide` takes |
+| `memories.unhide` | `{ hide_key: String }` | `()` | undoes `hide` |
 
 `memories.surprise` selects at most 36 photos from up to 12 days, with
 older days favored and up to three distinct photos per day. An album ID

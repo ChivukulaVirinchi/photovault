@@ -19,6 +19,7 @@
   import Check from "lucide-svelte/icons/check";
   import Play from "lucide-svelte/icons/play";
   import LayoutDashboard from "lucide-svelte/icons/layout-dashboard";
+  import EyeOff from "lucide-svelte/icons/eye-off";
   import { collage } from "../lib/stores/collage.svelte";
   import type { PhotoSummaryDto } from "../lib/api/types";
   import type { MemoryCard } from "../lib/api/all";
@@ -50,6 +51,20 @@
       p.id === photoId ? { ...p, thumbnail_path: thumbnailPath } : p
     ));
   }
+  async function hideMemory() {
+    if (actionBusy) return;
+    actionBusy = true;
+    try {
+      const key = await memories.hide(id);
+      window.location.hash = "#/memories";
+      toasts.undoable("Got it. You won't see this memory again", () => memories.unhide(key));
+    } catch (e) {
+      toasts.error(`Couldn't hide that memory: ${commandErrorMessage(e)}`);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
   async function bulkTrash() {
     if (actionBusy) return;
     const ids = selection.listIn(photos.map((p) => p.id));
@@ -66,7 +81,7 @@
       const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== loadSeq || memoryId !== id) return;
       if (result.count === 0) {
-        toasts.info("No selected photos needed trashing");
+        toasts.info("Those photos are already in Trash");
         return;
       }
       photoVisibility.markTrashed(ids);
@@ -223,6 +238,9 @@
       <span class="kind">{memoryKindLabel(c.kind)}</span>
     {/snippet}
     {#snippet actions()}
+      <button class="ghost icon-action" onclick={hideMemory} disabled={actionBusy} title="Hide this memory" aria-label="Hide this memory">
+        <EyeOff size={15} strokeWidth={2} />
+      </button>
       <button class="ghost icon-action" onclick={startMemorySlideshow} disabled={photos.length === 0} title="Start slideshow" aria-label="Start memory slideshow">
         <Play size={15} strokeWidth={2} />
       </button>

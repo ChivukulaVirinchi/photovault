@@ -9,6 +9,7 @@
   import Check from "lucide-svelte/icons/check";
   import X from "lucide-svelte/icons/x";
   import SkipForward from "lucide-svelte/icons/skip-forward";
+  import EyeOff from "lucide-svelte/icons/eye-off";
 
   let stats = $state<ReviewFaceCountDto | null>(null);
   let faces = $state<FaceDetailDto[]>([]);
@@ -58,7 +59,7 @@
     }
   }
 
-  async function answer(kind: "confirm" | "reject" | "skip") {
+  async function answer(kind: "confirm" | "reject" | "skip" | "ignore") {
     if (!current || busy) return;
     busy = true;
     const item = current;
@@ -71,7 +72,12 @@
         await people.faceReject(item.face_id);
         if (!mounted) return;
         rejected += 1;
+      } else if (kind === "ignore") {
+        await people.faceIgnore(item.face_id);
+        if (!mounted) return;
+        rejected += 1;
       } else {
+        await people.faceSkip(item.face_id);
         if (!mounted) return;
         skippedFaceIds.add(item.face_id);
         skipped += 1;
@@ -107,6 +113,9 @@
     } else if (e.key === "s" || e.key === "S") {
       e.preventDefault();
       answer("skip");
+    } else if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      answer("ignore");
     } else if (e.key === "Escape" || e.key === "q" || e.key === "Q") {
       e.preventDefault();
       window.location.hash = "/people";
@@ -130,13 +139,13 @@
   {/snippet}
   {#snippet subtitle()}
     <span class="hint">
-      Confirm or reject unconfirmed faces within each person cluster.
-      Y = confirm, N = reject, S = skip, Esc = close.
+      Is this the same person?
+      Y = yes, N = no, F = not a face, S = not sure, Esc = close.
     </span>
   {/snippet}
   {#snippet actions()}
     <span class="counts mono">
-      {confirmed} confirmed · {rejected} rejected · {skipped} skipped
+      {confirmed} yes · {rejected} no · {skipped} skipped
     </span>
   {/snippet}
 </DetailHeader>
@@ -147,9 +156,9 @@
   {#if !current && faces.length === 0}
     <div class="empty">
       {#if (stats?.unconfirmed_total ?? 0) > 0 && skippedFaceIds.size > 0}
-        <p class="done">All caught up for this session — skipped faces will stay available for a later pass.</p>
+        <p class="done">All done. Faces you skipped won't come back.</p>
       {:else}
-        <p class="done">All caught up — no unconfirmed faces left to review.</p>
+        <p class="done">All done. Nothing left to check.</p>
       {/if}
     </div>
   {:else if !current}
@@ -167,7 +176,7 @@
       <div class="cluster-info">
         <span class="cluster-name">{c.cluster_name ?? "Unnamed"}</span>
         <span class="confidence mono">
-          {(c.confidence * 100).toFixed(0)}% confidence
+          Looks like them · {(c.confidence * 100).toFixed(0)}%
         </span>
       </div>
     </div>
@@ -184,12 +193,21 @@
       </button>
       <button
         class="action skip"
+        onclick={() => answer("ignore")}
+        disabled={busy}
+        title="Not a face (F)"
+      >
+        <EyeOff size={16} strokeWidth={2} />
+        <span>Not a face</span>
+      </button>
+      <button
+        class="action skip"
         onclick={() => answer("skip")}
         disabled={busy}
-        title="Skip (S)"
+        title="Not sure (S)"
       >
         <SkipForward size={16} strokeWidth={2} />
-        <span>Skip</span>
+        <span>Not sure</span>
       </button>
       <button
         class="action yes"

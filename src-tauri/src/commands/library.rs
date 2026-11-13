@@ -2196,3 +2196,72 @@ mod tests {
         );
     }
 }
+
+/// Keys the UI may keep per library: small remembered choices such as a
+/// dismissed banner. Namespaced so the UI can't touch engine state.
+fn ui_state_key(key: &str) -> CommandResult<String> {
+    if key.is_empty()
+        || key.len() > 64
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+    {
+        return Err(CommandError::Validation {
+            field: "key".into(),
+            reason: "must be 1-64 letters, digits, dots or underscores".into(),
+        });
+    }
+    Ok(format!("ui.{key}"))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibraryUiStateArgs {
+    pub key: String,
+    /// Absent: just read. `null`: forget. A string: remember it.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub value: Option<Option<String>>,
+}
+
+fn deserialize_some<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Read, and optionally change, a small remembered UI choice for the open
+/// library, e.g. a banner the user dismissed.
+#[tauri::command]
+pub async fn library_ui_state(
+    state: State<'_, AppState>,
+    args: LibraryUiStateArgs,
+) -> CommandResult<Option<String>> {
+    let key = ui_state_key(&args.key)?;
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    match args.value {
+        Some(Some(value)) => {
+            db.conn.execute(
+                "INSERT INTO library_meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![key, value],
+            )?;
+        }
+        Some(None) => {
+            db.conn
+                .execute("DELETE FROM library_meta WHERE key = ?1", [&key])?;
+        }
+        None => {}
+    }
+    use rusqlite::OptionalExtension;
+    Ok(db
+        .conn
+        .query_row(
+            "SELECT value FROM library_meta WHERE key = ?1",
+            [&key],
+            |row| row.get(0),
+        )
+        .optional()?)
+}

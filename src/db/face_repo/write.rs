@@ -1,8 +1,8 @@
 //! Write/mutation methods for FaceRepo.
 
-use rusqlite::{params, Result as SqliteResult};
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
-use super::FaceRepo;
+use super::{FaceRepo, MergeReceipt};
 
 impl<'a> FaceRepo<'a> {
     /// Name a cluster (set the person's name)
@@ -16,14 +16,14 @@ impl<'a> FaceRepo<'a> {
 
     /// Delete a face cluster — "this isn't a real person" gesture.
     ///
-    /// Faces previously assigned to this cluster have their `cluster_id`
-    /// set to NULL so a future re-clustering pass can pick them up
-    /// again. Inferred-identity links and gallery embeddings rooted at
-    /// the cluster cascade away (FK ON DELETE CASCADE in the schema).
+    /// Its faces are set aside (`user_confirmed = -1`), so the next
+    /// clustering pass doesn't quietly rebuild the same person.
+    /// Inferred-identity links and gallery embeddings rooted at the
+    /// cluster cascade away (FK ON DELETE CASCADE in the schema).
     pub fn delete_cluster(&self, cluster_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "UPDATE faces SET cluster_id = NULL WHERE cluster_id = ?1",
+            "UPDATE faces SET cluster_id = NULL, user_confirmed = -1 WHERE cluster_id = ?1",
             params![cluster_id],
         )?;
         tx.execute(
@@ -39,6 +39,44 @@ impl<'a> FaceRepo<'a> {
             params![cluster_id],
         )?;
         tx.commit()
+    }
+
+    /// "Not a face": set a detection aside for good. It leaves its person
+    /// and clustering never picks it up again (`user_confirmed = -1`).
+    pub fn ignore_face(&self, face_id: i64) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let cluster_id: Option<i64> = tx
+            .query_row(
+                "SELECT cluster_id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        tx.execute(
+            "UPDATE faces SET cluster_id = NULL, user_confirmed = -1 WHERE id = ?1",
+            params![face_id],
+        )?;
+        tx.execute(
+            "DELETE FROM face_review_queue WHERE face_id = ?1",
+            params![face_id],
+        )?;
+        if let Some(cluster_id) = cluster_id {
+            Self::refresh_cluster_stats_tx(&tx, cluster_id)?;
+            Self::refresh_gallery_tx(&tx, cluster_id)?;
+        }
+        tx.commit()
+    }
+
+    /// Take a face out of review without deciding about it ("not sure").
+    /// It keeps its person; review just stops asking.
+    pub fn skip_review_face(&self, face_id: i64) -> SqliteResult<()> {
+        self.conn.execute(
+            r#"INSERT INTO library_meta (key, value) VALUES ('people.review_skipped', json_array(?1))
+               ON CONFLICT(key) DO UPDATE SET value = json_insert(value, '$[#]', ?1)"#,
+            params![face_id],
+        )?;
+        Ok(())
     }
 
     /// Assign an existing face to an existing cluster and update cluster metadata.
@@ -90,7 +128,11 @@ impl<'a> FaceRepo<'a> {
     ///
     /// Moves all faces from source to target, updates counts, deletes source.
     /// Refuses if a cannot-merge constraint exists between the two clusters.
-    pub fn merge_clusters(&self, source_id: i64, target_id: i64) -> SqliteResult<()> {
+    pub fn merge_clusters(
+        &self,
+        source_id: i64,
+        target_id: i64,
+    ) -> SqliteResult<Option<MergeReceipt>> {
         let blocked: i64 = self.conn.query_row(
             r#"
             SELECT COUNT(*) FROM cluster_cannot_merge
@@ -106,10 +148,21 @@ impl<'a> FaceRepo<'a> {
                 source_id,
                 target_id
             );
-            return Ok(());
+            return Ok(None);
         }
 
         let tx = self.conn.unchecked_transaction()?;
+        let (source_name, source_user_named): (Option<String>, bool) = tx.query_row(
+            "SELECT name, COALESCE(is_user_named, 0) FROM face_clusters WHERE id = ?1",
+            params![source_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let face_ids: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM faces WHERE cluster_id = ?1")?;
+            let rows = stmt.query_map(params![source_id], |row| row.get(0))?;
+            rows.collect::<SqliteResult<_>>()?
+        };
+        let mut target_took_name = false;
 
         // Preserve names: if the target is unnamed but the source has a name,
         // carry the name over so we never lose a user-assigned label.
@@ -135,6 +188,7 @@ impl<'a> FaceRepo<'a> {
                     "UPDATE face_clusters SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
                     params![name, target_id],
                 )?;
+                target_took_name = true;
             }
         }
 
@@ -164,6 +218,55 @@ impl<'a> FaceRepo<'a> {
             params![source_id],
         )?;
 
+        tx.commit()?;
+        Ok(Some(MergeReceipt {
+            source_id,
+            target_id,
+            source_name,
+            source_user_named,
+            face_ids,
+            target_took_name,
+        }))
+    }
+
+    /// Undo a merge: bring the source person back with their faces and
+    /// remember the two are different people, so clustering never merges
+    /// them again. Inferred photo links are rebuilt by the next face pass.
+    pub fn unmerge_clusters(&self, receipt: &MergeReceipt) -> SqliteResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO face_clusters (id, name, is_user_named) VALUES (?1, ?2, ?3)",
+            params![
+                receipt.source_id,
+                receipt.source_name,
+                receipt.source_user_named
+            ],
+        )?;
+        {
+            let mut stmt =
+                tx.prepare("UPDATE faces SET cluster_id = ?1 WHERE id = ?2 AND cluster_id = ?3")?;
+            for face_id in &receipt.face_ids {
+                stmt.execute(params![receipt.source_id, face_id, receipt.target_id])?;
+            }
+        }
+        if receipt.target_took_name {
+            tx.execute(
+                "UPDATE face_clusters SET name = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                params![receipt.target_id],
+            )?;
+        }
+        let (a, b) = (
+            receipt.source_id.min(receipt.target_id),
+            receipt.source_id.max(receipt.target_id),
+        );
+        tx.execute(
+            "INSERT OR IGNORE INTO cluster_cannot_merge (cluster_a_id, cluster_b_id) VALUES (?1, ?2)",
+            params![a, b],
+        )?;
+        for cluster_id in [receipt.source_id, receipt.target_id] {
+            Self::refresh_cluster_stats_tx(&tx, cluster_id)?;
+            Self::refresh_gallery_tx(&tx, cluster_id)?;
+        }
         tx.commit()
     }
 

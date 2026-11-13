@@ -6,6 +6,8 @@ import { toasts } from "./toast.svelte";
 import { jobs } from "./jobs.svelte";
 import { dataRevision } from "./dataRevision.svelte";
 import { events, type ScanReconciled } from "../api/events";
+
+const KEPT_MISSING_KEY = "missing.kept_count";
 import type {
   CommandError,
   DriveDto,
@@ -208,8 +210,25 @@ class LibraryStore {
   /// Changes from disk are applied silently; screens just refresh. Only a
   /// mass disappearance (held back for safety) surfaces, as a banner.
   private applyReconcile(r: ScanReconciled) {
-    this.missingHeldBack = r.held_back_removals;
     if (r.removed || r.moved || r.modified) dataRevision.bump();
+    const held = r.held_back_removals;
+    if (held === 0) {
+      this.missingHeldBack = 0;
+      return;
+    }
+    // Once the user chose to keep them, the same missing photos don't ask
+    // again; a different number of them does.
+    const seq = this.seq;
+    void library.uiState(KEPT_MISSING_KEY).catch(() => null).then((kept) => {
+      if (seq === this.seq) this.missingHeldBack = kept === String(held) ? 0 : held;
+    });
+  }
+
+  /// "Keep for now": remembered for this library until more go missing.
+  keepMissing() {
+    const held = this.missingHeldBack;
+    this.missingHeldBack = 0;
+    void library.uiState(KEPT_MISSING_KEY, String(held)).catch(() => {});
   }
 
   /// Confirm the removals a scan held back.

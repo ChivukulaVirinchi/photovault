@@ -1083,7 +1083,7 @@
       const result = await trash.trashPhotos(ids, session);
       if (!mounted) return;
       if (result.count === 0) {
-        toasts.info("No selected photos needed trashing");
+        toasts.info("Those photos are already in Trash");
         return;
       }
       const trashedIds = ids;
@@ -1307,7 +1307,7 @@
 
       const idx = items.findIndex((p) => p.id === photoId);
       if (idx < 0) {
-        toasts.error("That photo is not in the loaded timeline.");
+        toasts.error("Couldn't find that photo. It may have been moved or deleted.");
         return;
       }
       focusedIdx = idx;
@@ -1517,7 +1517,7 @@
           or drive is disconnected, reconnect it and check again. Otherwise they can go to Trash.
         </span>
         <button class="primary" onclick={() => libraryStore.trashMissing()}>Move to Trash</button>
-        <button class="dismiss-banner" onclick={() => (libraryStore.missingHeldBack = 0)} aria-label="Keep missing photos for now" title="Keep for now">
+        <button class="dismiss-banner" onclick={() => libraryStore.keepMissing()} aria-label="Keep missing photos for now" title="Keep for now">
           <X size={14} strokeWidth={2} />
         </button>
       </div>
@@ -1532,7 +1532,7 @@
         <h2>Looking for photos…</h2>
         <p class="muted">
           {#if scanJob && scanJob.processed > 0}
-            Found {scanJob.processed.toLocaleString()} so far. They appear here as they're indexed.
+            Found {scanJob.processed.toLocaleString()} so far. They'll show up here as they're added.
           {:else}
             Smriti is reading {libraryStore.driveRoot ?? "this folder"}. Your files stay exactly where they are.
           {/if}

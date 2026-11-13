@@ -224,7 +224,7 @@
 <div class="page" bind:this={pageEl} onscroll={saveScroll}>
   {#if groups.length === 0}
     <div class="empty">
-      <p>No duplicates yet. Press scan — it takes a moment for big libraries.</p>
+      <p>No duplicates found yet. Checking a big library takes a few minutes.</p>
       <button class="primary" onclick={run} disabled={running}>
         {running ? "Scanning…" : "Scan"}
       </button>

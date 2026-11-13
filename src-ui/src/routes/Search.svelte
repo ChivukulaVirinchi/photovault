@@ -327,7 +327,7 @@
       const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== runSeq || query !== q.trim() || !results) return;
       if (result.count === 0) {
-        toasts.info("No selected photos needed trashing");
+        toasts.info("Those photos are already in Trash");
         return;
       }
       photoVisibility.markTrashed(ids);
@@ -586,7 +586,7 @@
           {#if pagingError}
             <button class="ghost" onclick={() => run()}>Retry search</button>
           {:else if results.photos.length >= MAX_SEARCH_RESULTS}
-            <span class="muted small">20,000-result limit reached</span>
+            <span class="muted small">Showing the first 20,000. Try a narrower search.</span>
           {:else if results.has_more}
             <span class="muted small">{loadingMore ? "Loading…" : "Continuing automatically…"}</span>
           {/if}
@@ -627,12 +627,12 @@
     {/if}
     {#if results.people.length === 0 && results.albums.length === 0 && results.places.length === 0 && results.photos.length === 0}
       <div class="empty">
-        <p>Nothing matches that yet.</p>
+        <p>No matches. Try other words, a name or a place.</p>
       </div>
     {/if}
   {:else if !loading}
     <div class="empty">
-      <p>Search your library.</p>
+      <p>Try a person, a place, a year, or anything you remember about the photo.</p>
     </div>
   {/if}
 </div>

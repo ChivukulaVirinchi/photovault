@@ -221,7 +221,7 @@
     </span>
   {/if}
   <button class="primary" onclick={run} disabled={running}>
-    {running ? "Detecting…" : "Detect bursts"}
+    {running ? "Looking…" : "Find bursts"}
   </button>
 </PageHeader>
 
@@ -232,7 +232,7 @@
     <div class="empty">
       <p>No burst groups yet. Run detection — it'll look for shots taken in quick succession.</p>
       <button class="primary" onclick={run} disabled={running}>
-        {running ? "Detecting…" : "Detect bursts"}
+        {running ? "Looking…" : "Find bursts"}
       </button>
     </div>
   {:else}

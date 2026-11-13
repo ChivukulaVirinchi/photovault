@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { people } from "../api/all";
   import { commandErrorMessage } from "../api";
+  import { toasts } from "../stores/toast.svelte";
   import type { PersonDto } from "../api/types";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";
@@ -49,10 +50,10 @@
     if (busy) return;
     const sourceLabel = source.name ?? `Person ${source.id}`;
     const targetLabel = target.name ?? `Person ${target.id}`;
-    if (!confirm(`Merge ${sourceLabel} into ${targetLabel}? This can't be undone.`)) return;
     busy = true;
     try {
-      const merged = await people.merge(source.id, target.id);
+      const { person: merged, undo } = await people.merge(source.id, target.id);
+      toasts.undoable(`Merged ${sourceLabel} into ${targetLabel}`, async () => { await people.unmerge(undo); });
       if (!mounted) return;
       onsuccess?.(merged);
       onclose();

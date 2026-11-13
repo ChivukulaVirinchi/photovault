@@ -107,7 +107,7 @@
       const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== loadSeq || albumId !== id) return;
       if (result.count === 0) {
-        toasts.info("No selected photos needed trashing");
+        toasts.info("Those photos are already in Trash");
         return;
       }
       photoVisibility.markTrashed(ids);

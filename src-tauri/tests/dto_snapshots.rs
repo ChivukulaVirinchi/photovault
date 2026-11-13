@@ -486,6 +486,7 @@ fn memory_card_dto() {
         hero_thumbnail_path: Some(".photovault/thumbnails/memory.jpg".into()),
         photo_count: 3,
         photo_ids: vec![7, 8, 9],
+        hide_key: "day:2020-01-01".into(),
     };
     let dto: MemoryCardDto = card.into();
     assert_json_snapshot!(dto);

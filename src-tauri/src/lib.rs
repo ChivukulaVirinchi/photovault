@@ -20,6 +20,9 @@ pub use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    smriti::services::album_suggestions::set_home_override(
+        smriti::config::AppConfig::load().home_city_override,
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {
             // Existing instance: focus the main window. Tauri's plugin
@@ -45,6 +48,7 @@ pub fn run() {
             commands::library::library_close,
             commands::library::library_network_drive_get,
             commands::library::library_network_drive_set,
+            commands::library::library_ui_state,
             commands::library::library_compat_photos_list,
             commands::library::library_apply_changes,
             commands::library::library_start_scan,
@@ -80,6 +84,10 @@ pub fn run() {
             commands::people::people_photo_ids,
             commands::people::people_rename,
             commands::people::people_merge,
+            commands::people::people_unmerge,
+            commands::people::people_face_ignore,
+            commands::people::people_face_skip,
+            commands::people::people_memories_hidden,
             commands::people::people_delete,
             commands::people::people_start_processing,
             commands::people::people_reset_all,
@@ -129,6 +137,8 @@ pub fn run() {
             commands::memories::memories_surprise,
             commands::memories::memories_detail,
             commands::memories::memories_save_as_album,
+            commands::memories::memories_hide,
+            commands::memories::memories_unhide,
             // duplicates
             commands::duplicates::duplicates_list,
             commands::duplicates::duplicates_get_group,

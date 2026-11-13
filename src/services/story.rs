@@ -59,7 +59,7 @@ pub struct Facts {
 
 impl Facts {
     pub fn gather(conn: &Connection, ids: &[i64]) -> Facts {
-        let home = crate::services::album_suggestions::detect_home_city(conn, None)
+        let home = crate::services::album_suggestions::home(conn)
             .map(|(city, country, _, _)| (city, country));
         Self::gather_with_home(conn, ids, home)
     }
@@ -119,14 +119,18 @@ impl Facts {
                     }
                 }
             }
-            // People hidden from memories never appear in a title.
+            // People hidden from memories never appear in a title, and
+            // strangers in the background don't count as company.
             let sql = format!(
-                "SELECT fc.name, COUNT(DISTINCT f.photo_id)
+                "WITH {known}
+                 SELECT fc.name, COUNT(DISTINCT f.photo_id)
                  FROM faces f JOIN face_clusters fc ON fc.id = f.cluster_id
                  WHERE f.photo_id IN ({marks})
+                   AND fc.id IN (SELECT cluster_id FROM known)
                    AND NOT EXISTS (SELECT 1 FROM memory_blocks mb
                                    WHERE mb.kind = 'person' AND mb.target_key = CAST(fc.id AS TEXT))
-                 GROUP BY fc.id"
+                 GROUP BY fc.id",
+                known = crate::services::album_suggestions::KNOWN_PEOPLE_CTE,
             );
             if let Ok(mut stmt) = conn.prepare(&sql) {
                 let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {

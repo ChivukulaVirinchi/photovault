@@ -25,6 +25,7 @@
   import { thumbUrl } from "../lib/thumbnail";
   import { thumbnailOnVisible } from "../lib/thumbnailRequest";
   import PageHeader from "../lib/components/PageHeader.svelte";
+  import X from "lucide-svelte/icons/x";
   import type { CollageSuggestion, MemoryCard } from "../lib/api/all";
   import type { ShapeId } from "../lib/collage";
 
@@ -93,6 +94,24 @@
       saveMemoriesCache();
     } catch {
       // Suggestions are a nicety; leave whatever was there.
+    }
+  }
+
+  async function hideMemory(card: MemoryCard) {
+    const before = cards;
+    cards = cards.filter((c) => c.id !== card.id);
+    saveMemoriesCache();
+    try {
+      const key = await memories.hide(card.id);
+      toasts.undoable("Got it. You won't see this memory again", async () => {
+        await memories.unhide(key);
+        await load();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      cards = before;
+      saveMemoriesCache();
+      toasts.error(`Couldn't hide that memory: ${commandErrorMessage(e)}`);
     }
   }
 
@@ -179,12 +198,13 @@
   {:else if cards.length === 0}
     <div class="empty">
       <p>
-        Nothing today. Memories surface once your library has roughly three months of photos to look back on.
+        Nothing today. Memories appear once you have a few months of photos to look back on.
       </p>
     </div>
   {:else}
     <div class="cards">
       {#each cards as c (c.id)}
+        <div class="card-wrap">
         <a
           class="card"
           href="#/memory?id={c.id}"
@@ -205,6 +225,10 @@
             </div>
           </div>
         </a>
+        <button class="hide" onclick={() => hideMemory(c)} title="Hide this memory" aria-label="Hide this memory">
+          <X size={14} strokeWidth={2} />
+        </button>
+        </div>
       {/each}
     </div>
   {/if}
@@ -239,7 +263,26 @@
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--s-4);
   }
+  .card-wrap { position: relative; }
+  .hide {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 0;
+    background: rgb(15 16 21 / 62%);
+    color: #e7eaf0;
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .card-wrap:hover .hide, .hide:focus-visible { opacity: 1; }
   .card {
+    display: block;
     aspect-ratio: 3 / 4;
     background: var(--bg-card);
     border-radius: var(--r-md);
@@ -290,7 +333,7 @@
     font-family: var(--font-display);
     font-size: var(--t-2xl);
     font-weight: 500;
-    color: #fff;
+    color: #e7eaf0;
     line-height: 1.1;
     font-variation-settings: "opsz" 60;
     margin: 0;

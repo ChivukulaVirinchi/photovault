@@ -313,7 +313,7 @@
 <PageHeader title="Albums">
   <span class="count mono">{list.length.toLocaleString()}{" "}<span class="muted">{list.length === 1 ? "album" : "albums"}</span></span>
   <button class="ghost" onclick={runDetection} disabled={detecting || detectBusy}>
-    {detecting || detectBusy ? "Detecting…" : "Detect"}
+    {detecting || detectBusy ? "Looking…" : "Find ideas"}
   </button>
   {#if creating}
     <!-- svelte-ignore a11y_autofocus -->
@@ -332,7 +332,7 @@
     <section class="suggestions">
       <div class="section-head">
         <h3 class="section-title">Suggestions</h3>
-        <span class="hint">Patterns we noticed — accept to save, dismiss to ignore.</span>
+        <span class="hint">Ideas from your photos. Keep the ones you like.</span>
       </div>
       <div class="suggest-grid">
         {#each suggestions as s (s.id)}
@@ -365,11 +365,11 @@
 
   {#if list.length === 0 && suggestions.length === 0}
     <div class="empty">
-      <p>Make one, or run detection to find what already groups itself.</p>
+      <p>Make one, or let Smriti find your trips and get-togethers.</p>
       <div class="row">
         <button class="primary" onclick={() => (creating = true)}>New album</button>
         <button class="ghost" onclick={runDetection} disabled={detecting || detectBusy}>
-    {detecting || detectBusy ? "Detecting…" : "Detect"}
+    {detecting || detectBusy ? "Looking…" : "Find ideas"}
   </button>
       </div>
     </div>

@@ -190,6 +190,49 @@ pub async fn memories_save_as_album(
 /// Collects (card_index, file_path, file_hash, orientation) for every
 /// card whose hero photo exists. Feeds `upgrade_covers_to_medium` so
 /// the medium thumbnail generation runs outside the DB lock.
+#[derive(Debug, Deserialize)]
+pub struct MemoriesHideArgs {
+    pub memory_id: String,
+}
+
+/// Hide one of today's memories for good. Returns the key that
+/// [`memories_unhide`] takes to undo it.
+#[tauri::command]
+pub async fn memories_hide(
+    state: State<'_, AppState>,
+    args: MemoriesHideArgs,
+) -> CommandResult<String> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    let today = Local::now().date_naive();
+    let cards = smriti::services::memories::generate_for_today_cached(&db.conn, today)
+        .map_err(|s| CommandError::internal(format!("memories: {s}")))?;
+    let card = cards
+        .into_iter()
+        .find(|c| c.id == args.memory_id)
+        .ok_or_else(|| CommandError::not_found("memory", args.memory_id.clone()))?;
+    smriti::services::memories::hide(&db.conn, &card.hide_key)?;
+    Ok(card.hide_key)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemoriesUnhideArgs {
+    pub hide_key: String,
+}
+
+#[tauri::command]
+pub async fn memories_unhide(
+    state: State<'_, AppState>,
+    args: MemoriesUnhideArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    smriti::services::memories::unhide(&db.conn, &args.hide_key)?;
+    Ok(())
+}
+
 fn collect_hero_inputs(
     conn: &rusqlite::Connection,
     cards: &[MemoryCardDto],

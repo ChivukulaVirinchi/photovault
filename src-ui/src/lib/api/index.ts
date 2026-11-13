@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandError } from "./types";
+import { devMode } from "../stores/devMode.svelte";
+
+/// What failed, in words: the engine's own message is for developers.
+const PLAIN_FAILURE: Record<string, string> = {
+  database: "Smriti couldn't read or save that in the library.",
+  io: "Smriti couldn't reach that file or folder. Is the drive still connected?",
+  network: "Smriti couldn't reach the internet.",
+  internal: "Something went wrong.",
+};
 
 /// Generic typed wrapper around Tauri's `invoke`.
 ///
@@ -24,7 +33,7 @@ export function commandErrorMessage(error: unknown): string {
   const e = error as Partial<CommandError>;
   switch (e.kind) {
     case "not_found":
-      return `${e.entity ?? "item"} not found`;
+      return `That ${(e.entity ?? "item").replace(/_/g, " ")} is no longer here.`;
     case "validation":
       return e.reason ?? "Invalid input";
     case "library_closed":
@@ -37,12 +46,14 @@ export function commandErrorMessage(error: unknown): string {
     case "cancelled":
       return "Operation cancelled.";
     case "schema_too_new":
-      return `This library uses a newer Smriti schema (v${e.db_version ?? "?"}). Update Smriti from Settings, then open it again.`;
+      return "This library was made with a newer version of Smriti. Update Smriti from Settings, then open it again.";
     case "database":
     case "io":
     case "network":
-    case "internal":
-      return e.message ?? "Something went wrong.";
+    case "internal": {
+      const plain = PLAIN_FAILURE[e.kind];
+      return devMode.enabled && e.message ? `${plain} (${e.message})` : plain;
+    }
     default:
       if (typeof (error as { message?: unknown }).message === "string") {
         return (error as { message: string }).message;

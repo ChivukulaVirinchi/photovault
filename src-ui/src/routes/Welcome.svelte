@@ -42,7 +42,7 @@
     } catch {
       if (!mounted) return;
       pickError =
-        "Couldn't open the folder picker. Run this in the Tauri window, not a browser tab.";
+        "Couldn't open the folder picker. Please use the Smriti app, not a web browser.";
     }
   }
 
@@ -184,7 +184,7 @@
     {#if schemaTooNew}
       <div class="schema-error">
         <p class="error">
-          This library uses schema v{schemaTooNew.db_version}; this Smriti build supports v{schemaTooNew.max_supported}.
+          This library was made with a newer version of Smriti. Update Smriti to open it.
         </p>
         {#if libraryStore.driveRoot}
           <p class="schema-note mono">{libraryStore.driveRoot}</p>

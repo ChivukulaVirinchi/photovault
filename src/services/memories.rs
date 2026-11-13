@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::services::collage_picks::{self, NOT_SCREENSHOT};
 use crate::services::story;
 use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::{params, Connection, Result as SqliteResult};
@@ -22,14 +23,14 @@ pub fn surprise_photos(
 ) -> SqliteResult<Vec<i64>> {
     let excluded = serde_json::to_string(&exclude_ids.iter().rev().take(256).collect::<Vec<_>>())
         .expect("integer IDs serialize");
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "WITH eligible AS MATERIALIZED (
           SELECT p.id, p.file_hash, p.phash, p.is_favorite,
                  COALESCE(p.width * p.height, 0) AS area,
                  COALESCE(substr(p.date_taken, 1, 10), 'undated:' || p.id) AS day
           FROM photos p
           WHERE p.is_trashed = FALSE AND p.media_type = 'photo'
-            AND lower(p.file_name) NOT LIKE 'screenshot%'
+            AND {NOT_SCREENSHOT}
             AND (p.date_taken IS NULL OR substr(p.date_taken, 1, 10) <= date('now'))
             AND (?1 IS NULL OR (?1 = -1 AND p.is_favorite = TRUE)
                  OR EXISTS (SELECT 1 FROM album_photos ap WHERE ap.album_id = ?1 AND ap.photo_id = p.id))
@@ -37,7 +38,7 @@ pub fn surprise_photos(
             AND NOT EXISTS (
               SELECT 1 FROM faces f JOIN memory_blocks mb
               ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
-              WHERE f.photo_id = p.id)
+              WHERE f.photo_id = p.id AND f.user_confirmed >= 0)
         ), days AS MATERIALIZED (
           SELECT day, ((random() & 2147483647) + 1) /
             CASE WHEN day < date('now', '-1 year') THEN 4 ELSE 1 END AS ticket
@@ -50,7 +51,7 @@ pub fn surprise_photos(
         SELECT id, file_hash, phash, day,
           (SELECT group_id FROM duplicate_group_members WHERE photo_id = ranked.id LIMIT 1)
         FROM ranked WHERE rank <= 8 ORDER BY ticket, day, rank"
-    )?;
+    ))?;
     let mut rows = stmt.query(params![album_id, excluded])?;
     let mut ids = Vec::new();
     let mut hashes = HashSet::new();
@@ -115,6 +116,12 @@ pub struct Memory {
     pub score: f32,
     pub year: i32,
     pub has_faces: bool,
+    /// Favourites among the photos shown.
+    pub favorites: usize,
+    /// Someone the user has named appears in it.
+    pub named_person: bool,
+    /// What hiding this memory blocks; see [`hide_key`].
+    pub hide_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -127,11 +134,13 @@ pub struct MemoryCard {
     pub hero_thumbnail_path: Option<String>,
     pub photo_count: usize,
     pub photo_ids: Vec<i64>,
+    pub hide_key: String,
 }
 
 impl From<Memory> for MemoryCard {
     fn from(m: Memory) -> Self {
         Self {
+            hide_key: m.hide_key,
             id: m.id,
             kind: m.kind,
             title: m.title,
@@ -161,7 +170,14 @@ const SEASONAL_MIN_PHOTOS: i64 = 5;
 
 /// Cap on photos per YearRecap card.
 const YEAR_RECAP_MAX_PHOTOS: usize = 50;
+/// Photos each generator considers per memory.
 const MAX_MEMORY_PHOTOS: usize = 500;
+/// Photos a memory shows: the best of each stretch of its time span. A
+/// memory is a look back, not the whole camera roll of that day.
+const MAX_SHOWN_PHOTOS: usize = 60;
+/// Memories of one kind the user has hidden before that kind is shown less.
+const HIDDEN_BEFORE_LESS: usize = 3;
+const HIDE_BLOCK_KIND: &str = "memory";
 
 /// Top entry point: full pipeline. Runs the generators, scores, filters
 /// blocks, picks heroes, returns cards.
@@ -209,22 +225,26 @@ pub fn generate_for_today(conn: &Connection, today: NaiveDate) -> Result<Vec<Mem
         return Ok(Vec::new());
     }
 
-    populate_hero_and_faces(conn, &mut all).map_err(|e| format!("Hero selection failed: {}", e))?;
-    rank(&mut all, current_year);
-
     let blocks = load_person_blocks(conn).map_err(|e| format!("Block load failed: {}", e))?;
     if !blocks.is_empty() {
         filter_blocked(conn, &mut all, &blocks)
             .map_err(|e| format!("Block filter failed: {}", e))?;
     }
 
+    let scores = curate_photos(conn, &mut all).map_err(|e| format!("Curation failed: {e}"))?;
+    populate_hero_and_faces(conn, &mut all, &scores)
+        .map_err(|e| format!("Hero selection failed: {}", e))?;
+    let hidden = load_hidden(conn).map_err(|e| format!("Hidden load failed: {e}"))?;
+    all.retain(|m| !hidden.contains(&m.hide_key));
+    rank(&mut all, current_year, &hidden);
+
     if all.len() > MAX_CARDS {
         all.truncate(MAX_CARDS);
     }
 
     // Titles last, so only the cards shown pay for the lookups.
-    let home = crate::services::album_suggestions::detect_home_city(conn, None)
-        .map(|(city, country, _, _)| (city, country));
+    let home =
+        crate::services::album_suggestions::home(conn).map(|(city, country, _, _)| (city, country));
     for memory in &mut all {
         retitle(conn, memory, today, &home);
     }
@@ -290,8 +310,9 @@ fn cache_key(conn: &Connection, today: NaiveDate) -> SqliteResult<String> {
         |row| row.get(0),
     )?;
     Ok(format!(
-        "{}|{today}|{fingerprint}",
-        conn.path().unwrap_or("")
+        "{}|{today}|{fingerprint}|{:?}",
+        conn.path().unwrap_or(""),
+        crate::services::album_suggestions::home_override()
     ))
 }
 
@@ -360,7 +381,7 @@ fn on_this_day(
     // The cutoff date excludes photos from the recent N months.
     let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         r#"
         WITH matched AS (
             SELECT id,
@@ -369,8 +390,9 @@ fn on_this_day(
                        PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
                        ORDER BY date_taken DESC, id DESC
                    ) AS rn
-            FROM photos
+            FROM photos p
             WHERE is_trashed = FALSE
+              AND {NOT_SCREENSHOT}
               AND date_taken IS NOT NULL
               AND strftime('%m-%d', date_taken) = ?1
               AND date_taken < ?2
@@ -382,7 +404,7 @@ fn on_this_day(
         ORDER BY yr DESC
         LIMIT 10
         "#,
-    )?;
+    ))?;
 
     let rows = stmt.query_map(
         params![today_md, cutoff_str, MAX_MEMORY_PHOTOS as i64],
@@ -409,6 +431,9 @@ fn on_this_day(
             score: 0.0,
             year: yr,
             has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
         });
     }
     Ok(out)
@@ -429,7 +454,7 @@ fn fallback_window(
     let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         r#"
         WITH matched AS (
             SELECT id,
@@ -438,8 +463,9 @@ fn fallback_window(
                        PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
                        ORDER BY date_taken DESC, id DESC
                    ) AS rn
-            FROM photos
+            FROM photos p
             WHERE is_trashed = FALSE
+              AND {NOT_SCREENSHOT}
               AND date_taken IS NOT NULL
               AND strftime('%m-%d', date_taken) IN (?1, ?2, ?3, ?4, ?5, ?6, ?7)
               AND date_taken < ?8
@@ -451,7 +477,7 @@ fn fallback_window(
         ORDER BY yr DESC
         LIMIT 10
         "#,
-    )?;
+    ))?;
 
     let rows = stmt.query_map(
         params![
@@ -488,6 +514,9 @@ fn fallback_window(
             score: 0.0,
             year: yr,
             has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
         });
     }
     Ok(out)
@@ -502,7 +531,7 @@ fn seasonal_recap(
     let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         r#"
         WITH matched AS (
             SELECT id,
@@ -514,8 +543,9 @@ fn seasonal_recap(
                        PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
                        ORDER BY date_taken DESC, id DESC
                    ) AS rn
-            FROM photos
+            FROM photos p
             WHERE is_trashed = FALSE
+              AND {NOT_SCREENSHOT}
               AND date_taken IS NOT NULL
               AND strftime('%m', date_taken) = ?1
               AND date_taken < ?2
@@ -528,7 +558,7 @@ fn seasonal_recap(
         ORDER BY yr DESC
         LIMIT 5
         "#,
-    )?;
+    ))?;
 
     let rows = stmt.query_map(
         params![
@@ -558,6 +588,9 @@ fn seasonal_recap(
             score: 0.0,
             year: yr,
             has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
         });
     }
     Ok(out)
@@ -579,6 +612,7 @@ fn person_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memo
             LEFT JOIN memory_blocks mb
               ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
             WHERE p.is_trashed = FALSE
+              AND f.user_confirmed >= 0
               AND p.date_taken IS NOT NULL
               AND fc.name IS NOT NULL AND TRIM(fc.name) != ''
               AND mb.id IS NULL
@@ -630,26 +664,17 @@ fn person_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memo
         score: 0.0,
         year: *first_year.min(last_year),
         has_faces: true,
+        favorites: 0,
+        named_person: false,
+        hide_key: String::new(),
     }))
 }
 
 /// Rotate one non-home place photographed in at least three different years.
 fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memory>> {
-    let home_city: Option<String> = conn
-        .query_row(
-            r#"SELECT location_city
-               FROM photos
-               WHERE is_trashed = FALSE
-                 AND location_city IS NOT NULL AND location_city != ''
-                 AND date_taken IS NOT NULL
-               GROUP BY location_city
-               ORDER BY COUNT(DISTINCT strftime('%Y-%W', date_taken)) DESC
-               LIMIT 1"#,
-            [],
-            |row| row.get(0),
-        )
-        .ok();
-    let mut stmt = conn.prepare(
+    // The same home the trips and titles use.
+    let home_city = crate::services::album_suggestions::home(conn).map(|(city, _, _, _)| city);
+    let mut stmt = conn.prepare(&format!(
         r#"
         WITH ranked AS (
             SELECT id, location_city AS city,
@@ -658,8 +683,9 @@ fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memor
                        PARTITION BY location_city, CAST(strftime('%Y', date_taken) AS INTEGER)
                        ORDER BY is_favorite DESC, date_taken DESC, id DESC
                    ) AS rn
-            FROM photos
+            FROM photos p
             WHERE is_trashed = FALSE
+              AND {NOT_SCREENSHOT}
               AND date_taken IS NOT NULL
               AND location_city IS NOT NULL AND location_city != ''
               AND (?1 IS NULL OR location_city != ?1)
@@ -673,7 +699,7 @@ fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memor
         ORDER BY year_count DESC, photo_count DESC, city
         LIMIT 24
         "#,
-    )?;
+    ))?;
     let rows = stmt.query_map(params![home_city], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -703,14 +729,18 @@ fn place_story(conn: &Connection, today: NaiveDate) -> SqliteResult<Option<Memor
         score: 0.0,
         year: *first_year.min(last_year),
         has_faces: false,
+        favorites: 0,
+        named_person: false,
+        hide_key: String::new(),
     }))
 }
 
+/// FNV-1a: the same for a name in every build, so a hidden place stays
+/// hidden after an update (std's hasher makes no such promise).
 fn stable_text_id(value: &str) -> u64 {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
+    value.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 fn year_recap(
@@ -721,7 +751,7 @@ fn year_recap(
     let cutoff = today - Duration::days(MIN_PHOTO_AGE_MONTHS * 30);
     let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         r#"
         WITH matched AS (
             SELECT id,
@@ -730,8 +760,9 @@ fn year_recap(
                        PARTITION BY CAST(strftime('%Y', date_taken) AS INTEGER)
                        ORDER BY date_taken DESC, id DESC
                    ) AS rn
-            FROM photos
+            FROM photos p
             WHERE is_trashed = FALSE
+              AND {NOT_SCREENSHOT}
               AND date_taken IS NOT NULL
               AND date_taken < ?1
         )
@@ -742,7 +773,7 @@ fn year_recap(
         ORDER BY yr DESC
         LIMIT 5
         "#,
-    )?;
+    ))?;
 
     let rows = stmt.query_map(params![cutoff_str, YEAR_RECAP_MAX_PHOTOS as i64], |row| {
         Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
@@ -770,6 +801,9 @@ fn year_recap(
             score: 0.0,
             year: yr,
             has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
         });
     }
     Ok(out)
@@ -823,11 +857,34 @@ fn age_label(photo_date: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
+// ---------- Curation ----------
+
+/// Keep only each memory's photos worth looking back at (see
+/// [`collage_picks::curate`]) and drop memories left with none. Returns each
+/// kept photo's quality score; videos are left out of it, so they're never
+/// a memory's cover.
+fn curate_photos(conn: &Connection, memories: &mut Vec<Memory>) -> SqliteResult<HashMap<i64, f32>> {
+    let mut scores = HashMap::new();
+    for memory in memories.iter_mut() {
+        let curated = collage_picks::curate(conn, &memory.photo_ids, MAX_SHOWN_PHOTOS, true)?;
+        memory.photo_ids = curated.iter().map(|c| c.id).collect();
+        scores.extend(curated.iter().filter(|c| !c.video).map(|c| (c.id, c.score)));
+    }
+    memories.retain(|m| !m.photo_ids.is_empty());
+    Ok(scores)
+}
+
 // ---------- Hero selection ----------
 
-/// Populate `hero_photo_id` and `has_faces` on each memory via a single
-/// batched query over all unique photo_ids.
-fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> SqliteResult<()> {
+/// Pick each memory's cover and fill in what ranking and hiding need, via
+/// one batched query over all its photos. The cover is the best photo by
+/// `scores` (favourites and faces first), nudged toward wide shots, which
+/// fill a card, and ones whose thumbnail is ready.
+fn populate_hero_and_faces(
+    conn: &Connection,
+    memories: &mut [Memory],
+    scores: &HashMap<i64, f32>,
+) -> SqliteResult<()> {
     // Collect all unique photo ids.
     let mut all_ids: HashSet<i64> = HashSet::new();
     for m in memories.iter() {
@@ -850,8 +907,13 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
                COALESCE(p.orientation, 1) AS orientation,
                COALESCE(p.width, 0) AS width,
                COALESCE(p.height, 0) AS height,
-               COALESCE((SELECT COUNT(*) FROM faces WHERE photo_id = p.id), 0) AS face_count,
-               p.thumbnail_path
+               COALESCE((SELECT COUNT(*) FROM faces WHERE photo_id = p.id AND user_confirmed >= 0), 0),
+               p.thumbnail_path,
+               COALESCE(p.is_favorite, FALSE),
+               EXISTS (SELECT 1 FROM faces f JOIN face_clusters fc ON fc.id = f.cluster_id
+                       WHERE f.photo_id = p.id AND f.user_confirmed >= 0
+                         AND fc.name IS NOT NULL AND TRIM(fc.name) != ''),
+               substr(p.date_taken, 1, 10)
         FROM photos p
         WHERE p.id IN ({}) AND p.is_trashed = FALSE
         "#,
@@ -865,6 +927,9 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
         height: i32,
         face_count: i64,
         thumbnail_path: Option<String>,
+        favorite: bool,
+        named_person: bool,
+        day: Option<String>,
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -878,6 +943,9 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
                 height: row.get(3)?,
                 face_count: row.get(4)?,
                 thumbnail_path: row.get(5)?,
+                favorite: row.get(6)?,
+                named_person: row.get(7)?,
+                day: row.get(8)?,
             },
         ))
     })?;
@@ -894,25 +962,26 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
             continue;
         };
         let mut best_score = f32::MIN;
-        let mut any_faces = false;
+        let mut days: HashMap<&str, usize> = HashMap::new();
+        mem.has_faces = false;
+        mem.favorites = 0;
+        mem.named_person = false;
 
         for pid in &mem.photo_ids {
             let Some(m) = meta.get(pid) else { continue };
+            mem.has_faces |= m.face_count > 0;
+            mem.favorites += usize::from(m.favorite);
+            mem.named_person |= m.named_person;
+            if let Some(day) = &m.day {
+                *days.entry(day.as_str()).or_default() += 1;
+            }
 
+            // Videos have no score: a cover only when there's nothing else.
+            let mut score = scores.get(pid).copied().unwrap_or(-10.0);
             // Landscape orientations are 1 (unrotated wide) and 3 (180).
             // 6/8 are rotated portraits. Treat width >= height as landscape too.
-            let is_landscape = matches!(m.orientation, 1 | 3) && m.width >= m.height && m.width > 0;
-
-            let mut score = 0.0_f32;
-            if is_landscape {
-                score += 3.0;
-            }
-            if m.face_count > 0 {
-                score += 2.0;
-                any_faces = true;
-            }
-            if m.face_count >= 2 {
-                score += 1.0;
+            if matches!(m.orientation, 1 | 3) && m.width >= m.height && m.width > 0 {
+                score += 0.3;
             }
             // Prefer photos that already have a thumbnail — avoids
             // an empty card while on-demand generation runs in the
@@ -929,34 +998,129 @@ fn populate_hero_and_faces(conn: &Connection, memories: &mut [Memory]) -> Sqlite
             }
         }
 
+        // The day most of its photos are from, earliest on a tie.
+        let main_day = days
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))
+            .map(|(day, _)| day.to_string());
+        mem.hide_key = hide_key(mem, main_day.as_deref());
         mem.hero_photo_id = best_id;
         mem.hero_thumbnail_path = meta.get(&best_id).and_then(|m| m.thumbnail_path.clone());
-        mem.has_faces = any_faces;
     }
 
     Ok(())
 }
 
+// ---------- Hiding ----------
+
+/// What a hidden memory stays hidden as. Unlike the memory's id, which is
+/// per day, this names the moment itself, so "hide" holds next year and for
+/// the neighbouring days' versions of the same memory: a day for anniversary
+/// cards, a month, a year, a person or a place.
+fn hide_key(memory: &Memory, main_day: Option<&str>) -> String {
+    match memory.kind {
+        MemoryKind::OnThisDay | MemoryKind::FallbackWindow => match main_day {
+            Some(day) => format!("day:{day}"),
+            None => format!("year:{}", memory.year),
+        },
+        MemoryKind::SeasonalRecap => match main_day {
+            Some(day) => format!("month:{}", &day[..day.len().min(7)]),
+            None => format!("year:{}", memory.year),
+        },
+        MemoryKind::YearRecap => format!("year:{}", memory.year),
+        // "person-<cluster>-<year>-<day>" / "place-<hash>-<year>-<day>".
+        MemoryKind::PersonStory | MemoryKind::PlaceStory => memory
+            .id
+            .rsplitn(3, '-')
+            .nth(2)
+            .map(|subject| subject.replacen('-', ":", 1))
+            .unwrap_or_else(|| memory.id.clone()),
+    }
+}
+
+fn load_hidden(conn: &Connection) -> SqliteResult<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT target_key FROM memory_blocks WHERE kind = ?1")?;
+    let rows = stmt.query_map([HIDE_BLOCK_KIND], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// Hide one of today's memories for good. `hide_key` comes from its card.
+pub fn hide(conn: &Connection, hide_key: &str) -> SqliteResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO memory_blocks (kind, target_key) VALUES (?1, ?2)",
+        params![HIDE_BLOCK_KIND, hide_key],
+    )?;
+    Ok(())
+}
+
+/// Undo [`hide`].
+pub fn unhide(conn: &Connection, hide_key: &str) -> SqliteResult<()> {
+    conn.execute(
+        "DELETE FROM memory_blocks WHERE kind = ?1 AND target_key = ?2",
+        params![HIDE_BLOCK_KIND, hide_key],
+    )?;
+    Ok(())
+}
+
 // ---------- Ranking ----------
 
-fn rank(memories: &mut [Memory], current_year: i32) {
+/// Order memories by how much they're likely to mean: favourites and named
+/// people count most, then a little for age and size (capped, so the
+/// biggest dump of photos doesn't win by bulk). Kinds the user keeps hiding
+/// sink, and kinds alternate so the page isn't five anniversaries in a row.
+fn rank(memories: &mut Vec<Memory>, current_year: i32, hidden: &HashSet<String>) {
+    let hidden_of = |prefix: &str| hidden.iter().filter(|k| k.starts_with(prefix)).count();
     for m in memories.iter_mut() {
-        let years_ago = (current_year - m.year).max(0);
-        let count_factor = ((m.photo_ids.len() as f32) + 1.0).log2();
-        let age_factor = ((years_ago as f32) + 1.0).sqrt();
-        let face_factor = if m.has_faces { 1.3 } else { 1.0 };
+        let years_ago = (current_year - m.year).clamp(0, 10) as f32;
+        let count_factor = ((m.photo_ids.len() as f32) + 1.0).log2().min(5.0);
+        let age_factor = 1.0 + 0.15 * years_ago;
+        let favorite_factor = 1.0 + 0.3 * m.favorites.min(5) as f32;
+        let people_factor = if m.named_person {
+            1.3
+        } else if m.has_faces {
+            1.1
+        } else {
+            1.0
+        };
         let kind_factor = match m.kind {
             MemoryKind::SeasonalRecap => 1.5,
             MemoryKind::PersonStory | MemoryKind::PlaceStory => 1.8,
             _ => 1.0,
         };
-        m.score = count_factor * age_factor * face_factor * kind_factor;
+        let less = if hidden_of(kind_prefix(m.kind)) >= HIDDEN_BEFORE_LESS {
+            0.5
+        } else {
+            1.0
+        };
+        m.score = count_factor * age_factor * favorite_factor * people_factor * kind_factor * less;
     }
     memories.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // Never two of a kind in a row while another kind is waiting.
+    let mut rest = std::mem::take(memories);
+    while !rest.is_empty() {
+        let last = memories.last().map(|m: &Memory| kind_prefix(m.kind));
+        let next = rest
+            .iter()
+            .position(|m| Some(kind_prefix(m.kind)) != last)
+            .unwrap_or(0);
+        memories.push(rest.remove(next));
+    }
+}
+
+/// The [`hide_key`] prefix memories of this kind are hidden under.
+fn kind_prefix(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::OnThisDay | MemoryKind::FallbackWindow => "day:",
+        MemoryKind::SeasonalRecap => "month:",
+        MemoryKind::YearRecap => "year:",
+        MemoryKind::PersonStory => "person:",
+        MemoryKind::PlaceStory => "place:",
+    }
 }
 
 // ---------- Block filter ----------
@@ -1030,7 +1194,7 @@ mod tests {
     fn insert_photo(conn: &Connection, id: i64, date: &str) {
         conn.execute(
             "INSERT INTO photos (id, file_path, file_name, file_hash, file_size, date_taken, width, height, orientation) \
-             VALUES (?1, ?2, ?3, 'h', 1, ?4, 1920, 1080, 1)",
+             VALUES (?1, ?2, ?3, 'h' || ?1, 1, ?4, 1920, 1080, 1)",
             rusqlite::params![
                 id,
                 format!("photo{}.jpg", id),
@@ -1116,9 +1280,12 @@ mod tests {
             score: 0.0,
             year: 2020,
             has_faces: true,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
         }];
 
-        populate_hero_and_faces(&conn, &mut memories).unwrap();
+        populate_hero_and_faces(&conn, &mut memories, &HashMap::new()).unwrap();
 
         assert_eq!(memories[0].hero_photo_id, 0);
         assert!(memories[0].hero_thumbnail_path.is_none());
@@ -1137,7 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn dense_memory_day_is_capped_before_detail_payload() {
+    fn dense_memory_day_shows_the_best_of_its_photos() {
         let conn = fresh_db();
         for id in 1..=(MAX_MEMORY_PHOTOS as i64 + 25) {
             insert_photo(&conn, id, "2022-04-15 10:00:00");
@@ -1150,8 +1317,110 @@ mod tests {
             .find(|card| card.kind == MemoryKind::OnThisDay)
             .unwrap();
 
-        assert_eq!(on_this_day.photo_ids.len(), MAX_MEMORY_PHOTOS);
-        assert_eq!(on_this_day.photo_count, MAX_MEMORY_PHOTOS);
+        assert_eq!(on_this_day.photo_ids.len(), MAX_SHOWN_PHOTOS);
+        assert_eq!(on_this_day.photo_count, MAX_SHOWN_PHOTOS);
+    }
+
+    #[test]
+    fn junk_stays_out_and_favourites_lead() {
+        let conn = fresh_db();
+        for id in 1..=4 {
+            insert_photo(&conn, id, &format!("2022-04-15 1{id}:00:00"));
+        }
+        conn.execute_batch(
+            "UPDATE photos SET file_name = 'Screenshot_20220415.png' WHERE id = 1;
+             UPDATE photos SET width = 320, height = 240 WHERE id = 2;
+             UPDATE photos SET is_favorite = TRUE WHERE id = 4;",
+        )
+        .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let card = generate_for_today(&conn, today).unwrap().remove(0);
+        assert_eq!(card.photo_ids, vec![3, 4]);
+        assert_eq!(card.hero_photo_id, 4);
+    }
+
+    #[test]
+    fn a_memory_of_only_junk_is_not_shown() {
+        let conn = fresh_db();
+        insert_photo(&conn, 1, "2022-04-15 10:00:00");
+        conn.execute("UPDATE photos SET file_name = 'Screen Shot 1.png'", [])
+            .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        assert!(generate_for_today(&conn, today).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_hidden_memory_stays_hidden_on_later_days() {
+        let conn = fresh_db();
+        insert_photo(&conn, 1, "2022-04-15 10:00:00");
+        insert_photo(&conn, 2, "2022-04-15 11:00:00");
+        let today = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+        let card = generate_for_today(&conn, today).unwrap().remove(0);
+        assert_eq!(card.hide_key, "day:2022-04-15");
+        hide(&conn, &card.hide_key).unwrap();
+        assert!(generate_for_today(&conn, today).unwrap().is_empty());
+        // Two days later the same day returns as "this week": still hidden.
+        let later = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        assert!(generate_for_today(&conn, later).unwrap().is_empty());
+    }
+
+    #[test]
+    fn story_hide_keys_name_the_person_or_place() {
+        let memory = |kind, id: &str| Memory {
+            id: id.into(),
+            kind,
+            title: String::new(),
+            photo_ids: vec![1],
+            hero_photo_id: 1,
+            hero_thumbnail_path: None,
+            score: 0.0,
+            year: 2021,
+            has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
+        };
+        let person = memory(MemoryKind::PersonStory, "person-7-2026-105");
+        assert_eq!(hide_key(&person, Some("2021-06-01")), "person:7");
+        let place = memory(MemoryKind::PlaceStory, "place-123-2026-105");
+        assert_eq!(hide_key(&place, None), "place:123");
+        let recap = memory(MemoryKind::SeasonalRecap, "sr-2021-04-15");
+        assert_eq!(hide_key(&recap, Some("2021-04-09")), "month:2021-04");
+        assert_eq!(stable_text_id("Goa"), stable_text_id("Goa"));
+        assert_eq!(stable_text_id("Goa"), 16_933_378_578_193_846_910);
+    }
+
+    #[test]
+    fn ranking_alternates_kinds_and_sinks_kinds_the_user_hides() {
+        let memory = |kind, year, photos: usize| Memory {
+            id: format!("{kind:?}-{year}"),
+            kind,
+            title: String::new(),
+            photo_ids: (0..photos as i64).collect(),
+            hero_photo_id: 0,
+            hero_thumbnail_path: None,
+            score: 0.0,
+            year,
+            has_faces: false,
+            favorites: 0,
+            named_person: false,
+            hide_key: String::new(),
+        };
+        let mut memories = vec![
+            memory(MemoryKind::OnThisDay, 2016, 40),
+            memory(MemoryKind::OnThisDay, 2017, 40),
+            memory(MemoryKind::SeasonalRecap, 2020, 10),
+        ];
+        rank(&mut memories, 2026, &HashSet::new());
+        let kinds: Vec<_> = memories.iter().map(|m| m.kind).collect();
+        assert_eq!(kinds[1], MemoryKind::SeasonalRecap);
+
+        let hidden: HashSet<String> = ["day:2001-01-01", "day:2002-01-01", "day:2003-01-01"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        rank(&mut memories, 2026, &hidden);
+        assert_eq!(memories[0].kind, MemoryKind::SeasonalRecap);
     }
 
     #[test]
@@ -1294,7 +1563,8 @@ mod tests {
             for month in 1..=4 {
                 insert_photo(&conn, id, &format!("{year}-{month:02}-01 10:00:00"));
                 conn.execute(
-                    "UPDATE photos SET location_city = 'Delhi' WHERE id = ?1",
+                    "UPDATE photos SET location_city = 'Delhi', gps_latitude = 28.6,
+                            gps_longitude = 77.2 WHERE id = ?1",
                     [id],
                 )
                 .unwrap();
@@ -1303,7 +1573,8 @@ mod tests {
             for day in 1..=3 {
                 insert_photo(&conn, id, &format!("{year}-08-{day:02} 10:00:00"));
                 conn.execute(
-                    "UPDATE photos SET location_city = 'Goa' WHERE id = ?1",
+                    "UPDATE photos SET location_city = 'Goa', gps_latitude = 15.5,
+                            gps_longitude = 73.8 WHERE id = ?1",
                     [id],
                 )
                 .unwrap();

@@ -46,7 +46,7 @@
 
 {#if assetSetup.ready && (!ready || error)}
   <section class:dialog aria-label={`Enable ${labels[feature]}`}>
-    {#if dialog}<h2>Enable smart features?</h2>{/if}
+    {#if dialog}<h2>Turn on face finding and photo search?</h2>{/if}
     <p>{descriptions[feature]}</p>
     <p class="detail">{#if bytes !== null}{bytes === 0 ? "Files are already downloaded." : `${(bytes / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 0 })} MB one-time download.`}{:else if checking}Checking download size…{/if} Processing stays on your device. You can keep browsing during setup.</p>
     {#if error}<p class="error" role="alert">{error}</p>{/if}

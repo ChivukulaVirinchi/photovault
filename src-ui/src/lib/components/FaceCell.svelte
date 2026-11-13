@@ -4,6 +4,7 @@
   import Check from "lucide-svelte/icons/check";
   import ArrowLeftRight from "lucide-svelte/icons/arrow-left-right";
   import X from "lucide-svelte/icons/x";
+  import EyeOff from "lucide-svelte/icons/eye-off";
 
   interface Props {
     face: {
@@ -14,6 +15,8 @@
     onConfirm?: (faceId: number) => void;
     onReject?: (faceId: number) => void;
     onReassign?: (faceId: number) => void;
+    /// "Not a face": shown when given.
+    onIgnore?: (faceId: number) => void;
     onClick?: (faceId: number) => void;
     /// Always show action buttons (not just on hover) — used in KSimilarDialog.
     showActions?: boolean;
@@ -26,6 +29,7 @@
     onConfirm,
     onReject,
     onReassign,
+    onIgnore,
     onClick,
     showActions = false,
     busy = false,
@@ -94,6 +98,16 @@
           onclick={() => onReassign(face.face_id)}
         >
           <ArrowLeftRight size={14} strokeWidth={2.25} />
+        </button>
+      {/if}
+      {#if onIgnore}
+        <button
+          class="action-btn reject"
+          title="Not a face"
+          aria-label="Not a face"
+          onclick={() => onIgnore(face.face_id)}
+        >
+          <EyeOff size={14} strokeWidth={2.25} />
         </button>
       {/if}
       {#if onReject}

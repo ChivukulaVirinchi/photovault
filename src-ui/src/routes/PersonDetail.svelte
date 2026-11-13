@@ -36,6 +36,7 @@
   let error = $state<string | null>(null);
   let showAddDialog = $state(false);
   let showMergeDialog = $state(false);
+  let hiddenFromMemories = $state(false);
   let showReassignDialog = $state<number | null>(null);
   let showKSimilarDialog = $state(false);
   let unconfirmedFaces = $state<FaceDetailDto[]>([]);
@@ -67,7 +68,7 @@
     const seq = loadSeq;
     const personId = id;
     const label = person.name ?? `Person ${person.id}`;
-    if (!confirm(`Remove ${label} as a person?\n\nFaces stay in their photos and may be re-clustered next time face detection runs.`)) return;
+    if (!confirm(`Remove ${label} as a person?\n\nTheir photos stay. Smriti won't group these faces into a person again.`)) return;
     try {
       actionBusy = true;
       await people.delete(person.id);
@@ -106,7 +107,7 @@
       const result = await trash.trashPhotos(ids, session);
       if (!mounted || seq !== loadSeq || personId !== id) return;
       if (result.count === 0) {
-        toasts.info("No selected photos needed trashing");
+        toasts.info("Those photos are already in Trash");
         return;
       }
       photoVisibility.markTrashed(ids);
@@ -284,6 +285,9 @@
       hasMore = photoPage.has_more;
       unconfirmedFaces = facePage.items;
       browseContext.set(`person:${personId}`, firstIds);
+      void people.memoriesHidden(personId).then((hidden) => {
+        if (mounted && seq === loadSeq) hiddenFromMemories = hidden;
+      }).catch(() => {});
       if (nextPerson.photo_count <= ALL_IDS_NAV_LIMIT) {
         void people.photoIds(personId).then((allIds) => {
           if (!mounted || seq !== loadSeq || personId !== id) return;
@@ -352,6 +356,34 @@
     finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
   }
 
+  async function ignoreFace(faceId: number) {
+    if (verifyBusy) return;
+    const seq = loadSeq;
+    const personId = id;
+    verifyBusy = true;
+    try {
+      await people.faceIgnore(faceId);
+      if (!mounted || seq !== loadSeq || personId !== id) return;
+      unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
+      toasts.info("Got it. That's not a face");
+    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
+  }
+
+  async function toggleMemories() {
+    if (!person || actionBusy) return;
+    const personId = id;
+    const hide = !hiddenFromMemories;
+    actionBusy = true;
+    try {
+      const now = await people.memoriesHidden(personId, hide);
+      if (!mounted || personId !== id) return;
+      hiddenFromMemories = now;
+      toasts.info(now ? "Got it. They won't appear in Memories" : "They'll appear in Memories again");
+    } catch (e) { if (mounted && personId === id) error = commandErrorMessage(e); }
+    finally { if (mounted) actionBusy = false; }
+  }
+
   async function reassignFace(faceId: number) {
     showReassignDialog = faceId;
   }
@@ -417,6 +449,9 @@
             <Search size={14} strokeWidth={1.75} />
             Find more like this
           </button>
+          <button class="ghost" onclick={toggleMemories} disabled={actionBusy}>
+            {hiddenFromMemories ? "Show in memories" : "Hide from memories"}
+          </button>
           <button class="danger" onclick={notAPerson} disabled={actionBusy}>Not a person</button>
         {/if}
       {/snippet}
@@ -439,6 +474,7 @@
           onConfirm={confirmFace}
           onReject={rejectFace}
           onReassign={reassignFace}
+          onIgnore={ignoreFace}
           busy={verifyBusy}
         />
       {/each}

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Hide a memory from its card or page, with Undo. It stays hidden on later
+  days and next year too, and kinds of memory you keep hiding show up less.
+- Hide a person from Memories from their page.
+- "Not a face" on a face (person page and Review faces), and Undo after
+  merging two people.
+
+### Changed
+- Memories show the best photos of each moment instead of everything from
+  that day: screenshots, tiny images, copies and look-alikes stay out,
+  favourites and faces lead, and the cover is the best photo.
+- Memories are ordered by what's likely to mean most (favourites, people you
+  named) rather than by size, and kinds take turns.
+- The home city set in Settings is used by memories and titles too, not only
+  by trip suggestions.
+- Gatherings, events and titles count only people you named or who turn up
+  on several days, so strangers in a crowd no longer make a "gathering".
+- Error messages say what failed in plain words; the technical detail shows
+  in Developer mode. Many settings, buttons and empty pages are worded more
+  plainly.
+
+### Fixed
+- Corrections stick:
+  - A removed person's faces are no longer regrouped into a new person.
+  - Two people whose merge was undone are never merged again.
+  - Faces skipped in review stop coming back.
+  - A dismissed trip or event no longer returns after a few months, or when
+    a photo is added to or removed from it.
+- Less nagging:
+  - "Keep for now" on the missing-photos banner is remembered until more
+    photos go missing.
+  - The People banner about faces to check can be put off.
+  - Album ideas left unanswered stop being offered after a while.
+
 ## [0.5.0] — 2026-10-19
 
 ### Added

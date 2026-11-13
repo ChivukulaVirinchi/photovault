@@ -33,6 +33,9 @@ const SAME_MOMENT_SECS: i64 = 60;
 const CHUNK: usize = 500;
 
 const BLOCK_KIND: &str = "collage";
+/// Screenshots by their usual file names, for queries over `photos p`.
+pub(crate) const NOT_SCREENSHOT: &str =
+    "lower(p.file_name) NOT LIKE 'screenshot%' AND lower(p.file_name) NOT LIKE 'screen shot%'";
 const GROUP_BURST: u8 = 0;
 const GROUP_DUPLICATE: u8 = 1;
 
@@ -46,6 +49,7 @@ struct Candidate {
     phash: Option<u64>,
     /// Burst and duplicate groups: one photo per group at most.
     groups: Vec<(u8, i64)>,
+    video: bool,
 }
 
 /// Options for [`pick_best`].
@@ -78,7 +82,12 @@ pub fn pick_best(
     let ids = thin_evenly(photo_ids, MAX_CANDIDATES);
     let mut candidates = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(CHUNK) {
-        candidates.extend(load_candidates(conn, chunk, options.skip_hidden_people)?);
+        candidates.extend(load_candidates(
+            conn,
+            chunk,
+            options.skip_hidden_people,
+            false,
+        )?);
     }
     Ok(choose(candidates, options.max.min(MAX_AUTO_PHOTOS)))
 }
@@ -91,37 +100,100 @@ fn thin_evenly(ids: &[i64], max: usize) -> Vec<i64> {
     (0..max).map(|i| ids[i * ids.len() / max]).collect()
 }
 
+/// A photo kept by [`curate`], with how strongly it deserves to be seen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Curated {
+    pub id: i64,
+    pub score: f32,
+    pub video: bool,
+}
+
+/// The photos of a set worth looking back at, in the order they were taken.
+/// Screenshots, tiny or badly exposed shots and repeats (copies, look-alikes)
+/// are left out; a set with more than `max` left keeps the best photo of each
+/// of `max` equal stretches of its time span. Videos stay in.
+pub fn curate(
+    conn: &Connection,
+    photo_ids: &[i64],
+    max: usize,
+    skip_hidden_people: bool,
+) -> SqliteResult<Vec<Curated>> {
+    let mut candidates = Vec::with_capacity(photo_ids.len());
+    for chunk in photo_ids.chunks(CHUNK) {
+        candidates.extend(load_candidates(conn, chunk, skip_hidden_people, true)?);
+    }
+    candidates.sort_by_key(|c| (c.taken.is_none(), c.taken.unwrap_or(0), c.id));
+
+    // One of each copy or look-alike: the best one.
+    let mut by_quality: Vec<usize> = (0..candidates.len()).collect();
+    by_quality.sort_by(|&a, &b| by_score(&candidates[b], &candidates[a]).then(a.cmp(&b)));
+    let mut kept: Vec<usize> = Vec::with_capacity(candidates.len());
+    for i in by_quality {
+        if !clashes(&candidates, &kept, i, Repeat::Copy) {
+            kept.push(i);
+        }
+    }
+    kept.sort_unstable();
+
+    if max > 0 && kept.len() > max {
+        kept = (0..max)
+            .filter_map(|b| {
+                kept[b * kept.len() / max..(b + 1) * kept.len() / max]
+                    .iter()
+                    .copied()
+                    .max_by(|&a, &b| by_score(&candidates[a], &candidates[b]).then(b.cmp(&a)))
+            })
+            .collect();
+    }
+    Ok(kept
+        .into_iter()
+        .map(|i| Curated {
+            id: candidates[i].id,
+            score: candidates[i].score,
+            video: candidates[i].video,
+        })
+        .collect())
+}
+
 fn load_candidates(
     conn: &Connection,
     ids: &[i64],
     skip_hidden_people: bool,
+    videos: bool,
 ) -> SqliteResult<Vec<Candidate>> {
     let placeholders = vec!["?"; ids.len()].join(",");
     let hidden_people = if skip_hidden_people {
         "AND NOT EXISTS (
            SELECT 1 FROM faces f JOIN memory_blocks mb
              ON mb.kind = 'person' AND mb.target_key = CAST(f.cluster_id AS TEXT)
-           WHERE f.photo_id = p.id)"
+           WHERE f.photo_id = p.id AND f.user_confirmed >= 0)"
     } else {
         ""
+    };
+    let media = if videos {
+        "p.media_type IN ('photo', 'video')"
+    } else {
+        "p.media_type = 'photo'"
     };
     let sql = format!(
         r#"SELECT p.id, CAST(strftime('%s', p.date_taken) AS INTEGER), p.is_favorite,
                   COALESCE(p.width, 0), COALESCE(p.height, 0), p.brightness,
                   p.phash, p.file_hash,
-                  (SELECT COUNT(*) FROM faces f WHERE f.photo_id = p.id),
-                  (SELECT MAX(f.bbox_width * f.bbox_height) FROM faces f WHERE f.photo_id = p.id),
+                  (SELECT COUNT(*) FROM faces f WHERE f.photo_id = p.id AND f.user_confirmed >= 0),
+                  (SELECT MAX(f.bbox_width * f.bbox_height) FROM faces f
+                   WHERE f.photo_id = p.id AND f.user_confirmed >= 0),
                   (SELECT bgm.group_id FROM burst_group_members bgm WHERE bgm.photo_id = p.id LIMIT 1),
                   COALESCE((SELECT MAX(bgm.is_suggested_best) FROM burst_group_members bgm
                             WHERE bgm.photo_id = p.id), 0),
                   (SELECT dgm.group_id FROM duplicate_group_members dgm WHERE dgm.photo_id = p.id LIMIT 1),
                   COALESCE((SELECT MAX(dgm.is_suggested_keep) FROM duplicate_group_members dgm
-                            WHERE dgm.photo_id = p.id), 0)
+                            WHERE dgm.photo_id = p.id), 0),
+                  p.media_type = 'video'
            FROM photos p
            WHERE p.id IN ({placeholders})
              AND p.is_trashed = FALSE
-             AND p.media_type = 'photo'
-             AND lower(p.file_name) NOT LIKE 'screenshot%'
+             AND {media}
+             AND {NOT_SCREENSHOT}
              -- Stacked look-alikes: only the stack's cover is a candidate.
              AND NOT EXISTS (
                SELECT 1 FROM photo_stack_members psm
@@ -161,6 +233,7 @@ fn load_candidates(
             file_hash: row.get(7)?,
             phash: row.get::<_, Option<i64>>(6)?.map(|h| h as u64),
             groups,
+            video: row.get(14)?,
         }))
     })?;
     let mut out = Vec::new();
@@ -708,6 +781,7 @@ mod tests {
             hero_thumbnail_path: None,
             photo_count: ids.len(),
             photo_ids: ids,
+            hide_key: format!("day:{id}"),
         }
     }
 

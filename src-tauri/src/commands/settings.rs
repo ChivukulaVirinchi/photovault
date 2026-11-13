@@ -230,6 +230,7 @@ pub async fn settings_update(args: SettingsUpdateArgs) -> CommandResult<Settings
     cfg.save().map_err(|e| CommandError::Io {
         message: e.to_string(),
     })?;
+    smriti::services::album_suggestions::set_home_override(cfg.home_city_override.clone());
     Ok((&cfg).into())
 }
 

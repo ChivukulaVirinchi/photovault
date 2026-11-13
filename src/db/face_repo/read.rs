@@ -16,6 +16,10 @@ type FaceBoxRow = (i64, f32, f32, f32, f32);
 /// already been thumbnailed.
 type UnprocessedPhotoRow = (i64, String, i32, Option<i64>, String);
 
+/// Faces the user skipped in review, kept in `library_meta` as a JSON list
+/// of face ids (see `FaceRepo::skip_review_face`).
+const NOT_SKIPPED: &str = "id NOT IN (SELECT value FROM json_each(COALESCE((SELECT value FROM library_meta WHERE key = 'people.review_skipped'), '[]')))";
+
 impl<'a> FaceRepo<'a> {
     /// A live preview is a newest-first snapshot, not the oldest review page.
     pub fn get_recent_faces(&self, limit: usize) -> SqliteResult<Vec<FaceDetail>> {
@@ -178,7 +182,8 @@ impl<'a> FaceRepo<'a> {
         let placeholders = vec!["?"; photo_ids.len()].join(",");
         let mut stmt = self.conn.prepare(&format!(
             "SELECT photo_id, bbox_x, bbox_y, bbox_width, bbox_height
-             FROM faces WHERE photo_id IN ({placeholders}) ORDER BY photo_id, id"
+             FROM faces WHERE photo_id IN ({placeholders}) AND user_confirmed >= 0
+             ORDER BY photo_id, id"
         ))?;
         let rows = stmt
             .query_map(params_from_iter(photo_ids), |row| {
@@ -546,6 +551,7 @@ impl<'a> FaceRepo<'a> {
              FROM faces f
              JOIN photos p ON p.id = f.photo_id
              WHERE f.cluster_id IS NULL
+               AND f.user_confirmed >= 0
                AND p.is_trashed = FALSE ",
         );
         let mut params: Vec<rusqlite::types::Value> = Vec::new();
@@ -580,27 +586,33 @@ impl<'a> FaceRepo<'a> {
         Ok(faces)
     }
 
-    /// Count unconfirmed faces across all clusters.
+    /// Count unconfirmed faces across all clusters, leaving out ones the
+    /// user skipped in review.
     /// Returns (total_unconfirmed, clusters_with_unconfirmed).
     pub fn count_unconfirmed_global(&self) -> SqliteResult<(i64, i64)> {
         let total: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM faces WHERE cluster_id IS NOT NULL AND user_confirmed = 0",
+            &format!(
+                "SELECT COUNT(*) FROM faces
+                 WHERE cluster_id IS NOT NULL AND user_confirmed = 0 AND {NOT_SKIPPED}"
+            ),
             [],
             |row| row.get(0),
         )?;
         let cluster_count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT cluster_id) FROM faces WHERE cluster_id IS NOT NULL AND user_confirmed = 0",
+            &format!(
+                "SELECT COUNT(DISTINCT cluster_id) FROM faces
+                 WHERE cluster_id IS NOT NULL AND user_confirmed = 0 AND {NOT_SKIPPED}"
+            ),
             [],
             |row| row.get(0),
         )?;
         Ok((total, cluster_count))
     }
 
-    /// Return the next review batch while ignoring faces the current UI
-    /// session has skipped. Skips are intentionally not persisted as a
-    /// reject/confirm decision, but they still need to be excluded from
-    /// the server-side cluster selection or the reviewer can be sent
-    /// straight back to the same skipped-only cluster.
+    /// Return the next review batch, leaving out faces the user skipped.
+    /// A skip isn't a confirm or reject decision; it just takes the face
+    /// out of review (see `skip_review_face`). `excluded_face_ids` are
+    /// this session's skips still in flight.
     pub fn next_unconfirmed_face_batch_excluding(
         &self,
         limit: usize,
@@ -619,6 +631,7 @@ impl<'a> FaceRepo<'a> {
                 WHERE cluster_id IS NOT NULL
                   AND user_confirmed = 0
                   AND id NOT IN ({placeholders})
+                  AND {NOT_SKIPPED}
                 GROUP BY cluster_id
                 ORDER BY COUNT(*) DESC, MIN(id) ASC
                 LIMIT 1
@@ -628,6 +641,7 @@ impl<'a> FaceRepo<'a> {
             JOIN next_cluster n ON n.cluster_id = f.cluster_id
             WHERE f.user_confirmed = 0
               AND f.id NOT IN ({placeholders})
+              AND f.{NOT_SKIPPED}
             ORDER BY f.id ASC
             LIMIT ?
             "#
@@ -659,13 +673,14 @@ impl<'a> FaceRepo<'a> {
         &self,
         limit: usize,
     ) -> SqliteResult<Vec<FaceDetail>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"
             WITH next_cluster AS (
                 SELECT cluster_id
                 FROM faces
                 WHERE cluster_id IS NOT NULL
                   AND user_confirmed = 0
+                  AND {NOT_SKIPPED}
                 GROUP BY cluster_id
                 ORDER BY COUNT(*) DESC, MIN(id) ASC
                 LIMIT 1
@@ -674,10 +689,11 @@ impl<'a> FaceRepo<'a> {
             FROM faces f
             JOIN next_cluster n ON n.cluster_id = f.cluster_id
             WHERE f.user_confirmed = 0
+              AND f.{NOT_SKIPPED}
             ORDER BY f.id ASC
             LIMIT ?1
             "#,
-        )?;
+        ))?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             Ok(FaceDetail {
                 face_id: row.get(0)?,

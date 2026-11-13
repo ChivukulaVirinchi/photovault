@@ -5,6 +5,7 @@
   import { routeCache } from "../lib/stores/routeCache.svelte";
   import { people, settings, type FaceDetailDto } from "../lib/api/all";
   import { libraryStore } from "../lib/stores/library.svelte";
+  import { library } from "../lib/api/library";
   import { jobs } from "../lib/stores/jobs.svelte";
   import { toasts } from "../lib/stores/toast.svelte";
   import { thumbUrl } from "../lib/thumbnail";
@@ -31,6 +32,14 @@
   let loading = $state(true);
   let pendingPhotos = $state(0);
   let unconfirmedTotal = $state(0);
+  /// How many faces needed checking when the user last said "Not now".
+  let verifyDismissedAt = $state<number | null>(null);
+  /// The banner returns only once clearly more faces need checking.
+  const showVerify = $derived(
+    unconfirmedTotal > 0 &&
+      (verifyDismissedAt == null ||
+        (unconfirmedTotal >= verifyDismissedAt * 1.25 && unconfirmedTotal - verifyDismissedAt >= 20)),
+  );
   let clustersWithUnconfirmed = $state(0);
   let showModelUpgradeBanner = $state(false);
   let faceActionBusy = $state(false);
@@ -69,7 +78,7 @@
     if (faceActionBusy || running) return;
     if (
       !confirm(
-        "Re-run face detection with the upgraded model?\n\nThis clears existing face groups and names so Smriti can rebuild embeddings from scratch.",
+        "Look for faces again with the improved recognition?\n\nPeople and the names you gave them will be cleared and found again.",
       )
     )
       return;
@@ -91,6 +100,11 @@
     showModelUpgradeBanner = false;
     startFaceProcessing();
   }
+  function dismissVerify() {
+    verifyDismissedAt = unconfirmedTotal;
+    void library.uiState("people.verify_dismissed_at", String(unconfirmedTotal)).catch(() => {});
+  }
+
   function dismissModelUpgrade() {
     localStorage.setItem("smriti_model_upgrade_dismissed", "1");
     showModelUpgradeBanner = false;
@@ -161,12 +175,14 @@
   async function loadPending() {
     const seq = ++pendingSeq;
     try {
-      const [r, review] = await Promise.all([
+      const [r, review, dismissed] = await Promise.all([
         people.pendingFaceCount(),
         people.reviewFaceCount(),
+        library.uiState("people.verify_dismissed_at").catch(() => null),
       ]);
       if (!mounted || seq !== pendingSeq) return;
       pendingPhotos = r.pending_photos;
+      verifyDismissedAt = dismissed == null ? null : Number(dismissed);
       unconfirmedTotal = review.unconfirmed_total;
       clustersWithUnconfirmed = review.clusters_with_unconfirmed;
     } catch {
@@ -324,7 +340,7 @@
   <div class="resume-banner" style="border-color: var(--accent); background: color-mix(in oklab, var(--bg-card) 80%, var(--accent) 15%)">
     <div class="resume-text">
       <strong>Model upgraded</strong>
-      We've upgraded the face recognition model to AdaFace.
+      Smriti now recognises faces better.
       Re-run face detection to apply the improved embeddings.
     </div>
     <button class="primary" onclick={reRunFacesFromScratch} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Re-run detection</button>
@@ -345,16 +361,17 @@
   </div>
 {/if}
 
-{#if !running && unconfirmedTotal > 0}
+{#if !running && showVerify}
   <div class="resume-banner verify-banner">
     <div class="resume-text">
       <strong>{unconfirmedTotal.toLocaleString()}</strong>
-      face{unconfirmedTotal === 1 ? "" : "s"} need verification across {clustersWithUnconfirmed} {clustersWithUnconfirmed === 1 ? "person" : "people"}.
+      face{unconfirmedTotal === 1 ? "" : "s"} to check across {clustersWithUnconfirmed} {clustersWithUnconfirmed === 1 ? "person" : "people"}.
       <span class="hint">
-        Confirm or reject faces that might not belong to their assigned person.
+        Some might not be who Smriti thinks they are.
       </span>
     </div>
-    <a class="primary" href="#/review-faces" style="text-decoration:none;display:inline-flex;align-items:center;padding:7px 14px;border-radius:var(--r-md);font-weight:600">Verify now</a>
+    <a class="primary" href="#/review-faces" style="text-decoration:none;display:inline-flex;align-items:center;padding:7px 14px;border-radius:var(--r-md);font-weight:600">Check now</a>
+    <button class="ghost" onclick={dismissVerify}>Not now</button>
   </div>
 {/if}
 
@@ -392,7 +409,7 @@
     </div>
   {:else if clusters.length === 0 && !running}
     <div class="empty">
-      <p>No faces yet. Run face detection to start finding the people in your library.</p>
+      <p>No people yet. Let Smriti look for faces to find the people in your photos.</p>
       <button class="primary" onclick={startFaceProcessing} disabled={running || faceActionBusy || !assetSetup.ready?.faces}>Find faces</button>
     </div>
   {:else if clusters.length === 0 && running}

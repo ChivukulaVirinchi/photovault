@@ -69,7 +69,7 @@ const KIND_TITLE: Record<JobKind, string> = {
   bursts:           "Detecting bursts",
   thumbnails:       "Generating thumbnails",
   assets:           "Installing assets",
-  semantic:         "Indexing visual search",
+  semantic:         "Preparing photo search",
   geocoding:        "Resolving places",
   albumSuggestions: "Looking for trips",
   albumExport:      "Exporting album",

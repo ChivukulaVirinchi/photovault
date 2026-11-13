@@ -670,8 +670,25 @@ pub async fn albums_suggestions_list(
         let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
         let db = lib.db.lock().await;
         let repo = AlbumSuggestionRepo::new(&db.conn);
-        let suggestions: Vec<AlbumSuggestionDto> =
-            repo.get_pending()?.into_iter().map(Into::into).collect();
+        let offered: Vec<_> = repo
+            .get_pending()?
+            .into_iter()
+            .filter(|s| s.seen_count < smriti::db::album_suggestion_repo::MAX_TIMES_SHOWN)
+            .collect();
+        // Counted once per app run, however often the strip refreshes.
+        static COUNTED: std::sync::Mutex<Option<std::collections::HashSet<i64>>> =
+            std::sync::Mutex::new(None);
+        let fresh: Vec<i64> = {
+            let mut counted = COUNTED.lock().unwrap_or_else(|e| e.into_inner());
+            let counted = counted.get_or_insert_with(Default::default);
+            offered
+                .iter()
+                .map(|s| s.id)
+                .filter(|id| counted.insert(*id))
+                .collect()
+        };
+        repo.mark_seen(&fresh)?;
+        let suggestions: Vec<AlbumSuggestionDto> = offered.into_iter().map(Into::into).collect();
         let inputs = collect_suggestion_cover_inputs(&db.conn, &suggestions)?;
         (
             suggestions,

@@ -7,6 +7,10 @@
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::collections::{HashMap, HashSet};
 
+/// A suggestion passed over this many times without an answer stops being
+/// offered. Silence is an answer too.
+pub const MAX_TIMES_SHOWN: i64 = 6;
+
 /// A persisted album suggestion.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -131,11 +135,42 @@ impl<'a> AlbumSuggestionRepo<'a> {
         Ok(out)
     }
 
-    /// Delete suggestions older than `days` that are not pending.
+    /// The photos of every suggestion ever made, with its kind.
+    pub fn photo_sets_by_kind(
+        &self,
+    ) -> SqliteResult<Vec<(String, std::collections::HashSet<i64>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, photo_ids_json FROM album_suggestions")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (kind, json) = row?;
+            let ids: Vec<i64> = serde_json::from_str(&json).unwrap_or_default();
+            out.push((kind, ids.into_iter().collect()));
+        }
+        Ok(out)
+    }
+
+    /// Note that pending suggestions were shown (see `MAX_TIMES_SHOWN`).
+    pub fn mark_seen(&self, ids: &[i64]) -> SqliteResult<()> {
+        let mut stmt = self
+            .conn
+            .prepare("UPDATE album_suggestions SET seen_count = seen_count + 1 WHERE id = ?1")?;
+        for id in ids {
+            stmt.execute(params![id])?;
+        }
+        Ok(())
+    }
+
+    /// Delete accepted suggestions older than `days` (they're albums now).
+    /// Dismissals are kept: they're what stops a suggestion coming back.
     pub fn cleanup_old(&self, days: u32) -> SqliteResult<usize> {
         let affected = self.conn.execute(
             r#"DELETE FROM album_suggestions
-               WHERE status != 'pending'
+               WHERE status = 'accepted'
                  AND created_at < datetime('now', ?1)"#,
             params![format!("-{} days", days)],
         )?;

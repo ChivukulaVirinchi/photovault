@@ -47,6 +47,19 @@ pub struct FaceDetail {
 }
 
 /// Face database repository
+/// What a merge changed, so it can be undone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeReceipt {
+    pub source_id: i64,
+    pub target_id: i64,
+    pub source_name: Option<String>,
+    pub source_user_named: bool,
+    /// Faces that moved from the source to the target.
+    pub face_ids: Vec<i64>,
+    /// The target was unnamed and took the source's name.
+    pub target_took_name: bool,
+}
+
 pub struct FaceRepo<'a> {
     pub(crate) conn: &'a Connection,
 }

@@ -414,7 +414,7 @@
     const root = libraryStore.driveRoot;
     const placeholderId = `pending-semantic-index-${Date.now()}`;
     jobs.register(placeholderId, "semantic");
-    toasts.success("Indexing visual search...");
+    toasts.success("Preparing photo search…");
     try {
       const r = await semantic.startIndexing();
       jobs.dismiss(placeholderId);
@@ -496,7 +496,7 @@
       const preview = await library.exclusions.preview(path);
       if (!sameLibrary(root)) return;
       const count = preview.indexed_count;
-      const itemText = count === 1 ? "1 indexed item" : `${count.toLocaleString()} indexed items`;
+      const itemText = count === 1 ? "1 photo" : `${count.toLocaleString()} photos`;
       if (
         !confirm(
           `Exclude ${preview.relative_path}?\n\nSmriti will skip this folder in future scans. ${itemText} inside it will be removed from Smriti. Files stay on disk.`,
@@ -524,7 +524,7 @@
       if (!sameLibrary(root)) return;
       await loadExclusions();
       if (!sameLibrary(root)) return;
-      toasts.success("Exclusion removed. Run scan to index this folder again.");
+      toasts.success("Folder included again. Its photos come back on the next check.");
     } catch (e) {
       if (sameVisibleLibrary(root)) toasts.error(`Couldn't remove exclusion: ${commandErrorMessage(e)}`);
     } finally {
@@ -571,7 +571,7 @@
     const root = libraryStore.driveRoot;
     if (
       !confirm(
-        "Wipe every detected face, every cluster, and every face crop on disk, then re-run face detection?\n\nThis is irreversible. Names you've assigned to clusters will be lost.",
+        "Forget every face and person, then look for faces again?\n\nThis can't be undone. The names you gave people will be lost.",
       )
     )
       return;
@@ -704,7 +704,7 @@
         <span class="label-text">Enable AI features</span>
       </label>
       <p class="hint blurb">
-        Enables provider-backed Assistant features. Local visual search remains available when this is off.
+        Uses an online AI service you set up. Photo search works without it.
       </p>
     </section>
 
@@ -814,7 +814,7 @@
         </label>
         <p class="hint blurb">
           {networkDrive.detected
-            ? "Detected automatically. Smriti keeps its database in a mode that is safe on network shares."
+            ? "Detected automatically. Smriti works in a way that's safe on network drives."
             : "Turn on if this library is on a NAS or network share that Smriti didn't recognise."}
         </p>
       {/if}
@@ -860,7 +860,7 @@
             <div>
               <h4 class="subsection-title">Capture dates</h4>
               <p class="hint blurb">
-                Re-read dates for every photo and video using embedded metadata first, filename dates next, and file modified time only as a fallback.
+                Check again when each photo was taken: the date saved in the photo first, then the file name.
               </p>
             </div>
             <button class="ghost" onclick={refreshPhotoDates} disabled={refreshingDates || !hasLibrary}>
@@ -898,8 +898,8 @@
                   <strong class="mono" title={item.relative_path}>{item.relative_path}</strong>
                   <span class="hint">
                     {item.indexed_count === 0
-                      ? "No indexed items"
-                      : `${item.indexed_count.toLocaleString()} indexed ${item.indexed_count === 1 ? "item" : "items"} remaining`}
+                      ? "None of its photos are in your library"
+                      : `${item.indexed_count.toLocaleString()} of its ${item.indexed_count === 1 ? "photos is" : "photos are"} still in your library`}
                   </span>
                 </div>
                 <button class="ghost danger-soft" onclick={() => removeExclusion(item.relative_path)} disabled={exclusionsActing}>
@@ -924,7 +924,7 @@
         </span>
       </div>
       <p class="hint blurb">
-        Local runtimes, models, and offline data live outside the app binary. Smriti uses these when available and keeps browsing usable when optional assets are missing.
+        Some features need a one-time download. Everything else works without them.
       </p>
       {#if devMode.enabled}
         <div class="asset-actions">
@@ -947,7 +947,7 @@
           <div>
             <h4 class="subsection-title">Visual search</h4>
             <p class="hint blurb">
-              Search by image meaning and find visually similar photos. The model is optional and stored outside the app binary.
+              Search for what's in a photo and find ones that look alike. A one-time download.
             </p>
           </div>
           <span class="asset-status" data-status={visualSearchReady ? "active" : "missing"}>
@@ -965,7 +965,7 @@
           <p class="asset-path mono" title={semanticStatus.model_dir}>{semanticStatus.model_dir}</p>
           <div class="asset-actions">
             <button class="ghost" onclick={startSemanticIndexing} disabled={semanticRunning || !visualSearchReady || !hasLibrary}>
-              {semanticRunning ? "Indexing..." : "Index visual search"}
+              {semanticRunning ? "Preparing…" : "Prepare photo search"}
             </button>
             <button class="ghost" onclick={recheckVisualSearch} disabled={semanticRunning || assetsBusy}>
               Recheck visual search
@@ -1138,9 +1138,9 @@
         <ul class="counters">
           {#each [
             { n: h.total_photos, label: "Total photos", tone: "neutral" },
-            { n: h.inaccurate_dates, label: "Inaccurate dates", tone: h.inaccurate_dates > 0 ? "warn" : "ok", note: "Pulled from mtime — possibly wrong year." },
+            { n: h.inaccurate_dates, label: "Inaccurate dates", tone: h.inaccurate_dates > 0 ? "warn" : "ok", note: "Taken from the file date, so the year may be wrong." },
             { n: h.missing_dates, label: "No date at all", tone: h.missing_dates > 0 ? "warn" : "ok" },
-            { n: h.heic_count, label: "HEIC photos", tone: h.heic_decoder_available || h.heic_count === 0 ? "ok" : "warn", note: h.heic_decoder_available ? "Decoder available." : "Decoder NOT available — these won't render." },
+            { n: h.heic_count, label: "HEIC photos", tone: h.heic_decoder_available || h.heic_count === 0 ? "ok" : "warn", note: h.heic_decoder_available ? "These open normally." : "This computer can't show these yet." },
             { n: h.face_processed_no_faces, label: "Processed but no faces", tone: "neutral", note: "Likely face-less landscapes; nothing to fix." },
           ] as stat}
             <li class="counter" data-tone={stat.tone}>

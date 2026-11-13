@@ -27,6 +27,10 @@ export const library = {
     set: (forced: boolean) =>
       call<NetworkDriveDto>("library_network_drive_set", { forced }),
   },
+  /// A small remembered UI choice for this library, such as a dismissed
+  /// banner. Pass `value` to change it (`null` forgets it).
+  uiState: (key: string, value?: string | null) =>
+    call<string | null>("library_ui_state", value === undefined ? { key } : { key, value }),
   startScan: (scanHidden?: boolean) =>
     call<JobIdDto>("library_start_scan", { scan_hidden_folders: scanHidden }),
   /// Trash every indexed photo whose file is no longer on disk. Used to
