@@ -31,12 +31,16 @@
 let
   version = "0.5.0";
 
-  src = fetchFromGitHub {
-    owner = "ChivukulaVirinchi";
-    repo = "photovault";
-    rev = "v${version}";
-    hash = "sha256-4d+98BghGaWC8vb6ftI34uIQevs0+Ss7hKqoWbyj+0E=";
-  };
+  src = lib.cleanSourceWith {
+     src = ../.;
+     filter = name: type:
+       let base = baseNameOf (toString name); in
+       !(builtins.elem base [
+         ".git" ".direnv" "node_modules" "target" "result" "dist"
+         "data" "website" "notebooks"
+       ])
+       && !(lib.hasPrefix "result" base);
+   };
 
   # Svelte 5 + Vite 8 frontend. Tauri embeds these assets at *compile time*
   # (custom-protocol), so dist must exist before cargo runs.
