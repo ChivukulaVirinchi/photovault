@@ -69,9 +69,10 @@ async fn run_metadata_job(
             .query_row(
                 "SELECT COUNT(*) FROM photos WHERE metadata_extracted = FALSE AND is_trashed = FALSE",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0),
             )
             .unwrap_or(0)
+            .max(0) as u64
     };
     let total = total as u64;
     let mut done = 0u64;

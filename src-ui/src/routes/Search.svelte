@@ -25,10 +25,13 @@
 <script lang="ts">
   import { photoLabel } from "../lib/a11y";
   import { ignoreShortcut } from "../lib/keys";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { commandErrorMessage } from "../lib/api";
-  import { search, trash } from "../lib/api/all";
+  import { people, search, trash } from "../lib/api/all";
+  import { countOf } from "../lib/format";
+  import History from "lucide-svelte/icons/history";
+  import type { PersonDto } from "../lib/api/types";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { dataRevision } from "../lib/stores/dataRevision.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
@@ -130,6 +133,150 @@
 
   let composing = false;
   let pagingError = $state(false);
+
+  // ---------- suggestions: @people, #things, recent searches ----------
+  type Suggest =
+    | { kind: "people"; start: number; end: number; typed: string; matches: PersonDto[] }
+    | { kind: "thing" }
+    | { kind: "recent"; items: string[] };
+  let suggest = $state<Suggest | null>(null);
+  let active = $state(0);
+  let focused = $state(false);
+  let recent = $state<string[]>([]);
+  let named: PersonDto[] | null = null;
+
+  /// Named people, most photographed first, fetched on the first `@`.
+  async function namedPeople(): Promise<PersonDto[]> {
+    if (!named) {
+      const list = await people.list({ namedOnly: true });
+      named = list.filter((p) => p.name).sort((a, b) => b.photo_count - a.photo_count);
+    }
+    return named;
+  }
+
+  /// What to offer for the text before the caret: people after `@`, a hint
+  /// after `#`, recent searches in an empty box.
+  async function updateSuggest() {
+    const el = inputEl;
+    if (!el || !focused) {
+      suggest = null;
+      return;
+    }
+    const caret = el.selectionStart ?? q.length;
+    const before = q.slice(0, caret);
+    const at = before.lastIndexOf("@");
+    const hash = before.lastIndexOf("#");
+    if (at >= 0 && at > hash && (at === 0 || /\s/.test(before[at - 1]))) {
+      const typed = before.slice(at + 1).replace(/^"/, "");
+      const want = typed.toLowerCase();
+      const list = await namedPeople();
+      if (inputEl !== el || (el.selectionStart ?? q.length) !== caret) return;
+      const matches = list
+        .filter((p) => {
+          const name = p.name!.toLowerCase();
+          return name.startsWith(want) || name.split(/\s+/).some((w) => w.startsWith(want));
+        })
+        .slice(0, 6);
+      // A finished name and a space mean the user has moved on.
+      const done = matches.length === 0 || (/\s$/.test(typed) && matches.every((p) => !p.name!.toLowerCase().startsWith(want)));
+      suggest = done ? null : { kind: "people", start: at, end: caret, typed, matches };
+      active = 0;
+      return;
+    }
+    if (hash >= 0 && hash > at && !/\s/.test(before.slice(hash + 1))) {
+      suggest = { kind: "thing" };
+      return;
+    }
+    suggest = q.trim() === "" && recent.length > 0 ? { kind: "recent", items: recent } : null;
+    active = 0;
+  }
+
+  async function onFocus() {
+    focused = true;
+    try {
+      recent = await search.recent();
+    } catch {
+      recent = [];
+    }
+    void updateSuggest();
+  }
+
+  function pickPerson(person: PersonDto) {
+    const s = suggest;
+    if (s?.kind !== "people" || !person.name) return;
+    const insert = `@${person.name} `;
+    q = q.slice(0, s.start) + insert + q.slice(s.end).replace(/^\s+/, "");
+    suggest = null;
+    const caret = s.start + insert.length;
+    void tick().then(() => {
+      inputEl?.focus();
+      inputEl?.setSelectionRange(caret, caret);
+    });
+    onInput();
+  }
+
+  function pickRecent(item: string) {
+    q = item;
+    suggest = null;
+    void run();
+  }
+
+  async function clearRecent() {
+    try {
+      await search.clearRecent();
+    } catch {}
+    recent = [];
+    suggest = null;
+  }
+
+  /// Keys the open list takes over. True when it handled the key.
+  function suggestKey(e: KeyboardEvent): boolean {
+    const s = suggest;
+    if (!s || s.kind === "thing") {
+      if (s && e.key === "Escape") {
+        suggest = null;
+        return true;
+      }
+      return false;
+    }
+    const count = s.kind === "people" ? s.matches.length : s.items.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      active = (active + (e.key === "ArrowDown" ? 1 : count - 1)) % count;
+      return true;
+    }
+    if (e.key === "Escape") {
+      suggest = null;
+      return true;
+    }
+    if (e.key === "Enter" || (e.key === "Tab" && s.kind === "people")) {
+      if (s.kind === "people") pickPerson(s.matches[active]);
+      else pickRecent(s.items[active]);
+      return true;
+    }
+    return false;
+  }
+
+  /// The typed part of a suggested name, for picking it out.
+  function splitName(name: string, typed: string): [string, string, string] {
+    const want = typed.trim().toLowerCase();
+    if (!want) return ["", "", name];
+    const lower = name.toLowerCase();
+    // At the start, or at the start of a later word: "Raju" in "Uncle Raju".
+    const at = lower.startsWith(want)
+      ? 0
+      : lower.split(/(\s+)/).reduce<[number, number]>(
+          ([found, pos], part) => [found < 0 && pos > 0 && part.startsWith(want) ? pos : found, pos + part.length],
+          [-1, 0],
+        )[0];
+    if (at < 0) return ["", "", name];
+    return [name.slice(0, at), name.slice(at, at + want.length), name.slice(at + want.length)];
+  }
+
+  /// A search the user settled on goes into the recent list.
+  function rememberQuery() {
+    const query = q.trim();
+    if (query) void search.remember(query).catch(() => {});
+  }
 
   async function run() {
     if (debounceId) window.clearTimeout(debounceId);
@@ -486,11 +633,18 @@
     <input
       bind:this={inputEl}
       bind:value={q}
-      oninput={onInput}
+      oninput={() => { onInput(); void updateSuggest(); }}
+      onfocus={onFocus}
+      onblur={() => { focused = false; suggest = null; }}
+      onclick={() => void updateSuggest()}
       oncompositionstart={() => { composing = true; onInput(); }}
       oncompositionend={() => { composing = false; onInput(); }}
-      onkeydown={(event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); void run(); } }}
-      placeholder="Search photos, people, places, and albums"
+      onkeydown={(event) => {
+        if (event.isComposing) return;
+        if (suggestKey(event)) { event.preventDefault(); return; }
+        if (event.key === "Enter") { event.preventDefault(); rememberQuery(); void run(); }
+      }}
+      placeholder="Search photos, people, places · @someone #something"
       class="search-input"
       aria-label="Search"
     />
@@ -501,11 +655,63 @@
       </button>
     {/if}
   </div>
+  {#if suggest}
+    <!-- Items take the mouse down so the input keeps focus. -->
+    <div class="suggest" role="listbox" aria-label={suggest.kind === "people" ? "People" : suggest.kind === "recent" ? "Recent searches" : "Search tip"}>
+      {#if suggest.kind === "people"}
+        {@const s = suggest}
+        <div class="suggest-head">People</div>
+        {#each s.matches as p, i (p.id)}
+          {@const [lead, hit, rest] = splitName(p.name ?? "", s.typed)}
+          <button
+            type="button"
+            class="suggest-item"
+            class:active={i === active}
+            role="option"
+            aria-selected={i === active}
+            onmousedown={(e) => { e.preventDefault(); pickPerson(p); }}
+            onmouseenter={() => (active = i)}
+          >
+            {#if p.representative_thumbnail_path}
+              <img class="avatar" src={thumbUrl(libraryStore.driveRoot, p.representative_thumbnail_path) ?? ""} alt="" />
+            {:else}
+              <span class="avatar initial">{(p.name ?? "?").slice(0, 1)}</span>
+            {/if}
+            <span class="name">{lead}<strong>{hit}</strong>{rest}</span>
+            <span class="meta mono">{countOf(p.photo_count, "photo")}</span>
+          </button>
+        {/each}
+      {:else if suggest.kind === "thing"}
+        <p class="suggest-hint">Looks for what's in the photo, like <em>#beach</em> or <em>#birthday cake</em>.</p>
+      {:else}
+        {@const s = suggest}
+        <div class="suggest-head">
+          Recent
+          <button type="button" class="suggest-clear" onmousedown={(e) => { e.preventDefault(); void clearRecent(); }}>Clear</button>
+        </div>
+        {#each s.items as item, i (item)}
+          <button
+            type="button"
+            class="suggest-item"
+            class:active={i === active}
+            role="option"
+            aria-selected={i === active}
+            onmousedown={(e) => { e.preventDefault(); pickRecent(item); }}
+            onmouseenter={() => (active = i)}
+          >
+            <History size={14} strokeWidth={1.75} />
+            <span class="name">{item}</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+  {/if}
 </div>
 
 {#if error}<p class="error" style="padding: var(--s-3) var(--s-7)">{error}</p>{/if}
 
-<div class="page" bind:this={pageEl} use:marqueeSelect={{ getAllIds: () => visiblePhotoIds }}>
+<div class="page" bind:this={pageEl} use:marqueeSelect={{ getAllIds: () => visiblePhotoIds }}
+  onclickcapture={(e) => { if ((e.target as Element | null)?.closest("a")) rememberQuery(); }}>
   {#if results}
     {#if results.interpreted.length > 0}
       <div class="chips interpreted" aria-label="Interpreted filters">
@@ -655,7 +861,87 @@
 {/if}
 
 <style>
-  .search-row { padding: var(--s-4) var(--s-7) 0; }
+  .search-row { padding: var(--s-4) var(--s-7) 0; position: relative; }
+  .suggest {
+    position: absolute;
+    left: var(--s-7);
+    right: var(--s-7);
+    top: calc(100% + 6px);
+    z-index: 20;
+    max-width: 520px;
+    padding: 6px;
+    background: var(--bg-paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    box-shadow: 0 18px 40px -14px rgb(0 0 0 / 45%), 0 2px 6px rgb(0 0 0 / 12%);
+    animation: suggest-in 140ms var(--ease) both;
+  }
+  @keyframes suggest-in { from { opacity: 0; transform: translateY(-4px); } }
+  @media (prefers-reduced-motion: reduce) { .suggest { animation: none; } }
+  .suggest-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px 6px;
+    font-size: var(--t-xs);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+  .suggest-clear {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 500;
+  }
+  .suggest-clear:hover { color: var(--ink); }
+  .suggest-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-soft);
+    text-align: left;
+    font-size: var(--t-sm);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  .suggest-item.active { background: var(--bg-card); color: var(--ink); }
+  .suggest-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .suggest-item .name strong { color: var(--ink); font-weight: 600; }
+  .suggest-item .meta { color: var(--ink-faint); font-size: var(--t-xs); }
+  .avatar {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 0 0 1px var(--line);
+  }
+  .avatar.initial {
+    display: inline-grid;
+    place-items: center;
+    background: var(--bg-card);
+    color: var(--ink-muted);
+    font-size: var(--t-xs);
+    font-weight: 600;
+  }
+  .suggest-hint {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: var(--t-sm);
+    color: var(--ink-muted);
+  }
+  .suggest-hint em { color: var(--ink-soft); font-style: normal; font-weight: 500; }
   .bar {
     display: flex;
     align-items: center;
@@ -724,6 +1010,11 @@
     flex-wrap: wrap;
     gap: var(--s-2);
     margin: 0 0 var(--s-4);
+  }
+  .interpreted .chip[data-kind="missing"] {
+    border-style: dashed;
+    color: var(--hot);
+    border-color: color-mix(in oklab, var(--hot) 45%, var(--line));
   }
   .interpreted .chip {
     display: inline-flex;

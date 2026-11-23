@@ -6,7 +6,8 @@ use tauri::State;
 use smriti::db::{db_path_for, open_secondary};
 use smriti::services::search::SearchService;
 use smriti::services::semantic::{
-    relevant_text_search_candidates, SemanticSearchService, SEMANTIC_TEXT_SEARCH_LIMIT,
+    relevant_candidates_up_to, relevant_text_search_candidates, SemanticSearchService,
+    SEMANTIC_TEXT_SEARCH_LIMIT,
 };
 
 use crate::dto::SearchResultsDto;
@@ -50,18 +51,24 @@ pub async fn search_query(
         .clamp(1, SearchService::UNIFIED_SEARCH_MAX_PHOTOS);
     let unified = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_secondary(&db_path)?;
-        let semantic_ids = semantic_photo_ids(
+        // Visual search runs on what the query leaves after people, places
+        // and dates, and only among the photos that pass those filters.
+        let mut semantic = |text: &str, within: Option<&std::collections::HashSet<i64>>| {
+            semantic_photo_ids(
+                &conn,
+                &drive_root,
+                &semantic_index,
+                &semantic_runner,
+                &semantic_query,
+                text,
+                within,
+            )
+            .unwrap_or_default()
+        };
+        Ok::<_, CommandError>(SearchService::search_unified_page_with(
             &conn,
-            &drive_root,
-            &semantic_index,
-            &semantic_runner,
-            &semantic_query,
             &q,
-        )?;
-        Ok::<_, CommandError>(SearchService::search_unified_page(
-            &conn,
-            &q,
-            semantic_ids,
+            &mut semantic,
             offset,
             limit,
         )?)
@@ -78,6 +85,45 @@ fn should_try_semantic(q: &str) -> bool {
     trimmed.len() >= 3 && trimmed.chars().any(char::is_alphabetic)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SearchRememberArgs {
+    pub q: String,
+}
+
+/// Remember a search the user settled on, for the recent list.
+#[tauri::command]
+pub async fn search_remember(
+    state: State<'_, AppState>,
+    args: SearchRememberArgs,
+) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    SearchService::remember_query(&db.conn, &args.q)?;
+    Ok(())
+}
+
+/// The latest searches, newest first.
+#[tauri::command]
+pub async fn search_recent(state: State<'_, AppState>) -> CommandResult<Vec<String>> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    Ok(SearchService::recent_queries(&db.conn, 6)?)
+}
+
+#[tauri::command]
+pub async fn search_recent_clear(state: State<'_, AppState>) -> CommandResult<()> {
+    let lib_guard = state.library.read().await;
+    let lib = lib_guard.as_ref().ok_or(CommandError::LibraryClosed)?;
+    let db = lib.db.lock().await;
+    SearchService::clear_recent(&db.conn)?;
+    Ok(())
+}
+
+/// Most visual matches kept within a filtered set ("Dad and Mom food").
+const WITHIN_RESULT_CAP: usize = 1_000;
+
 fn semantic_photo_ids(
     conn: &rusqlite::Connection,
     drive_root: &std::path::Path,
@@ -89,10 +135,24 @@ fn semantic_photo_ids(
     >,
     semantic_query: &std::sync::Arc<std::sync::Mutex<SemanticQueryPageCache>>,
     q: &str,
+    within: Option<&std::collections::HashSet<i64>>,
 ) -> Result<Vec<i64>, CommandError> {
     if !should_try_semantic(q) {
         return Ok(Vec::new());
     }
+    // Pages of one search share a candidate list; the filtered set is part
+    // of what makes it the same search.
+    let cache_key = match within {
+        None => q.to_owned(),
+        Some(ids) => {
+            use std::hash::{Hash, Hasher};
+            let mut sorted: Vec<i64> = ids.iter().copied().collect();
+            sorted.sort_unstable();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            sorted.hash(&mut hasher);
+            format!("{q}\u{1f}{:x}", hasher.finish())
+        }
+    };
 
     let revision = conn
         .query_row(
@@ -116,7 +176,7 @@ fn semantic_photo_ids(
     // warmup thread holds the runner mutex for the first seconds after
     // startup.
     if let Ok(mut cache) = semantic_query.try_lock() {
-        if let Some(cached) = cache.get(q, revision) {
+        if let Some(cached) = cache.get(&cache_key, revision) {
             return Ok(cached);
         }
     }
@@ -165,7 +225,8 @@ fn semantic_photo_ids(
         let Ok(mut cache) = semantic_index.try_lock() else {
             return Ok(Vec::new());
         };
-        match svc.search_vector_cached(conn, &mut cache, &vector, SEMANTIC_TEXT_SEARCH_LIMIT) {
+        let limit = within.map_or(SEMANTIC_TEXT_SEARCH_LIMIT, |ids| ids.len().max(1));
+        match svc.search_vector_cached_within(conn, &mut cache, &vector, limit, within) {
             Ok(candidates) => candidates,
             Err(err) => {
                 tracing::debug!("semantic search skipped: {}", err);
@@ -174,13 +235,16 @@ fn semantic_photo_ids(
         }
     };
 
-    let photo_ids = relevant_text_search_candidates(candidates)
-        .into_iter()
-        .map(|c| c.photo_id)
-        .collect::<Vec<_>>();
+    // Within a filtered set every match is already one of the user's people
+    // or dates, so keep more of them than a whole-library search does.
+    let relevant = match within {
+        None => relevant_text_search_candidates(candidates),
+        Some(_) => relevant_candidates_up_to(candidates, WITHIN_RESULT_CAP),
+    };
+    let photo_ids = relevant.into_iter().map(|c| c.photo_id).collect::<Vec<_>>();
 
     if let Ok(mut cache) = semantic_query.try_lock() {
-        cache.remember(q.to_owned(), revision, photo_ids.clone());
+        cache.remember(cache_key, revision, photo_ids.clone());
     }
     Ok(photo_ids)
 }

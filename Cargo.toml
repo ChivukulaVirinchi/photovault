@@ -66,7 +66,7 @@ name = "smriti"
 
 [dependencies]
 # Database
-rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+rusqlite = { version = "0.43", features = ["bundled", "blob"] }
 
 # Async runtime
 tokio.workspace = true

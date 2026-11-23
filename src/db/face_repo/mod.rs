@@ -4,9 +4,12 @@
 
 mod gallery;
 mod read;
+mod undo;
 mod write;
 
 use rusqlite::Connection;
+
+pub use undo::{FaceSnapshot, FaceState};
 
 use crate::ml::FaceEmbedding;
 

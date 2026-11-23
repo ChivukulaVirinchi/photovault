@@ -87,6 +87,7 @@ pub fn run() {
             commands::people::people_unmerge,
             commands::people::people_face_ignore,
             commands::people::people_face_skip,
+            commands::people::people_face_undo,
             commands::people::people_memories_hidden,
             commands::people::people_delete,
             commands::people::people_start_processing,
@@ -129,6 +130,9 @@ pub fn run() {
             commands::assistant::assistant_clear,
             // search
             commands::search::search_query,
+            commands::search::search_remember,
+            commands::search::search_recent,
+            commands::search::search_recent_clear,
             // semantic search
             commands::semantic::semantic_status,
             commands::semantic::semantic_start_indexing,

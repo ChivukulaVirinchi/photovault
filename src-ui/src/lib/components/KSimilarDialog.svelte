@@ -4,6 +4,7 @@
   import { people, type FaceDetailDto } from "../api/all";
   import { commandErrorMessage } from "../api";
   import FaceCell from "./FaceCell.svelte";
+  import { offerFaceUndo } from "../faceUndo";
   import X from "lucide-svelte/icons/x";
 
   interface Props {
@@ -15,12 +16,12 @@
   let faces = $state<FaceDetailDto[]>([]);
   let busy = $state(false);
   let error = $state<string | null>(null);
-  let message = $state<string | null>(null);
   let mounted = true;
 
   async function load() {
     try {
-      const next = await people.kSimilarToCluster(clusterId, 20);
+      // Enough to work through in one sitting without a "load more".
+      const next = await people.kSimilarToCluster(clusterId, 48);
       if (!mounted) return;
       faces = next;
     } catch (e) {
@@ -29,14 +30,22 @@
     }
   }
 
-  async function confirmFace(faceId: number) {
+  /// A decision on one face, with Undo that puts it back in its place.
+  async function decide(faceId: number, act: () => Promise<string>, done: string) {
     if (busy) return;
     busy = true;
+    const index = faces.findIndex((f) => f.face_id === faceId);
+    const face = faces[index];
     try {
-      await people.faceConfirmToCluster(faceId, clusterId);
+      const token = await act();
       if (!mounted) return;
       faces = faces.filter((f) => f.face_id !== faceId);
-      message = "Face confirmed.";
+      offerFaceUndo(token, done, () => {
+        if (!mounted || !face) return;
+        const next = [...faces];
+        next.splice(Math.min(index, next.length), 0, face);
+        faces = next;
+      });
     } catch (e) {
       if (!mounted) return;
       error = commandErrorMessage(e);
@@ -45,20 +54,19 @@
     }
   }
 
-  async function rejectFace(faceId: number) {
-    if (busy) return;
-    busy = true;
-    try {
-      await people.faceReject(faceId, clusterId);
-      if (!mounted) return;
-      faces = faces.filter((f) => f.face_id !== faceId);
-      message = "Face rejected.";
-    } catch (e) {
-      if (!mounted) return;
-      error = commandErrorMessage(e);
-    } finally {
-      if (mounted) busy = false;
-    }
+  const confirmFace = (faceId: number) =>
+    decide(faceId, () => people.faceConfirmToCluster(faceId, clusterId), "Added to this person");
+  const rejectFace = (faceId: number) =>
+    decide(faceId, () => people.faceReject(faceId, clusterId), "Not this person");
+
+  /// How close a face is to this person's photos, as a share of a perfect match.
+  const closeness = (score: number) => `${Math.round(Math.max(0, score) * 100)}%`;
+
+  /// The face's photo, for context; decisions made so far are kept.
+  function openPhoto(photoId: number) {
+    if (!photoId || busy) return;
+    onclose();
+    window.location.hash = `#/photo?id=${photoId}`;
   }
 
   function requestClose() {
@@ -98,8 +106,8 @@
     <header>
       <h3>Find more like this</h3>
       <p class="hint">
-        These faces may belong to this person but weren't clustered together.
-        Confirm or reject each one.
+        Faces that look like this person, closest first. Keep the ones that are
+        them; click a face to see its photo.
       </p>
       <button
         class="close-btn"
@@ -114,9 +122,6 @@
     {#if error}
       <p class="error">{error}</p>
     {/if}
-    {#if message}
-      <p class="msg">{message}</p>
-    {/if}
 
     <div class="grid-scroll">
       {#if faces.length > 0}
@@ -124,8 +129,11 @@
           {#each faces as f (f.face_id)}
             <FaceCell
               face={{ face_id: f.face_id, user_confirmed: f.user_confirmed, thumbnail_path: f.thumbnail_path }}
+              size={148}
+              caption={closeness(f.confidence)}
               onConfirm={confirmFace}
               onReject={rejectFace}
+              onClick={() => openPhoto(f.photo_id)}
               showActions={true}
               busy={busy}
             />
@@ -160,7 +168,7 @@
     border: 1px solid var(--line);
     border-radius: var(--r-lg, 12px);
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
-    width: min(520px, 100%);
+    width: min(880px, 92vw);
     max-height: min(80vh, calc(100vh - 2 * var(--s-4)));
     display: flex;
     flex-direction: column;
@@ -211,13 +219,6 @@
     font-size: var(--t-xs);
     margin: 0;
   }
-  .msg {
-    padding: var(--s-2) var(--s-5);
-    background: color-mix(in oklab, var(--bg-paper) 80%, var(--keep));
-    color: var(--keep);
-    font-size: var(--t-xs);
-    margin: 0;
-  }
   .grid-scroll {
     flex: 1 1 auto;
     min-height: 0;
@@ -226,8 +227,9 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    gap: var(--s-2);
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    justify-items: center;
+    gap: var(--s-3);
   }
   .empty {
     padding: var(--s-6) var(--s-4);

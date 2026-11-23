@@ -39,7 +39,7 @@ reqwest.workspace = true
 
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+rusqlite = { version = "0.43", features = ["bundled", "blob"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 open = "5"

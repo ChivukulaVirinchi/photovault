@@ -134,7 +134,10 @@ impl Facts {
             );
             if let Ok(mut stmt) = conn.prepare(&sql) {
                 let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
-                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, usize>(1)?))
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)? as usize,
+                    ))
                 });
                 for (name, count) in rows.into_iter().flatten().flatten() {
                     facts.faces += 1;

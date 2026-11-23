@@ -6,6 +6,7 @@
   import { commandErrorMessage } from "../lib/api";
   import { people, trash, type FaceDetailDto } from "../lib/api/all";
   import { toasts } from "../lib/stores/toast.svelte";
+  import { offerFaceUndo } from "../lib/faceUndo";
   import { libraryStore } from "../lib/stores/library.svelte";
   import { browseContext } from "../lib/stores/browseContext.svelte";
   import { photoVisibility } from "../lib/stores/photoVisibility.svelte";
@@ -330,45 +331,33 @@
     if (remaining < 900) void loadMorePhotos();
   }
 
-  async function confirmFace(faceId: number) {
+  /// A decision on a face in "Verify these", with Undo that puts the face
+  /// back where it was.
+  async function decide(faceId: number, act: (id: number) => Promise<string>, message: string) {
     if (verifyBusy) return;
     const seq = loadSeq;
     const personId = id;
+    const index = unconfirmedFaces.findIndex((f) => f.face_id === faceId);
+    const face = unconfirmedFaces[index];
     verifyBusy = true;
     try {
-      await people.faceConfirm(faceId);
+      const token = await act(faceId);
       if (!mounted || seq !== loadSeq || personId !== id) return;
       unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
+      offerFaceUndo(token, message, () => {
+        if (!mounted || seq !== loadSeq || personId !== id || !face) return;
+        const next = [...unconfirmedFaces];
+        next.splice(Math.min(index, next.length), 0, face);
+        unconfirmedFaces = next;
+      });
     } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
     finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
   }
 
-  async function rejectFace(faceId: number) {
-    if (verifyBusy) return;
-    const seq = loadSeq;
-    const personId = id;
-    verifyBusy = true;
-    try {
-      await people.faceReject(faceId);
-      if (!mounted || seq !== loadSeq || personId !== id) return;
-      unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
-    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
-    finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
-  }
-
-  async function ignoreFace(faceId: number) {
-    if (verifyBusy) return;
-    const seq = loadSeq;
-    const personId = id;
-    verifyBusy = true;
-    try {
-      await people.faceIgnore(faceId);
-      if (!mounted || seq !== loadSeq || personId !== id) return;
-      unconfirmedFaces = unconfirmedFaces.filter((f) => f.face_id !== faceId);
-      toasts.info("Got it. That's not a face");
-    } catch (e) { if (mounted && seq === loadSeq && personId === id) error = commandErrorMessage(e); }
-    finally { if (mounted && seq === loadSeq && personId === id) verifyBusy = false; }
-  }
+  const personName = $derived(person?.name ?? "this person");
+  const confirmFace = (faceId: number) => decide(faceId, people.faceConfirm, `That's ${personName}`);
+  const rejectFace = (faceId: number) => decide(faceId, (f) => people.faceReject(f), `Not ${personName}`);
+  const ignoreFace = (faceId: number) => decide(faceId, people.faceIgnore, "Not a face");
 
   async function toggleMemories() {
     if (!person || actionBusy) return;

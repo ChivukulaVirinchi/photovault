@@ -4,6 +4,7 @@
 //! high-volume embedding payload lives in `.photovault/semantic/...`
 //! beside thumbnails and other per-library cache data.
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -174,7 +175,13 @@ struct SemanticVectorIndex {
 }
 
 impl SemanticVectorIndex {
-    fn search(&self, query: &[f32], limit: usize) -> Vec<SemanticCandidate> {
+    /// The `limit` closest photos to `query`, only among `within` if given.
+    fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+        within: Option<&HashSet<i64>>,
+    ) -> Vec<SemanticCandidate> {
         if self.photo_ids.is_empty() || limit == 0 {
             return Vec::new();
         }
@@ -182,12 +189,16 @@ impl SemanticVectorIndex {
             .vectors
             .iter()
             .zip(&self.photo_ids)
+            .filter(|(_, photo_id)| within.is_none_or(|w| w.contains(photo_id)))
             .map(|(vector, photo_id)| SemanticCandidate {
                 photo_id: *photo_id,
                 score: cosine(query, vector).clamp(-1.0, 1.0),
             })
             .collect();
         let keep = limit.min(candidates.len());
+        if keep == 0 {
+            return Vec::new();
+        }
         candidates.select_nth_unstable_by(keep - 1, |a, b| {
             b.score
                 .total_cmp(&a.score)
@@ -470,6 +481,20 @@ impl SemanticSearchService {
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticCandidate>, String> {
+        self.search_vector_cached_within(conn, cache, query, limit, None)
+    }
+
+    /// [`Self::search_vector_cached`], scored only among `within` when given:
+    /// a search with people or dates looks for the best matches among
+    /// those photos, not for those photos among the library's best.
+    pub fn search_vector_cached_within(
+        &self,
+        conn: &Connection,
+        cache: &mut SemanticIndexCache,
+        query: &[f32],
+        limit: usize,
+        within: Option<&HashSet<i64>>,
+    ) -> Result<Vec<SemanticCandidate>, String> {
         if query.len() != SEMANTIC_DIM {
             return Ok(Vec::new());
         }
@@ -487,7 +512,7 @@ impl SemanticSearchService {
         Ok(cache
             .index
             .as_ref()
-            .map(|idx| idx.search(query, limit))
+            .map(|idx| idx.search(query, limit, within))
             .unwrap_or_default())
     }
 
@@ -498,7 +523,7 @@ impl SemanticSearchService {
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticCandidate>, String> {
-        Ok(self.build_vector_index(conn)?.search(query, limit))
+        Ok(self.build_vector_index(conn)?.search(query, limit, None))
     }
 
     fn build_vector_index(&self, conn: &Connection) -> Result<SemanticVectorIndex, String> {
@@ -1031,7 +1056,18 @@ where
 }
 
 pub fn relevant_text_search_candidates(
+    candidates: Vec<SemanticCandidate>,
+) -> Vec<SemanticCandidate> {
+    relevant_candidates_up_to(candidates, SEMANTIC_TEXT_RESULT_CAP)
+}
+
+/// [`relevant_text_search_candidates`] with a chosen cap. Searches within
+/// a filtered set keep more: every match there is already one of the
+/// user's people or dates. The absolute floor still applies, so a set with
+/// nothing like the query returns nothing rather than its least-bad photos.
+pub fn relevant_candidates_up_to(
     mut candidates: Vec<SemanticCandidate>,
+    cap: usize,
 ) -> Vec<SemanticCandidate> {
     candidates.sort_by(|a, b| {
         b.score
@@ -1051,7 +1087,7 @@ pub fn relevant_text_search_candidates(
     candidates
         .into_iter()
         .filter(|c| c.score >= threshold)
-        .take(SEMANTIC_TEXT_RESULT_CAP)
+        .take(cap)
         .collect()
 }
 

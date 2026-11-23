@@ -20,6 +20,11 @@
     onClick?: (faceId: number) => void;
     /// Always show action buttons (not just on hover) — used in KSimilarDialog.
     showActions?: boolean;
+    /// Side in px. Large cells keep the face clear and put the actions in a
+    /// bar along the bottom instead of over it.
+    size?: number;
+    /// A quiet note in the corner, such as how close a match is.
+    caption?: string | null;
     /// Disable all interaction.
     busy?: boolean;
   }
@@ -32,8 +37,11 @@
     onIgnore,
     onClick,
     showActions = false,
+    size = 80,
+    caption = null,
     busy = false,
   }: Props = $props();
+  const large = $derived(size >= 120);
 
   let hover = $state(false);
 
@@ -55,6 +63,9 @@
   class:unconfirmed
   class:hover
   class:busy
+  class:large
+  style:width="{size}px"
+  style:height="{size}px"
   onmouseenter={() => (hover = true)}
   onmouseleave={() => (hover = false)}
   onfocusin={() => (focused = true)}
@@ -74,6 +85,10 @@
     <img src={faceCropUrl(face.face_id) ?? ""} alt="" loading="lazy" />
   {:else}
     <span class="placeholder small">no face</span>
+  {/if}
+
+  {#if caption}
+    <span class="caption mono">{caption}</span>
   {/if}
 
   {#if (hover || focused || showActions) && !busy}
@@ -172,6 +187,30 @@
     gap: 2px;
     background: rgba(0, 0, 0, 0.45);
     animation: fade-in 120ms var(--ease);
+  }
+  .caption {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    padding: 1px 6px;
+    border-radius: var(--r-pill, 999px);
+    background: rgb(15 16 21 / 55%);
+    color: #e7eaf0;
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  .face-cell.large {
+    border-radius: var(--r-lg, 12px);
+  }
+  .face-cell.large .actions {
+    inset: auto 0 0 0;
+    padding: 18px 8px 8px;
+    gap: 8px;
+    background: linear-gradient(to top, rgb(10 11 14 / 72%), transparent);
+  }
+  .face-cell.large .action-btn {
+    width: 32px;
+    height: 32px;
   }
   .action-btn {
     width: 26px;

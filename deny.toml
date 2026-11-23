@@ -10,15 +10,11 @@ yanked = "warn"
 # drifts faster than our transitive deps can follow. We fail on actual
 # vulnerabilities and on yanks; unmaintained/unsound surface as info.
 unmaintained = "none"
-ignore = [
-    # Known transitive unmaintained/yank chain. Kept documented so future
-    # audits don't re-investigate the same ground. These no longer block
-    # CI (see `unmaintained = "none"` above) but we track them here anyway.
-    "RUSTSEC-2024-0436",  # paste — transitive via iced/wgpu, image/rav1e, imageproc/nalgebra
-    "RUSTSEC-2025-0058",  # custom_derive — transitive via iced
-    "RUSTSEC-2024-0384",  # instant — transitive via iced/wgpu/parking_lot
-    { crate = "core2@0.4.0", reason = "yanked; pinned transitively by bitstream-io via rav1e; no upstream replacement" },
-]
+# Only advisories that still match something in Cargo.lock. An entry that
+# outlives its crate would silently mute the advisory if the crate came back,
+# so a stale one fails the check.
+unused-ignored-advisory = "deny"
+ignore = []
 
 [licenses]
 version = 2

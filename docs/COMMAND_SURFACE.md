@@ -515,12 +515,13 @@ ledger. Re-running the same archive set resumes idempotently.
 | `people.unclustered_faces` | `{ cursor: Option<String>, limit: Option<u32> }` | `Page<FaceDetailDto>` | unclustered faces for People review prompt |
 | `people.next_unconfirmed_faces` | `{ limit: Option<u32> }` | `Page<FaceDetailDto>` | one batch from the cluster with the most unconfirmed faces; default/max 200 |
 | `people.review_face_count` | `{}` | `ReviewFaceCountDto` | count for manual face review |
-| `people.face_confirm` | `{ face_id: i64 }` | `()` | confirms current cluster assignment |
-| `people.face_confirm_to_cluster` | `{ face_id: i64, cluster_id: i64 }` | `()` | confirms a face into a specific cluster |
-| `people.face_reject` | `{ face_id: i64, cluster_id: i64 }` | `()` | records that this face does not belong in a cluster |
-| `people.face_ignore` | `{ face_id: i64 }` | `()` | "not a face": the detection leaves its person and is never grouped again |
-| `people.face_skip` | `{ face_id: i64 }` | `()` | "not sure" in review: the face stops coming up for review |
-| `people.face_reassign` | `{ face_id: i64, cluster_id: i64 }` | `()` | moves a face to another cluster |
+| `people.face_confirm` | `{ face_id: i64 }` | `String` | confirms current cluster assignment; returns an undo token |
+| `people.face_confirm_to_cluster` | `{ face_id: i64, cluster_id: i64 }` | `String` | confirms a face into a specific cluster (refreshing the one it left); undo token |
+| `people.face_reject` | `{ face_id: i64, cluster_id: i64 }` | `String` | records that this face does not belong in a cluster; undo token |
+| `people.face_ignore` | `{ face_id: i64 }` | `String` | "not a face": the detection leaves its person and is never grouped again; undo token |
+| `people.face_skip` | `{ face_id: i64 }` | `String` | "not sure" in review: the face stops coming up for review; undo token |
+| `people.face_reassign` | `{ face_id: i64, cluster_id: i64 }` | `String` | moves a face to another cluster; undo token |
+| `people.face_undo` | `{ token: String }` | `()` | restores the face exactly as it was before that decision (person, decision, "not this person" marks, galleries, review rows, skip); `Conflict` if the face changed since or the token is unknown. Tokens live for the app run (last 50) |
 | `people.face_suggest_clusters` | `{ face_id: i64, limit: Option<u32> }` | `Vec<ClusterSuggestionDto>` | suggestions for reassign dialog |
 | `people.k_similar_to_cluster` | `{ cluster_id: i64, k: u32 }` | `Vec<FaceDetailDto>` | nearest face candidates for review |
 
@@ -660,9 +661,13 @@ key. The old local parser fallback is disabled for Assistant execution.
 | Command | Args | Returns |
 |---|---|---|
 | `search.query` | `{ q: String, offset?: u32, limit?: u32 }` | `SearchResultsDto` |
-| `search.recent.list` | `{ limit: Option<u32> }` | `Vec<RecentSearchDto>` |
-| `search.recent.remove` | `{ q: String }` | `()` |
-| `search.recent.clear` | `{}` | `()` |
+| `search.remember` | `{ q: String }` | `()` |
+| `search.recent` | `{}` | `Vec<String>` |
+| `search.recent_clear` | `{}` | `()` |
+
+`search.remember` records a search the user settled on (pressed Enter or
+opened a result); typing alone never adds one. `search.recent` returns the
+latest six, newest first; the library keeps 50.
 
 `search.query` is the unified entry point. `offset` defaults to `0` and `limit`
 defaults to `200` (maximum `1000`). `SearchResultsDto.photos` and
@@ -679,11 +684,21 @@ favourites, and media type are ANDed together. Multiple people mean
 must contain every requested person, and must not contain another assigned
 or unassigned detected face.
 
+`@Name` is an explicit person: the longest name that fits matches whole
+and case-insensitively (`@Uncle Raju`; `@"..."` also works), and a name
+nobody has returns no photos with a `missing` chip. `#words` (up to the
+next `#`) is something that must be seen in the photo: those photos have to
+be visual matches, where plain leftover words may also match a file name,
+camera or place.
+
 If the optional semantic model is installed and the library has indexed
 vectors, `search.query` also asks the local text encoder for semantic
-photo candidates. Those candidates are not a separate shortcut: they are
-fed into the same smart-search filter path, so date/person/place/media
-constraints still apply.
+photo candidates, for the `#words`, or else for the words left once
+people, places, dates and the like are taken out. Names are never
+embedded, and nothing is embedded when nothing is left. With such filters,
+similarity is scored among the photos that pass them (keeping up to 1,000),
+not the library's global top matches, so combined queries keep their
+recall.
 
 ### 5a. `semantic` — optional visual search
 

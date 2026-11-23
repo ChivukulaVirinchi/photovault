@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use rusqlite::{params, params_from_iter, types::Value, Connection, Result as SqliteResult};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, Result as SqliteResult,
+};
 
 use crate::search::date_parser::{DateParser, DateRange};
 use crate::search::SearchQuery;
@@ -150,6 +152,10 @@ struct SmartIntent {
     favorite: Option<bool>,
     media_type: Option<SmartMediaType>,
     semantic_photo_ids: Vec<i64>,
+    /// A `#thing` phrase: photos must look like it.
+    concept: Option<String>,
+    /// `@names` that match no one; the search then finds nothing, and says so.
+    missing_people: Vec<String>,
 }
 
 impl SmartIntent {
@@ -163,6 +169,10 @@ impl SmartIntent {
             || self.media_type.is_some()
     }
 }
+
+/// Visual search for [`SearchService::search_unified_page_with`]: photo ids
+/// that look like the text, best first, only among the given set if any.
+pub type SemanticLookup<'a> = dyn FnMut(&str, Option<&HashSet<i64>>) -> Vec<i64> + 'a;
 
 impl SearchService {
     pub fn search(conn: &Connection, query: &SearchQuery) -> SqliteResult<Vec<SearchResult>> {
@@ -338,6 +348,54 @@ impl SearchService {
             .collect()
     }
 
+    /// Remember a search the user settled on (pressed Enter, opened a
+    /// result), for the recent list. Typing alone never adds one.
+    pub fn remember_query(conn: &Connection, query: &str) -> SqliteResult<()> {
+        let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+        if query.is_empty() {
+            return Ok(());
+        }
+        // Re-added as the newest row, so the list's order is the row order
+        // and never depends on how finely the clock ticks.
+        let uses: i64 = conn
+            .query_row(
+                "SELECT use_count FROM recent_searches WHERE query = ?1",
+                params![query],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        conn.execute(
+            "DELETE FROM recent_searches WHERE query = ?1",
+            params![query],
+        )?;
+        conn.execute(
+            "INSERT INTO recent_searches (query, use_count) VALUES (?1, ?2)",
+            params![query, uses + 1],
+        )?;
+        conn.execute(
+            "DELETE FROM recent_searches WHERE id NOT IN
+               (SELECT id FROM recent_searches ORDER BY id DESC LIMIT ?1)",
+            params![Self::RECENT_KEPT as i64],
+        )?;
+        Ok(())
+    }
+
+    /// The latest remembered searches, newest first.
+    pub fn recent_queries(conn: &Connection, limit: usize) -> SqliteResult<Vec<String>> {
+        let mut stmt =
+            conn.prepare("SELECT query FROM recent_searches ORDER BY id DESC LIMIT ?1")?;
+        let rows = stmt.query_map(params![limit as i64], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    pub fn clear_recent(conn: &Connection) -> SqliteResult<()> {
+        conn.execute("DELETE FROM recent_searches", [])?;
+        Ok(())
+    }
+
+    const RECENT_KEPT: usize = 50;
+
     /// Run a unified multi-entity search.
     ///
     /// The query string is parsed once via `QueryParser`; people/album/place
@@ -383,9 +441,56 @@ impl SearchService {
         if query.is_empty() {
             return Ok(UnifiedSearchPage::default());
         }
-
         let mut intent = Self::parse_smart_intent(conn, query)?;
         intent.semantic_photo_ids = semantic_photo_ids;
+        Self::finish_page(conn, query, intent, offset, limit)
+    }
+
+    /// One page of results, with visual search supplied by the caller:
+    /// `semantic(text, within)` returns the photos that look like `text`,
+    /// best first, only among `within` when given. It's asked only about
+    /// what the query leaves once people, places, dates and the like are
+    /// taken out (never about names), and not at all when nothing is left.
+    /// With filters, similarity is scored among the photos that pass them,
+    /// so "Dad and Mom food" isn't limited to the library's top food photos.
+    pub fn search_unified_page_with(
+        conn: &Connection,
+        raw_query: &str,
+        semantic: &mut SemanticLookup<'_>,
+        offset: usize,
+        limit: usize,
+    ) -> SqliteResult<UnifiedSearchPage> {
+        let query = raw_query.trim();
+        if query.is_empty() {
+            return Ok(UnifiedSearchPage::default());
+        }
+        let mut intent = Self::parse_smart_intent(conn, query)?;
+        let wanted = intent.concept.clone().or_else(|| intent.text.clone());
+        if let (Some(text), true) = (wanted, intent.missing_people.is_empty()) {
+            let within = if intent.has_structured_filters() {
+                let mut base = intent.clone();
+                base.text = None;
+                base.concept = None;
+                let (rows, _) =
+                    Self::search_smart_photos(conn, &base, 0, Self::UNIFIED_SEARCH_MAX_PHOTOS)?;
+                Some(rows.into_iter().map(|r| r.photo_id).collect::<HashSet<_>>())
+            } else {
+                None
+            };
+            if within.as_ref().is_none_or(|w| !w.is_empty()) {
+                intent.semantic_photo_ids = semantic(&text, within.as_ref());
+            }
+        }
+        Self::finish_page(conn, query, intent, offset, limit)
+    }
+
+    fn finish_page(
+        conn: &Connection,
+        query: &str,
+        intent: SmartIntent,
+        offset: usize,
+        limit: usize,
+    ) -> SqliteResult<UnifiedSearchPage> {
         let mut results = UnifiedSearchResults {
             interpreted: Self::interpreted_filters(&intent),
             // Entity hit lists are query-wide and identical on every
@@ -424,6 +529,12 @@ impl SearchService {
             lower = text.to_lowercase();
         }
 
+        // `@Name` people first, so their names never reach the word rules.
+        if text.contains('@') {
+            text = Self::take_explicit_people(conn, &text, &mut intent)?;
+            lower = text.to_lowercase();
+        }
+
         for (needle, media) in [
             ("videos", SmartMediaType::Video),
             ("video", SmartMediaType::Video),
@@ -453,6 +564,22 @@ impl SearchService {
             }
         }
 
+        // A `#thing` phrase runs to the next `#`; the words the rules above
+        // understood ("videos", "favourites") are already out of it.
+        if let Some(at) = text.find('#') {
+            let (before, phrase) = text.split_at(at);
+            let words: Vec<String> = phrase
+                .split('#')
+                .map(|part| part.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|part| !part.is_empty())
+                .collect();
+            if !words.is_empty() {
+                intent.concept = Some(words.join(" "));
+            }
+            text = before.trim().to_string();
+            lower = text.to_lowercase();
+        }
+
         let album_phrase = if let Some(rest) = lower.strip_prefix("album ") {
             Some(text[text.len() - rest.len()..].trim().to_string())
         } else {
@@ -473,7 +600,11 @@ impl SearchService {
             if !people.is_empty() {
                 remaining =
                     Self::remove_entity_names(&remaining, people.iter().map(|p| p.name.as_str()));
-                intent.people_all = people;
+                for person in people {
+                    if !intent.people_all.iter().any(|p| p.id == person.id) {
+                        intent.people_all.push(person);
+                    }
+                }
             }
         }
 
@@ -574,8 +705,20 @@ impl SearchService {
                 label: Self::date_label(range),
             });
         }
+        for name in &intent.missing_people {
+            out.push(InterpretedFilter {
+                kind: "missing".into(),
+                label: format!("No one called {name}"),
+            });
+        }
+        if let Some(concept) = &intent.concept {
+            out.push(InterpretedFilter {
+                kind: "semantic".into(),
+                label: concept.clone(),
+            });
+        }
         if let Some(text) = &intent.text {
-            if intent.semantic_photo_ids.is_empty() {
+            if intent.semantic_photo_ids.is_empty() || intent.concept.is_some() {
                 out.push(InterpretedFilter {
                     kind: "text".into(),
                     label: text.clone(),
@@ -586,7 +729,7 @@ impl SearchService {
                     label: text.clone(),
                 });
             }
-        } else if !intent.semantic_photo_ids.is_empty() {
+        } else if intent.concept.is_none() && !intent.semantic_photo_ids.is_empty() {
             out.push(InterpretedFilter {
                 kind: "semantic".into(),
                 label: "Visual meaning".into(),
@@ -665,11 +808,25 @@ impl SearchService {
         offset: usize,
         limit: usize,
     ) -> SqliteResult<(Vec<SearchResult>, bool)> {
+        if !intent.missing_people.is_empty() {
+            return Ok((Vec::new(), false));
+        }
         let mut sql = String::from(
             "SELECT p.id, p.date_taken, p.location_city, p.location_country, p.thumbnail_path \
              FROM photos p WHERE p.is_trashed = FALSE",
         );
         let mut bind: Vec<Value> = Vec::new();
+        if intent.concept.is_some() {
+            // Asked for by name: the photo has to look like it.
+            if intent.semantic_photo_ids.is_empty() {
+                sql.push_str(" AND 0");
+            } else {
+                sql.push_str(" AND p.id IN (SELECT value FROM json_each(?))");
+                bind.push(Value::Text(
+                    serde_json::to_string(&intent.semantic_photo_ids).unwrap_or_default(),
+                ));
+            }
+        }
 
         if let Some(d) = &intent.date_range {
             sql.push_str(" AND p.date_taken >= ? AND p.date_taken <= ?");
@@ -767,15 +924,18 @@ impl SearchService {
             }
         }
         if let Some(t) = &intent.text {
-            let semantic_clause = if intent.semantic_photo_ids.is_empty() {
+            // Without a `#thing`, leftover words may also be a file name, a
+            // camera or a place the parser didn't know, so a visual match
+            // is one way in among those, not a requirement.
+            let semantic_ids: &[i64] = if intent.concept.is_some() {
+                &[]
+            } else {
+                &intent.semantic_photo_ids
+            };
+            let semantic_clause = if semantic_ids.is_empty() {
                 String::new()
             } else {
-                format!(
-                    " OR p.id IN ({})",
-                    std::iter::repeat_n("?", intent.semantic_photo_ids.len())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )
+                " OR p.id IN (SELECT value FROM json_each(?))".to_string()
             };
             sql.push_str(&format!(
                 " AND (
@@ -804,19 +964,21 @@ impl SearchService {
             for _ in 0..8 {
                 bind.push(like.clone());
             }
-            for id in &intent.semantic_photo_ids {
-                bind.push(Value::Integer(*id));
+            if !semantic_ids.is_empty() {
+                // One JSON parameter, however many ids: a filtered set can be
+                // thousands, past SQLite's limit on parameters.
+                bind.push(Value::Text(
+                    serde_json::to_string(semantic_ids).unwrap_or_default(),
+                ));
             }
-        } else if !intent.semantic_photo_ids.is_empty() && !intent.has_structured_filters() {
-            sql.push_str(&format!(
-                " AND p.id IN ({})",
-                std::iter::repeat_n("?", intent.semantic_photo_ids.len())
-                    .collect::<Vec<_>>()
-                    .join(",")
+        } else if intent.concept.is_none()
+            && !intent.semantic_photo_ids.is_empty()
+            && !intent.has_structured_filters()
+        {
+            sql.push_str(" AND p.id IN (SELECT value FROM json_each(?))");
+            bind.push(Value::Text(
+                serde_json::to_string(&intent.semantic_photo_ids).unwrap_or_default(),
             ));
-            for id in &intent.semantic_photo_ids {
-                bind.push(Value::Integer(*id));
-            }
         }
 
         if intent.semantic_photo_ids.is_empty() {
@@ -887,6 +1049,102 @@ impl SearchService {
             let page: Vec<SearchResult> =
                 results.into_iter().skip(offset).take(page_limit).collect();
             Ok((page, has_more))
+        }
+    }
+
+    /// Take `@Name` people out of `text`. A name matches whole and
+    /// case-insensitively, the longest one that fits, so `@Uncle Raju`
+    /// needs no quotes; `@"..."` is accepted too. A name nobody has is
+    /// recorded as missing. Returns the text without them.
+    fn take_explicit_people(
+        conn: &Connection,
+        text: &str,
+        intent: &mut SmartIntent,
+    ) -> SqliteResult<String> {
+        let mut stmt = conn.prepare(
+            "SELECT id, name FROM face_clusters
+             WHERE name IS NOT NULL AND trim(name) != ''
+             ORDER BY length(name) DESC, photo_count DESC",
+        )?;
+        let named: Vec<ResolvedPerson> = stmt
+            .query_map([], |row| {
+                Ok(ResolvedPerson {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            })?
+            .collect::<SqliteResult<_>>()?;
+
+        let mut rest = String::with_capacity(text.len());
+        let mut tail = text;
+        while let Some(at) = tail.find('@') {
+            rest.push_str(&tail[..at]);
+            let after = &tail[at + 1..];
+            let (wanted, used) = match after.strip_prefix('"') {
+                Some(quoted) => {
+                    let end = quoted.find('"').unwrap_or(quoted.len());
+                    (Some(quoted[..end].trim()), 1 + (end + 1).min(quoted.len()))
+                }
+                None => (None, 0),
+            };
+            let found = match wanted {
+                Some(name) => named
+                    .iter()
+                    .find(|p| p.name.trim().eq_ignore_ascii_case(name) || p.name.trim() == name)
+                    .map(|p| (p, used)),
+                None => named.iter().find_map(|p| {
+                    let len = Self::name_prefix_len(after, p.name.trim())?;
+                    Some((p, len))
+                }),
+            };
+            match found {
+                Some((person, len)) => {
+                    if !intent.people_all.iter().any(|p| p.id == person.id) {
+                        intent.people_all.push(person.clone());
+                    }
+                    tail = &after[len..];
+                }
+                None => {
+                    let len = if used > 0 {
+                        used
+                    } else {
+                        after.find(char::is_whitespace).unwrap_or(after.len())
+                    };
+                    let word = wanted.map(str::to_string).unwrap_or_else(|| {
+                        after[..len]
+                            .trim_matches(|c: char| !c.is_alphanumeric())
+                            .to_string()
+                    });
+                    if !word.is_empty() {
+                        intent.missing_people.push(word);
+                    }
+                    tail = &after[len..];
+                }
+            }
+            rest.push(' ');
+        }
+        rest.push_str(tail);
+        Ok(rest.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    /// Bytes of `text` taken by `name` at its start, ignoring case, when the
+    /// name ends on a word boundary there.
+    fn name_prefix_len(text: &str, name: &str) -> Option<usize> {
+        if name.is_empty() {
+            return None;
+        }
+        let mut t = text.char_indices();
+        let mut end = 0;
+        for n in name.chars() {
+            let (i, c) = t.next()?;
+            if !c.to_lowercase().eq(n.to_lowercase()) {
+                return None;
+            }
+            end = i + c.len_utf8();
+        }
+        match text[end..].chars().next() {
+            Some(c) if c.is_alphanumeric() => None,
+            _ => Some(end),
         }
     }
 
@@ -1035,9 +1293,11 @@ impl SearchService {
     fn remove_word(text: &str, needle: &str) -> String {
         text.split_whitespace()
             .filter(|w| {
-                w.trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_lowercase()
-                    != needle
+                // `#photo booth` is a thing to look for, not the word "photo".
+                w.starts_with('#')
+                    || w.trim_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase()
+                        != needle
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -1286,6 +1546,138 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// What visual search was asked: the text, and the set it searched in.
+    type Asked = Vec<(String, Option<Vec<i64>>)>;
+
+    /// A visual search stub: records what it was asked, answers `ids`.
+    fn page_with(conn: &Connection, q: &str, ids: Vec<i64>) -> (UnifiedSearchResults, Asked) {
+        let mut asked = Vec::new();
+        let mut semantic = |text: &str, within: Option<&HashSet<i64>>| {
+            let mut within: Option<Vec<i64>> = within.map(|w| w.iter().copied().collect());
+            if let Some(w) = within.as_mut() {
+                w.sort_unstable();
+            }
+            asked.push((text.to_string(), within.clone()));
+            ids.iter()
+                .copied()
+                .filter(|id| within.as_ref().is_none_or(|w| w.contains(id)))
+                .collect()
+        };
+        let page = SearchService::search_unified_page_with(conn, q, &mut semantic, 0, 100).unwrap();
+        (page.results, asked)
+    }
+
+    fn chips(results: &UnifiedSearchResults) -> Vec<(String, String)> {
+        results
+            .interpreted
+            .iter()
+            .map(|f| (f.kind.clone(), f.label.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn visual_search_sees_only_the_thing_not_the_names() {
+        let conn = search_test_conn();
+        for id in 1..=4 {
+            insert_photo(&conn, id, &format!("img{id}"), "2024-01-01T10:00:00Z");
+        }
+        insert_person(&conn, 1, "Dad", &[1, 2, 3]);
+        insert_person(&conn, 2, "Mom", &[2, 3]);
+
+        let (results, asked) = page_with(&conn, "Dad and Mom food", vec![3, 4]);
+        // Scored among Dad-and-Mom photos only, and asked about "food" alone.
+        assert_eq!(asked, vec![("food".to_string(), Some(vec![2, 3]))]);
+        assert_eq!(results.photo_ids, vec![3]);
+
+        // Names only: no visual search at all.
+        let (_, asked) = page_with(&conn, "Dad and Mom", vec![1]);
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn at_names_match_whole_names_and_say_when_no_one_matches() {
+        let conn = search_test_conn();
+        for id in 1..=3 {
+            insert_photo(&conn, id, &format!("img{id}"), "2024-01-01T10:00:00Z");
+        }
+        insert_person(&conn, 1, "Uncle Raju", &[1, 2]);
+        insert_person(&conn, 2, "Raju", &[3]);
+
+        let (results, _) = page_with(&conn, "@uncle raju", vec![]);
+        assert_eq!(results.photo_ids.len(), 2);
+        assert_eq!(
+            chips(&results),
+            vec![("person".to_string(), "Uncle Raju".to_string())]
+        );
+
+        let (results, _) = page_with(&conn, "@\"Raju\"", vec![]);
+        assert_eq!(results.photo_ids, vec![3]);
+
+        let (results, asked) = page_with(&conn, "@Kiran beach", vec![1]);
+        assert!(results.photo_ids.is_empty());
+        assert!(asked.is_empty());
+        assert!(
+            chips(&results).contains(&("missing".to_string(), "No one called Kiran".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_hash_thing_must_be_seen_in_the_photo() {
+        let conn = search_test_conn();
+        insert_photo(&conn, 1, "food_court_2019", "2024-01-01T10:00:00Z");
+        insert_photo(&conn, 2, "img2", "2024-01-02T10:00:00Z");
+        insert_photo(&conn, 3, "img3", "2024-01-03T10:00:00Z");
+        insert_person(&conn, 1, "Dad", &[1, 2, 3]);
+
+        // Plain words: a file name still counts.
+        let (results, _) = page_with(&conn, "Dad food", vec![2]);
+        let mut ids = results.photo_ids.clone();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
+
+        // `#food`: only photos that look like food; "videos" still filters.
+        let (results, _) = page_with(&conn, "@Dad #food", vec![2]);
+        assert_eq!(results.photo_ids, vec![2]);
+        conn.execute("UPDATE photos SET media_type = 'video' WHERE id = 3", [])
+            .unwrap();
+        let (results, asked) = page_with(&conn, "@Dad #food videos", vec![2, 3]);
+        assert_eq!(asked, vec![("food".to_string(), Some(vec![3]))]);
+        assert_eq!(results.photo_ids, vec![3]);
+        assert!(chips(&results).contains(&("semantic".to_string(), "food".to_string())));
+    }
+
+    #[test]
+    fn recent_searches_keep_the_latest_once_each() {
+        let conn = search_test_conn();
+        conn.execute_batch(
+            "CREATE TABLE recent_searches (id INTEGER PRIMARY KEY, query TEXT NOT NULL,
+               last_used DATETIME DEFAULT CURRENT_TIMESTAMP, use_count INTEGER DEFAULT 1,
+               UNIQUE(query))",
+        )
+        .unwrap();
+        for q in ["goa", "  dad   2019 ", "goa", ""] {
+            SearchService::remember_query(&conn, q).unwrap();
+        }
+        assert_eq!(
+            SearchService::recent_queries(&conn, 5).unwrap(),
+            vec!["goa", "dad 2019"]
+        );
+        SearchService::clear_recent(&conn).unwrap();
+        assert!(SearchService::recent_queries(&conn, 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hashtags_survive_the_word_rules() {
+        assert_eq!(
+            SearchService::remove_word("#photo booth photos", "photos"),
+            "#photo booth"
+        );
+        assert_eq!(
+            SearchService::remove_word("#photo booth", "photo"),
+            "#photo booth"
+        );
     }
 
     #[test]

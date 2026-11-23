@@ -94,28 +94,31 @@ export const people = {
       cursor: cursor ?? null,
       limit: limit ?? 24,
     }),
+  // Face decisions return a token `faceUndo` takes back within the session.
   faceConfirm: (faceId: number) =>
-    mutate(call<null>("people_face_confirm", { face_id: faceId })),
+    mutate(call<string>("people_face_confirm", { face_id: faceId })),
   faceConfirmToCluster: (faceId: number, clusterId: number) =>
-    mutate(call<null>("people_face_confirm_to_cluster", {
+    mutate(call<string>("people_face_confirm_to_cluster", {
       face_id: faceId,
       cluster_id: clusterId,
     })),
   /// "Not a face": the detection is set aside for good.
   faceIgnore: (faceId: number) =>
-    mutate(call<null>("people_face_ignore", { face_id: faceId })),
+    mutate(call<string>("people_face_ignore", { face_id: faceId })),
   /// "Not sure" in review: the face stops coming up.
-  faceSkip: (faceId: number) => call<null>("people_face_skip", { face_id: faceId }),
+  faceSkip: (faceId: number) => call<string>("people_face_skip", { face_id: faceId }),
   faceReject: (faceId: number, notClusterId?: number) =>
-    mutate(call<null>("people_face_reject", {
+    mutate(call<string>("people_face_reject", {
       face_id: faceId,
       not_cluster_id: notClusterId ?? null,
     })),
   faceReassign: (faceId: number, targetClusterId: number) =>
-    mutate(call<null>("people_face_reassign", {
+    mutate(call<string>("people_face_reassign", {
       face_id: faceId,
       target_cluster_id: targetClusterId,
     })),
+  /// Take back a face decision; refused if the face changed since.
+  faceUndo: (token: string) => mutate(call<null>("people_face_undo", { token })),
   faceSuggestClusters: (faceId: number, topK?: number) =>
     call<ClusterSuggestionDto[]>("people_face_suggest_clusters", {
       face_id: faceId,
@@ -308,6 +311,11 @@ export interface SearchResults {
 export const search = {
   query: (q: string, offset = 0, limit = 200) =>
     call<SearchResults>("search_query", { q, offset, limit }),
+  /// Remember a search the user settled on (Enter, or opening a result).
+  remember: (q: string) => call<null>("search_remember", { q }),
+  /// The latest remembered searches, newest first.
+  recent: () => call<string[]>("search_recent"),
+  clearRecent: () => call<null>("search_recent_clear"),
 };
 
 // ---------- semantic search ----------

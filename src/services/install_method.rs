@@ -85,6 +85,22 @@ pub(crate) fn classify_path(exe: &Path) -> InstallMethod {
         return InstallMethod::SourceBuild;
     }
 
+    // --- Nix (NixOS, or Nix on another Linux or macOS) --------------
+    // The store is read-only and Nix owns what's in it, so an update has to
+    // come through Nix too.
+    #[cfg(unix)]
+    if lower.starts_with("/nix/store/") {
+        let upgrade_cmd = if Path::new("/run/current-system").exists() {
+            "sudo nixos-rebuild switch --upgrade"
+        } else {
+            "nix profile upgrade smriti"
+        };
+        return InstallMethod::PackageManager {
+            name: "nix".into(),
+            upgrade_cmd: upgrade_cmd.into(),
+        };
+    }
+
     // --- Linux ----------------------------------------------------
     #[cfg(target_os = "linux")]
     {
@@ -215,6 +231,16 @@ mod tests {
         match classify_path(&p) {
             InstallMethod::PackageManager { name, .. } => assert_eq!(name, "flatpak"),
             other => panic!("expected flatpak, got {:?}", other),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nix_store_install_updates_through_nix() {
+        let p = PathBuf::from("/nix/store/0a1b2c-smriti-0.5.0/bin/.smriti-tauri-wrapped");
+        match classify_path(&p) {
+            InstallMethod::PackageManager { name, .. } => assert_eq!(name, "nix"),
+            other => panic!("expected nix, got {:?}", other),
         }
     }
 

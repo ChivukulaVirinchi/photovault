@@ -558,14 +558,14 @@ impl FaceProcessor {
         Ok(merged_count)
     }
 
-    /// Save a face crop image to disk as JPEG.
+    /// Save a face crop image to disk as JPEG, at the aligned face's own
+    /// 112×112: shrinking it further left too little detail to tell people
+    /// apart when the crop is shown large ("Find more like this").
     pub(crate) fn save_face_crop(
         aligned_face: &image::RgbImage,
         path: &Path,
     ) -> Result<(), image::ImageError> {
-        let dynamic = image::DynamicImage::ImageRgb8(aligned_face.clone());
-        let resized = dynamic.resize_exact(80, 80, image::imageops::FilterType::Lanczos3);
-        resized.save(path)
+        aligned_face.save(path)
     }
 
     /// Get the face crops directory for a drive.

@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { people, type ClusterSuggestionDto } from "../api/all";
   import { commandErrorMessage } from "../api";
+  import { offerFaceUndo } from "../faceUndo";
   import type { PersonDto } from "../api/types";
   import { libraryStore } from "../stores/library.svelte";
   import { thumbUrl } from "../thumbnail";
@@ -61,7 +62,9 @@
     if (busy) return;
     busy = true;
     try {
-      await people.faceReassign(faceId, clusterId);
+      const token = await people.faceReassign(faceId, clusterId);
+      // The person page refreshes either way; Undo moves the face back.
+      offerFaceUndo(token, "Moved to someone else", () => onsuccess?.());
       if (!mounted) return;
       onsuccess?.();
       onclose();

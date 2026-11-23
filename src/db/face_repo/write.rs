@@ -397,6 +397,11 @@ impl<'a> FaceRepo<'a> {
             ],
         )?;
 
+        // A confirmed face stays in a gallery through refreshes; it has left.
+        tx.execute(
+            "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1 AND face_id = ?2",
+            params![old_cluster_id, face_id],
+        )?;
         Self::refresh_cluster_stats_tx(&tx, old_cluster_id)?;
         Self::refresh_gallery_tx(&tx, old_cluster_id)?;
         Self::refresh_cluster_stats_tx(&tx, new_cluster_id)?;
@@ -408,6 +413,17 @@ impl<'a> FaceRepo<'a> {
     /// Confirm a currently-unassigned face into a cluster (used by K-similar flow).
     pub fn confirm_face_to_cluster(&self, face_id: i64, cluster_id: i64) -> SqliteResult<()> {
         let tx = self.conn.unchecked_transaction()?;
+        // The person the face is leaving, if any: its count and gallery must
+        // stop including the face too.
+        let previous: Option<i64> = tx
+            .query_row(
+                "SELECT cluster_id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten()
+            .filter(|&c| c != cluster_id);
 
         tx.execute(
             "UPDATE faces SET cluster_id = ?1, user_confirmed = 1 WHERE id = ?2",
@@ -446,6 +462,14 @@ impl<'a> FaceRepo<'a> {
 
         Self::refresh_cluster_stats_tx(&tx, cluster_id)?;
         Self::refresh_gallery_tx(&tx, cluster_id)?;
+        if let Some(previous) = previous {
+            tx.execute(
+                "DELETE FROM person_gallery_embeddings WHERE cluster_id = ?1 AND face_id = ?2",
+                params![previous, face_id],
+            )?;
+            Self::refresh_cluster_stats_tx(&tx, previous)?;
+            Self::refresh_gallery_tx(&tx, previous)?;
+        }
 
         tx.commit()
     }

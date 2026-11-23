@@ -129,3 +129,119 @@ fn skipped_review_faces_stop_coming_back() {
         .unwrap()
         .is_empty());
 }
+
+fn gallery(db: &smriti::db::Database, face_id: i64) -> Vec<(i64, String)> {
+    db.conn
+        .prepare(
+            "SELECT cluster_id, COALESCE(source, '') FROM person_gallery_embeddings
+             WHERE face_id = ?1 ORDER BY cluster_id",
+        )
+        .unwrap()
+        .query_map([face_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+fn negatives(db: &smriti::db::Database, face_id: i64) -> Vec<i64> {
+    db.conn
+        .prepare("SELECT not_cluster_id FROM face_negatives WHERE face_id = ?1 ORDER BY 1")
+        .unwrap()
+        .query_map([face_id], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+#[test]
+fn undoing_a_yes_takes_the_face_back_out_of_the_gallery() {
+    let (_dir, db) = common::make_library();
+    cluster(&db, 1, Some("Asha"));
+    let face = insert_face(&db, 1, Some(1));
+    let repo = FaceRepo::new(&db.conn);
+    let before = repo.snapshot_face(face).unwrap();
+
+    repo.confirm_face(face).unwrap();
+    assert!(gallery(&db, face).contains(&(1, "user_confirmed".into())));
+
+    repo.restore_face(&before).unwrap();
+    assert_eq!(repo.face_state(face).unwrap(), Some((Some(1), 0)));
+    assert!(!gallery(&db, face).contains(&(1, "user_confirmed".into())));
+}
+
+#[test]
+fn undoing_a_no_keeps_older_decisions() {
+    let (_dir, db) = common::make_library();
+    cluster(&db, 1, Some("Asha"));
+    cluster(&db, 2, Some("Ravi"));
+    let face = insert_face(&db, 1, Some(1));
+    let repo = FaceRepo::new(&db.conn);
+    // An earlier, unrelated "not Ravi".
+    db.conn
+        .execute(
+            "INSERT INTO face_negatives (face_id, not_cluster_id) VALUES (?1, 2)",
+            [face],
+        )
+        .unwrap();
+    let before = repo.snapshot_face(face).unwrap();
+
+    repo.reject_face_to_unknown(face, 1).unwrap();
+    assert_eq!(negatives(&db, face), vec![1, 2]);
+    assert_eq!(cluster_of(&db, face), None);
+
+    repo.restore_face(&before).unwrap();
+    assert_eq!(cluster_of(&db, face), Some(1));
+    assert_eq!(negatives(&db, face), vec![2]);
+}
+
+#[test]
+fn moving_a_face_to_someone_else_updates_both_and_undoes_cleanly() {
+    let (_dir, db) = common::make_library();
+    cluster(&db, 1, Some("Asha"));
+    cluster(&db, 2, Some("Ravi"));
+    let moved = insert_face(&db, 1, Some(1));
+    insert_face(&db, 2, Some(1));
+    let repo = FaceRepo::new(&db.conn);
+    repo.confirm_face(moved).unwrap();
+    let face_count = |id: i64| -> i64 {
+        db.conn
+            .query_row(
+                "SELECT face_count FROM face_clusters WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let before = repo.snapshot_face(moved).unwrap();
+
+    repo.confirm_face_to_cluster(moved, 2).unwrap();
+    assert_eq!((face_count(1), face_count(2)), (1, 1));
+    assert_eq!(gallery(&db, moved), vec![(2, "user_confirmed".into())]);
+
+    repo.restore_face(&before).unwrap();
+    assert_eq!(cluster_of(&db, moved), Some(1));
+    assert_eq!((face_count(1), face_count(2)), (2, 0));
+    assert_eq!(gallery(&db, moved), vec![(1, "user_confirmed".into())]);
+}
+
+#[test]
+fn not_a_face_and_not_sure_can_be_undone() {
+    let (_dir, db) = common::make_library();
+    cluster(&db, 1, Some("Asha"));
+    let face = insert_face(&db, 1, Some(1));
+    let other = insert_face(&db, 2, Some(1));
+    let repo = FaceRepo::new(&db.conn);
+
+    let before = repo.snapshot_face(face).unwrap();
+    repo.ignore_face(face).unwrap();
+    repo.restore_face(&before).unwrap();
+    assert_eq!(repo.face_state(face).unwrap(), Some((Some(1), 0)));
+
+    // Undoing one skip leaves the other skips alone.
+    let before = repo.snapshot_face(face).unwrap();
+    repo.skip_review_face(other).unwrap();
+    repo.skip_review_face(face).unwrap();
+    assert_eq!(repo.count_unconfirmed_global().unwrap().0, 0);
+    repo.restore_face(&before).unwrap();
+    assert_eq!(repo.count_unconfirmed_global().unwrap().0, 1);
+}
