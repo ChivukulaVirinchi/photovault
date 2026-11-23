@@ -232,7 +232,7 @@ patch releases and rc releases follow the same path.
 - [ ] Require PR before merging (1 approval is fine for a solo project).
 - [ ] Require status checks matching the current CI workflow:
       `Format`, `Quality ubuntu-latest`, `Quality windows-latest`,
-      `Quality macos-latest`, `MSRV (1.88)` and `Supply chain (audit + deny)`.
+      `Quality macos-latest`, `MSRV (1.89)` and `Supply chain (audit + deny)`.
 - [ ] Require branches up-to-date before merging.
 - [ ] Include administrators.
 

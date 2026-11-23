@@ -6,7 +6,7 @@ Smriti builds natively on Linux, Windows, and macOS.
 
 ### Linux
 
-- Rust toolchain (stable, MSRV 1.88+) via `rustup`
+- Rust toolchain (stable, MSRV 1.89+) via `rustup`
 - Node 20.19+ and npm (the frontend is Vite 8 + Svelte 5)
 - Tauri build deps. On Ubuntu/Debian:
 

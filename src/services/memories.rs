@@ -120,7 +120,7 @@ pub struct Memory {
     pub favorites: usize,
     /// Someone the user has named appears in it.
     pub named_person: bool,
-    /// What hiding this memory blocks; see [`hide_key`].
+    /// What hiding this memory blocks: a day, month, year, person or place.
     pub hide_key: String,
 }
 

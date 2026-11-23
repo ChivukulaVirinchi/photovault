@@ -14,7 +14,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 name = "smriti"
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 authors = ["Virinchi Chivukula", "Chekka Umesh Kumar", "Smriti contributors"]
 license = "Apache-2.0"
 description = "Offline-first desktop photo library manager with face recognition, smart albums, and full-text search."
