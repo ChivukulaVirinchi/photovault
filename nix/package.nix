@@ -3,6 +3,7 @@
   fetchFromGitHub,
   rustPlatform,
   buildNpmPackage,
+  importNpmLock,
   nodejs_22,
   cargo-tauri,
   pkg-config,
@@ -22,14 +23,22 @@
   gst_all_1,
   oniguruma,
   sqlite,
-  # Optional integrations (see module.nix):
-  smriti-assets ? null,   # patched asset pack -> SMRITI_ASSET_DIR
-  onnxruntime ? null,     # e.g. pkgs.onnxruntime on aarch64 -> ORT_DYLIB_PATH
+  # nixpkgs' ONNX Runtime (required): the wrapper sets ORT_DYLIB_PATH so the
+  # in-app smart-features pack never needs its bundled prebuilt runtime.
+  onnxruntime,
   extraWrapperArgs ? [ ],
 }:
 
+# ort 2.0.0-rc.11 binds the ONNX Runtime 1.23 C API (upstream ships 1.23.2).
+# load-dynamic accepts any newer runtime (the C API is backwards compatible),
+# but fail loudly if nixpkgs ever ships something older.
+assert lib.assertMsg (lib.versionAtLeast onnxruntime.version "1.23")
+  "smriti: ort 2.0.0-rc.11 requires ONNX Runtime >= 1.23 (nixpkgs has ${onnxruntime.version})";
+
 let
-  version = "0.5.0";
+  # The workspace root is the smriti crate (src-tauri is a 0.0.0 shell),
+  # so the version tracks the source of truth instead of a hardcoded copy.
+  version = (lib.importTOML ../Cargo.toml).package.version;
 
   src = lib.cleanSourceWith {
      src = ../.;
@@ -49,7 +58,9 @@ let
     inherit version src;
     sourceRoot = "${src.name}/src-ui";
     nodejs = nodejs_22; # engines: ^20.19 || ^22.12 || >=24
-    npmDepsHash = "sha256-S/sxP8vpDj4D+S/TiRYpwfhovfPw2+2K4q/lONpk2vk="; # TODO: fill
+    # node_modules is derived from package-lock.json — no hash to maintain.
+    npmDeps = importNpmLock { npmRoot = ../src-ui; };
+    npmConfigHook = importNpmLock.npmConfigHook;
     # default buildPhase runs `npm run build` (vite build)
     installPhase = ''
       runHook preInstall
@@ -63,7 +74,9 @@ rustPlatform.buildRustPackage {
   pname = "smriti";
   inherit version src;
 
-  cargoHash = "sha256-sI84P5eZD51oLQXx4Z09GpGGn9Ixu91VDKZD246eHCU="; # TODO: fill
+  # Workspace lockfile at the repo root; importCargoLock vendors it without
+  # a fixed-output hash. All dependencies are crates.io (no outputHashes).
+  cargoLock.lockFile = ../Cargo.lock;
 
   # Cargo.lock lives at the workspace root; the Tauri crate is a member.
   buildAndTestSubdir = "src-tauri";
@@ -111,11 +124,8 @@ rustPlatform.buildRustPackage {
   # WEBKIT_GST_ALLOWED_URI_PROTOCOLS=asset, its gst plugin, and the NVIDIA fix.
   postFixup = ''
     gappsWrapperArgs+=(--prefix PATH : ${lib.makeBinPath [ xdg-utils dbus ]})
-  ''
-  + lib.optionalString (smriti-assets != null) ''
-    gappsWrapperArgs+=(--set SMRITI_ASSET_DIR ${smriti-assets})
-  ''
-  + lib.optionalString (onnxruntime != null) ''
+    # runtime.rs resolves ORT_DYLIB_PATH first, so nixpkgs' ONNX Runtime
+    # replaces the prebuilt one from the in-app pack (models stay in-app).
     gappsWrapperArgs+=(--set ORT_DYLIB_PATH ${onnxruntime}/lib/libonnxruntime.so)
   ''
   + lib.optionalString (extraWrapperArgs != [ ]) ''

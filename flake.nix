@@ -10,28 +10,19 @@
       pkgsFor = system: import nixpkgs {
         inherit system;
         overlays = [ self.overlays.default ];
-        # The asset pack contains InsightFace pretrained models (non-commercial terms).
-        config.allowUnfreePredicate = pkg:
-          builtins.elem (nixpkgs.lib.getName pkg) [ "smriti-assets" ];
       };
     in
     {
-        overlays.default = final: _prev: {
-          smriti = final.callPackage ./nix/package.nix {
-            # callPackage would otherwise auto-inject these from pkgs despite the
-            # `? null` defaults in package.nix. Keep the base app lean; the NixOS
-            # module opts in via .override.
-            smriti-assets = null;
-            onnxruntime = null;
-          };
-          smriti-assets = final.callPackage ./nix/assets.nix { };
-        };
+      overlays.default = final: _prev: {
+        # callPackage auto-injects nixpkgs' onnxruntime; the package wrapper
+        # points ORT_DYLIB_PATH at it. Models are installed in-app, not packaged.
+        smriti = final.callPackage ./nix/package.nix { };
+      };
 
       packages = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           default = pkgs.smriti;
           smriti = pkgs.smriti;
-          smriti-assets = pkgs.smriti-assets;
         });
 
       # Applying this module also applies the overlay, so `programs.smriti`

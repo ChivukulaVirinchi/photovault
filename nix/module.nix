@@ -3,7 +3,6 @@
 let
   cfg = config.programs.smriti;
   finalPackage = cfg.package.override {
-    smriti-assets = if cfg.smartFeatures.enable then cfg.smartFeatures.assets else null;
     inherit (cfg) extraWrapperArgs;
   };
 in
@@ -13,19 +12,9 @@ in
 
     package = lib.mkPackageOption pkgs "smriti" { };
 
-    smartFeatures = {
-      enable = lib.mkEnableOption ''
-        the optional asset pack (on-device face recognition, offline place
-        names). ~300 MB, contains InsightFace models under non-commercial
-        terms, so it requires allowUnfree for "smriti-assets". Visual-search
-        CLIP models (~1.5 GB) are still downloaded in-app on first use.
-      '';
-      assets = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.smriti-assets;
-        description = "Patched asset pack exposed to Smriti via SMRITI_ASSET_DIR.";
-      };
-    };
+    # No smartFeatures option: the face/places pack and CLIP models are
+    # installed from inside the app on every platform. The package wraps
+    # ORT_DYLIB_PATH to nixpkgs' onnxruntime instead of bundling a runtime.
 
     enableKeyring = lib.mkOption {
       type = lib.types.bool;

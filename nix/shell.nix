@@ -10,9 +10,10 @@ mkShell {
   ] ++ (with gst_all_1; [ gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav ]);
   shellHook = ''
     export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-    # setup_assets.sh downloads a prebuilt ORT that can't dlopen on NixOS;
-    # point the engine at a nix-built one instead (checked first by runtime.rs).
+    # Don't run setup_assets.sh here: its prebuilt ORT can't dlopen on NixOS.
+    # runtime.rs checks ORT_DYLIB_PATH first, so the engine uses nixpkgs' build;
+    # install the face/places pack from inside the app like on other platforms.
     export ORT_DYLIB_PATH="${onnxruntime}/lib/libonnxruntime.so"
-    echo "Dev: npm ci --prefix src-ui && ./scripts/setup_assets.sh && cargo tauri dev --no-watch"
+    echo "Dev: npm ci --prefix src-ui && cargo tauri dev --no-watch (smart-features pack: install in-app)"
   '';
 }
